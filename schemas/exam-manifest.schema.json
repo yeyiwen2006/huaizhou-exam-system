@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huaizhou.example/schemas/exam-manifest.schema.json",
+  "title": "Synthetic exam package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "examId", "examName", "subjects", "groups", "questions", "resourceRoots"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "examId": { "type": "string", "minLength": 1 },
+    "examName": { "type": "string", "minLength": 1 },
+    "subjects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subjectId", "name", "maxScore"],
+        "properties": {
+          "subjectId": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "maxScore": { "$ref": "#/$defs/scoreExpression" }
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["groupId", "subjectId", "type", "order", "questionCount", "scoring"],
+        "properties": {
+          "groupId": { "type": "string", "minLength": 1 },
+          "subjectId": { "type": "string", "minLength": 1 },
+          "type": { "enum": ["single", "multiple", "indeterminate"] },
+          "order": { "type": "integer", "minimum": 1 },
+          "questionCount": { "type": "integer", "minimum": 1 },
+          "allowAbstain": { "type": "boolean", "default": false },
+          "scoring": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
+              "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
+            },
+            "minProperties": 1
+          }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["questionId", "questionNo", "subjectId", "groupId", "source", "options"],
+        "properties": {
+          "questionId": { "type": "string", "minLength": 1 },
+          "questionNo": { "type": "integer", "minimum": 1 },
+          "subjectId": { "type": "string", "minLength": 1 },
+          "groupId": { "type": "string", "minLength": 1 },
+          "source": { "$ref": "#/$defs/relativePath" },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "resourceRoots": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relativePath" }
+    }
+  },
+  "$defs": {
+    "scoreExpression": {
+      "type": "string",
+      "minLength": 1,
+      "description": "有限十进制、允许变量及四则运算的专用表达式"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "oneCorrect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correct", "blank", "wrong"],
+      "properties": {
+        "correct": { "$ref": "#/$defs/scoreExpression" },
+        "blank": { "$ref": "#/$defs/scoreExpression" },
+        "wrong": { "$ref": "#/$defs/scoreExpression" }
+      }
+    },
+    "multipleCorrect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allCorrect", "partialCorrect", "blank", "wrong"],
+      "properties": {
+        "allCorrect": { "$ref": "#/$defs/scoreExpression" },
+        "partialCorrect": { "$ref": "#/$defs/scoreExpression" },
+        "blank": { "$ref": "#/$defs/scoreExpression" },
+        "wrong": { "$ref": "#/$defs/scoreExpression" }
+      }
+    }
+  }
+}

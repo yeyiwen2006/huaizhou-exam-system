@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-minimal",
+  "answers": [
+    {
+      "questionId": "q-001",
+      "questionNo": 1,
+      "correctOptionIds": ["A"]
+    }
+  ]
+}

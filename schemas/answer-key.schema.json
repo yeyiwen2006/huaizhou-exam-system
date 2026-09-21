@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huaizhou.example/schemas/answer-key.schema.json",
+  "title": "Server-only answer key",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "examId", "answers"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "examId": { "type": "string", "minLength": 1 },
+    "answers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["questionId", "questionNo", "correctOptionIds"],
+        "properties": {
+          "questionId": { "type": "string", "minLength": 1 },
+          "questionNo": { "type": "integer", "minimum": 1 },
+          "correctOptionIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

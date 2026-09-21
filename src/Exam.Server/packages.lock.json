@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Npgsql": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
+      },
+      "exam.application": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Contracts": "[1.0.0, )",
+          "Exam.Domain": "[1.0.0, )"
+        }
+      },
+      "exam.contracts": {
+        "type": "Project"
+      },
+      "exam.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Contracts": "[1.0.0, )"
+        }
+      },
+      "exam.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Application": "[1.0.0, )",
+          "Exam.Contracts": "[1.0.0, )",
+          "Exam.Domain": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
+        }
+      }
+    }
+  }
+}

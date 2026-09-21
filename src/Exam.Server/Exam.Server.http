@@ -1,0 +1,11 @@
+@Exam.Server_HostAddress = https://localhost:7069
+
+GET {{Exam.Server_HostAddress}}/health/live
+Accept: application/json
+
+###
+
+GET {{Exam.Server_HostAddress}}/api/system/time
+Accept: application/json
+
+###

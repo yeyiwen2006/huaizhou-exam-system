@@ -1,0 +1,10 @@
+{
+  "serverId": "server-demo",
+  "nodeId": "node-a",
+  "serverEpoch": 1,
+  "correlationId": "corr-demo-001",
+  "result": {
+    "status": "ok"
+  },
+  "error": null
+}

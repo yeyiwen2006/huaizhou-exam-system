@@ -1,0 +1,14 @@
+{
+  "serverId": "server-demo",
+  "nodeId": "node-a",
+  "serverEpoch": 1,
+  "correlationId": "corr-demo-002",
+  "result": null,
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "状态版本已变化，请刷新后重试。",
+    "field": "expectedVersion",
+    "location": null,
+    "retryable": true
+  }
+}

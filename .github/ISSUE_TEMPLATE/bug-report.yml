@@ -1,0 +1,34 @@
+name: 缺陷报告
+description: 记录最小复现、预期、实际和脱敏日志
+title: "[缺陷] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境与版本
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏后的证据
+      description: 不得粘贴真实试卷、个人数据、凭据、密钥或原始数据库。

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "exam.contracts": {
+        "type": "Project"
+      },
+      "exam.desktop.shared": {
+        "type": "Project"
+      }
+    }
+  }
+}
