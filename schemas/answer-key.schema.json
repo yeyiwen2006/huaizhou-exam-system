@@ -2,12 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huaizhou.example/schemas/answer-key.schema.json",
   "title": "Server-only answer key",
+  "description": "独立答案，仅在服务器使用，不进入学生端包。按考试、题号、选项关联，见 requirements.md「逐题导入、原版显示与加密」。正确选项必须是该题 options 的子集、且数量必须与题组题型一致（单选题恰好一个、多项与不定项可多个），这些跨文件约束由校验器判定。规则版本字段（拟命名 ruleSetId、paperVersion，与 A 的 GradingPublicationInfo.RuleSetId、PackageUnlockMaterial.PaperVersion 对齐）由 D05 定义后再加，见 docs/import-package-spec.md「已知缺口」。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "examId", "answers"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "examId": { "type": "string", "minLength": 1 },
+    "examId": { "type": "string", "minLength": 1, "maxLength": 128 },
     "answers": {
       "type": "array",
       "minItems": 1,
@@ -16,13 +17,20 @@
         "additionalProperties": false,
         "required": ["questionId", "questionNo", "correctOptionIds"],
         "properties": {
-          "questionId": { "type": "string", "minLength": 1 },
-          "questionNo": { "type": "integer", "minimum": 1 },
+          "questionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "questionNo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99999,
+            "description": "必须与清单中同一 questionId 的题号一致，由校验器判定。"
+          },
           "correctOptionIds": {
             "type": "array",
             "minItems": 1,
+            "maxItems": 26,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1 }
+            "description": "正确答案的选项标识。其数量决定该题走 oneCorrect 还是 multipleCorrect 分支，也决定该题满分（选对或全部选对的得分）。",
+            "items": { "type": "string", "minLength": 1, "maxLength": 32 }
           }
         }
       }

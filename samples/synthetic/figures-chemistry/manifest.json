@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-figures-chemistry",
+  "examName": "图形化学合成考试",
+  "subjects": [
+    { "subjectId": "subject-c", "name": "科目丙", "maxScore": "20" }
+  ],
+  "groups": [
+    {
+      "groupId": "group-c-indeterminate",
+      "subjectId": "subject-c",
+      "name": "一、不定项选择题",
+      "type": "indeterminate",
+      "order": 1,
+      "questionCount": 4,
+      "allowAbstain": true,
+      "maxScore": "20",
+      "scoring": {
+        "oneCorrect": { "correct": "5", "blank": "0", "wrong": "0" },
+        "multipleCorrect": { "allCorrect": "5", "partialCorrect": "2", "blank": "0", "wrong": "0" }
+      }
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "q-c-051",
+      "questionNo": 51,
+      "subjectId": "subject-c",
+      "groupId": "group-c-indeterminate",
+      "source": "questions/图形化学合成考试_51.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": {
+        "anchorScheme": "pageTopLeftNormalizedV1",
+        "optionCaptions": ["A.", "B.", "C.", "D."],
+        "pageCount": 2
+      }
+    },
+    {
+      "questionId": "q-c-052",
+      "questionNo": 52,
+      "subjectId": "subject-c",
+      "groupId": "group-c-indeterminate",
+      "source": "questions/图形化学合成考试_52.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-c-053",
+      "questionNo": 53,
+      "subjectId": "subject-c",
+      "groupId": "group-c-indeterminate",
+      "source": "questions/图形化学合成考试_53.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["（A）", "（B）", "（C）", "（D）"] }
+    },
+    {
+      "questionId": "q-c-054",
+      "questionNo": 54,
+      "subjectId": "subject-c",
+      "groupId": "group-c-indeterminate",
+      "source": "questions/图形化学合成考试_54.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    }
+  ],
+  "resourceRoots": ["figures", "styles"]
+}

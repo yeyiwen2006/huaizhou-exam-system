@@ -1,0 +1,17 @@
+% 合成共享样式。仅用于仓库内的合成样包，不含任何真实试卷内容。
+% 选项定位标记约定的定义方：D01（逐题规范与合成样例），见 docs/import-package-spec.md。
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{exam-synthetic}[2026/09/22 v1 synthetic shared style]
+
+\RequirePackage{amsmath}
+\RequirePackage{hyperref}
+
+% \optmark{题目标识}{选项标识}
+% 在选项字母处建立零尺寸的命名目标；不改变外观与占位。
+% D03 用 PdfPig 读取该目标并转成页面左上角归一化坐标（anchorScheme=pageTopLeftNormalizedV1），
+% B03 据此在选项字母处叠加圆形选择控件，圆钮第 i 个对应 options[i]。
+\DeclareRobustCommand{\optmark}[2]{\hypertarget{opt:#1:#2}{}}
+
+% 合成自定义命令，用于验证「含原有自定义命令的代表样题正确编译显示」。
+\newcommand{\syntheticblank}[1][2em]{\underline{\hspace{#1}}}
+\newcommand{\syntheticunit}[1]{\,\mathrm{#1}}
