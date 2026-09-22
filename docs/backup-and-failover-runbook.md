@@ -10,6 +10,10 @@
 
 同步副本用于单机故障接管，历史备份用于误删除或损坏恢复，两者不能相互替代。正式考试前、考试中和考试后按执行指南建立并验证归档。
 
+仓库实现使用 `pg_basebackup --wal-method=stream --checkpoint=fast` 生成一致基础备份，复制版本化密文资源及受保护配置，并写入不含秘密、带文件长度和 SHA-256 的 `exam-backup.json`。恢复先运行 `pg_verifybackup` 并逐项核对清单，再复制到配置限定的隔离暂存根目录并复核；代码不会自动覆盖当前 PostgreSQL 数据目录。相同 `requestId` 的备份和恢复结果分别写入 `exam.backup_records`、`exam.restore_records`，服务重启后仍可恢复原结果。清单用于发现意外损坏，并非对抗能够同时篡改文件与清单的攻击者；正式部署仍须依靠受限目录 ACL、离线副本及受保护密钥材料。
+
+双机参数、WAL 归档命令、备用库初始化和只读检查脚本见 [PostgreSQL 18 双机部署基线](../deploy/postgresql/README.md)。口令通过 Windows 受保护配置、服务账户环境或 `pgpass.conf` 提供，不能进入脚本参数、日志或仓库。
+
 ## 人工接管顺序
 
 1. 确认原主机关机，或已从所有业务网络隔离，并记录操作者、时间和证据。

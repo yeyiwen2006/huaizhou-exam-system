@@ -214,6 +214,38 @@ public sealed class ExamVersionAggregate
         }
     }
 
+    public ExamVersionSnapshot SynchronizePersistedParticipant(
+        string participantId,
+        ParticipationBusinessState persistedState)
+    {
+        lock (_gate)
+        {
+            RequireIdentifier(participantId, nameof(participantId));
+            if (persistedState == ParticipationBusinessState.NotParticipating)
+            {
+                _participants.Remove(participantId);
+                return CreateSnapshot();
+            }
+
+            if (!_participants.TryGetValue(participantId, out var participant))
+            {
+                _participants.Add(
+                    participantId,
+                    new ParticipantState(
+                        participantId,
+                        persistedState,
+                        _paperVersion,
+                        0,
+                        PaperUpdateState.NotReceived,
+                        null));
+                return CreateSnapshot();
+            }
+
+            participant.ExamState = persistedState;
+            return CreateSnapshot();
+        }
+    }
+
     public ExamVersionSnapshot ChangeParticipantState(string participantId, ParticipationBusinessState requestedState)
     {
         lock (_gate)

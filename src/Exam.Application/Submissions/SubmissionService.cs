@@ -1,3 +1,4 @@
+using Exam.Application.Commands;
 using Exam.Contracts.Submissions;
 using Exam.Domain.Submissions;
 
@@ -10,13 +11,15 @@ public sealed class SubmissionService : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly Func<string> _receiptIdFactory;
     private readonly SemaphoreSlim _writeSlots;
+    private readonly IParticipationAccessReader? _accessReader;
 
     public SubmissionService(
         ISubmissionStore store,
         IGradingTaskQueue gradingQueue,
         int maxConcurrentWrites = 32,
         TimeProvider? timeProvider = null,
-        Func<string>? receiptIdFactory = null)
+        Func<string>? receiptIdFactory = null,
+        IParticipationAccessReader? accessReader = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(gradingQueue);
@@ -29,6 +32,7 @@ public sealed class SubmissionService : IDisposable
         _gradingQueue = gradingQueue;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _receiptIdFactory = receiptIdFactory ?? (() => Guid.NewGuid().ToString("N"));
+        _accessReader = accessReader;
         _writeSlots = new SemaphoreSlim(maxConcurrentWrites, maxConcurrentWrites);
     }
 
@@ -198,6 +202,51 @@ public sealed class SubmissionService : IDisposable
         try
         {
             var submission = await _store.FindSubmissionAsync(examId, candidateId, cancellationToken);
+            return submission is null
+                ? SubmissionOperationResult<SubmissionReceipt>.Failure(
+                    SubmissionErrorCode.NotFound,
+                    "尚未找到已持久保存的最终答卷。")
+                : SubmissionOperationResult<SubmissionReceipt>.Success(
+                    submission.Receipt,
+                    true,
+                    "已找到原交卷回执。");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return SubmissionOperationResult<SubmissionReceipt>.Failure(
+                SubmissionErrorCode.PersistenceFailed,
+                $"回执查询失败：{exception.Message}");
+        }
+    }
+
+    public async ValueTask<SubmissionOperationResult<SubmissionReceipt>> FindReceiptForDeviceAsync(
+        string participationId,
+        long entryVersion,
+        string deviceId,
+        long authorizationVersion,
+        CancellationToken cancellationToken = default)
+    {
+        if (_accessReader is null || string.IsNullOrWhiteSpace(participationId) ||
+            string.IsNullOrWhiteSpace(deviceId) || entryVersion < 1 || authorizationVersion < 1)
+        {
+            return SubmissionOperationResult<SubmissionReceipt>.Failure(
+                SubmissionErrorCode.InvalidRequest,
+                "回执查询必须提供有效的参试和设备授权版本。");
+        }
+
+        try
+        {
+            var access = await _accessReader.FindAsync(participationId, cancellationToken);
+            if (access is null || access.EntryVersion != entryVersion ||
+                !string.Equals(access.AuthorizedDeviceId, deviceId, StringComparison.Ordinal) ||
+                access.AuthorizationVersion != authorizationVersion)
+            {
+                return SubmissionOperationResult<SubmissionReceipt>.Failure(
+                    SubmissionErrorCode.AuthorizationRevoked,
+                    "当前设备无权查询该参试记录的交卷回执。");
+            }
+
+            var submission = await _store.FindSubmissionByParticipationAsync(participationId, cancellationToken);
             return submission is null
                 ? SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.NotFound,

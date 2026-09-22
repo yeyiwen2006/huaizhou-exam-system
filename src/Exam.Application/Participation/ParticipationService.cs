@@ -66,7 +66,9 @@ public sealed class ParticipationService(
                 group => group.First().Candidate.CandidateId,
                 StringComparer.Ordinal);
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.login", request, () =>
+        {
+            EnsureActiveDevice(transaction, request.DeviceId);
+            return RunIdempotent(transaction, request.RequestId, "participation.login", request, () =>
             {
                 var session = new StudentSession(
                     Guid.NewGuid().ToString("N"),
@@ -77,12 +79,25 @@ public sealed class ParticipationService(
                     candidateIdsByExam);
                 transaction.SaveSession(session);
                 return ToSessionResult(session);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<EntryPreparationResult> PrepareEntryAsync(
         PrepareExamEntryRequest request,
         CancellationToken cancellationToken = default)
+        => await PrepareEntryCoreAsync(request, null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<EntryPreparationResult> PrepareEntryAsync(
+        PrepareExamEntryRequest request,
+        string authenticatedDeviceId,
+        CancellationToken cancellationToken = default)
+        => await PrepareEntryCoreAsync(request, authenticatedDeviceId, cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<EntryPreparationResult> PrepareEntryCoreAsync(
+        PrepareExamEntryRequest request,
+        string? authenticatedDeviceId,
+        CancellationToken cancellationToken)
     {
         ValidateRequestId(request.RequestId);
         Require(request.SessionId, nameof(request.SessionId));
@@ -90,11 +105,15 @@ public sealed class ParticipationService(
 
         var session = await GetAuthorizedSessionAsync(request.SessionId, request.ExamId, cancellationToken)
             .ConfigureAwait(false);
+        EnsureAuthenticatedDeviceOwnsSession(authenticatedDeviceId, session);
         var exam = await GetAllowedExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
         var now = _timeProvider.GetUtcNow();
 
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.prepare", request, () =>
+        {
+            EnsureCurrentSession(transaction, session);
+            EnsureCurrentExam(transaction, exam, _timeProvider.GetUtcNow());
+            return RunIdempotent(transaction, request.RequestId, "participation.prepare", request, () =>
             {
                 var candidateId = CandidateIdForExam(session, request.ExamId);
                 var participation = transaction.FindParticipation(request.ExamId, candidateId);
@@ -154,12 +173,25 @@ public sealed class ParticipationService(
                     participation?.EntryVersion,
                     participation?.AuthorizationVersion,
                     now);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ParticipationResult> ConfirmParticipationAsync(
         ConfirmParticipationRequest request,
         CancellationToken cancellationToken = default)
+        => await ConfirmParticipationCoreAsync(request, null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<ParticipationResult> ConfirmParticipationAsync(
+        ConfirmParticipationRequest request,
+        string authenticatedDeviceId,
+        CancellationToken cancellationToken = default)
+        => await ConfirmParticipationCoreAsync(request, authenticatedDeviceId, cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<ParticipationResult> ConfirmParticipationCoreAsync(
+        ConfirmParticipationRequest request,
+        string? authenticatedDeviceId,
+        CancellationToken cancellationToken)
     {
         ValidateRequestId(request.RequestId);
         Require(request.SessionId, nameof(request.SessionId));
@@ -168,10 +200,14 @@ public sealed class ParticipationService(
 
         var session = await GetAuthorizedSessionAsync(request.SessionId, request.ExamId, cancellationToken)
             .ConfigureAwait(false);
+        EnsureAuthenticatedDeviceOwnsSession(authenticatedDeviceId, session);
         var exam = await GetAllowedExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
 
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.confirm", request, () =>
+        {
+            EnsureCurrentSession(transaction, session);
+            EnsureCurrentExam(transaction, exam, _timeProvider.GetUtcNow());
+            return RunIdempotent(transaction, request.RequestId, "participation.confirm", request, () =>
             {
                 var candidateId = CandidateIdForExam(session, request.ExamId);
                 var participation = transaction.FindParticipation(request.ExamId, candidateId);
@@ -243,20 +279,36 @@ public sealed class ParticipationService(
                 return ToResult(
                     participation,
                     exam.Lifecycle == ExamLifecycle.Running ? exam.UnlockReference : null);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ParticipationResult> WithdrawAsync(
         WithdrawParticipationRequest request,
         CancellationToken cancellationToken = default)
+        => await WithdrawCoreAsync(request, null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<ParticipationResult> WithdrawAsync(
+        WithdrawParticipationRequest request,
+        string authenticatedDeviceId,
+        CancellationToken cancellationToken = default)
+        => await WithdrawCoreAsync(request, authenticatedDeviceId, cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<ParticipationResult> WithdrawCoreAsync(
+        WithdrawParticipationRequest request,
+        string? authenticatedDeviceId,
+        CancellationToken cancellationToken)
     {
         ValidateRequestId(request.RequestId);
         Require(request.SessionId, nameof(request.SessionId));
         Require(request.ParticipationId, nameof(request.ParticipationId));
         var session = await GetActiveSessionAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+        EnsureAuthenticatedDeviceOwnsSession(authenticatedDeviceId, session);
 
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.withdraw", request, () =>
+        {
+            EnsureCurrentSession(transaction, session);
+            return RunIdempotent(transaction, request.RequestId, "participation.withdraw", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
                     ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参试记录。");
@@ -276,7 +328,8 @@ public sealed class ParticipationService(
                 transaction.SaveParticipation(withdrawn);
                 transaction.RemoveConflict(participation.ParticipationId);
                 return ToResult(withdrawn, null);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<DeviceDecisionResult> DecideDeviceAsync(
@@ -296,7 +349,9 @@ public sealed class ParticipationService(
         }
 
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.device-decision", request, () =>
+        {
+            EnsureActiveDevice(transaction, request.SelectedDeviceId);
+            return RunIdempotent(transaction, request.RequestId, "participation.device-decision", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
                     ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参试记录。");
@@ -339,7 +394,8 @@ public sealed class ParticipationService(
                     audit.OperatorId,
                     audit.Reason,
                     audit.DecidedAt);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ParticipationResult> EnsureAuthorizedForWriteAsync(
@@ -355,6 +411,7 @@ public sealed class ParticipationService(
 
         return await persistence.ExecuteTransactionAsync(transaction =>
         {
+            EnsureActiveDevice(transaction, request.DeviceId);
             var participation = transaction.FindParticipation(request.ParticipationId)
                 ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试授权不存在。");
             EnsureAuthorization(participation, request.DeviceId, request.EntryVersion, request.AuthorizationVersion);
@@ -386,7 +443,9 @@ public sealed class ParticipationService(
         }
 
         return await persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "participation.finalize", request, () =>
+        {
+            EnsureActiveDevice(transaction, request.DeviceId);
+            return RunIdempotent(transaction, request.RequestId, "participation.finalize", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
                     ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试授权不存在。");
@@ -414,7 +473,8 @@ public sealed class ParticipationService(
                 transaction.SaveParticipation(submitted);
                 transaction.RemoveConflict(participation.ParticipationId);
                 return ToResult(submitted, null);
-            }), cancellationToken).ConfigureAwait(false);
+            });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -519,7 +579,48 @@ public sealed class ParticipationService(
     {
         var exam = await examDirectory.FindAsync(examId, cancellationToken).ConfigureAwait(false)
             ?? throw Error(ParticipationErrorCodes.ExamNotFound, "找不到考试。");
-        var now = _timeProvider.GetUtcNow();
+        EnsureExamAllowedNow(exam, _timeProvider.GetUtcNow());
+        return exam;
+    }
+
+    private static void EnsureCurrentSession(
+        IParticipationTransaction transaction,
+        StudentSession expected)
+    {
+        EnsureActiveDevice(transaction, expected.DeviceId);
+        var current = transaction.FindSession(expected.SessionId);
+        if (current is null ||
+            !string.Equals(current.DeviceId, expected.DeviceId, StringComparison.Ordinal))
+        {
+            throw Error(ParticipationErrorCodes.AuthorizationRevoked, "登录会话已失效或不再属于当前设备。");
+        }
+    }
+
+    private static void EnsureActiveDevice(IParticipationTransaction transaction, string deviceId)
+    {
+        if (!transaction.IsActiveDevice(deviceId))
+        {
+            throw Error(ParticipationErrorCodes.NotActivated, "设备激活已经失效。");
+        }
+    }
+
+    private static void EnsureCurrentExam(
+        IParticipationTransaction transaction,
+        ExamEntrySnapshot exam,
+        DateTimeOffset now)
+    {
+        if (!transaction.IsExamEntryCurrent(exam))
+        {
+            throw Error(
+                ParticipationErrorCodes.PreparationVersionMismatch,
+                "考试时间、状态或资源版本已变化，请重新获取进入资料。");
+        }
+
+        EnsureExamAllowedNow(exam, now);
+    }
+
+    private static void EnsureExamAllowedNow(ExamEntrySnapshot exam, DateTimeOffset now)
+    {
         if (exam.Lifecycle == ExamLifecycle.Ended ||
             now < exam.ScheduledStart - EntryWindowBeforeStart ||
             now >= exam.ScheduledEnd)
@@ -542,8 +643,6 @@ public sealed class ParticipationService(
         {
             throw Error(ParticipationErrorCodes.ResourcesNotReady, "考试已开始，但解锁信息尚不可用。");
         }
-
-        return exam;
     }
 
     private static T RunIdempotent<T>(
@@ -602,6 +701,17 @@ public sealed class ParticipationService(
             !StringComparer.Ordinal.Equals(session.DeviceId, participation.AuthorizedDeviceId))
         {
             throw Error(ParticipationErrorCodes.AuthorizationRevoked, "当前会话无权操作该参试记录。");
+        }
+    }
+
+    private static void EnsureAuthenticatedDeviceOwnsSession(
+        string? authenticatedDeviceId,
+        StudentSession session)
+    {
+        if (authenticatedDeviceId is not null &&
+            !string.Equals(authenticatedDeviceId, session.DeviceId, StringComparison.Ordinal))
+        {
+            throw Error(ParticipationErrorCodes.AuthorizationRevoked, "已认证设备与学生会话不一致。");
         }
     }
 

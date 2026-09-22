@@ -69,6 +69,14 @@ public sealed class InMemoryExamVersioningService : IExamVersioningService
             request.ExamId,
             aggregate => aggregate.ConfirmPaperReview(request.ParticipantId, request.PaperVersion));
 
+    public VersioningResult<ExamVersionSnapshot> SynchronizePersistedParticipant(
+        string examId,
+        string participantId,
+        Exam.Contracts.Common.ParticipationBusinessState persistedState) =>
+        WithExam(
+            examId,
+            aggregate => aggregate.SynchronizePersistedParticipant(participantId, persistedState));
+
     private VersioningResult<T> WithExam<T>(string examId, Func<ExamVersionAggregate, T> action)
     {
         if (string.IsNullOrWhiteSpace(examId) || !_exams.TryGetValue(examId, out var aggregate))
