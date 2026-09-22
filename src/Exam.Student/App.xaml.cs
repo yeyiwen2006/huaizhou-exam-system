@@ -40,11 +40,20 @@ public partial class App : Application
 }
 
 /// <summary>
-/// 组合根：B01 使用 MockStudentApi；A01 契约的服务端 HTTP 客户端就绪后在此替换实现（页面不变）。
+/// 组合根：B01/B02 使用 MockStudentApi 与 MockExamCommandFeed；
+/// A01 契约的服务端 HTTP 客户端与 A04 SignalR 通道就绪后在此替换实现（页面不变）。
 /// </summary>
 public sealed class AppServices
 {
-    public IStudentApi Api { get; } = new MockStudentApi();
+    private readonly MockStudentApi _api = new();
+
+    public IStudentApi Api => _api;
+    public IExamCommandFeed CommandFeed { get; }
     public StudentSession Session { get; } = new();
     public DeviceStore DeviceStore { get; } = new(App.AppDataDirectory);
+
+    public AppServices()
+    {
+        CommandFeed = new MockExamCommandFeed(_api);
+    }
 }

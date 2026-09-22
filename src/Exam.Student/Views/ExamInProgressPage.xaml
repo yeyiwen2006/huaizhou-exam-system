@@ -85,7 +85,8 @@
                     <!-- B03 接入：题干 + 图片（居中、按 LaTeX 版式）+ 选项（圆形按钮） -->
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <controls:Banner Level="Info"
+                            <controls:Banner x:Name="PaperBanner"
+                                            Level="Info"
                                             IsOpen="True"
                                             Message="题目内容区：B03 接入原版 PDF 试题显示、题内图片与选项圆形按钮。当前为 B01 页框。" />
                             <StackPanel Orientation="Horizontal" Margin="0,16,0,0">

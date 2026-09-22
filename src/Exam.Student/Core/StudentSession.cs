@@ -60,6 +60,9 @@ public sealed class StudentSession : ObservableObject
     /// <summary>登录后填充（含 SessionId 与报名考试范围）。</summary>
     public StudentSessionResult? LoginResult { get; private set; }
 
+    /// <summary>当前正在作答的考试（B02 解锁后进入；B03 渲染消费，B04 持久化）。</summary>
+    public UnlockedExamContext? CurrentExam { get; private set; }
+
     public void OnActivated(string clientNumber)
     {
         ClientNumber = clientNumber;
@@ -72,13 +75,24 @@ public sealed class StudentSession : ObservableObject
         OnPropertyChanged(nameof(LoginResult));
     }
 
+    /// <summary>开始考试：记录解锁后的试卷内容（仅内存）。</summary>
+    public void BeginExam(string examId, byte[] unlockedPayload)
+    {
+        CurrentExam = new UnlockedExamContext(examId, unlockedPayload);
+        OnPropertyChanged(nameof(CurrentExam));
+    }
+
     /// <summary>退出登录：清空考生信息与会话，账号数据互不互通。</summary>
     public void Logout()
     {
         LoginResult = null;
         Candidate = null;
+        CurrentExam = null;
     }
 }
+
+/// <summary>已解锁的考试上下文：明文仅在内存，交卷/离开即由 GC 回收。</summary>
+public sealed record UnlockedExamContext(string ExamId, byte[] Payload);
 
 /// <summary>登录考生会话信息。</summary>
 public sealed record SessionCandidate(CandidateIdentity Identity, string SessionId)

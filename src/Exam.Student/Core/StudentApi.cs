@@ -1,4 +1,6 @@
+using System.IO;
 using Exam.Contracts.Activation;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 
@@ -19,7 +21,9 @@ public sealed record ExamOverview(
 
 /// <summary>
 /// 学生端服务接口：请求/响应全部使用 Exam.Contracts 类型，
-/// 与服务器 API 封套（ApiEnvelope）同构，B02+ 接入 HTTP 客户端时仅替换实现，页面不变。
+/// 与服务器 API 封套（ApiEnvelope）同构，A01 契约的 HTTP 客户端就绪后仅替换实现，页面不变。
+/// B02 新增：说明获取、包分块下载、确认/退出参试、解锁密钥换取。
+/// 契约缺口（待 A×D 定稿）：包传输与完整性校验方式、解锁引用格式——见 docs/b01-implementation-status.md。
 /// </summary>
 public interface IStudentApi
 {
@@ -37,6 +41,25 @@ public interface IStudentApi
 
     /// <summary>考试概览列表（B01 展示层，见契约缺口说明）。</summary>
     Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(CancellationToken ct = default);
+
+    /// <summary>获取考试说明（按说明版本）。</summary>
+    Task<InstructionsDocument?> GetInstructionsAsync(
+        string sessionId, string examId, long instructionsVersion, CancellationToken ct = default);
+
+    /// <summary>分块下载加密包（顺序流；传输契约待 A×D 定稿，现为 Mock 本地流）。</summary>
+    IAsyncEnumerable<byte[]> DownloadPackageChunksAsync(
+        ExamResourceDescriptor descriptor, CancellationToken ct = default);
+
+    /// <summary>确认参试（上报已下载的试卷与说明版本）。</summary>
+    Task<ApiEnvelope<ParticipationResult>?> ConfirmParticipationAsync(
+        ConfirmParticipationRequest request, CancellationToken ct = default);
+
+    /// <summary>退出参试（等待页退出）。</summary>
+    Task<ApiEnvelope<ParticipationResult>?> WithdrawParticipationAsync(
+        WithdrawParticipationRequest request, CancellationToken ct = default);
+
+    /// <summary>以解锁引用换取内容密钥（解锁引用格式为 A04×D03 契约缺口，现为 Mock 直换）。</summary>
+    Task<byte[]?> ResolveUnlockKeyAsync(string unlockReference, CancellationToken ct = default);
 }
 
 public static class RequestIds
@@ -44,9 +67,22 @@ public static class RequestIds
     public static string New() => Guid.NewGuid().ToString("N");
 }
 
+/// <summary>服务器指令订阅（B02 仅消费 Start；A04 SignalR 通道就绪后替换实现）。</summary>
+public interface IExamCommandFeed
+{
+    event EventHandler<CommandDelivery>? CommandReceived;
+    Task StartAsync(string sessionId, string examId);
+    Task StopAsync();
+}
+
 /// <summary>
-/// Mock 实现：固定延迟 + 确定性规则，覆盖 B01 页面需要的成功与错误路径。
+/// Mock 实现：固定延迟 + 确定性规则，覆盖 B01/B02 页面需要的成功与错误路径。
 /// 数据均为独立合成样例，不含任何真实试卷；联调后由真实 HTTP 客户端替换。
+/// 情景（examId）：
+///  demo-exam          —— 正常流程：下载→确认→（模拟开考指令）→解锁；
+///  demo-late          —— 已开始的考试：同一流程进入，确认后立即解锁；
+///  demo-package-timeout —— 包下载失败（模拟超时）：不可确认参试；
+///  demo-closed        —— 已结束/不可进入。
 /// </summary>
 public sealed class MockStudentApi : IStudentApi
 {
@@ -61,20 +97,32 @@ public sealed class MockStudentApi : IStudentApi
     };
 
     private readonly Dictionary<string, int> _activationPollCount = new();
-    private readonly Dictionary<string, string> _admissionByExam = new()
-    {
-        ["demo-exam"] = "2026001",
-        ["demo-package-timeout"] = "2026001",
-        ["demo-closed"] = "2026001",
-    };
+    private readonly Dictionary<string, byte[]> _unlockKeys = new();
+    private readonly TimeSpan _latency;
+
+    /// <summary>确认参试成功后触发（Mock 指令源用于调度开考指令）。</summary>
+    public event Action<ParticipationResult>? ParticipationConfirmed;
+
+    public MockStudentApi(TimeSpan? latency = null) => _latency = latency ?? TimeSpan.FromMilliseconds(700);
 
     public static IReadOnlyList<string> InstructionsFor(string examId) =>
-        examId == "demo-exam" ? SampleInstructionLines : Array.Empty<string>();
+        examId == "demo-exam" || examId == "demo-late" ? SampleInstructionLines : Array.Empty<string>();
+
+    /// <summary>生成（或复用）某考试的加密包，返回包字节与解锁引用。</summary>
+    public (byte[] Package, string UnlockReference) GetOrBuildPackage(string examId, long paperVersion)
+    {
+        var key = _unlockKeys.TryGetValue($"key:{examId}", out var existing)
+            ? existing
+            : SyntheticExamPackage.CreateKey();
+        _unlockKeys[$"key:{examId}"] = key;
+        var package = SyntheticExamPackage.Seal(SyntheticExamPackage.CreatePlaintext(examId, paperVersion), key);
+        return (package, $"unlock:{examId}");
+    }
 
     public async Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(
         SubmitActivationRequest request, CancellationToken ct = default)
     {
-        await Task.Delay(900, ct);
+        await Task.Delay(_latency, ct);
 
         var polls = _activationPollCount.TryGetValue(request.RequestId, out var n) ? n + 1 : 1;
         _activationPollCount[request.RequestId] = polls;
@@ -95,7 +143,7 @@ public sealed class MockStudentApi : IStudentApi
     public async Task<ApiEnvelope<StudentSessionResult>> LoginAsync(
         LoginStudentRequest request, CancellationToken ct = default)
     {
-        await Task.Delay(700, ct);
+        await Task.Delay(_latency, ct);
 
         // 名册核对：准考证号 9999 不在任何名册 → ROSTER_MISMATCH（演示错误路径）
         if (request.AdmissionNo == "9999")
@@ -113,24 +161,24 @@ public sealed class MockStudentApi : IStudentApi
                 Name: request.Name,
                 ClassText: request.ClassText,
                 AdmissionNo: request.AdmissionNo),
-            ExamIds: new[] { "demo-exam", "demo-package-timeout", "demo-closed" },
+            ExamIds: new[] { "demo-exam", "demo-late", "demo-package-timeout", "demo-closed" },
             AuthenticatedAt: DateTimeOffset.Now));
     }
 
     public async Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(
         PrepareExamEntryRequest request, CancellationToken ct = default)
     {
-        await Task.Delay(900, ct);
+        await Task.Delay(_latency, ct);
 
         return request.ExamId switch
         {
-            "demo-exam" => Ok(new EntryPreparationResult(
+            "demo-exam" or "demo-late" or "demo-package-timeout" => Ok(new EntryPreparationResult(
                 PreparationId: $"prep-{Guid.NewGuid().ToString("N")[..10]}",
                 ExamId: request.ExamId,
                 Status: EntryPreparationStatus.Ready,
                 Resources: new ExamResourceDescriptor(
-                    EncryptedPackageUri: $"https://{request.SessionId[..8]}.local/synthetic-minimal.v1.bin",
-                    PackageLength: 2048,
+                    EncryptedPackageUri: $"https://{request.ExamId}.local/synthetic.v1.bin",
+                    PackageLength: GetOrBuildPackage(request.ExamId, 1).Package.Length,
                     PaperVersion: 1,
                     InstructionsVersion: 1),
                 ParticipationId: null,
@@ -139,11 +187,6 @@ public sealed class MockStudentApi : IStudentApi
                 EntryVersion: null,
                 AuthorizationVersion: null,
                 PreparedAt: DateTimeOffset.Now)),
-
-            // 同意进入但试题包超时 → “试题获取失败！”
-            "demo-package-timeout" => Fail<EntryPreparationResult>(
-                ParticipationErrorCodes.ResourcesNotReady,
-                "试题获取失败！"),
 
             // 不允许进入 → “当前不可进入该考试！”
             _ => Fail<EntryPreparationResult>(
@@ -154,14 +197,17 @@ public sealed class MockStudentApi : IStudentApi
 
     public async Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(CancellationToken ct = default)
     {
-        await Task.Delay(500, ct);
+        await Task.Delay(_latency, ct);
         var now = DateTimeOffset.Now;
         return new[]
         {
             new ExamOverview("demo-exam", "演示考试（合成样例）",
                 now.AddMinutes(10), now.AddMinutes(130),
                 new[] { "数学", "物理", "化学" }, ExamLifecycle.Scheduled),
-            new ExamOverview("demo-package-timeout", "试题包超时模拟（合成样例）",
+            new ExamOverview("demo-late", "已开考进入演示（合成样例）",
+                now.AddMinutes(-5), now.AddMinutes(115),
+                new[] { "数学" }, ExamLifecycle.Running),
+            new ExamOverview("demo-package-timeout", "试题包下载失败模拟（合成样例）",
                 now.AddMinutes(30), now.AddMinutes(120),
                 new[] { "数学" }, ExamLifecycle.Scheduled),
             new ExamOverview("demo-closed", "已结束考试（合成样例）",
@@ -169,6 +215,110 @@ public sealed class MockStudentApi : IStudentApi
                 new[] { "数学" }, ExamLifecycle.Ended),
         };
     }
+
+    public async Task<InstructionsDocument?> GetInstructionsAsync(
+        string sessionId, string examId, long instructionsVersion, CancellationToken ct = default)
+    {
+        await Task.Delay(_latency, ct);
+        var lines = InstructionsFor(examId);
+        return lines.Count == 0
+            ? null
+            : new InstructionsDocument(instructionsVersion, lines);
+    }
+
+    public async IAsyncEnumerable<byte[]> DownloadPackageChunksAsync(
+        ExamResourceDescriptor descriptor, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var examId = ExtractExamId(descriptor.EncryptedPackageUri);
+        var (package, _) = GetOrBuildPackage(examId, descriptor.PaperVersion);
+
+        // 试题包下载失败情景：抛出模拟超时，验证客户端不产生半截文件、不可确认参试
+        if (examId == "demo-package-timeout")
+        {
+            await Task.Delay(_latency, ct);
+            yield return package[..64];
+            await Task.Delay(_latency, ct);
+            throw new IOException("试题包下载超时（合成模拟）。");
+        }
+
+        var offset = 0;
+        const int chunkSize = 256;
+        while (offset < package.Length)
+        {
+            await Task.Delay(40, ct);
+            var size = Math.Min(chunkSize, package.Length - offset);
+            yield return package[offset..(offset + size)];
+            offset += size;
+        }
+    }
+
+    public async Task<ApiEnvelope<ParticipationResult>?> ConfirmParticipationAsync(
+        ConfirmParticipationRequest request, CancellationToken ct = default)
+    {
+        await Task.Delay(_latency, ct);
+
+        // 服务器侧校验：包或说明未齐（版本上报不符）→ 不可确认参试
+        if (request.DownloadedPaperVersion <= 0 || request.DownloadedInstructionsVersion <= 0)
+        {
+            return Fail<ParticipationResult>(
+                ParticipationErrorCodes.PreparationVersionMismatch,
+                "试题包或考试说明未就绪，不能确认参试。");
+        }
+
+        // 已结束的考试：下载完成也不能新增参试
+        if (request.ExamId == "demo-closed")
+        {
+            return Fail<ParticipationResult>(
+                ParticipationErrorCodes.EntryNotAllowed,
+                "考试已结束，不能新增参试。");
+        }
+
+        var (package, unlockReference) = GetOrBuildPackage(request.ExamId, request.DownloadedPaperVersion);
+
+        var result = new ParticipationResult(
+            ParticipationId: $"part-{Guid.NewGuid().ToString("N")[..10]}",
+            ExamId: request.ExamId,
+            CandidateId: "cand-mock",
+            BusinessState: request.ExamId == "demo-late"
+                ? ParticipationBusinessState.Answering
+                : ParticipationBusinessState.Waiting,
+            AuthorizedDeviceId: "device-mock",
+            EntryVersion: 1,
+            AuthorizationVersion: 1,
+            Version: 1,
+            UnlockReference: unlockReference);
+
+        ParticipationConfirmed?.Invoke(result);
+        return Ok(result);
+    }
+
+    public Task<ApiEnvelope<ParticipationResult>?> WithdrawParticipationAsync(
+        WithdrawParticipationRequest request, CancellationToken ct = default)
+        => Task.FromResult<ApiEnvelope<ParticipationResult>?>(
+            Ok(new ParticipationResult(
+                ParticipationId: request.ParticipationId,
+                ExamId: string.Empty,
+                CandidateId: "cand-mock",
+                BusinessState: ParticipationBusinessState.NotParticipating,
+                AuthorizedDeviceId: "device-mock",
+                EntryVersion: 1,
+                AuthorizationVersion: 1,
+                Version: request.ExpectedVersion,
+                UnlockReference: null)));
+
+    public Task<byte[]?> ResolveUnlockKeyAsync(string unlockReference, CancellationToken ct = default)
+    {
+        var examId = unlockReference.StartsWith("unlock:", StringComparison.Ordinal)
+            ? unlockReference["unlock:".Length..]
+            : string.Empty;
+        return Task.FromResult(_unlockKeys.TryGetValue($"key:{examId}", out var key) ? key : null);
+    }
+
+    private static string ExtractExamId(string uri) =>
+        uri.Contains("demo-late", StringComparison.Ordinal) ? "demo-late"
+        : uri.Contains("demo-package-timeout", StringComparison.Ordinal) ? "demo-package-timeout"
+        : uri.Contains("demo-closed", StringComparison.Ordinal) ? "demo-closed"
+        : "demo-exam";
 
     private static ApiEnvelope<T> Ok<T>(T result) => new(
         ServerId: "mock-server",
@@ -185,4 +335,64 @@ public sealed class MockStudentApi : IStudentApi
         CorrelationId: RequestIds.New(),
         Result: default,
         Error: new ApiError(code, message));
+}
+
+/// <summary>
+/// Mock 指令源：确认参试后按情景派发开考指令（demo-exam 延迟派发 Start；
+/// demo-late 已是答题态无需指令，由确认结果直接驱动解锁）。
+/// </summary>
+public sealed class MockExamCommandFeed : IExamCommandFeed
+{
+    private readonly MockStudentApi _api;
+    private CancellationTokenSource? _cts;
+
+    public event EventHandler<CommandDelivery>? CommandReceived;
+
+    public MockExamCommandFeed(MockStudentApi api)
+    {
+        _api = api;
+        _api.ParticipationConfirmed += OnParticipationConfirmed;
+    }
+
+    public Task StartAsync(string sessionId, string examId) => Task.CompletedTask;
+
+    public Task StopAsync()
+    {
+        _cts?.Cancel();
+        return Task.CompletedTask;
+    }
+
+    private async void OnParticipationConfirmed(ParticipationResult result)
+    {
+        if (result.BusinessState != ParticipationBusinessState.Waiting)
+        {
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+        try
+        {
+            // 开考延迟（模拟等待开考 → 收到开始指令）
+            await Task.Delay(TimeSpan.FromSeconds(6), _cts.Token);
+
+            CommandReceived?.Invoke(this, new CommandDelivery(
+                Server: new ServerNodeEnvelope("mock-server", "mock-node-1", 1),
+                EventId: $"evt-{Guid.NewGuid().ToString("N")[..10]}",
+                ExamId: result.ExamId,
+                ParticipationId: result.ParticipationId,
+                EntryVersion: result.EntryVersion,
+                EventType: CommandEventType.Start,
+                StateVersion: result.Version,
+                TargetDeviceId: result.AuthorizedDeviceId,
+                TargetAuthorizationVersion: result.AuthorizationVersion,
+                ResourceVersion: 1,
+                ProtectedUnlockReference: result.UnlockReference,
+                Metadata: new Dictionary<string, string>(),
+                CreatedAt: DateTimeOffset.Now,
+                DeliveryAttempt: 1));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }

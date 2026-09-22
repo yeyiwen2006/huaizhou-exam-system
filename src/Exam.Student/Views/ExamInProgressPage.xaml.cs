@@ -40,6 +40,7 @@ public partial class ExamInProgressPage : UserControl
 
         BuildNav();
         SelectQuestion(1);
+        ShowPaperStatus();
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) => UpdateClock();
@@ -78,6 +79,18 @@ public partial class ExamInProgressPage : UserControl
         yield return ("数学（100分）", "不定项选择题（每小题3分/4分）", 30);
         yield return ("物理（60分）", "不定项选择题（每小题3分）", 20);
         yield return ("化学（40分）", "单项选择题（每小题{正确选项总数}分）", 24);
+    }
+
+    /// <summary>
+    /// B02：显示已解锁试卷的状态。真实题目渲染为 B03（PDF + 选项圆钮）；
+    /// 此处仅呈现“已解密”事实与内容规模，证明明文仅在开考后进入内存。
+    /// </summary>
+    private void ShowPaperStatus()
+    {
+        var exam = App.Services.Session.CurrentExam;
+        PaperBanner.Message = exam is null
+            ? "题目内容区：B03 接入原版 PDF 试题显示与选项圆形按钮。当前为 B01 页框。"
+            : $"试题已解密（{exam.Payload.Length / 1024.0:F1} KB 合成样例，B02 解锁产物）。题目渲染与选项交互由 B03 接入。";
     }
 
     private void SelectQuestion(int number)
