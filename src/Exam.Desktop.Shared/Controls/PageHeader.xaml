@@ -1,0 +1,43 @@
+<UserControl x:Class="Exam.Desktop.Shared.Controls.PageHeader"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+      统一页头：左上角设备编号 + 考生姓名（全端一致）。
+      右侧为 RightContent 插槽，用于各页面右上角操作（退出系统 / 返回 / 提交答卷等红色按钮）。
+    -->
+    <Border Background="{DynamicResource Brush.Surface}"
+            BorderBrush="{DynamicResource Brush.Border}"
+            BorderThickness="0,0,0,1"
+            Padding="16,10">
+        <DockPanel LastChildFill="False">
+            <ContentPresenter DockPanel.Dock="Right"
+                              Content="{Binding RightContent, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                              VerticalAlignment="Center" />
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Background="{DynamicResource Brush.Primary.Soft}"
+                        CornerRadius="4"
+                        Padding="8,3"
+                        VerticalAlignment="Center">
+                    <TextBlock x:Name="NumberText"
+                               Text="未激活"
+                               FontSize="{DynamicResource Font.Size.Caption}"
+                               FontWeight="Bold"
+                               Foreground="{DynamicResource Brush.Primary}" />
+                </Border>
+                <TextBlock x:Name="NameText"
+                           Text="未登录"
+                           FontSize="{DynamicResource Font.Size.Body.Large}"
+                           FontWeight="Bold"
+                           Foreground="{DynamicResource Brush.Text.Primary}"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center" />
+                <TextBlock x:Name="ClassTextBlock"
+                           Text=""
+                           FontSize="{DynamicResource Font.Size.Caption}"
+                           Foreground="{DynamicResource Brush.Text.Secondary}"
+                           Margin="8,3,0,0"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</UserControl>

@@ -1,0 +1,64 @@
+<UserControl x:Class="Exam.Student.Views.ActivationPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls;assembly=Exam.Desktop.Shared"
+             Background="{DynamicResource Brush.Background}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <controls:PageHeader Grid.Row="0"
+                            ClientNumber="{Binding ClientNumber, Mode=OneWay}" />
+
+        <!-- 居中激活卡片 -->
+        <Border Grid.Row="1"
+                Style="{StaticResource Card}"
+                Width="420"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Margin="24">
+            <StackPanel DataContext="{Binding RelativeSource={RelativeSource AncestorType=UserControl}}">
+                <TextBlock Style="{StaticResource PageTitle}" Text="学生端激活" />
+                <TextBlock Style="{StaticResource CaptionText}"
+                           Text="首次使用需连接服务器申请激活，激活需考务端批准。"
+                           Margin="0,6,0,20" />
+
+                <controls:ValidatedInput x:Name="HostInput"
+                                         Label="服务器 IP 地址"
+                                         Watermark="例如 192.168.1.10"
+                                         InputChanged="OnInputChanged" />
+                <controls:ValidatedInput x:Name="PortInput"
+                                        Label="服务器端口"
+                                        Watermark="例如 5001"
+                                        IsNumericOnly="True"
+                                        Text="5001"
+                                        Margin="0,12,0,0"
+                                        InputChanged="OnInputChanged" />
+
+                <controls:StatusPill x:Name="ActivationPill"
+                                    Text="未激活"
+                                    Level="Neutral"
+                                    Margin="0,16,0,0"
+                                    HorizontalAlignment="Left" />
+
+                <Button x:Name="RequestButton"
+                        Style="{StaticResource Btn.Primary}"
+                        Content="请求激活"
+                        Height="{StaticResource Control.Height.Large}"
+                        FontSize="{DynamicResource Font.Size.Body.Large}"
+                        Margin="0,20,0,0"
+                        Click="OnRequestActivation" />
+
+                <controls:Banner x:Name="ErrorBanner"
+                                Level="Danger"
+                                Margin="0,16,0,0" />
+            </StackPanel>
+        </Border>
+
+        <controls:BusyOverlay x:Name="Busy"
+                              Grid.RowSpan="2"
+                              Message="正在向服务器请求激活…" />
+    </Grid>
+</UserControl>

@@ -1,0 +1,33 @@
+<UserControl x:Class="Exam.Desktop.Shared.Controls.ValidatedInput"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+      带标签与校验反馈的输入框。
+      班级、准考证号等仅数字字段设 IsNumericOnly=true；错误通过 ErrorText 呈现。
+    -->
+    <StackPanel>
+        <TextBlock x:Name="LabelText"
+                   Text=""
+                   FontSize="{DynamicResource Font.Size.Caption}"
+                   Foreground="{DynamicResource Brush.Text.Secondary}"
+                   Margin="2,0,0,6" />
+        <Grid>
+            <TextBox x:Name="Input"
+                     TextChanged="OnTextChanged" />
+            <TextBlock x:Name="WatermarkText"
+                       Text=""
+                       FontSize="{DynamicResource Font.Size.Body}"
+                       Foreground="{DynamicResource Brush.Text.Disabled}"
+                       Margin="{StaticResource Padding.Control}"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"
+                       Visibility="Collapsed" />
+        </Grid>
+        <TextBlock x:Name="ErrorTextBlock"
+                   Text=""
+                   FontSize="{DynamicResource Font.Size.Caption}"
+                   Foreground="{DynamicResource Brush.Danger}"
+                   Margin="2,4,0,0"
+                   Visibility="Collapsed" />
+    </StackPanel>
+</UserControl>

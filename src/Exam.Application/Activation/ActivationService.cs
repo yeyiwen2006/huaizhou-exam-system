@@ -80,7 +80,15 @@ public sealed class ActivationService(
             }
 
             EnsureCredential(request.Credential, activationRequest.ProtectedCredential);
-            return ToRequestResult(activationRequest);
+            var device = transaction.FindDevice(request.DeviceId);
+            return device is null
+                ? ToRequestResult(activationRequest)
+                : ToRequestResult(activationRequest) with
+                {
+                    Status = device.Status,
+                    ClientNumber = device.ClientNumber,
+                    CredentialVersion = device.CredentialVersion
+                };
         }, cancellationToken);
     }
 
@@ -189,6 +197,33 @@ public sealed class ActivationService(
                 var reactivated = device.Reactivate(now);
                 transaction.SaveDevice(reactivated);
                 return ToResult(reactivated);
+            }), cancellationToken);
+    }
+
+    public ValueTask<ActivationResult> CancelOwnAsync(
+        CancelOwnActivationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequestId(request.RequestId);
+        Require(request.DeviceId, nameof(request.DeviceId));
+        Require(request.Credential, nameof(request.Credential));
+        var now = _timeProvider.GetUtcNow();
+
+        return persistence.ExecuteTransactionAsync(transaction =>
+            RunIdempotent(transaction, request.RequestId, "activation.cancel-own", request, () =>
+            {
+                var device = transaction.FindDevice(request.DeviceId)
+                    ?? throw Error(ActivationErrorCodes.DeviceNotFound, "找不到设备登记。");
+                EnsureCredential(request.Credential, device.ProtectedCredential);
+                if (device.Status == ActivationStatus.Revoked)
+                {
+                    return ToResult(device);
+                }
+
+                var revoked = device.Revoke(now);
+                transaction.SaveDevice(revoked);
+                return ToResult(revoked);
             }), cancellationToken);
     }
 

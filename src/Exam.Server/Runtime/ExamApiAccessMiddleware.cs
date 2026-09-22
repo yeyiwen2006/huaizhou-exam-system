@@ -87,12 +87,18 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         (HttpMethods.IsPost(method) && route is
             "/activation/requests" or
             "/activation/status" or
+            "/activation/cancel-own" or
             "/activation/reactivate" or
             "/participation/login") ||
         (HttpMethods.IsGet(method) && route == "/commands/time");
 
     private static bool IsDeviceRoute(string method, string route)
     {
+        if (HttpMethods.IsGet(method) && (route is "/student/exams" or "/student/instructions"))
+        {
+            return true;
+        }
+
         if (route.StartsWith("/commands/due", StringComparison.Ordinal) ||
             route == "/commands/acknowledgements" ||
             route.StartsWith("/submissions/", StringComparison.Ordinal) ||
@@ -108,8 +114,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             "/participation/prepare-entry" or
             "/participation/confirm" or
             "/participation/withdraw" or
-            "/participation/authorize-write" or
-            "/participation/finalize";
+            "/participation/authorize-write";
     }
 
     public static string RequireAuthenticatedDeviceId(HttpContext context) =>

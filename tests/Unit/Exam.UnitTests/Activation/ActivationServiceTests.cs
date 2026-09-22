@@ -102,6 +102,42 @@ public sealed class ActivationServiceTests
     }
 
     [Fact]
+    public async Task CancelOwnActivation_RequiresCredential_ReplaysReceipt_AndRetainsDeviceIdentity()
+    {
+        var fixture = new Fixture();
+        var applied = await fixture.Service.SubmitRequestAsync(new("own-apply", "own-device", "own-secret"));
+        var approved = await fixture.Service.ApproveAsync(new("own-approve", applied.ActivationRequestId, "room-7"));
+        var request = new CancelOwnActivationRequest("own-cancel", approved.DeviceId, "own-secret");
+
+        var denied = await Assert.ThrowsAsync<ActivationRuleException>(() =>
+            fixture.Service.CancelOwnAsync(request with { Credential = "someone-else" }).AsTask());
+        Assert.Equal(ActivationErrorCodes.InvalidCredential, denied.Code);
+        Assert.True(await fixture.Service.ValidateActiveDeviceAsync(approved.DeviceId, "own-secret"));
+
+        var cancelled = await fixture.Service.CancelOwnAsync(request);
+        var restarted = new ActivationService(fixture.Persistence, fixture.CredentialProtector, fixture.Clock);
+        Assert.Equal(cancelled, await restarted.CancelOwnAsync(request));
+        Assert.Equal(cancelled, await restarted.CancelOwnAsync(request with { RequestId = "own-cancel-again" }));
+        Assert.Equal(ActivationStatus.Revoked, cancelled.Status);
+        Assert.Equal(approved.ClientNumber, cancelled.ClientNumber);
+        Assert.Equal("room-7", cancelled.RoomGroupId);
+        Assert.Equal(approved.CredentialVersion, cancelled.CredentialVersion);
+        Assert.Equal(ActivationStatus.Revoked, (await restarted.GetRequestStatusAsync(new(
+            applied.ActivationRequestId, approved.DeviceId, "own-secret"))).Status);
+
+        var replayConflict = await Assert.ThrowsAsync<ActivationRuleException>(() =>
+            restarted.CancelOwnAsync(request with { Credential = "someone-else" }).AsTask());
+        Assert.Equal(ActivationErrorCodes.IdempotencyConflict, replayConflict.Code);
+
+        var reactivated = await restarted.ReactivateAsync(new("own-reactivate", approved.DeviceId, "own-secret"));
+        Assert.Equal(approved.ClientNumber, reactivated.ClientNumber);
+        Assert.Equal("room-7", reactivated.RoomGroupId);
+        // An old receipt cannot cancel a new activation a second time.
+        Assert.Equal(cancelled, await restarted.CancelOwnAsync(request));
+        Assert.True(await restarted.ValidateActiveDeviceAsync(approved.DeviceId, "own-secret"));
+    }
+
+    [Fact]
     public async Task SequenceStopsAt999_AndStartsAt001OnNextServerDate()
     {
         var fixture = new Fixture(new DateTimeOffset(2026, 9, 22, 23, 59, 0, TimeSpan.Zero));

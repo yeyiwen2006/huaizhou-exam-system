@@ -1,12 +1,14 @@
 ﻿<Window x:Class="Exam.Student.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:Exam.Student"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
-
-    </Grid>
+        Title="怀籀传承在线考试系统 · 学生端"
+        MinWidth="1000"
+        MinHeight="640"
+        Width="1280"
+        Height="800"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Brush.Background}"
+        FontFamily="{DynamicResource Font.Family}">
+    <!-- B06 将在此窗口实现普通账户全屏霸屏；B01 先保证页面流程完整 -->
+    <ContentControl x:Name="PageRegion" />
 </Window>

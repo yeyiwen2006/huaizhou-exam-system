@@ -36,6 +36,11 @@ public sealed record RevokeActivationRequest(
     string DeviceId,
     string Reason);
 
+public sealed record CancelOwnActivationRequest(
+    string RequestId,
+    string DeviceId,
+    string Credential);
+
 public sealed record ReactivateDeviceRequest(
     string RequestId,
     string DeviceId,

@@ -8,6 +8,7 @@ using Exam.Application.Versioning;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
+using Exam.Contracts.Participation;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Commands;
 using Exam.Domain.Submissions;
@@ -42,8 +43,23 @@ public sealed class ExamApiEndpointTests
         Assert.Contains("/api/v1/participation/confirm", routes);
         Assert.Contains("/api/v1/commands/acknowledgements", routes);
         Assert.Contains("/api/v1/submissions/final", routes);
+        Assert.DoesNotContain("/api/v1/participation/finalize", routes);
         Assert.Contains("/api/v1/versioning/exams/{examId}/paper-publications", routes);
         Assert.Contains("/api/v1/versioning/exams/{examId}/grading-publications", routes);
+    }
+
+    [Fact]
+    public async Task Participation_cannot_be_finalized_without_the_final_answer_transaction()
+    {
+        await using var application = await CreateApplicationAsync();
+        using var client = application.GetTestClient();
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/participation/finalize",
+            new FinalizeParticipationRequest("request-bypass", "participation", "device", 1, 1),
+            JsonDefaults.Create());
+
+        Assert.True(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed,
+            $"A standalone participation finalization endpoint must not exist: {response.StatusCode}.");
     }
 
     [Fact]

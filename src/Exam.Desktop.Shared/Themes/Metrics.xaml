@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- 间距、圆角、控件尺寸规范 -->
+
+    <sys:Double x:Key="Spacing.XS">4</sys:Double>
+    <sys:Double x:Key="Spacing.SM">8</sys:Double>
+    <sys:Double x:Key="Spacing.MD">12</sys:Double>
+    <sys:Double x:Key="Spacing.LG">16</sys:Double>
+    <sys:Double x:Key="Spacing.XL">24</sys:Double>
+    <sys:Double x:Key="Spacing.XXL">32</sys:Double>
+
+    <CornerRadius x:Key="Radius.SM">4</CornerRadius>
+    <CornerRadius x:Key="Radius.MD">6</CornerRadius>
+    <CornerRadius x:Key="Radius.LG">10</CornerRadius>
+    <CornerRadius x:Key="Radius.Pill">999</CornerRadius>
+
+    <sys:Double x:Key="Control.Height.Small">28</sys:Double>
+    <sys:Double x:Key="Control.Height">36</sys:Double>
+    <sys:Double x:Key="Control.Height.Large">44</sys:Double>
+
+    <sys:Double x:Key="Icon.Size.SM">14</sys:Double>
+    <sys:Double x:Key="Icon.Size">18</sys:Double>
+    <sys:Double x:Key="Icon.Size.LG">24</sys:Double>
+
+    <Thickness x:Key="Padding.Control">10,0</Thickness>
+    <Thickness x:Key="Padding.ControlLarge">14,0</Thickness>
+    <Thickness x:Key="Padding.Card">16</Thickness>
+
+    <sys:Double x:Key="Page.MaxWidth">960</sys:Double>
+
+</ResourceDictionary>
