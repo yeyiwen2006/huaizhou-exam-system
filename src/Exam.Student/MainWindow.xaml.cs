@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Controls;
 using Exam.Student.Core;
 using Exam.Student.Views;
+using Exam.Contracts.Activation;
+using Exam.Contracts.Submissions;
 
 namespace Exam.Student;
 
@@ -19,14 +21,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>启动流程：已激活 → 登录页；未激活 → 激活页。</summary>
-    public void Start()
+    public async Task StartAsync()
     {
         _navigation = new Navigation(PageRegion);
 
-        var device = App.Services.DeviceStore.Load();
-        if (device is { ClientNumber: not null })
+        var device = await Task.Run(App.Services.DeviceStore.Load);
+        if (device is not null)
         {
-            App.Services.Session.OnActivated(device.ClientNumber);
+            App.Services.ConfigureDevice(device);
+        }
+
+        if (device is { Status: ActivationStatus.Active })
+        {
+            App.Services.StartClock();
             _navigation.GoToLogin();
             return;
         }
@@ -47,6 +54,12 @@ public partial class MainWindow : Window
         private void Set(UserControl page)
         {
             _region.Content = page;
+            if (Window.GetWindow(_region) is { } window)
+            {
+                window.WindowStyle = App.Services.Session.IsActivated ? WindowStyle.None : WindowStyle.SingleBorderWindow;
+                window.ResizeMode = App.Services.Session.IsActivated ? ResizeMode.NoResize : ResizeMode.CanResize;
+                window.WindowState = App.Services.Session.IsActivated ? WindowState.Maximized : WindowState.Normal;
+            }
         }
 
         public void GoToActivation()
@@ -69,14 +82,14 @@ public partial class MainWindow : Window
             Set(new WaitingExamPage(this, exam));
         }
 
-        public void GoToExamInProgress(ExamOverview exam)
+        public void GoToExamInProgress(ExamOverview exam, StudentExamRuntime runtime)
         {
-            Set(new ExamInProgressPage(this, exam));
+            Set(new ExamInProgressPage(this, exam, runtime));
         }
 
-        public void GoToSubmitted()
+        public void GoToSubmitted(SubmissionReceipt receipt)
         {
-            Set(new SubmittedPage(this));
+            Set(new SubmittedPage(this, receipt));
         }
     }
 }

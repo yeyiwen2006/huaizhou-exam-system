@@ -19,7 +19,7 @@
                         Padding="8,3"
                         VerticalAlignment="Center">
                     <TextBlock x:Name="NumberText"
-                               Text="编号 --"
+                               Text="未激活"
                                FontSize="{DynamicResource Font.Size.Caption}"
                                FontWeight="Bold"
                                Foreground="{DynamicResource Brush.Primary}" />

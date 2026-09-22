@@ -16,9 +16,7 @@
   </compatibility>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
-      <!-- S17：100% / 125% / 150% 显示缩放下保持清晰。
-           B01 笔误修复：dpi 声明必须用 SMI/2016 命名空间的 dpiAwareness 元素，
-           原写法（SMI/2005 的 <dpi> 元素）未注册，导致激活上下文失败、apphost 无法启动。 -->
+      <!-- S17：100% / 125% / 150% 显示缩放下保持清晰 -->
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
     </windowsSettings>
   </application>

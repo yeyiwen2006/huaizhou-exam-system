@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Exam.Contracts.Participation;
+using Exam.Contracts.Activation;
+using Exam.Contracts.Submissions;
 
 namespace Exam.Student.Core;
 
@@ -34,6 +36,14 @@ public sealed class StudentSession : ObservableObject
 {
     private string? _clientNumber;
     private SessionCandidate? _candidate;
+    private bool _isActivated;
+    private readonly HashSet<string> _submittedExams = new(StringComparer.Ordinal);
+
+    public bool IsActivated
+    {
+        get => _isActivated;
+        private set => SetProperty(ref _isActivated, value);
+    }
 
     /// <summary>服务器分配的设备编号（激活后稳定，与服务器是否在线无关）。</summary>
     public string? ClientNumber
@@ -60,59 +70,87 @@ public sealed class StudentSession : ObservableObject
     /// <summary>登录后填充（含 SessionId 与报名考试范围）。</summary>
     public StudentSessionResult? LoginResult { get; private set; }
 
-    /// <summary>当前正在作答的考试（B02 解锁后进入；B03 渲染消费，B04 持久化）。</summary>
-    public UnlockedExamContext? CurrentExam { get; private set; }
+    public StudentExamRuntime? ActiveExam { get; private set; }
+
+    public void RegisterExam(StudentExamRuntime runtime)
+    {
+        if (LoginResult is null || runtime.Manager.SessionId != LoginResult.SessionId ||
+            (ActiveExam is not null && !ReferenceEquals(ActiveExam, runtime)))
+        {
+            throw new InvalidOperationException("考试会话与当前登录不匹配，请先恢复原考试。");
+        }
+
+        ActiveExam = runtime;
+        OnPropertyChanged(nameof(ActiveExam));
+    }
+
+    public async Task ReleaseExamAsync()
+    {
+        if (ActiveExam is { } runtime)
+        {
+            await runtime.DisposeAsync();
+            ActiveExam = null;
+            OnPropertyChanged(nameof(ActiveExam));
+        }
+    }
 
     public void OnActivated(string clientNumber)
     {
         ClientNumber = clientNumber;
+        IsActivated = true;
+    }
+
+    public void OnActivationChanged(DeviceRecord? device)
+    {
+        IsActivated = device?.Status == ActivationStatus.Active;
+        ClientNumber = IsActivated ? device!.ClientNumber : null;
+        if (!IsActivated)
+        {
+            Logout();
+        }
     }
 
     public void OnLoggedIn(StudentSessionResult result)
     {
+        if (ActiveExam is not null)
+        {
+            throw new InvalidOperationException("原考试尚未释放，不能切换考生。");
+        }
+
+        _submittedExams.Clear();
         LoginResult = result;
         Candidate = new SessionCandidate(result.Candidate, result.SessionId);
         OnPropertyChanged(nameof(LoginResult));
     }
 
-    /// <summary>
-    /// 开始考试：记录解锁后的试卷内容（仅内存）与参试授权上下文
-    /// （B04 据此核对本地记录权限：ParticipationId/EntryVersion/AuthorizationVersion）。
-    /// </summary>
-    public void BeginExam(
-        string examId,
-        byte[] unlockedPayload,
-        ParticipationAuthorization? authorization = null)
-    {
-        CurrentExam = new UnlockedExamContext(examId, unlockedPayload, authorization);
-        OnPropertyChanged(nameof(CurrentExam));
-    }
-
     /// <summary>退出登录：清空考生信息与会话，账号数据互不互通。</summary>
     public void Logout()
     {
+        if (ActiveExam is not null)
+        {
+            throw new InvalidOperationException("原考试尚未处理完成，不能清除考生会话。");
+        }
+
         LoginResult = null;
         Candidate = null;
-        CurrentExam = null;
+        _submittedExams.Clear();
+        OnPropertyChanged(nameof(LoginResult));
+    }
+
+    public bool HasSubmitted(string examId) => _submittedExams.Contains(examId);
+
+    public void RecordSubmission(SubmissionReceipt receipt)
+    {
+        var candidateId = LoginResult?.CandidateIdsByExam?.GetValueOrDefault(receipt.ExamId) ?? LoginResult?.Candidate.CandidateId;
+        if (LoginResult is null || receipt.CandidateId != candidateId ||
+            !LoginResult.ExamIds.Contains(receipt.ExamId) || string.IsNullOrWhiteSpace(receipt.ReceiptId))
+        {
+            throw new InvalidOperationException("交卷回执与当前考生不匹配。");
+        }
+
+        _submittedExams.Add(receipt.ExamId);
     }
 }
-
-/// <summary>已解锁的考试上下文：明文仅在内存，交卷/离开即由 GC 回收。</summary>
-public sealed record UnlockedExamContext(
-    string ExamId,
-    byte[] Payload,
-    ParticipationAuthorization? Authorization = null);
-
-/// <summary>
-/// 参试授权上下文（来自确认参试结果）：B04 本地恢复时核对权限，
-/// 防止旧授权或另一参试记录写入进度（S05：旧授权不能写进度）。
-/// </summary>
-public sealed record ParticipationAuthorization(
-    string ParticipationId,
-    long EntryVersion,
-    long AuthorizationVersion,
-    long PaperVersion,
-    string? DeviceId = null);
 
 /// <summary>登录考生会话信息。</summary>
 public sealed record SessionCandidate(CandidateIdentity Identity, string SessionId)

@@ -14,7 +14,8 @@
                              CandidateName="{Binding CandidateDisplay, Mode=OneWay}">
             <controls:PageHeader.RightContent>
                 <Button Style="{StaticResource Btn.Danger}"
-                        Content="返回"
+                        Content="退出考试"
+                        Loaded="OnExitButtonLoaded"
                         Click="OnGoBack" />
             </controls:PageHeader.RightContent>
         </controls:PageHeader>
@@ -26,8 +27,8 @@
                     <TextBlock Style="{StaticResource PageTitle}"
                                Text="{Binding ExamName, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                     <controls:StatusPill x:Name="StatePill"
-                                         Text="准备中"
-                                         Level="Neutral"
+                                         Text="尚未确认参试"
+                                         Level="Info"
                                          Margin="12,0,0,0"
                                          VerticalAlignment="Center" />
                 </StackPanel>
@@ -42,92 +43,66 @@
                            Margin="0,8,0,0"
                            Text="" />
 
-                <controls:Banner x:Name="InfoBanner"
-                                Level="Info"
+                <controls:Banner Level="Info"
                                 IsOpen="True"
-                                Message="试题包将在进入本页后自动下载；下载与考试说明齐备并确认参试后，等待开考指令自动解密进入考试。"
+                                Message="请先取得完整试题包与考试说明，再确认参试。试题包在开考前保持加密。当前版本尚未提供完整答题与交卷功能，请勿用于正式考试。"
                                 Margin="0,16,0,0" />
 
-                <controls:Banner x:Name="ErrorBanner"
-                                Level="Error"
-                                IsOpen="False"
-                                Message=""
-                                Margin="0,16,0,0" />
-
-                <!-- 试题下载（B02） -->
+                <!-- 考试说明（全部科目全部题型） -->
                 <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="考试说明" />
+                        <ItemsControl x:Name="InstructionList" Margin="0,12,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- B02 接入：试题下载状态、解密、自动进入考试 -->
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
                         <TextBlock Style="{StaticResource SectionTitle}" Text="试题下载" />
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <controls:StatusPill x:Name="DownloadPill"
-                                                 Text="未开始"
+                                                 Text="正在准备下载…"
                                                  Level="Neutral" />
-                            <TextBlock x:Name="DownloadDetail"
-                                       Style="{StaticResource BodyText}"
-                                       Foreground="{DynamicResource Brush.TextSecondary}"
-                                       Margin="12,0,0,0"
-                                       VerticalAlignment="Center"
-                                       Text="" />
                         </StackPanel>
-                        <ProgressBar x:Name="DownloadBar"
-                                     Height="8"
-                                     Minimum="0"
-                                     Maximum="100"
-                                     Value="0"
-                                     Margin="0,12,0,0" />
-                        <Button x:Name="RetryDownloadButton"
-                                Style="{StaticResource Btn.Secondary}"
-                                Content="重试下载"
-                                Margin="0,12,0,0"
-                                HorizontalAlignment="Left"
-                                Visibility="Collapsed"
-                                Click="OnRetryDownload" />
+                        <ProgressBar x:Name="DownloadBar" Minimum="0" Maximum="100" Height="8" Margin="0,12,0,0" />
+                        <TextBlock x:Name="DownloadDetail" Style="{StaticResource CaptionText}" Margin="0,6,0,0" />
+                        <Button x:Name="RetryDownloadButton" Style="{StaticResource Btn.Secondary}"
+                                Content="重试获取资料" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnRetryDownload" />
                     </StackPanel>
                 </Border>
 
-                <!-- 考试说明（下载的说明资源；字体约定由说明文本自身携带，C01 评审） -->
-                <Border x:Name="InstructionCard"
-                        Style="{StaticResource Card}"
-                        Margin="0,12,0,0">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="考试说明" />
-                        <ItemsControl x:Name="InstructionList" Margin="0,12,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Style="{StaticResource BodyText}"
-                                               Text="{Binding}"
-                                               Margin="0,0,0,6" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="本地答题恢复" />
+                        <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}" Margin="0,8,0,0"
+                                   Text="正在检查本机是否有未完成的固定答卷…" />
+                        <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
+                        <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
+                                Content="重试本地保存" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                Visibility="Collapsed" Click="OnRetryLocalSave" />
                     </StackPanel>
                 </Border>
 
-                <!-- 确认参试（B02：包与说明齐备才可点） -->
-                <Border Style="{StaticResource Card}" Margin="0,12,0,12">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
                         <TextBlock Style="{StaticResource SectionTitle}" Text="参试确认" />
-                        <TextBlock x:Name="ConfirmHint"
-                                   Style="{StaticResource BodyText}"
-                                   Foreground="{DynamicResource Brush.TextSecondary}"
-                                   Margin="0,8,0,0"
-                                   Text="试题包与考试说明齐备后才能确认参试。" />
-                        <Button x:Name="ConfirmButton"
-                                Style="{StaticResource Btn.Primary}"
-                                Content="确认参试"
-                                Margin="0,12,0,0"
-                                HorizontalAlignment="Left"
-                                IsEnabled="False"
-                                Click="OnConfirmParticipation" />
+                        <TextBlock x:Name="ConfirmHint" Style="{StaticResource BodyText}" Margin="0,8,0,0"
+                                   Text="试题包与考试说明全部取得后才能确认参试。" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button x:Name="ConfirmButton" Style="{StaticResource Btn.Primary}" Content="确认参试"
+                                    IsEnabled="False" Click="OnConfirmParticipation" />
+                            <Button x:Name="RetryConnectionButton" Style="{StaticResource Btn.Secondary}"
+                                    Content="重试连接与解锁" Margin="12,0,0,0" Visibility="Collapsed" Click="OnRetryConnection" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
+
+                <controls:Banner x:Name="ErrorBanner" Level="Danger" Margin="0,12,0,0" />
 
             </StackPanel>
         </ScrollViewer>
 
-        <controls:BusyOverlay x:Name="BusyLayer"
-                              Grid.Row="0"
-                              Grid.RowSpan="2"
-                              Message="正在处理…" />
+        <controls:BusyOverlay x:Name="BusyLayer" Grid.RowSpan="2" Message="正在处理…" />
     </Grid>
 </UserControl>

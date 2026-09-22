@@ -1,3 +1,5 @@
+using System.IO;
+using Exam.Contracts.Common;
 using Exam.Contracts.Submissions;
 using Exam.Student.Core;
 
@@ -24,54 +26,46 @@ public sealed class FakeLocalStateStore : ILocalStateStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<LocalStateKey, AnswerStateRecord> _states = new();
-    private readonly Dictionary<LocalStateKey, HashSet<string>> _marks = new();
     private readonly Dictionary<LocalStateKey, PendingSnapshot> _snapshots = new();
     private readonly Dictionary<LocalStateKey, FixedSubmissionRecord> _fixed = new();
     private readonly Dictionary<LocalStateKey, PreparationRecord> _preparations = new();
 
     /// <summary>下一次写操作（保存答案/标记/固定）返回失败。</summary>
     public bool FailNextWrite { get; set; }
+    public bool ThrowOnLoad { get; set; }
+    public Func<Task>? BeforeStateWrite { get; set; }
+    public PendingSnapshot? LastAttemptedSnapshot { get; private set; }
+    public FixedSubmissionRecord? LastAttemptedFixed { get; private set; }
 
     /// <summary>写操作尝试次数（含失败；被门闸阻止的调用不计入）。</summary>
     public int WriteAttempts { get; private set; }
 
     public Task<AnswerStateRecord?> LoadAnswerStateAsync(LocalStateKey key, CancellationToken ct = default)
     {
+        if (ThrowOnLoad) throw new IOException("注入的恢复读取故障。");
         lock (_gate)
         {
-            // 与 SQLite 实现同语义：状态行 + 独立标记表合并；仅有标记时合成最小记录
             _states.TryGetValue(key, out var state);
-            _marks.TryGetValue(key, out var marks);
-            if (state is null && marks is null)
+            return Task.FromResult(state is null ? null : state with
             {
-                return Task.FromResult<AnswerStateRecord?>(null);
-            }
-
-            if (state is null)
-            {
-                return Task.FromResult<AnswerStateRecord?>(new AnswerStateRecord(
-                    null, 0, 0, 0, 0, null, DateTimeOffset.MinValue,
-                    new Dictionary<string, AnswerValue>(), new HashSet<string>(marks!)));
-            }
-
-            return Task.FromResult<AnswerStateRecord?>(state with
-            {
-                Answers = new Dictionary<string, AnswerValue>(state.Answers),
-                Marks = marks is not null ? new HashSet<string>(marks) : new HashSet<string>(state.Marks),
+                Answers = PersistedProgress.FreezeAnswers(state.Answers),
+                Marks = new HashSet<string>(state.Marks),
             });
         }
     }
 
-    public Task<StoreWriteResult> SaveAnswerStateAsync(
+    public async Task<StoreWriteResult> SaveAnswerStateAsync(
         LocalStateKey key, AnswerStateRecord state, PendingSnapshot? snapshot, CancellationToken ct = default)
     {
+        if (BeforeStateWrite is { } wait) await wait();
         lock (_gate)
         {
             WriteAttempts++;
+            LastAttemptedSnapshot = snapshot;
             if (FailNextWrite)
             {
                 FailNextWrite = false;
-                return Task.FromResult(StoreWriteResult.Fail("注入的磁盘故障。"));
+                return StoreWriteResult.Fail("注入的磁盘故障。");
             }
 
             _states[key] = state;
@@ -80,25 +74,12 @@ public sealed class FakeLocalStateStore : ILocalStateStore
                 _snapshots[key] = snapshot;
             }
 
-            return Task.FromResult(StoreWriteResult.Ok());
+            return StoreWriteResult.Ok();
         }
     }
 
     public Task<StoreWriteResult> SaveMarksAsync(LocalStateKey key, IReadOnlyCollection<string> marks, CancellationToken ct = default)
-    {
-        lock (_gate)
-        {
-            WriteAttempts++;
-            if (FailNextWrite)
-            {
-                FailNextWrite = false;
-                return Task.FromResult(StoreWriteResult.Fail("注入的磁盘故障。"));
-            }
-
-            _marks[key] = new HashSet<string>(marks);
-            return Task.FromResult(StoreWriteResult.Ok());
-        }
-    }
+        => throw new InvalidOperationException("标记必须与完整版本状态和快照在同一事务保存。");
 
     public Task<PendingSnapshot?> LoadPendingSnapshotAsync(LocalStateKey key, CancellationToken ct = default)
     {
@@ -116,6 +97,7 @@ public sealed class FakeLocalStateStore : ILocalStateStore
         lock (_gate)
         {
             WriteAttempts++;
+            LastAttemptedFixed = record;
             if (FailNextWrite)
             {
                 FailNextWrite = false;
@@ -134,11 +116,35 @@ public sealed class FakeLocalStateStore : ILocalStateStore
 
     public Task<FixedSubmissionRecord?> LoadFixedSubmissionAsync(LocalStateKey key, CancellationToken ct = default)
     {
+        if (ThrowOnLoad) throw new IOException("注入的恢复读取故障。");
         lock (_gate)
         {
             return Task.FromResult(_fixed.TryGetValue(key, out var fixedRecord)
                 ? fixedRecord
                 : null);
+        }
+    }
+
+    public Task<(StoreWriteResult Result, FixedSubmissionRecord? Record)> TryFixSubmissionAsync(
+        LocalStateKey key, FixedSubmissionRecord record, AnswerStateRecord pendingState,
+        PendingSnapshot pendingSnapshot, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            WriteAttempts++;
+            LastAttemptedFixed = record;
+            LastAttemptedSnapshot = pendingSnapshot;
+            if (FailNextWrite)
+            {
+                FailNextWrite = false;
+                return Task.FromResult((StoreWriteResult.Fail("注入的事务故障。"), (FixedSubmissionRecord?)null));
+            }
+            if (_fixed.TryGetValue(key, out var existing))
+                return Task.FromResult((StoreWriteResult.Ok(), (FixedSubmissionRecord?)existing));
+            _states[key] = pendingState;
+            _snapshots[key] = pendingSnapshot;
+            _fixed[key] = record;
+            return Task.FromResult((StoreWriteResult.Ok(), (FixedSubmissionRecord?)record));
         }
     }
 
@@ -166,7 +172,6 @@ public sealed class FakeLocalStateStore : ILocalStateStore
         lock (_gate)
         {
             _states.Remove(key);
-            _marks.Remove(key);
             _snapshots.Remove(key);
             _fixed.Remove(key);
             _preparations.Remove(key);
@@ -185,7 +190,8 @@ public sealed class AnswerSessionTests
     private static readonly LocalStateKey KeyB = new("srv-1", "exam-1", "cand-B");
 
     private static AnswerSessionContext Context(string participationId = "part-1", long authorizationVersion = 1) =>
-        new(participationId, EntryVersion: 1, AuthorizationVersion: authorizationVersion, PaperVersion: 1, DeviceId: "device-1");
+        new(participationId, EntryVersion: 1, AuthorizationVersion: authorizationVersion, PaperVersion: 1,
+            DeviceId: "device-1", IsServerAuthorized: true);
 
     [Fact]
     public async Task StartAsync_NoSavedState_WritesInitialVersion1()
@@ -278,8 +284,9 @@ public sealed class AnswerSessionTests
         Assert.False(markBlocked.Succeeded);
         Assert.Equal(attemptsBefore, store.WriteAttempts);
 
-        // 内存不包含未落盘的修改
+        // 可靠状态不冒充落盘成功；未保存编辑另外保留用于重试。
         Assert.False(session.Answers.ContainsKey("q1"));
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.PendingAnswers!["q1"]);
     }
 
     [Fact]
@@ -382,7 +389,7 @@ public sealed class AnswerSessionTests
     }
 
     [Fact]
-    public async Task CurrentQuestion_Persisted_WithoutVersionBump()
+    public async Task CurrentQuestion_Persisted_WithVersionBumpAndMatchingSnapshot()
     {
         var store = new FakeLocalStateStore();
         var session = new AnswerSession(store);
@@ -392,10 +399,278 @@ public sealed class AnswerSessionTests
         var result = await session.SetCurrentQuestionAsync("q5");
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, session.AnswerVersion); // 切题不改变答案版本
+        Assert.Equal(3, session.AnswerVersion);
+        var snapshot = await store.LoadPendingSnapshotAsync(KeyA);
+        Assert.Equal(3, snapshot!.AnswerVersion);
+        Assert.Equal("q5", snapshot.CurrentQuestionId);
 
         var restored = new AnswerSession(store);
         await restored.StartAsync(KeyA, Context());
         Assert.Equal("q5", restored.CurrentQuestionId);
+    }
+
+    [Fact]
+    public async Task FailedWrite_RetainsDeepCopiedEdit_AndRetriesExactSnapshot()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        var options = new[] { "A" };
+        store.FailNextWrite = true;
+
+        Assert.False((await session.SetAnswerAsync("q1", new AnswerValue(AnswerKind.Selected, options))).Succeeded);
+        var attempted = store.LastAttemptedSnapshot;
+        options[0] = "B";
+
+        Assert.Equal(1, session.AnswerVersion);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Empty(session.Answers);
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.PendingAnswers!["q1"]);
+        Assert.False((await session.SetCurrentQuestionAsync("q2")).Succeeded);
+
+        var retried = await session.RetrySaveAsync();
+
+        Assert.True(retried.Succeeded);
+        Assert.Equal(2, retried.AnswerVersion);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Same(attempted, store.LastAttemptedSnapshot);
+        Assert.False(string.IsNullOrWhiteSpace(attempted!.RequestId));
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.Answers["q1"]);
+    }
+
+    [Fact]
+    public async Task MarkAndNavigation_AreVersionedTransactions_AndFailedNavigationRetainsBothStates()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        await session.ToggleMarkAsync("q1");
+        await session.SetCurrentQuestionAsync("q1");
+        store.FailNextWrite = true;
+
+        Assert.False((await session.SetCurrentQuestionAsync("q2")).Succeeded);
+        Assert.Equal(3, session.AnswerVersion);
+        Assert.Equal("q1", session.CurrentQuestionId);
+        Assert.Equal("q2", session.PendingCurrentQuestionId);
+        Assert.Contains("q1", session.PendingMarks!);
+        Assert.True((await session.RetrySaveAsync()).Succeeded);
+
+        var state = await store.LoadAnswerStateAsync(KeyA);
+        var snapshot = await store.LoadPendingSnapshotAsync(KeyA);
+        Assert.Equal(4, state!.AnswerVersion);
+        Assert.Equal(state.AnswerVersion, snapshot!.AnswerVersion);
+        Assert.Equal("q2", snapshot.CurrentQuestionId);
+        Assert.Contains("q1", state.Marks);
+        Assert.Equal(state.UpdatedAt, snapshot.SavedAt);
+    }
+
+    [Fact]
+    public async Task ConcurrentEdits_AreSerializedWithoutVersionOrAnswerLoss()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.BeforeStateWrite = async () => { entered.TrySetResult(); await release.Task; };
+
+        var first = session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = Enumerable.Range(2, 8).Select(index =>
+            session.SetAnswerAsync($"q{index}", AnswerValue.Selected("B"))).ToArray();
+        release.SetResult();
+        var results = await Task.WhenAll(new[] { first }.Concat(queued));
+
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        Assert.Equal(Enumerable.Range(2, 9).Select(value => (long)value), results.Select(result => result.AnswerVersion).Order());
+        Assert.Equal(10, session.AnswerVersion);
+        Assert.Equal(9, session.Answers.Count);
+        Assert.Equal(10, store.WriteAttempts);
+    }
+
+    [Fact]
+    public async Task FreezeFailure_LocksImmediately_AndKeepsFirstIdTupleAndSnapshot()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        await session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+        store.FailNextWrite = true;
+
+        var first = await session.FixSubmissionAsync("submission-first");
+
+        Assert.False(first.Succeeded);
+        Assert.Equal(AnswerSessionStatus.FixPending, session.Status);
+        Assert.True(session.HasPendingSubmission);
+        Assert.Null(session.FixedSubmission);
+        Assert.False((await session.SetAnswerAsync("q1", AnswerValue.Selected("B"))).Succeeded);
+        var retried = await session.FixSubmissionAsync("submission-must-not-replace");
+
+        Assert.True(retried.Succeeded);
+        Assert.True(retried.IsReplay);
+        Assert.Equal("submission-first", retried.Record!.SubmissionId);
+        Assert.Equal(first.Record!.RequestId, retried.Record.RequestId);
+        Assert.Equal(first.Record.CreatedAt, retried.Record.CreatedAt);
+        Assert.Equal("part-1", retried.Record.ParticipationId);
+        Assert.Equal("device-1", retried.Record.DeviceId);
+        Assert.Equal(1, retried.Record.EntryVersion);
+        Assert.Equal(1, retried.Record.AuthorizationVersion);
+        Assert.False(session.HasPendingSubmission);
+        AnswerAssert.Equal(AnswerValue.Selected("A"), retried.Record.FrozenAnswers["q1"]);
+    }
+
+    [Fact]
+    public async Task FreezeIncludesUnsavedEdit_AndRetryAtomicallyPersistsItWithSameFixedSubmission()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        store.FailNextWrite = true;
+        await session.SetAnswerAsync("q1", AnswerValue.Abstain());
+        var pending = store.LastAttemptedSnapshot;
+        store.FailNextWrite = true;
+
+        var failed = await session.FixSubmissionAsync("submission-first");
+
+        Assert.False(failed.Succeeded);
+        Assert.Equal(2, failed.Record!.AnswerVersion);
+        AnswerAssert.Equal(AnswerValue.Abstain(), failed.Record.FrozenAnswers["q1"]);
+        Assert.NotNull(store.LastAttemptedFixed);
+        Assert.Equal(1, session.AnswerVersion);
+        Assert.Equal(1, (await store.LoadAnswerStateAsync(KeyA))!.AnswerVersion);
+        Assert.Null(await store.LoadFixedSubmissionAsync(KeyA));
+        Assert.True(session.HasUnsavedChanges);
+        Assert.True((await session.RetrySaveAsync()).Succeeded);
+        Assert.Same(pending, store.LastAttemptedSnapshot);
+        Assert.Equal(AnswerSessionStatus.Fixed, session.Status);
+        Assert.Equal(failed.Record.RequestId, session.FixedSubmission!.RequestId);
+        Assert.Equal("submission-first", session.FixedSubmission.SubmissionId);
+        AnswerAssert.Equal(AnswerValue.Abstain(), session.FixedSubmission.FrozenAnswers["q1"]);
+    }
+
+    [Fact]
+    public async Task FreezeEntry_BlocksEditsQueuedBehindAnInFlightSave()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.BeforeStateWrite = async () => { entered.TrySetResult(); await release.Task; };
+        var inFlight = session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var fix = session.FixSubmissionAsync("submission-first");
+        var laterEdit = session.SetAnswerAsync("q2", AnswerValue.Selected("B"));
+        Assert.Equal(AnswerSessionStatus.FixPending, session.Status);
+        release.SetResult();
+
+        Assert.True((await inFlight).Succeeded);
+        Assert.True((await fix).Succeeded);
+        Assert.False((await laterEdit).Succeeded);
+        Assert.Single(session.FixedSubmission!.FrozenAnswers);
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.FixedSubmission.FrozenAnswers["q1"]);
+    }
+
+    [Fact]
+    public async Task Suspend_RetainsPendingEditAndCanRetry_WithoutCreatingAFalseSubmission()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        store.FailNextWrite = true;
+        await session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+
+        await session.SuspendAsync("服务器已通知考试结束，保留本地记录等待后续收卷功能。");
+        Assert.False((await session.ToggleMarkAsync("q1")).Succeeded);
+        Assert.True((await session.RetrySaveAsync()).Succeeded);
+
+        Assert.Equal(AnswerSessionStatus.Suspended, session.Status);
+        Assert.Null(session.FixedSubmissionId);
+        Assert.Null(session.FixedSubmission);
+        Assert.False(session.HasPendingSubmission);
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.Answers["q1"]);
+    }
+
+    [Fact]
+    public async Task AuthorizationLoss_BlocksQueuedChanges_AndSameStartCannotReauthorize()
+    {
+        var store = new FakeLocalStateStore();
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.BeforeStateWrite = async () => { entered.TrySetResult(); await release.Task; };
+        var inFlight = session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var invalidated = session.InvalidateAuthorizationAsync();
+        Assert.Equal(AnswerSessionStatus.PermissionDenied, session.Status);
+        var rejected = session.SetAnswerAsync("q2", AnswerValue.Selected("B"));
+        release.SetResult();
+        await inFlight;
+        await invalidated;
+
+        Assert.False((await rejected).Succeeded);
+        Assert.Equal(AnswerSessionStatus.PermissionDenied, (await session.StartAsync(KeyA, Context())).Status);
+        Assert.False((await session.RetrySaveAsync()).Succeeded);
+        Assert.False((await session.FixSubmissionAsync("must-not-create")).Succeeded);
+        Assert.False(session.Answers.ContainsKey("q2"));
+    }
+
+    [Fact]
+    public async Task StartRequiresLiveAuthorization_AndCannotReplacePendingStateOrCrossCandidate()
+    {
+        var store = new FakeLocalStateStore();
+        var denied = new AnswerSession(store);
+        Assert.Equal(AnswerSessionStatus.PermissionDenied,
+            (await denied.StartAsync(KeyA, Context() with { IsServerAuthorized = false })).Status);
+        Assert.Equal(0, store.WriteAttempts);
+
+        var session = new AnswerSession(store);
+        await session.StartAsync(KeyA, Context());
+        store.FailNextWrite = true;
+        await session.SetAnswerAsync("q1", AnswerValue.Selected("A"));
+
+        Assert.Equal(AnswerSessionStatus.WriteBlocked, (await session.StartAsync(KeyA, Context())).Status);
+        Assert.Equal(AnswerSessionStatus.PermissionDenied, (await session.StartAsync(KeyB, Context())).Status);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Null(await store.LoadAnswerStateAsync(KeyB));
+        Assert.True((await session.RetrySaveAsync()).Succeeded);
+        AnswerAssert.Equal(AnswerValue.Selected("A"), session.Answers["q1"]);
+    }
+
+    [Fact]
+    public async Task RestoreReadFailure_IsReportedAndNeverReplacedWithBlankState()
+    {
+        var store = new FakeLocalStateStore { ThrowOnLoad = true };
+        var session = new AnswerSession(store);
+
+        var result = await session.StartAsync(KeyA, Context());
+
+        Assert.Equal(AnswerSessionStatus.WriteBlocked, result.Status);
+        Assert.False(result.IsUsable);
+        Assert.NotNull(session.LastError);
+        Assert.False((await session.RetrySaveAsync()).Succeeded);
+        Assert.False((await session.FixSubmissionAsync("must-not-create")).Succeeded);
+        Assert.Equal(0, store.WriteAttempts);
+        Assert.False(session.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public async Task RestoreRejectsAnotherDevice_EvenWithOtherwiseMatchingAuthorization()
+    {
+        var store = new FakeLocalStateStore();
+        var original = new AnswerSession(store);
+        await original.StartAsync(KeyA, Context());
+        await original.FixSubmissionAsync("original-fixed");
+        var attempts = store.WriteAttempts;
+
+        var anotherDevice = new AnswerSession(store);
+        var result = await anotherDevice.StartAsync(KeyA, Context() with { DeviceId = "device-2" });
+
+        Assert.Equal(AnswerSessionStatus.PermissionDenied, result.Status);
+        Assert.Null(anotherDevice.FixedSubmission);
+        Assert.Equal(attempts, store.WriteAttempts);
     }
 }
