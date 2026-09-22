@@ -85,6 +85,47 @@ public sealed class PostgresVersionedResourceStore(
         return await reader.ReadAsync(cancellationToken) ? ReadResource(reader) : null;
     }
 
+    public async Task<VersionedEncryptedResource?> FindForPreparationAsync(
+        string resourceId,
+        string preparationId,
+        string sessionId,
+        string authenticatedDeviceId,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT resource.resource_id, resource.exam_id, resource.resource_kind,
+                   resource.resource_version, resource.encrypted_content,
+                   resource.encryption_envelope::text, resource.created_at, resource.created_by
+              FROM exam.versioned_resources AS resource
+              JOIN exam.entry_preparations AS preparation
+                ON preparation.preparation_id = $2
+              JOIN exam.student_sessions AS session
+                ON session.session_id = preparation.session_id
+               AND session.device_id = preparation.device_id
+              JOIN exam.exam_entry_access AS entry_access
+                ON entry_access.exam_id = preparation.exam_id
+             WHERE resource.resource_id = $1
+               AND preparation.session_id = $3
+               AND preparation.device_id = $4
+               AND resource.exam_id = preparation.exam_id
+               AND resource.resource_kind = 'paper-package'
+               AND resource.resource_version = preparation.paper_version
+               AND entry_access.paper_version = preparation.paper_version
+               AND entry_access.instructions_version = preparation.instructions_version
+               AND entry_access.package_ready
+               AND entry_access.instructions_ready
+               AND entry_access.lifecycle <> 'ended'
+               AND CURRENT_TIMESTAMP < entry_access.scheduled_end;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue(resourceId);
+        command.Parameters.AddWithValue(preparationId);
+        command.Parameters.AddWithValue(sessionId);
+        command.Parameters.AddWithValue(authenticatedDeviceId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadResource(reader) : null;
+    }
+
     private static VersionedEncryptedResource ReadResource(NpgsqlDataReader reader)
     {
         var envelope = JsonSerializer.Deserialize<EncryptedPackageEnvelope>(reader.GetString(5), JsonOptions)
