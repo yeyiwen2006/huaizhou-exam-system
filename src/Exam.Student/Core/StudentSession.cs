@@ -70,6 +70,30 @@ public sealed class StudentSession : ObservableObject
     /// <summary>登录后填充（含 SessionId 与报名考试范围）。</summary>
     public StudentSessionResult? LoginResult { get; private set; }
 
+    public StudentExamRuntime? ActiveExam { get; private set; }
+
+    public void RegisterExam(StudentExamRuntime runtime)
+    {
+        if (LoginResult is null || runtime.Manager.SessionId != LoginResult.SessionId ||
+            (ActiveExam is not null && !ReferenceEquals(ActiveExam, runtime)))
+        {
+            throw new InvalidOperationException("考试会话与当前登录不匹配，请先恢复原考试。");
+        }
+
+        ActiveExam = runtime;
+        OnPropertyChanged(nameof(ActiveExam));
+    }
+
+    public async Task ReleaseExamAsync()
+    {
+        if (ActiveExam is { } runtime)
+        {
+            await runtime.DisposeAsync();
+            ActiveExam = null;
+            OnPropertyChanged(nameof(ActiveExam));
+        }
+    }
+
     public void OnActivated(string clientNumber)
     {
         ClientNumber = clientNumber;
@@ -88,6 +112,11 @@ public sealed class StudentSession : ObservableObject
 
     public void OnLoggedIn(StudentSessionResult result)
     {
+        if (ActiveExam is not null)
+        {
+            throw new InvalidOperationException("原考试尚未释放，不能切换考生。");
+        }
+
         _submittedExams.Clear();
         LoginResult = result;
         Candidate = new SessionCandidate(result.Candidate, result.SessionId);
@@ -97,6 +126,11 @@ public sealed class StudentSession : ObservableObject
     /// <summary>退出登录：清空考生信息与会话，账号数据互不互通。</summary>
     public void Logout()
     {
+        if (ActiveExam is not null)
+        {
+            throw new InvalidOperationException("原考试尚未处理完成，不能清除考生会话。");
+        }
+
         LoginResult = null;
         Candidate = null;
         _submittedExams.Clear();

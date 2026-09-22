@@ -11,3 +11,19 @@ public sealed record StudentExamOverview(
     IReadOnlyList<string> Subjects,
     ExamLifecycle Lifecycle,
     string? CategoryName = null);
+
+/// <summary>Public text generated upstream from structured exam rules; never a source of scoring rules.</summary>
+public sealed record InstructionsDocument(long Version, IReadOnlyList<string> Lines);
+
+public sealed record UpdateStudentExamMetadataRequest(
+    string RequestId,
+    long ExpectedVersion,
+    string Name,
+    string? CategoryName,
+    IReadOnlyList<string> Subjects,
+    IReadOnlyList<string> InstructionLines);
+
+public sealed record StudentExamMetadataResult(
+    string ExamId,
+    long Version,
+    long InstructionsVersion);

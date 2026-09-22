@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Desktop.Shared\Exam.Desktop.Shared.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
   </ItemGroup>
 
   <PropertyGroup>

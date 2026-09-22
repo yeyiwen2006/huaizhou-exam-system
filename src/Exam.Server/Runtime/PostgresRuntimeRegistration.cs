@@ -109,7 +109,14 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(encryptionPolicy);
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
+        services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
+        services.AddSingleton<IPackageKeyUnwrapper>(new CertificateStorePackageKeyUnwrapper(
+            identity.NodeId,
+            configuration["PackageSecurity:CertificateThumbprint"] ?? string.Empty,
+            System.Security.Cryptography.X509Certificates.StoreLocation.LocalMachine));
+        services.AddSingleton<PostgresPackageUnlockService>();
         services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentDirectory>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentExamMetadataService>();
 
         if (configuration.GetValue("Backup:Enabled", false))
         {

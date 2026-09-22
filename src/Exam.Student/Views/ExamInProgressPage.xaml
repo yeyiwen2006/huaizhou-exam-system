@@ -87,9 +87,11 @@
                     <!-- B03 接入：题干 + 图片（居中、按 LaTeX 版式）+ 选项（圆形按钮） -->
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <controls:Banner Level="Info"
+                            <controls:Banner x:Name="PaperBanner"
+                                            Level="Info"
                                             IsOpen="True"
                                             Message="当前版本尚未提供答题与交卷功能，请联系考务人员。此页面不能用于正式考试。" />
+                            <controls:Banner x:Name="RuntimeErrorBanner" Level="Danger" Margin="0,12,0,0" />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

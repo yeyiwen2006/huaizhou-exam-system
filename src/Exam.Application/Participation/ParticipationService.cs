@@ -106,22 +106,26 @@ public sealed class ParticipationService(
         var session = await GetAuthorizedSessionAsync(request.SessionId, request.ExamId, cancellationToken)
             .ConfigureAwait(false);
         EnsureAuthenticatedDeviceOwnsSession(authenticatedDeviceId, session);
-        var exam = await GetAllowedExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
+        var exam = await GetExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
         var now = _timeProvider.GetUtcNow();
 
         return await persistence.ExecuteTransactionAsync(transaction =>
         {
             EnsureCurrentSession(transaction, session);
-            EnsureCurrentExam(transaction, exam, _timeProvider.GetUtcNow());
-            return RunIdempotent(transaction, request.RequestId, "participation.prepare", request, () =>
+            EnsureCurrentExam(transaction, exam);
+            // Acquire the request lock before the participation lock, as the other
+            // mutation paths do, even though replay must recheck current authority.
+            transaction.FindIdempotencyRecord(request.RequestId);
+            var candidateId = CandidateIdForExam(session, request.ExamId);
+            var participation = transaction.FindParticipation(request.ExamId, candidateId);
+            if (participation is { BusinessState: ParticipationBusinessState.Submitted })
             {
-                var candidateId = CandidateIdForExam(session, request.ExamId);
-                var participation = transaction.FindParticipation(request.ExamId, candidateId);
-                if (participation is { BusinessState: ParticipationBusinessState.Submitted })
-                {
-                    throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次进入考试。");
-                }
+                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次进入考试。");
+            }
 
+            EnsureExamAllowedNow(exam, _timeProvider.GetUtcNow(), IsActualParticipation(participation));
+            var result = RunIdempotent(transaction, request.RequestId, "participation.prepare", request, () =>
+            {
                 if (participation is not null &&
                     !StringComparer.Ordinal.Equals(participation.AuthorizedDeviceId, session.DeviceId))
                 {
@@ -174,6 +178,17 @@ public sealed class ParticipationService(
                     participation?.AuthorizationVersion,
                     now);
             });
+
+            // A saved preparation receipt is not an authorization token. A device that
+            // lost authorization after that request must start the device-decision flow.
+            if (participation is not null &&
+                !StringComparer.Ordinal.Equals(participation.AuthorizedDeviceId, session.DeviceId) &&
+                result.Status != EntryPreparationStatus.DeviceDecisionPending)
+            {
+                throw Error(ParticipationErrorCodes.AuthorizationRevoked, "设备授权已变化，请重新申请进入并等待裁决。");
+            }
+
+            return result;
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -201,27 +216,29 @@ public sealed class ParticipationService(
         var session = await GetAuthorizedSessionAsync(request.SessionId, request.ExamId, cancellationToken)
             .ConfigureAwait(false);
         EnsureAuthenticatedDeviceOwnsSession(authenticatedDeviceId, session);
-        var exam = await GetAllowedExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
+        var exam = await GetExamAsync(request.ExamId, cancellationToken).ConfigureAwait(false);
 
         return await persistence.ExecuteTransactionAsync(transaction =>
         {
             EnsureCurrentSession(transaction, session);
-            EnsureCurrentExam(transaction, exam, _timeProvider.GetUtcNow());
-            return RunIdempotent(transaction, request.RequestId, "participation.confirm", request, () =>
+            EnsureCurrentExam(transaction, exam);
+            transaction.FindIdempotencyRecord(request.RequestId);
+            var candidateId = CandidateIdForExam(session, request.ExamId);
+            var participation = transaction.FindParticipation(request.ExamId, candidateId);
+            if (participation is { BusinessState: ParticipationBusinessState.Submitted })
             {
-                var candidateId = CandidateIdForExam(session, request.ExamId);
-                var participation = transaction.FindParticipation(request.ExamId, candidateId);
-                if (participation is { BusinessState: ParticipationBusinessState.Submitted })
-                {
-                    throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次参试。");
-                }
+                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次参试。");
+            }
 
-                if (participation is not null &&
-                    !StringComparer.Ordinal.Equals(participation.AuthorizedDeviceId, session.DeviceId))
-                {
-                    throw Error(ParticipationErrorCodes.DeviceDecisionPending, "当前设备须等待考务人员裁决。");
-                }
+            if (participation is not null &&
+                !StringComparer.Ordinal.Equals(participation.AuthorizedDeviceId, session.DeviceId))
+            {
+                throw Error(ParticipationErrorCodes.DeviceDecisionPending, "当前设备须等待考务人员裁决。");
+            }
 
+            EnsureExamAllowedNow(exam, _timeProvider.GetUtcNow(), IsActualParticipation(participation));
+            var result = RunIdempotent(transaction, request.RequestId, "participation.confirm", request, () =>
+            {
                 var preparation = transaction.FindPreparation(request.PreparationId)
                     ?? throw Error(ParticipationErrorCodes.PreparationNotFound, "找不到有效的进入准备记录。");
                 if (!StringComparer.Ordinal.Equals(preparation.SessionId, session.SessionId) ||
@@ -240,7 +257,7 @@ public sealed class ParticipationService(
                     throw Error(ParticipationErrorCodes.PreparationVersionMismatch, "下载的试题包或考试说明已不是当前版本。");
                 }
 
-                var state = exam.Lifecycle == ExamLifecycle.Running
+                var state = CurrentLifecycle(exam, _timeProvider.GetUtcNow()) == ExamLifecycle.Running
                     ? ParticipationBusinessState.Answering
                     : ParticipationBusinessState.Waiting;
                 if (participation is null)
@@ -261,10 +278,6 @@ public sealed class ParticipationService(
                     participation = participation.Reenter(session.DeviceId, state);
                     transaction.SaveParticipation(participation);
                 }
-                else if (!StringComparer.Ordinal.Equals(participation.AuthorizedDeviceId, session.DeviceId))
-                {
-                    throw Error(ParticipationErrorCodes.DeviceDecisionPending, "当前设备须等待考务人员裁决。");
-                }
                 else if (state == ParticipationBusinessState.Answering &&
                          participation.BusinessState == ParticipationBusinessState.Waiting)
                 {
@@ -276,10 +289,20 @@ public sealed class ParticipationService(
                     transaction.SaveParticipation(participation);
                 }
 
-                return ToResult(
-                    participation,
-                    exam.Lifecycle == ExamLifecycle.Running ? exam.UnlockReference : null);
+                return ToResult(participation, null);
             });
+
+            // Idempotency prevents repeating the business mutation, not observing new
+            // lifecycle/authorization facts. Never replay a stale unlock after the end.
+            var current = transaction.FindParticipation(result.ParticipationId)
+                ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试登记已不存在。");
+            var lifecycle = CurrentLifecycle(exam, _timeProvider.GetUtcNow());
+            return ToResult(current,
+                lifecycle == ExamLifecycle.Running && current.BusinessState == ParticipationBusinessState.Answering
+                    ? exam.UnlockReference : null) with
+            {
+                Lifecycle = lifecycle
+            };
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -518,14 +541,23 @@ public sealed class ParticipationService(
             }), cancellationToken);
     }
 
-    public ValueTask<ParticipationResult?> FindParticipationAsync(
+    public async ValueTask<ParticipationResult?> FindParticipationAsync(
         string participationId,
-        CancellationToken cancellationToken = default) =>
-        persistence.ExecuteTransactionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var result = await persistence.ExecuteTransactionAsync(
             transaction => transaction.FindParticipation(participationId) is { } participation
                 ? ToResult(participation, null)
                 : null,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        if (result is null)
+        {
+            return null;
+        }
+
+        var exam = await examDirectory.FindAsync(result.ExamId, cancellationToken).ConfigureAwait(false);
+        return result with { Lifecycle = exam is null ? null : CurrentLifecycle(exam, _timeProvider.GetUtcNow()) };
+    }
 
     public ValueTask<IReadOnlyList<ParticipationResult>> ListActualParticipationsAsync(
         string examId,
@@ -579,13 +611,12 @@ public sealed class ParticipationService(
         return session;
     }
 
-    private async ValueTask<ExamEntrySnapshot> GetAllowedExamAsync(
+    private async ValueTask<ExamEntrySnapshot> GetExamAsync(
         string examId,
         CancellationToken cancellationToken)
     {
         var exam = await examDirectory.FindAsync(examId, cancellationToken).ConfigureAwait(false)
             ?? throw Error(ParticipationErrorCodes.ExamNotFound, "找不到考试。");
-        EnsureExamAllowedNow(exam, _timeProvider.GetUtcNow());
         return exam;
     }
 
@@ -612,8 +643,7 @@ public sealed class ParticipationService(
 
     private static void EnsureCurrentExam(
         IParticipationTransaction transaction,
-        ExamEntrySnapshot exam,
-        DateTimeOffset now)
+        ExamEntrySnapshot exam)
     {
         if (!transaction.IsExamEntryCurrent(exam))
         {
@@ -621,15 +651,22 @@ public sealed class ParticipationService(
                 ParticipationErrorCodes.PreparationVersionMismatch,
                 "考试时间、状态或资源版本已变化，请重新获取进入资料。");
         }
-
-        EnsureExamAllowedNow(exam, now);
     }
 
-    private static void EnsureExamAllowedNow(ExamEntrySnapshot exam, DateTimeOffset now)
+    private static bool IsActualParticipation(ParticipationRecord? participation) =>
+        participation?.BusinessState is ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering;
+
+    private static ExamLifecycle CurrentLifecycle(ExamEntrySnapshot exam, DateTimeOffset now) =>
+        exam.Lifecycle == ExamLifecycle.Ended || now >= exam.ScheduledEnd ? ExamLifecycle.Ended : exam.Lifecycle;
+
+    private static void EnsureExamAllowedNow(
+        ExamEntrySnapshot exam,
+        DateTimeOffset now,
+        bool actualRecovery = false)
     {
-        if (exam.Lifecycle == ExamLifecycle.Ended ||
+        if (!actualRecovery && (exam.Lifecycle == ExamLifecycle.Ended ||
             now < exam.ScheduledStart - EntryWindowBeforeStart ||
-            now >= exam.ScheduledEnd)
+            now >= exam.ScheduledEnd))
         {
             throw Error(ParticipationErrorCodes.EntryNotAllowed, "当前不在允许进入考试的时间或状态内。");
         }
@@ -645,7 +682,7 @@ public sealed class ParticipationService(
             throw Error(ParticipationErrorCodes.ResourcesNotReady, "考试资源元数据无效。");
         }
 
-        if (exam.Lifecycle == ExamLifecycle.Running && string.IsNullOrWhiteSpace(exam.UnlockReference))
+        if (CurrentLifecycle(exam, now) == ExamLifecycle.Running && string.IsNullOrWhiteSpace(exam.UnlockReference))
         {
             throw Error(ParticipationErrorCodes.ResourcesNotReady, "考试已开始，但解锁信息尚不可用。");
         }
