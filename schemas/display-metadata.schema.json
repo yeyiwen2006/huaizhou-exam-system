@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huaizhou.example/schemas/display-metadata.schema.json",
+  "title": "Per-question display metadata",
+  "description": "逐题显示元数据，对应 agent-implementation-guide.md 中 Question 的 displayMetadata 字段。只放「源侧声明、可静态校验」的显示信息；编译产物（每题页数、选项定位区域）不写入清单：页数由 D02 编译后核对并写回，选项区域由 D03 以 paperVersion 关联的版本产物发布。",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "anchorScheme": {
+      "const": "pageTopLeftNormalizedV1",
+      "description": "坐标规范名称：选项定位区域原点在页面左上角、按页面实际尺寸归一化到 [0,1]，显示时按实际尺寸缩放（agent-implementation-guide.md 的坐标约定）。省略时按此默认值处理。D03 产出的区域与 B03 的控件绑定必须使用同一名称，任何一方不得自造。"
+    },
+    "optionCaptions": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "description": "与题目 options 等长同序的显示文本，用于原卷使用 A. / A、/ 甲乙丙丁 等不同写法时，学生端仍能一致地显示与绑定选项控件。省略时按 options 原值显示。",
+      "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+    },
+    "pageCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "该题原版 PDF 页数。长题保留多页；清单作者可声明期望值供 D02 编译后核对，D02 以实测值写回。"
+    }
+  }
+}

@@ -108,6 +108,7 @@ SignalR事件包括START、END、SCHEDULE_CHANGED、PAPER_UPDATED、DEVICE_DECID
     {
       "groupId": "group-1",
       "subjectId": "subject-1",
+      "name": "一、单项选择题",
       "type": "single",
       "order": 1,
       "questionCount": 1,

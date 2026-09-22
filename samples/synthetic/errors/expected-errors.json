@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "note": "每个子目录是一个最小错误包：只含清单与（服务器专用）答案，恰好含一处缺陷。这些夹具针对 D01 的静态校验，不含 TeX 源文件；文件是否存在属于 D02 的依赖检查。rule 为稳定规则标识，location 为 RFC 6901 JSON Pointer；expectAdditionalErrors 为 false 表示不得再报其他错误。",
+  "cases": [
+    {
+      "case": "schema-version-unsupported",
+      "summary": "清单 schemaVersion 不是受支持版本",
+      "expect": [
+        {
+          "rule": "manifest.schema.version",
+          "location": "/schemaVersion"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "unknown-field",
+      "summary": "清单出现未定义字段",
+      "expect": [
+        {
+          "rule": "manifest.unknownField",
+          "location": "/unknownExtra"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "exam-name-invalid",
+      "summary": "考试名称含 Windows 文件名非法字符",
+      "expect": [
+        {
+          "rule": "manifest.examName.invalidFileName",
+          "location": "/examName"
+        },
+        {
+          "rule": "questions.source.fileName",
+          "location": "/questions/0/source"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "duplicate-question-no",
+      "summary": "两题题号重复",
+      "expect": [
+        {
+          "rule": "questions.duplicateNumber",
+          "location": "/questions/1/questionNo"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "duplicate-question-id",
+      "summary": "两题题目标识重复",
+      "expect": [
+        {
+          "rule": "questions.duplicateId",
+          "location": "/questions/1/questionId"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "group-unknown-subject",
+      "summary": "题组引用不存在的科目",
+      "expect": [
+        {
+          "rule": "groups.unknownSubject",
+          "location": "/groups/0/subjectId"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "question-unknown-group",
+      "summary": "题目引用不存在的题组",
+      "expect": [
+        {
+          "rule": "questions.unknownGroup",
+          "location": "/questions/0/groupId"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "question-group-subject-mismatch",
+      "summary": "题目科目与所属题组的科目不一致",
+      "expect": [
+        {
+          "rule": "questions.groupSubjectMismatch",
+          "location": "/questions/0/subjectId"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "question-count-mismatch",
+      "summary": "题组声明的题量与题目数不一致",
+      "expect": [
+        {
+          "rule": "groups.questionCount.mismatch",
+          "location": "/groups/0/questionCount"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "type-invalid",
+      "summary": "题组题型不在 single/multiple/indeterminate 之内",
+      "expect": [
+        {
+          "rule": "groups.type.invalid",
+          "location": "/groups/0/type"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "scoring-branch-mismatch",
+      "summary": "单项选择题组同时给出了多项分支",
+      "expect": [
+        {
+          "rule": "groups.scoring.branchMismatch",
+          "location": "/groups/0/scoring"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "scoring-branch-missing",
+      "summary": "不定项题组缺少多项分支",
+      "expect": [
+        {
+          "rule": "groups.scoring.branchMissing",
+          "location": "/groups/0/scoring"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "options-duplicate",
+      "summary": "题目选项标识重复",
+      "expect": [
+        {
+          "rule": "questions.options.duplicate",
+          "location": "/questions/0/options"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "options-too-few",
+      "summary": "题目选项少于两个",
+      "expect": [
+        {
+          "rule": "questions.options.tooFew",
+          "location": "/questions/0/options"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "source-path-escape",
+      "summary": "题目源文件路径越出包根目录",
+      "expect": [
+        {
+          "rule": "questions.source.pathEscapes",
+          "location": "/questions/0/source"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "source-filename-invalid",
+      "summary": "题目源文件名的题号与清单题号不一致",
+      "expect": [
+        {
+          "rule": "questions.source.fileName",
+          "location": "/questions/0/source"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "maxscore-not-constant",
+      "summary": "科目满分用了变量而不是常量",
+      "expect": [
+        {
+          "rule": "subjects.maxScore.constantRequired",
+          "location": "/subjects/0/maxScore"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "maxscore-mismatch",
+      "summary": "科目满分与逐题满分之和不符",
+      "expect": [
+        {
+          "rule": "subjects.maxScore.mismatch",
+          "location": "/subjects/0/maxScore"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "expression-unknown-variable",
+      "summary": "表达式使用白名单之外的变量",
+      "expect": [
+        {
+          "rule": "rule.score.expression.unknownVariable",
+          "location": "/groups/0/scoring/oneCorrect/correct"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "expression-syntax",
+      "summary": "表达式语法不完整",
+      "expect": [
+        {
+          "rule": "rule.score.expression.invalid",
+          "location": "/groups/0/scoring/oneCorrect/correct"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "expression-division-by-zero",
+      "summary": "表达式存在常量除零",
+      "expect": [
+        {
+          "rule": "rule.score.expression.divisionByZero",
+          "location": "/groups/0/scoring/oneCorrect/correct"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "expression-non-terminating",
+      "summary": "表达式常量部分的最终分值不是有限小数",
+      "expect": [
+        {
+          "rule": "rule.score.expression.nonTerminatingDecimal",
+          "location": "/groups/0/scoring/oneCorrect/correct"
+        }
+      ],
+      "expectAdditionalErrors": true
+    },
+    {
+      "case": "answer-unknown-question",
+      "summary": "答案引用清单中不存在的题目",
+      "expect": [
+        {
+          "rule": "rule.answerKey.unknownQuestion",
+          "location": "/answers/0/questionId"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "answer-question-no-mismatch",
+      "summary": "答案题号与清单不一致",
+      "expect": [
+        {
+          "rule": "rule.answerKey.questionNoMismatch",
+          "location": "/answers/0/questionNo"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "answer-option-not-declared",
+      "summary": "答案的正确选项不在题目选项之内",
+      "expect": [
+        {
+          "rule": "rule.answerKey.optionNotDeclared",
+          "location": "/answers/0/correctOptionIds"
+        }
+      ],
+      "expectAdditionalErrors": false
+    },
+    {
+      "case": "answer-correct-count-invalid",
+      "summary": "单项选择题给了多个正确选项",
+      "expect": [
+        {
+          "rule": "rule.answerKey.correctCount",
+          "location": "/answers/0/correctOptionIds"
+        }
+      ],
+      "expectAdditionalErrors": false
+    }
+  ]
+}

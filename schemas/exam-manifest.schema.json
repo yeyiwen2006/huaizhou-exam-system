@@ -1,14 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huaizhou.example/schemas/exam-manifest.schema.json",
-  "title": "Synthetic exam package manifest",
+  "title": "Exam package manifest",
+  "description": "逐题导入包的清单。GUI 和 CLI 按目录或 ZIP 导入，包含逐题 TeX、共享样式、题目图片及本清单；路径相对包根目录并保留子目录结构，按数字题号及清单顺序导入，见 requirements.md「逐题导入、原版显示与加密」。本文件自包含，分数表达式与显示元数据的定义同时以 schemas/scoring-rules.schema.json 和 schemas/display-metadata.schema.json 单独发布；一致性由 tests/Unit/Exam.UnitTests/Importing/SchemaConsistencyTests.cs 断言，避免两份定义漂移。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "examId", "examName", "subjects", "groups", "questions", "resourceRoots"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "examId": { "type": "string", "minLength": 1 },
-    "examName": { "type": "string", "minLength": 1 },
+    "examId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "examName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "考试名称。同时用于逐题文件名前缀，创建考试时必须检查能否用作 Windows 文件名（非法字符、保留设备名、结尾空格或句点），由校验器判定。"
+    },
     "subjects": {
       "type": "array",
       "minItems": 1,
@@ -17,81 +23,188 @@
         "additionalProperties": false,
         "required": ["subjectId", "name", "maxScore"],
         "properties": {
-          "subjectId": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "maxScore": { "$ref": "#/$defs/scoreExpression" }
+          "subjectId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "maxScore": {
+            "$ref": "#/$defs/scoreConstant",
+            "description": "科目满分，必须是无变量的有限十进制常量（需求中只有「每小题…分」使用变量）。必须等于该科所有题组逐题满分之和，配置不符不得发布；逐题满分依赖参考答案，因此该求和校验在同时持有清单与答案时进行。"
+          }
         }
       }
     },
     "groups": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["groupId", "subjectId", "type", "order", "questionCount", "scoring"],
-        "properties": {
-          "groupId": { "type": "string", "minLength": 1 },
-          "subjectId": { "type": "string", "minLength": 1 },
-          "type": { "enum": ["single", "multiple", "indeterminate"] },
-          "order": { "type": "integer", "minimum": 1 },
-          "questionCount": { "type": "integer", "minimum": 1 },
-          "allowAbstain": { "type": "boolean", "default": false },
-          "scoring": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
-              "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
-            },
-            "minProperties": 1
-          }
-        }
-      }
+      "items": { "$ref": "#/$defs/group" }
     },
     "questions": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["questionId", "questionNo", "subjectId", "groupId", "source", "options"],
-        "properties": {
-          "questionId": { "type": "string", "minLength": 1 },
-          "questionNo": { "type": "integer", "minimum": 1 },
-          "subjectId": { "type": "string", "minLength": 1 },
-          "groupId": { "type": "string", "minLength": 1 },
-          "source": { "$ref": "#/$defs/relativePath" },
-          "options": {
-            "type": "array",
-            "minItems": 2,
-            "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1 }
-          }
-        }
-      }
+      "items": { "$ref": "#/$defs/question" }
     },
     "resourceRoots": {
       "type": "array",
       "uniqueItems": true,
+      "description": "包内需要收集的共享资源目录（如题图与共享样式），相对包根目录。目录不存在或文件缺失由 D02 的依赖检查定位报错。",
       "items": { "$ref": "#/$defs/relativePath" }
     }
   },
   "$defs": {
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groupId", "subjectId", "name", "type", "order", "questionCount", "scoring"],
+      "description": "题组。同科可有多个相同题型的题组，每组有独立标识、名称、顺序、题量及计分规则。",
+      "properties": {
+        "groupId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "题组显示名称，用于学生端导航与考试说明，如「一、不定项选择题」。"
+        },
+        "type": { "enum": ["single", "multiple", "indeterminate"] },
+        "order": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999,
+          "description": "题组在本科目内的显示顺序。"
+        },
+        "questionCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999,
+          "description": "题组题量，必须等于清单中归属于该组的题目数。"
+        },
+        "maxScore": {
+          "$ref": "#/$defs/scoreConstant",
+          "description": "可选。题组满分，必须是无变量的有限十进制常量。声明时必须等于该组逐题满分之和。"
+        },
+        "allowAbstain": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用「不作答」。启用后该题组学生端在原选项之后显示「不作答」，与普通选项互斥。"
+        },
+        "scoring": { "$ref": "#/$defs/scoring" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "single" } }, "required": ["type"] },
+          "then": { "properties": { "scoring": { "$ref": "#/$defs/singleGroupRules" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "multiple" } }, "required": ["type"] },
+          "then": { "properties": { "scoring": { "$ref": "#/$defs/multipleGroupRules" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "indeterminate" } }, "required": ["type"] },
+          "then": { "properties": { "scoring": { "$ref": "#/$defs/indeterminateGroupRules" } } }
+        }
+      ]
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "questionNo", "subjectId", "groupId", "source", "options"],
+      "description": "逐题条目。全卷题号唯一，跨科不重置；开考后标识及结构固定。",
+      "properties": {
+        "questionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "questionNo": { "type": "integer", "minimum": 1, "maximum": 99999 },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "groupId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source": {
+          "$ref": "#/$defs/questionSource",
+          "description": "该题 TeX 源文件，相对包根目录，命名为「考试名称_题号.tex」，以最后一个下划线后的数字识别题号，且必须与 questionNo 一致。"
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 26,
+          "uniqueItems": true,
+          "description": "选项标识，按原卷显示顺序。选项文本与版式保持在原版 PDF 中，这里只登记标识。",
+          "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+        },
+        "displayMetadata": { "$ref": "#/$defs/displayMetadata" }
+      }
+    },
+    "displayMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "逐题显示元数据。与 schemas/display-metadata.schema.json 一致。编译产物（每题页数、选项定位区域）不写入清单：页数由 D02 编译后核对并写回，选项区域由 D03 以 paperVersion 关联的版本产物发布。",
+      "properties": {
+        "anchorScheme": {
+          "const": "pageTopLeftNormalizedV1",
+          "description": "坐标规范名称：选项定位区域原点在页面左上角、按页面实际尺寸归一化到 [0,1]，显示时按实际尺寸缩放（agent-implementation-guide.md 的坐标约定）。省略时按此默认值处理。D03 产出的区域与 B03 的控件绑定必须使用同一名称，任何一方不得自造。"
+        },
+        "optionCaptions": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "description": "与 options 等长同序的显示文本；省略时按 options 原值显示。",
+          "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "该题原版 PDF 页数。长题保留多页；清单作者可声明期望值供 D02 编译后核对，D02 以实测值写回。"
+        }
+      }
+    },
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
+        "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
+      }
+    },
+    "singleGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oneCorrect"],
+      "description": "type 为 single 的题组只使用 oneCorrect。",
+      "properties": { "oneCorrect": { "$ref": "#/$defs/oneCorrect" } }
+    },
+    "multipleGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["multipleCorrect"],
+      "description": "type 为 multiple 的题组只使用 multipleCorrect。",
+      "properties": { "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" } }
+    },
+    "indeterminateGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oneCorrect", "multipleCorrect"],
+      "description": "type 为 indeterminate 的题组必须同时提供两项分支。",
+      "properties": {
+        "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
+        "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
+      }
+    },
+    "scoreConstant": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "无变量的有限十进制常量，用于科目与题组满分；允许前导正负号与小数点，不允许变量、运算符或括号。",
+      "pattern": "^[+-]?[0-9]+(?:\\.[0-9]+)?$"
+    },
     "scoreExpression": {
       "type": "string",
       "minLength": 1,
-      "description": "有限十进制、允许变量及四则运算的专用表达式"
-    },
-    "relativePath": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+      "maxLength": 200,
+      "description": "有限十进制常量、{正确选项总数}、{选择的正确选项数}、加减乘除和括号组成的专用表达式。与 schemas/scoring-rules.schema.json 一致。",
+      "pattern": "^(?![\\s]*$)(?:[0-9.+\\-*/() \\t]|\\{正确选项总数\\}|\\{选择的正确选项数\\})+$"
     },
     "oneCorrect": {
       "type": "object",
       "additionalProperties": false,
       "required": ["correct", "blank", "wrong"],
+      "description": "「一个正确选项」的分支，多项选择题不使用。",
       "properties": {
         "correct": { "$ref": "#/$defs/scoreExpression" },
         "blank": { "$ref": "#/$defs/scoreExpression" },
@@ -102,12 +215,30 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["allCorrect", "partialCorrect", "blank", "wrong"],
+      "description": "「多个正确选项」的分支，单项选择题不使用。",
       "properties": {
         "allCorrect": { "$ref": "#/$defs/scoreExpression" },
         "partialCorrect": { "$ref": "#/$defs/scoreExpression" },
         "blank": { "$ref": "#/$defs/scoreExpression" },
         "wrong": { "$ref": "#/$defs/scoreExpression" }
       }
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "相对包根目录的路径，保留子目录结构；禁止盘符、绝对路径和 .. 逃逸。",
+      "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "questionSource": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "逐题 TeX 源文件路径，相对包根目录，文件名形如「考试名称_题号.tex」。",
+      "allOf": [
+        { "$ref": "#/$defs/relativePath" },
+        { "pattern": "^(?:[^/\\\\]+[/\\\\])*[^/\\\\]+_[0-9]+\\.tex$" }
+      ]
     }
   }
 }

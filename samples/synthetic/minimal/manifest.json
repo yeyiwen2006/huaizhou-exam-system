@@ -13,6 +13,7 @@
     {
       "groupId": "group-1",
       "subjectId": "subject-1",
+      "name": "一、单项选择题",
       "type": "single",
       "order": 1,
       "questionCount": 1,
@@ -33,8 +34,11 @@
       "subjectId": "subject-1",
       "groupId": "group-1",
       "source": "questions/合成最小考试_1.tex",
-      "options": ["A", "B", "C", "D"]
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": {
+        "optionCaptions": ["A.", "B.", "C.", "D."]
+      }
     }
   ],
-  "resourceRoots": ["figures", "styles"]
+  "resourceRoots": []
 }

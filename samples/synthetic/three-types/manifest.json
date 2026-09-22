@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-three-types",
+  "examName": "三题型合成考试",
+  "subjects": [
+    { "subjectId": "subject-a", "name": "科目甲", "maxScore": "25" },
+    { "subjectId": "subject-b", "name": "科目乙", "maxScore": "12" }
+  ],
+  "groups": [
+    {
+      "groupId": "group-a-single",
+      "subjectId": "subject-a",
+      "name": "一、单项选择题",
+      "type": "single",
+      "order": 1,
+      "questionCount": 3,
+      "maxScore": "15",
+      "scoring": {
+        "oneCorrect": { "correct": "5", "blank": "0", "wrong": "0" }
+      }
+    },
+    {
+      "groupId": "group-a-multiple",
+      "subjectId": "subject-a",
+      "name": "二、多项选择题",
+      "type": "multiple",
+      "order": 2,
+      "questionCount": 2,
+      "maxScore": "10",
+      "scoring": {
+        "multipleCorrect": { "allCorrect": "5", "partialCorrect": "2", "blank": "0", "wrong": "0" }
+      }
+    },
+    {
+      "groupId": "group-b-indeterminate",
+      "subjectId": "subject-b",
+      "name": "一、不定项选择题",
+      "type": "indeterminate",
+      "order": 1,
+      "questionCount": 2,
+      "allowAbstain": true,
+      "maxScore": "7",
+      "scoring": {
+        "oneCorrect": { "correct": "3", "blank": "0", "wrong": "0" },
+        "multipleCorrect": { "allCorrect": "4", "partialCorrect": "2", "blank": "0", "wrong": "0" }
+      }
+    },
+    {
+      "groupId": "group-b-variable",
+      "subjectId": "subject-b",
+      "name": "二、不定项选择题（按正确选项数量计分）",
+      "type": "indeterminate",
+      "order": 2,
+      "questionCount": 2,
+      "maxScore": "5",
+      "scoring": {
+        "oneCorrect": { "correct": "{正确选项总数}", "blank": "0", "wrong": "0" },
+        "multipleCorrect": {
+          "allCorrect": "{正确选项总数}",
+          "partialCorrect": "{选择的正确选项数}",
+          "blank": "0",
+          "wrong": "0"
+        }
+      }
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "q-a-001",
+      "questionNo": 1,
+      "subjectId": "subject-a",
+      "groupId": "group-a-single",
+      "source": "questions/三题型合成考试_1.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-a-002",
+      "questionNo": 2,
+      "subjectId": "subject-a",
+      "groupId": "group-a-single",
+      "source": "questions/三题型合成考试_2.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-a-003",
+      "questionNo": 3,
+      "subjectId": "subject-a",
+      "groupId": "group-a-single",
+      "source": "questions/三题型合成考试_3.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-a-004",
+      "questionNo": 4,
+      "subjectId": "subject-a",
+      "groupId": "group-a-multiple",
+      "source": "questions/三题型合成考试_4.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-a-005",
+      "questionNo": 5,
+      "subjectId": "subject-a",
+      "groupId": "group-a-multiple",
+      "source": "questions/三题型合成考试_5.tex",
+      "options": ["A", "B", "C", "D", "E"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D.", "E."] }
+    },
+    {
+      "questionId": "q-b-006",
+      "questionNo": 6,
+      "subjectId": "subject-b",
+      "groupId": "group-b-indeterminate",
+      "source": "questions/三题型合成考试_6.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-b-007",
+      "questionNo": 7,
+      "subjectId": "subject-b",
+      "groupId": "group-b-indeterminate",
+      "source": "questions/三题型合成考试_7.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-b-008",
+      "questionNo": 8,
+      "subjectId": "subject-b",
+      "groupId": "group-b-variable",
+      "source": "questions/三题型合成考试_8.tex",
+      "options": ["A", "B", "C", "D"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C.", "D."] }
+    },
+    {
+      "questionId": "q-b-009",
+      "questionNo": 9,
+      "subjectId": "subject-b",
+      "groupId": "group-b-variable",
+      "source": "questions/三题型合成考试_9.tex",
+      "options": ["A", "B", "C"],
+      "displayMetadata": { "optionCaptions": ["A.", "B.", "C."] }
+    }
+  ],
+  "resourceRoots": ["styles"]
+}

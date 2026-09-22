@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-error-case",
+  "examName": "错误合成考试",
+  "subjects": [
+    {
+      "subjectId": "subject-e",
+      "name": "科目戊",
+      "maxScore": "1"
+    }
+  ],
+  "groups": [
+    {
+      "groupId": "group-e",
+      "subjectId": "subject-e",
+      "name": "一、单项选择题",
+      "type": "single",
+      "order": 1,
+      "questionCount": 1,
+      "maxScore": "1",
+      "scoring": {
+        "oneCorrect": {
+          "correct": "1 +",
+          "blank": "0",
+          "wrong": "0"
+        }
+      }
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "q-e-001",
+      "questionNo": 1,
+      "subjectId": "subject-e",
+      "groupId": "group-e",
+      "source": "questions/错误合成考试_1.tex",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    }
+  ],
+  "resourceRoots": []
+}

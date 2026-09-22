@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-error-case",
+  "answers": [
+    {
+      "questionId": "q-e-001",
+      "questionNo": 7,
+      "correctOptionIds": [
+        "A"
+      ]
+    }
+  ]
+}
