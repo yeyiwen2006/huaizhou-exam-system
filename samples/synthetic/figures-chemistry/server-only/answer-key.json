@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-figures-chemistry",
+  "answers": [
+    {
+      "questionId": "q-c-051",
+      "questionNo": 51,
+      "correctOptionIds": [
+        "B"
+      ]
+    },
+    {
+      "questionId": "q-c-052",
+      "questionNo": 52,
+      "correctOptionIds": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "questionId": "q-c-053",
+      "questionNo": 53,
+      "correctOptionIds": [
+        "D"
+      ]
+    },
+    {
+      "questionId": "q-c-054",
+      "questionNo": 54,
+      "correctOptionIds": [
+        "A",
+        "B",
+        "D"
+      ]
+    }
+  ]
+}
