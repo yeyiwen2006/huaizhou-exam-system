@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Exam.Contracts.Resources;
 using Exam.Infrastructure.Security;
 
 namespace Exam.UnitTests.Security;
@@ -114,6 +115,68 @@ public sealed class PackageEncryptionServiceTests
             1,
             [new("node-a", nodeA)]));
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9000)]
+    public async Task ClientMaterial_DecodesTheServerFormat_AndClearsTheReleasedKey(int length)
+    {
+        using var node = CreateCertificate("node-a");
+        var source = RandomNumberGenerator.GetBytes(length);
+        await using var encrypted = new MemoryStream();
+        var envelope = await new PackageEncryptionService(4096).EncryptAsync(
+            new MemoryStream(source), encrypted, "client-package", 7, [new("node-a", node)]);
+        var material = ClientMaterial(envelope, node);
+        encrypted.Position = 0;
+        await using var plaintext = new MemoryStream();
+
+        await PackageCiphertext.DecryptAsync(encrypted, plaintext, material);
+
+        Assert.Equal(source, plaintext.ToArray());
+        Assert.All(material.DataKey, value => Assert.Equal(0, value));
+    }
+
+    [Theory]
+    [InlineData("package")]
+    [InlineData("version")]
+    [InlineData("key")]
+    [InlineData("final-record")]
+    public async Task ClientMaterial_RejectsWrongIdentityKeyAndMissingFinalAuthentication(string failure)
+    {
+        using var node = CreateCertificate("node-a");
+        await using var encrypted = new MemoryStream();
+        var envelope = await new PackageEncryptionService(4096).EncryptAsync(
+            new MemoryStream(RandomNumberGenerator.GetBytes(9000)), encrypted,
+            "client-package-integrity", 7, [new("node-a", node)]);
+        var material = ClientMaterial(envelope, node);
+        var ciphertext = encrypted.ToArray();
+        switch (failure)
+        {
+            case "package":
+                material = material with { PackageId = "another-exam-package" };
+                break;
+            case "version":
+                material = material with { PaperVersion = 8 };
+                break;
+            case "key":
+                material.DataKey[0] ^= 0x42;
+                break;
+            case "final-record":
+                ciphertext = ciphertext[..^16];
+                break;
+        }
+
+        await using var plaintext = new MemoryStream();
+        await Assert.ThrowsAnyAsync<Exception>(() => PackageCiphertext.DecryptAsync(
+            new MemoryStream(ciphertext), plaintext, material));
+        Assert.Empty(plaintext.ToArray());
+        Assert.All(material.DataKey, value => Assert.Equal(0, value));
+    }
+
+    private static PackageUnlockMaterial ClientMaterial(
+        EncryptedPackageEnvelope envelope, X509Certificate2 certificate) => new(
+            envelope.PackageId, envelope.PaperVersion, envelope.ChunkSize, envelope.NoncePrefix,
+            PackageEncryptionService.UnwrapDataKey(envelope, "node-a", certificate));
 
     private static X509Certificate2 CreateCertificate(string name)
     {

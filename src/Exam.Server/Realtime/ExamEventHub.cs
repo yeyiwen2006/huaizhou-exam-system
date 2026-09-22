@@ -1,6 +1,7 @@
 using Exam.Application.Activation;
 using Exam.Application.Commands;
 using Exam.Contracts.Commands;
+using Exam.Contracts.Common;
 using Exam.Server.Runtime;
 using Microsoft.AspNetCore.SignalR;
 
@@ -263,7 +264,7 @@ public sealed class ExamEventHub(
     {
         if (!connections.TryGet(Context.ConnectionId, out var connection) || connection is null)
         {
-            throw new HubException("实时连接尚未完成授权登记。");
+            throw new HubException(ErrorCodes.AuthorizationRevoked);
         }
 
         return connection;
@@ -274,8 +275,9 @@ public sealed class ExamEventHub(
         if (!await authorizer.IsStillAuthorizedAsync(identity, Context.ConnectionAborted))
         {
             connections.Remove(Context.ConnectionId);
-            Context.Abort();
-            throw new HubException("设备激活或参试授权已失效。");
+            // Keep the transport alive long enough for the stable error code to reach
+            // the caller. The removed registration cannot obtain or acknowledge events.
+            throw new HubException(ErrorCodes.AuthorizationRevoked);
         }
     }
 

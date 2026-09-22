@@ -92,30 +92,19 @@ public sealed class PostgresVersionedResourceStore(
         string authenticatedDeviceId,
         CancellationToken cancellationToken = default)
     {
-        const string sql = """
+        const string sql = PreparedEntryAccessSql.CurrentPreparationsCte + """
             SELECT resource.resource_id, resource.exam_id, resource.resource_kind,
                    resource.resource_version, resource.encrypted_content,
                    resource.encryption_envelope::text, resource.created_at, resource.created_by
               FROM exam.versioned_resources AS resource
-              JOIN exam.entry_preparations AS preparation
+              JOIN authorized_preparations AS preparation
                 ON preparation.preparation_id = $2
-              JOIN exam.student_sessions AS session
-                ON session.session_id = preparation.session_id
-               AND session.device_id = preparation.device_id
-              JOIN exam.exam_entry_access AS entry_access
-                ON entry_access.exam_id = preparation.exam_id
              WHERE resource.resource_id = $1
                AND preparation.session_id = $3
                AND preparation.device_id = $4
                AND resource.exam_id = preparation.exam_id
                AND resource.resource_kind = 'paper-package'
-               AND resource.resource_version = preparation.paper_version
-               AND entry_access.paper_version = preparation.paper_version
-               AND entry_access.instructions_version = preparation.instructions_version
-               AND entry_access.package_ready
-               AND entry_access.instructions_ready
-               AND entry_access.lifecycle <> 'ended'
-               AND CURRENT_TIMESTAMP < entry_access.scheduled_end;
+               AND resource.resource_version = preparation.paper_version;
             """;
         await using var command = dataSource.CreateCommand(sql);
         command.Parameters.AddWithValue(resourceId);

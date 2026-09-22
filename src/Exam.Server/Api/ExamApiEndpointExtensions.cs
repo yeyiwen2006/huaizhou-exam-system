@@ -25,6 +25,7 @@ public static class ExamApiEndpointExtensions
         api.MapVersioningApi();
         api.MapResourceApi();
         api.MapStudentApi();
+        api.MapPackageUnlockApi();
         return endpoints;
     }
 
@@ -109,6 +110,13 @@ public static class ExamApiEndpointExtensions
                     StatusCodes.Status404NotFound);
             }
 
+            var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
+                ?? throw new InvalidOperationException("缺少服务器身份配置。");
+            context.Response.Headers["X-Exam-Server-Id"] = identity.ServerId;
+            context.Response.Headers["X-Exam-Node-Id"] = identity.NodeId;
+            context.Response.Headers["X-Exam-Server-Epoch"] = identity.ServerEpoch.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            context.Response.Headers["X-Exam-Paper-Version"] = resource.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            context.Response.Headers.CacheControl = "no-store";
             return Results.File(
                 resource.EncryptedContent,
                 "application/vnd.huaizhou.exam-package",

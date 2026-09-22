@@ -1,5 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using Exam.Application.Activation;
+using Exam.Contracts.Commands;
+using Exam.Contracts.Common;
 using Exam.IntegrationTests.Postgres;
 using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +14,7 @@ namespace Exam.IntegrationTests.Api;
 public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture fixture)
 {
     private const string Token = "0123456789abcdef0123456789abcdef";
+    private readonly ServerNodeEnvelope server = new($"middleware-{Guid.NewGuid():N}", "node-a", 1);
 
     [Fact]
     public async Task Operator_route_rejects_spoofed_audit_identity()
@@ -27,10 +31,12 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
             context,
             new ExamApiSecurityOptions(Token, "operator-a"),
             new AcceptingCredentialValidator(),
-            CreateGuard());
+            CreateGuard(),
+            server);
 
         Assert.False(invoked);
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        await AssertErrorAsync(context, ErrorCodes.Forbidden);
     }
 
     [Fact]
@@ -50,10 +56,60 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
             context,
             new ExamApiSecurityOptions(Token, "operator-a"),
             new AcceptingCredentialValidator(),
-            CreateGuard());
+            CreateGuard(),
+            server);
 
         Assert.False(invoked);
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        await AssertErrorAsync(context, ErrorCodes.AuthorizationRevoked);
+    }
+
+    [Fact]
+    public async Task Device_route_rejects_non_object_body_with_authenticated_server_error()
+    {
+        var invoked = false;
+        var middleware = CreateMiddleware(() => invoked = true);
+        var context = CreateJsonContext("/api/v1/resources/unlock", "application/json", "[]");
+        context.Request.Headers["X-Exam-Device-Id"] = "device-a";
+        context.Request.Headers["X-Exam-Device-Credential"] = "credential-a";
+
+        await middleware.InvokeAsync(context, new ExamApiSecurityOptions(Token, "operator-a"),
+            new AcceptingCredentialValidator(), CreateGuard(), server);
+
+        Assert.False(invoked);
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        await AssertErrorAsync(context, ErrorCodes.AuthorizationRevoked);
+    }
+
+    [Fact]
+    public async Task Inactive_node_returns_retryable_error_with_server_identity()
+    {
+        var invoked = false;
+        var middleware = CreateMiddleware(() => invoked = true);
+        var context = CreateJsonContext("/api/v1/resources/unlock", "application/json", "{}");
+
+        await middleware.InvokeAsync(context, new ExamApiSecurityOptions(Token, "operator-a"),
+            new AcceptingCredentialValidator(), CreateGuard(allowUninitializedState: false), server);
+
+        Assert.False(invoked);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        await AssertErrorAsync(context, ErrorCodes.NotActiveServer, retryable: true);
+    }
+
+    private async Task AssertErrorAsync(DefaultHttpContext context, string code, bool retryable = false)
+    {
+        context.Response.Body.Position = 0;
+        var envelope = await JsonSerializer.DeserializeAsync<ApiEnvelope<object>>(
+            context.Response.Body, JsonDefaults.Create());
+        Assert.NotNull(envelope);
+        Assert.Equal(server.ServerId, envelope.ServerId);
+        Assert.Equal(server.NodeId, envelope.NodeId);
+        Assert.Equal(server.ServerEpoch, envelope.ServerEpoch);
+        Assert.Equal(context.TraceIdentifier, envelope.CorrelationId);
+        Assert.Null(envelope.Result);
+        Assert.NotNull(envelope.Error);
+        Assert.Equal(code, envelope.Error.Code);
+        Assert.Equal(retryable, envelope.Error.Retryable);
     }
 
     private ExamApiAccessMiddleware CreateMiddleware(Action onInvoked) =>
@@ -64,16 +120,16 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
             await Task.CompletedTask;
         });
 
-    private ActiveNodeGuard CreateGuard() =>
+    private ActiveNodeGuard CreateGuard(bool allowUninitializedState = true) =>
         new(
             fixture.DataSource,
             new ServerIdentityOptions
             {
-                ServerId = $"middleware-{Guid.NewGuid():N}",
-                NodeId = "node-a",
-                ServerEpoch = 1
+                ServerId = server.ServerId,
+                NodeId = server.NodeId,
+                ServerEpoch = server.ServerEpoch
             },
-            allowUninitializedState: true);
+            allowUninitializedState);
 
     private static DefaultHttpContext CreateJsonContext(string path, string contentType, string json)
     {

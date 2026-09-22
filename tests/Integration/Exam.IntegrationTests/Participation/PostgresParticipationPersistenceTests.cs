@@ -146,6 +146,45 @@ public sealed class PostgresParticipationPersistenceTests(PostgresDatabaseFixtur
         }
     }
 
+    [Fact]
+    public async Task EndedExamAllowsAuthorizedActualRecovery_ButReplayCannotReleaseUnlockOrReenterSubmitted()
+    {
+        await ResetAndSeedAsync();
+        var clock = new FixedTimeProvider(Start.AddMinutes(-10));
+        var activation = CreateActivationService(clock);
+        await ActivateAsync(activation, "recovery-device", "recovery-secret", "recovery");
+        var service = CreateParticipationService(activation, clock);
+        var session = await LoginAsync(service, "recovery-device", "recovery-secret", "recovery-login");
+        var preparation = await service.PrepareEntryAsync(new("recovery-prepare", session.SessionId, ExamId));
+        var waiting = await ConfirmAsync(service, session, preparation, "recovery-confirm");
+        await service.AdvanceExamToAnsweringAsync(new("recovery-start", ExamId));
+        await using (var end = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.exam_entry_access SET lifecycle = 'ended' WHERE exam_id = $1;
+                         """))
+        {
+            end.Parameters.AddWithValue(ExamId);
+            await end.ExecuteNonQueryAsync();
+        }
+
+        clock.Now = Start.AddHours(3);
+        var resumedPreparation = await service.PrepareEntryAsync(new("recovery-prepare-next", session.SessionId, ExamId));
+        var resumed = await ConfirmAsync(service, session, resumedPreparation, "recovery-confirm-next");
+        var replay = await ConfirmAsync(CreateParticipationService(activation, clock), session, preparation, "recovery-confirm");
+        Assert.Equal(EntryPreparationStatus.Resume, resumedPreparation.Status);
+        Assert.Equal(waiting.ParticipationId, resumed.ParticipationId);
+        Assert.Equal(waiting.EntryVersion, resumed.EntryVersion);
+        Assert.Equal(ParticipationBusinessState.Answering, resumed.BusinessState);
+        Assert.Equal(ExamLifecycle.Ended, resumed.Lifecycle);
+        Assert.Null(resumed.UnlockReference);
+        Assert.Equal(resumed, replay);
+
+        await service.FinalizeAsync(new("recovery-finalize", resumed.ParticipationId,
+            resumed.AuthorizedDeviceId, resumed.EntryVersion, resumed.AuthorizationVersion));
+        var rejected = await Assert.ThrowsAsync<ParticipationRuleException>(() =>
+            ConfirmAsync(service, session, preparation, "recovery-confirm").AsTask());
+        Assert.Equal(ParticipationErrorCodes.AlreadySubmitted, rejected.Code);
+    }
+
     private ActivationService CreateActivationService(TimeProvider clock) =>
         new(
             new PostgresActivationPersistence(fixture.DataSource),
@@ -236,8 +275,10 @@ public sealed class PostgresParticipationPersistenceTests(PostgresDatabaseFixtur
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
+        public DateTimeOffset Now { get; set; } = now;
+
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
 
-        public override DateTimeOffset GetUtcNow() => now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 }

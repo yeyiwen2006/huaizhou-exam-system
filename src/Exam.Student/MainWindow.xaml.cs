@@ -82,9 +82,9 @@ public partial class MainWindow : Window
             Set(new WaitingExamPage(this, exam));
         }
 
-        public void GoToExamInProgress(ExamOverview exam)
+        public void GoToExamInProgress(ExamOverview exam, StudentExamRuntime runtime)
         {
-            Set(new ExamInProgressPage(this, exam));
+            Set(new ExamInProgressPage(this, exam, runtime));
         }
 
         public void GoToSubmitted(SubmissionReceipt receipt)

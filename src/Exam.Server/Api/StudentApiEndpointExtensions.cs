@@ -1,5 +1,6 @@
 using Exam.Application.Activation;
 using Exam.Contracts.Activation;
+using Exam.Contracts.Student;
 using Exam.Infrastructure.Postgres.Student;
 using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Mvc;
@@ -34,6 +35,38 @@ public static class StudentApiEndpointExtensions
                     ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context),
                     cancellationToken)))
             .WithTags("Student Exams");
+
+        api.MapGet("/student/instructions", async (
+            string preparationId,
+            string sessionId,
+            [FromServices] PostgresStudentExamMetadataService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(
+                context, configuration, context.TraceIdentifier,
+                () => service.GetInstructionsAsync(
+                    preparationId,
+                    sessionId,
+                    ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context),
+                    cancellationToken)))
+            .WithTags("Student Exams");
+
+        api.MapPut("/student/exams/{examId}/metadata", async (
+            string examId,
+            UpdateStudentExamMetadataRequest request,
+            [FromServices] PostgresStudentExamMetadataService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(
+                context, configuration, request.RequestId,
+                () => service.UpdateAsync(
+                    examId,
+                    request,
+                    ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context),
+                    cancellationToken)))
+            .WithTags("Student Exam Configuration");
 
         return api;
     }

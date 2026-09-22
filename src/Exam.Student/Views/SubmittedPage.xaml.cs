@@ -26,12 +26,13 @@ public partial class SubmittedPage : UserControl
         Unloaded += (_, _) => _timer.Stop();
     }
 
-    private void OnTick(object? sender, EventArgs e)
+    private async void OnTick(object? sender, EventArgs e)
     {
         _remain--;
         if (_remain <= 0)
         {
             _timer.Stop();
+            await App.Services.Session.ReleaseExamAsync();
             _navigation.GoToExamSelection();
             return;
         }

@@ -37,6 +37,12 @@ public partial class ExamSelectionPage : UserControl
 
     private async Task LoadExamsAsync()
     {
+        if (_requesting)
+        {
+            return;
+        }
+
+        _requesting = true;
         Busy.Message = "正在获取考试列表…";
         Busy.IsBusy = true;
         try
@@ -67,10 +73,11 @@ public partial class ExamSelectionPage : UserControl
         finally
         {
             Busy.IsBusy = false;
+            _requesting = false;
         }
     }
 
-    private async void OnEnterExam(object sender, RoutedEventArgs e)
+    private void OnEnterExam(object sender, RoutedEventArgs e)
     {
         if (_requesting || sender is not Button { Tag: string examId })
         {
@@ -88,51 +95,20 @@ public partial class ExamSelectionPage : UserControl
             return;
         }
 
-        EntryBanner.Hide();
-        Busy.Message = "正在请求进入考试…";
-        Busy.IsBusy = true;
-        _requesting = true;
-        ApiEnvelope<EntryPreparationResult> envelope;
-        try
-        {
-            var request = new PrepareExamEntryRequest(RequestIds.New(), session.SessionId, examId);
-            envelope = await App.Services.Api.PrepareEntryAsync(request);
-        }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
-        {
-            EntryBanner.Show("未收到进入考试的确认，请检查连接后重试。");
-            return;
-        }
-        finally
-        {
-            Busy.IsBusy = false;
-            _requesting = false;
-        }
-
-        if (!envelope.IsSuccess)
-        {
-            EntryBanner.Show(envelope.Error!.Code switch
-            {
-                ParticipationErrorCodes.EntryNotAllowed => "当前不可进入该考试！",
-                ParticipationErrorCodes.ResourcesNotReady => envelope.Error.Message,
-                _ => envelope.Error.Message,
-            });
-            return;
-        }
-
-        if (envelope.Result!.Status == EntryPreparationStatus.DeviceDecisionPending)
-        {
-            EntryBanner.Show("当前账号已在其他设备登记，请等待考务人员裁决。");
-            return;
-        }
-
         var overview = _rows.FirstOrDefault(r => r.ExamId == examId)?.Overview;
-        if (overview is null || envelope.Result.ExamId != examId)
+        if (overview is null)
         {
             EntryBanner.Show("考试信息已变化，请重新获取考试列表。");
             return;
         }
 
+        if (App.Services.Session.ActiveExam is { } runtime && runtime.Manager.ExamId != examId)
+        {
+            EntryBanner.Show("原考试尚未处理完成，请先恢复原考试。");
+            return;
+        }
+
+        // 进入等待页后才下载、展示说明及确认参试；选择页不重复创建准备请求。
         _navigation.GoToWaitingExam(overview);
     }
 
@@ -156,6 +132,7 @@ public partial class ExamSelectionPage : UserControl
             return;
         }
 
+        await App.Services.Session.ReleaseExamAsync();
         App.Services.Session.Logout();
         Application.Current.Shutdown();
     }

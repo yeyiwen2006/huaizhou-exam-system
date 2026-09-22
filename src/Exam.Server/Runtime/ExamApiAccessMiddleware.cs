@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Exam.Application.Activation;
+using Exam.Contracts.Commands;
+using Exam.Contracts.Common;
 
 namespace Exam.Server.Runtime;
 
@@ -27,7 +29,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         HttpContext context,
         ExamApiSecurityOptions security,
         IDeviceCredentialValidator credentials,
-        ActiveNodeGuard activeNode)
+        ActiveNodeGuard activeNode,
+        ServerNodeEnvelope server)
     {
         if (!context.Request.Path.StartsWithSegments("/api/v1", out var remainder))
         {
@@ -39,7 +42,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         var node = await activeNode.CheckAsync(context.RequestAborted);
         if (!node.Allowed)
         {
-            await RejectNodeAsync(context, node);
+            await RejectNodeAsync(context, node, server);
             return;
         }
 
@@ -58,7 +61,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
                 return;
             }
 
-            await RejectAsync(context, StatusCodes.Status401Unauthorized, "设备凭据无效或与请求设备不一致。");
+            await RejectAsync(context, server, StatusCodes.Status401Unauthorized,
+                ErrorCodes.AuthorizationRevoked, "设备凭据无效或与请求设备不一致。");
             return;
         }
 
@@ -69,13 +73,15 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             : string.Empty;
         if (!FixedTimeEquals(supplied, security.OperatorToken))
         {
-            await RejectAsync(context, StatusCodes.Status401Unauthorized, "缺少有效的考务操作令牌。");
+            await RejectAsync(context, server, StatusCodes.Status401Unauthorized,
+                "UNAUTHORIZED", "缺少有效的考务操作令牌。");
             return;
         }
 
         if (!await HasMatchingAuditActorAsync(context, security.OperatorId))
         {
-            await RejectAsync(context, StatusCodes.Status403Forbidden, "请求中的操作者身份与已认证考务身份不一致。");
+            await RejectAsync(context, server, StatusCodes.Status403Forbidden,
+                ErrorCodes.Forbidden, "请求中的操作者身份与已认证考务身份不一致。");
             return;
         }
 
@@ -194,9 +200,10 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
                 using var document = await JsonDocument.ParseAsync(
                     context.Request.Body,
                     cancellationToken: context.RequestAborted);
-                if (document.RootElement.TryGetProperty("deviceId", out var bodyDevice) &&
-                    bodyDevice.ValueKind == JsonValueKind.String &&
-                    !string.Equals(bodyDevice.GetString(), deviceId, StringComparison.Ordinal))
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    (document.RootElement.TryGetProperty("deviceId", out var bodyDevice) &&
+                     (bodyDevice.ValueKind != JsonValueKind.String ||
+                      !string.Equals(bodyDevice.GetString(), deviceId, StringComparison.Ordinal))))
                 {
                     return null;
                 }
@@ -221,29 +228,26 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
     }
 
-    private static Task RejectAsync(HttpContext context, int statusCode, string message)
+    private static Task RejectAsync(
+        HttpContext context,
+        ServerNodeEnvelope server,
+        int statusCode,
+        string code,
+        string message,
+        bool retryable = false)
     {
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
-        return context.Response.WriteAsJsonAsync(new
-        {
-            error = new
-            {
-                code = statusCode == StatusCodes.Status403Forbidden ? "FORBIDDEN" : "UNAUTHORIZED",
-                message
-            },
-            correlationId = context.TraceIdentifier
-        });
+        return context.Response.WriteAsJsonAsync(new ApiEnvelope<object>(
+            server.ServerId,
+            server.NodeId,
+            server.ServerEpoch,
+            context.TraceIdentifier,
+            null,
+            new ApiError(code, message, Retryable: retryable)));
     }
 
-    private static Task RejectNodeAsync(HttpContext context, ActiveNodeCheck node)
-    {
-        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        context.Response.ContentType = "application/json; charset=utf-8";
-        return context.Response.WriteAsJsonAsync(new
-        {
-            error = new { code = node.ErrorCode, message = node.Reason },
-            correlationId = context.TraceIdentifier
-        });
-    }
+    private static Task RejectNodeAsync(HttpContext context, ActiveNodeCheck node, ServerNodeEnvelope server) =>
+        RejectAsync(context, server, StatusCodes.Status503ServiceUnavailable,
+            node.ErrorCode, node.Reason ?? "当前节点暂时不能处理请求。", retryable: true);
 }

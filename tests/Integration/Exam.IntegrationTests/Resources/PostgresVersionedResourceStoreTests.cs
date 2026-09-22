@@ -131,6 +131,77 @@ public sealed class PostgresVersionedResourceStoreTests(PostgresDatabaseFixture 
             preparationId,
             sessionId,
             deviceId));
+
+        await using (var beforeWindow = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.exam_entry_access
+                            SET paper_version = 2, scheduled_start = clock_timestamp() + interval '1 hour',
+                                scheduled_end = clock_timestamp() + interval '2 hours'
+                          WHERE exam_id = $1;
+                         """))
+        {
+            beforeWindow.Parameters.AddWithValue(examId);
+            await beforeWindow.ExecuteNonQueryAsync();
+        }
+
+        Assert.Null(await store.FindForPreparationAsync(packageId, preparationId, sessionId, deviceId));
+
+        await using (var end = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.exam_entry_access
+                            SET lifecycle = 'ended', scheduled_start = clock_timestamp() - interval '3 hours',
+                                scheduled_end = clock_timestamp() - interval '1 hour'
+                          WHERE exam_id = $1;
+                         """))
+        {
+            end.Parameters.AddWithValue(examId);
+            await end.ExecuteNonQueryAsync();
+        }
+
+        // Merely having downloaded a preparation before the deadline is not actual participation.
+        Assert.Null(await store.FindForPreparationAsync(packageId, preparationId, sessionId, deviceId));
+
+        await using (var actual = fixture.DataSource.CreateCommand("""
+                         INSERT INTO exam.participations
+                             (participation_id, exam_id, candidate_id, entry_version, business_state,
+                              authorized_device_id, authorization_version, version)
+                         VALUES ($1, $2, $3, 1, 'answering', $4, 1, 1);
+                         """))
+        {
+            actual.Parameters.AddWithValue($"participation-{Guid.NewGuid():N}");
+            actual.Parameters.AddWithValue(examId);
+            actual.Parameters.AddWithValue(candidateId);
+            actual.Parameters.AddWithValue(deviceId);
+            await actual.ExecuteNonQueryAsync();
+        }
+
+        Assert.NotNull(await store.FindForPreparationAsync(packageId, preparationId, sessionId, deviceId));
+
+        await using (var revoke = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.activation_devices SET activation_status = 'revoked' WHERE device_id = $1;
+                         """))
+        {
+            revoke.Parameters.AddWithValue(deviceId);
+            await revoke.ExecuteNonQueryAsync();
+        }
+
+        Assert.Null(await store.FindForPreparationAsync(packageId, preparationId, sessionId, deviceId));
+
+        await using (var reactivate = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.activation_devices SET activation_status = 'active' WHERE device_id = $1;
+                         """))
+        {
+            reactivate.Parameters.AddWithValue(deviceId);
+            await reactivate.ExecuteNonQueryAsync();
+        }
+
+        await using (var submit = fixture.DataSource.CreateCommand("""
+                         UPDATE exam.participations SET business_state = 'submitted' WHERE exam_id = $1;
+                         """))
+        {
+            submit.Parameters.AddWithValue(examId);
+            await submit.ExecuteNonQueryAsync();
+        }
+
+        Assert.Null(await store.FindForPreparationAsync(packageId, preparationId, sessionId, deviceId));
     }
 
     private async Task SeedPreparationAsync(
