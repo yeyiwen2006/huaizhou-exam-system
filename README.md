@@ -4,13 +4,13 @@
 
 ## 当前状态
 
-仓库现处于 M0/A01 与 A 组服务器核心的参考实现阶段。解决方案、公共契约、核心状态机、自动检查入口和协作模板已经建立。内存实现用于验证并发、幂等和状态转换，不等同于 PostgreSQL 持久化、SignalR 可靠通知、双机复制或生产验收已经完成。逐项完成度和限制见 [A 组实施状态](docs/a-implementation-status.md)。
+仓库已经具备 A02 至 A06 的 PostgreSQL 18 持久化、正式 HTTP API、设备授权的 SignalR 持久指令补发、通用 HTTP CLI、版本化加密题包存储、基础备份/隔离恢复以及 A08 主备控制基础设施。内存实现仅供单元测试；生产环境缺少 PostgreSQL 连接或考务令牌时会拒绝启用业务入口。逐项完成度、实测范围和仍需两台真实主机完成的限制见 [A 组实施状态](docs/a-implementation-status.md)。
 
 ## 开发环境
 
 - Windows 10/11 x64
 - .NET SDK 10.0.401，版本由 `global.json` 锁定
-- 后续持久化集成使用 PostgreSQL 18 的同一补丁版本
+- PostgreSQL 18；主备部署必须使用同一补丁版本
 - Visual Studio、Rider 或 `dotnet` CLI
 
 ```powershell
@@ -18,6 +18,8 @@ dotnet restore Huaizhou.ExamSystem.sln
 dotnet build Huaizhou.ExamSystem.sln --no-restore
 dotnet test Huaizhou.ExamSystem.sln --no-build
 ```
+
+PostgreSQL 集成测试要求只在当前进程提供 `EXAM_TEST_POSTGRES`，测试会为每次运行创建并删除随机数据库，不会把连接信息写入仓库。生产运行至少通过受保护环境配置提供 `ConnectionStrings__Exam`、`ExamSecurity__OperatorToken`、与该令牌绑定的 `ExamSecurity__OperatorId` 和 `ExamServer__*`；示例和双机部署步骤见 [PostgreSQL 双机部署基线](deploy/postgresql/README.md)。
 
 学生端和考务端项目仅在 Windows 上构建。真实试卷、答案、考生数据、数据库、证书、密钥、日志、备份和本地发布产物不得提交。
 

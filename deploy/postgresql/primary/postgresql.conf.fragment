@@ -1,0 +1,21 @@
+# PostgreSQL 18 primary fragment. Replace placeholders outside source control.
+listen_addresses = '{{PRIMARY_ADDRESS}}'
+wal_level = replica
+max_wal_senders = 10
+max_replication_slots = 10
+wal_keep_size = '4096MB'
+
+# A transaction is acknowledged only after the named standby has replayed it.
+synchronous_standby_names = 'FIRST 1 (exam_standby)'
+synchronous_commit = remote_apply
+
+archive_mode = on
+archive_timeout = '60s'
+archive_command = 'powershell.exe -NoProfile -NonInteractive -File "{{DEPLOY_ROOT}}/scripts/Invoke-WalArchive.ps1" "%p" "%f" "{{ARCHIVE_ROOT}}"'
+
+password_encryption = scram-sha-256
+ssl = on
+log_connections = on
+log_disconnections = on
+log_lock_waits = on
+deadlock_timeout = '1s'
