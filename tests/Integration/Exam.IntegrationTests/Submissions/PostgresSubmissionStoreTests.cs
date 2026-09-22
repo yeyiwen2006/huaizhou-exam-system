@@ -9,7 +9,7 @@ namespace Exam.IntegrationTests.Submissions;
 
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresSubmissionStoreTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresSubmissionStoreTests(PostgresDatabaseFixture fixture)
 {
     private static int _clientSequence = 500;
 
@@ -24,9 +24,10 @@ public sealed class PostgresSubmissionStoreTests(PostgresDatabaseFixture fixture
             PaperVersion = 1
         };
 
+        var nonRoundTripTimestamp = new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.Zero).AddTicks(7);
         var saved = await store.SaveSubmissionAsync(
             request,
-            DateTimeOffset.UtcNow,
+            nonRoundTripTimestamp,
             Id("receipt"));
         answers["q-1"] = AnswerValue.Selected("D");
         var replay = await store.SaveSubmissionAsync(
@@ -41,8 +42,12 @@ public sealed class PostgresSubmissionStoreTests(PostgresDatabaseFixture fixture
         var lateProgress = await store.SaveProgressAsync(
             context.Progress(Id("progress"), 99, "B"),
             DateTimeOffset.UtcNow.AddSeconds(2));
+        var queried = await store.FindSubmissionAsync(context.ExamId, context.CandidateId);
 
         Assert.Equal(SubmissionPersistenceStatus.Saved, saved.Status);
+        Assert.NotNull(queried);
+        Assert.Equal(saved.Submission!.Receipt, queried!.Receipt);
+        Assert.Equal(0, saved.Submission.Receipt.ReceivedAt.Ticks % TimeSpan.TicksPerMicrosecond);
         Assert.Equal(SubmissionPersistenceStatus.RequestReplay, replay.Status);
         Assert.Equal(saved.Submission!.Receipt, replay.Submission!.Receipt);
         Assert.Equal("A", Assert.Single(replay.Submission.FrozenAnswers["q-1"].OptionIds));
@@ -227,7 +232,7 @@ public sealed class PostgresSubmissionStoreTests(PostgresDatabaseFixture fixture
         var duplicateGrading = await grading.EnqueueOnceAsync(
             request.SubmissionId,
             saved.Submission!.Receipt.GradingVersion);
-        var zero = await completions.TryRecordAsync(context.ExamId, 1, 0, DateTimeOffset.UtcNow);
+        var zero = await completions.TryRecordAsync(Id("empty-exam"), 1, 0, DateTimeOffset.UtcNow);
         var first = await completions.TryRecordAsync(context.ExamId, 1, 1, DateTimeOffset.UtcNow);
         var duplicate = await completions.TryRecordAsync(context.ExamId, 1, 1, DateTimeOffset.UtcNow);
 

@@ -33,6 +33,12 @@ ExamSecurity__OperatorId
 HighAvailability__RequiredNodeIds__0
 HighAvailability__RequiredNodeIds__1
 Database__ApplyMigrations=false
+Database__MaximumPoolSize
+Database__Capacity__PostgresMaxConnections
+Database__Capacity__PostgresReservedConnections
+Database__Capacity__MaximumServerProcesses
+Database__Capacity__OtherConnections
+Database__Capacity__OperationsReserveConnections
 Backup__Enabled=true
 Backup__PostgresBinDirectory
 Backup__AllowedBackupRoot
@@ -42,6 +48,8 @@ Backup__ProtectedConfigurationDirectory
 ```
 
 迁移只在维护窗口由一个节点显式启用一次，考试期间保持 `Database__ApplyMigrations=false`。
+
+连接池上限必须按同库全部服务进程计算，并额外保留其他工具和运维连接。生产启动会核对数据库实际连接上限与声明预算；缺少上述容量配置或预算不符会阻止启动。配置含义、算术样例、队列保护和受考务身份保护的运行快照见[容量与运行观测](../../docs/operations/capacity-observability.md)。CI 的 16 连接池和开发回退值均不代表生产建议。
 
 ## 尚需真实环境完成的验收
 

@@ -1,6 +1,6 @@
 # A 组实施状态
 
-复核日期：2026-09-22。代码依据为已合并 B01/B02 的 main 提交 `2ae3b8e`，[该提交的 Windows/PostgreSQL CI 已通过](https://github.com/yeyiwen2006/huaizhou-exam-system/actions/runs/35698315773)。本文与 A01–A08 的 GitHub Issue 同步，区分本模块缺项和其他模块的后续工作，不替代整体验收报告。
+复核日期：2026-09-23。代码依据为本轮容量/A05 变更集与已合并 D01 的最新 `main`；Release 构建、普通测试、真实 PostgreSQL 集成及本机 300 会话基线均在本轮重新执行。本文区分服务端代码完成、单机容量基线和仍需双机/现场执行的验收，不用本机结果代替正式环境结论。
 
 | 任务与 Issue | 模块状态 | 结论 |
 | --- | --- | --- |
@@ -8,7 +8,7 @@
 | [A02 #2](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/2) | 已完成，保持关闭 | 激活编号、正式接口、PostgreSQL 并发与恢复测试已完成 |
 | [A03 #3](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/3) | 已完成，保持关闭 | 参试与授权事务已完成，B01/B02 真实接入及截止后恢复修正已合并 |
 | [A04 #4](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/4) | 已完成，关闭 | 持久指令、真实推送补发、受授权解锁及 B02 消费已接通 |
-| [A05 #5](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/5) | 部分完成，继续打开 | 缺权威名单驱动的自动收齐判断及可恢复的考务通知出口 |
+| [A05 #5](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/5) | 已完成，关闭 | 权威实际名单、自动持久检查、可恢复收齐事件及考务补取 API 已交付；现场通知时限仍由 E04/E05 验收 |
 | [A06 #6](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/6) | 已完成，保持关闭 | 时间与资源版本发布、并发检查、通知原子性及终态保护已完成 |
 | [A07 #7](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/7) | 部分完成，继续打开 | 缺独立 Windows 管理宿主、完整启动自检与完整恢复运行验证 |
 | [A08 #8](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/8) | 部分完成，继续打开 | 接管协调器尚未接入持久化和管理 API/CLI，尚未完成真实双机闭环 |
@@ -43,20 +43,19 @@
 
 证据：`tests/Unit/Exam.UnitTests/Commands/ReliableCommandServiceTests.cs`、`tests/Integration/Exam.IntegrationTests/Commands/PostgresCommandEventStoreTests.cs`、`tests/Integration/Exam.IntegrationTests/Resources/PostgresPackageUnlockServiceTests.cs`、`tests/Unit/Exam.StudentUnitTests/SignalRExamCommandFeedTests.cs`。记录包括丢通知补发、同事件重放、持久租约恢复、授权撤销、截止竞态，以及慢 START 不阻挡 END/撤销的真实 Hub 回归。
 
-本卡没有已识别的未实现指令基础服务。D03 正式组包发布、B05 自动交卷、B06 资源更新应用由对应任务负责；300 会话、丢包及服务重启后的时限实测由 E04/E05 跟踪，未宣称这些整体场景已通过。A05 自动产生收齐通知的缺项仍保留在 A05。
+本卡没有已识别的未实现指令基础服务。D03 正式组包发布、B05 自动交卷、B06 资源更新应用由对应任务负责；300 会话、丢包及服务重启后的时限实测由 E04/E05 跟踪，未宣称这些整体场景已通过。A05 自动收齐链路已在本轮补齐；300 会话与双机/现场时限仍由 E04/E05 跟踪。
 
 ### A05 进度与最终交卷
 
-**部分完成，继续打开。** 已有版本进度、有界写入、最终答卷/永久回执/参试终态/幂等结果/计分 outbox 同事务提交，以及真实数据库故障和并发测试；缺项集中在完整回收通知链路。
+**已完成，关闭。** 进度版本保护、最终答卷/永久回执/参试终态/幂等结果/计分 outbox 同事务提交，以及权威实际名单驱动的自动收齐和可恢复通知出口均已接通 PostgreSQL。兼容的 `/api/v1/submissions/collection/evaluate` 不再信任调用方提供的名单或版本；生产判断只读取数据库中的实际参试事实。
 
-当前代码位置：`CollectionCompletionService.EvaluateAsync`（`src/Exam.Application/Submissions/SubmissionService.cs`）仍接受调用方提供的 `actualParticipationIds` 和 `rosterVersion`；`/api/v1/submissions/collection/evaluate` 需要主动调用；`PostgresCollectionCompletionStore` 只写完成记录，尚未形成自动触发、可持续投递的考务通知链路。
+实际名单变化与最终答卷事务会在同一数据库事务中更新名单版本或写入 `collection_pending_checks`。`CollectionCompletionWorker` 仅在活动节点运行，按有界批次恢复并处理未决检查；每场检查在同一 SQL 快照中读取当前权威名单版本、实际参试者及最终答卷，零人不产生收齐事件。完成事实与可重放通知保存在 `collection_completion_events`，`(exam_id, roster_version)` 保证同一名单版本最多一个业务事件；并发名单变化会重新留下待检查记录，不因 worker 清理而丢失唤醒。
 
-- [ ] **改用权威实际名单。** 从 PostgreSQL 当前参试事实和有效名单版本读取应收范围，不信任调用方传入的精简名单。确认退出者排除，断线/崩溃但仍实际参试者不能被排除；判断过程中名单变化须重新核对，不能误报收齐。
-- [ ] **自动触发且可恢复。** 最终答卷持久保存和实际名单变化后自动重新判断；启动恢复未决检查。完成记录与待发送通知须原子保存或使用等价可恢复机制，重复触发不重复产生业务通知，不依赖人工调用 evaluate 才发现收齐。
-- [ ] **提供考务通知出口。** 将已持久的收齐事件接入考务可订阅或补取的 API/事件通道，保留事件标识及重连补取依据。传输服务属于 A；考务页面展示属于 C04/C06。结束指令 ACK 仍不得替代最终答卷回执。
-- [ ] **补齐针对性验收。** 实库验证最后两份答卷并发、等待退出、断线者未交卷、伪造不完整名单、重复触发，以及“答卷已保存但通知尚未发出”时重启恢复；收齐后通知不丢、不重复计数。2 秒通知时限在 E04/E05 联调记录中实测。
+考务端可使用现有管理员认证调用 `GET /api/v1/submissions/collection/events?examId=...&afterRosterVersion=...` 按版本补取。返回前会写 `delivery_fence_at` 并提交，形成当前数据库持久策略下的 WAL 提交屏障；服务端不以“已发送”为由删除事件，消费端可保存游标并按事件标识去重。具体恢复语义见 `docs/a05-collection-recovery.md`。
 
-**关闭条件：** 上述服务端自动收齐链路实现并有对应实库/接口回归证据。B05 学生端补传、D04/D05 计分消费和 E05 300 份答卷性能不作为本卡尚未实现代码的替代描述。
+回归证据包括伪造精简名单、最后两份并发提交、等待退出、零人、新参试者形成新名单版本、outbox/通知事务失败回滚、worker 重启恢复、并发队列清理不丢唤醒，以及真实 HTTP 管理员认证、游标和提交屏障。本轮本机 300 会话基线还独立核对了 300 个实际参试者、300 份最终答卷、300 个唯一回执、300 个计分任务、1 条权威收齐事件、0 条待检查，答案结构全部一致。
+
+A05 的服务端关闭不表示 C04/C06 弹窗展示、双机同步持久化或现场 2 秒通知时限已经通过。`collectionPersistedAfterLastReceiptTimestampMs` 只比较数据库处理时间戳，不是提交完成或考务 GUI 展示时间；这些继续由 E04/E05/E07 在目标双机、独立负载机和现场网络中验收。
 
 ### A06 时间与资源版本发布
 
@@ -92,7 +91,7 @@
 
 ## 本轮核对方法
 
-本轮只修改进度文档和 GitHub Issue，没有修改业务代码、重新跑负载或执行文件哈希检验。核对了上述实现、测试源码和最新主分支 CI；最近完整测试为 197 项通过，分类和局限见 [B01/B02 复核记录](b01-b02-review-verification.md)。以下历史基础版本数据保留为原始记录，不当作最新计数。
+本轮修改了 A05 自动收齐、生产容量控制与观测、负载工具及回归测试，并使用全新隔离数据库执行本机 300 会话基线。Release 构建为 0 警告、0 错误；合并最新 D01 后，非 PostgreSQL 分类 264/264、真实 PostgreSQL 分类 47/47，合计 311 项自动测试 0 失败、0 跳过；负载工具另完成 300 会话本机基线与只读数据库审计。以下历史基础版本数据保留为原始记录，不当作最新计数。
 
 ## A 组基础版本验证
 
@@ -112,4 +111,4 @@
 
 本轮增加自助取消激活、真实考试概览、版本化公开说明及授权解锁接口，移除绕过正式交卷事务的公开 finalize 路由；修正已有实际参试者在首次截止后恢复的规则。确认请求重放返回当前状态及 Lifecycle，结束后不返回可继续作答的解锁信息。
 
-A01、A02、A03、A04、A06 已按各自模块交付范围关闭任务卡。A05、A07、A08 的具体实现缺口、待验证项及关闭条件见上文，并同步写入对应 Issue。B01、B02 已合并，不能沿用“B02 接入中”或“只有内存参考实现”的描述。
+A01、A02、A03、A04、A06 已按各自模块交付范围关闭任务卡。A05 服务端自动收齐链路已在本轮完成；A07、A08 的具体实现缺口、待验证项及关闭条件见上文。A05 的现场展示与时限不作为服务端代码缺口回退，继续由对应 E/C 任务验收。B01、B02 已合并，不能沿用“B02 接入中”或“只有内存参考实现”的描述。
