@@ -17,7 +17,7 @@
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <!-- S17：100% / 125% / 150% 显示缩放下保持清晰 -->
-      <dpi xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">PerMonitorV2</dpi>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
     </windowsSettings>
   </application>
 </assembly>

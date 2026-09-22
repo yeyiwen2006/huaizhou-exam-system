@@ -499,6 +499,8 @@ private-exams/
 real-exams/
 *.db
 *.db-*
+*.db.identity
+*.db.initializing
 *.sqlite
 *.sqlite-*
 *.dump

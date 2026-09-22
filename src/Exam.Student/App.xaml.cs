@@ -51,6 +51,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         Services.StopClock();
+        Services.LocalState.Dispose();
         if (Services.Api is IDisposable disposable)
         {
             disposable.Dispose();
@@ -70,6 +71,8 @@ public sealed class AppServices
     public IStudentApi Api { get; } = new HttpStudentApi();
     public StudentSession Session { get; } = new();
     public DeviceStore DeviceStore { get; } = new(App.AppDataDirectory);
+    public SqliteLocalStateStore LocalState { get; } =
+        new(Path.Combine(App.AppDataDirectory, "state.db"));
     public ActivationWorkflow Activation { get; }
     public ServerClock Clock { get; private set; } = new();
     public DeviceRecord? Device { get; private set; }

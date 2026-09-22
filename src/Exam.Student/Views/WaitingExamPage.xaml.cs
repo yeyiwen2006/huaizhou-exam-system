@@ -71,6 +71,11 @@ public partial class WaitingExamPage : UserControl
                 _runtime = App.Services.Session.ActiveExam;
                 if (_runtime is null)
                 {
+                    var candidateId = session.CandidateIdsByExam?.GetValueOrDefault(_exam.ExamId);
+                    if (string.IsNullOrWhiteSpace(candidateId))
+                    {
+                        throw new InvalidOperationException("当前登录尚未提供该场考试的考生标识，不能混用另一场考试的恢复记录。");
+                    }
                     if (App.Services.Api is not IExamPackageApi packageApi)
                     {
                         throw new InvalidOperationException("试题服务尚未配置。");
@@ -84,7 +89,7 @@ public partial class WaitingExamPage : UserControl
                         return;
                     }
 
-                    _runtime = new StudentExamRuntime(manager, device);
+                    _runtime = new StudentExamRuntime(manager, device, App.Services.LocalState, candidateId);
                     App.Services.Session.RegisterExam(_runtime);
                 }
 
@@ -94,6 +99,17 @@ public partial class WaitingExamPage : UserControl
                 }
 
                 _runtime.StateChanged += OnRuntimeStateChanged;
+            }
+
+            if (!await _runtime.InitializeLocalRecoveryAsync(_lifetime.Token))
+            {
+                ErrorBanner.Show(_runtime.LocalStateError ?? "本地恢复检查尚未完成，不能开始新的参试操作。");
+                return;
+            }
+            if (_runtime.HasFixedSubmission)
+            {
+                ErrorBanner.Show("本机已有固定答卷，原记录已保留。当前版本尚未接入原回执核对和补传，请联系考务人员；不能重新开始作答。");
+                return;
             }
 
             var progress = new Progress<PackageDownloadProgress>(value =>
@@ -133,7 +149,7 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnConfirmParticipation(object sender, RoutedEventArgs e)
     {
-        if (_busy || _runtime is null)
+        if (_busy || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
         {
             return;
         }
@@ -181,11 +197,12 @@ public partial class WaitingExamPage : UserControl
         }
 
         await _runtime.StartNotificationsAsync(participation, server);
+        await _runtime.SynchronizeLocalAnswersAsync(_lifetime.Token);
     }
 
     private async void OnRetryConnection(object sender, RoutedEventArgs e)
     {
-        if (_busy || _runtime is null)
+        if (_busy || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
         {
             return;
         }
@@ -199,6 +216,7 @@ public partial class WaitingExamPage : UserControl
             {
                 await _runtime.Manager.UnlockAsync(_lifetime.Token);
             }
+            await _runtime.SynchronizeLocalAnswersAsync(_lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -264,6 +282,24 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnRetryDownload(object sender, RoutedEventArgs e) => await PrepareAndDownloadAsync();
 
+    private async void OnRetryLocalSave(object sender, RoutedEventArgs e)
+    {
+        if (_busy || _runtime is null) { return; }
+        SetBusy(true, "正在恢复本地保存…");
+        try
+        {
+            await _runtime.RetryLocalSaveAsync(_lifetime.Token);
+            if (_runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked)
+                await _runtime.SynchronizeLocalAnswersAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (IsRecoverable(error))
+        {
+            ErrorBanner.Show("本地保存尚未恢复，原记录和待保存内容均已保留，请检查存储后重试。");
+        }
+        finally { SetBusy(false); RefreshState(); }
+    }
+
     private void OnExitButtonLoaded(object sender, RoutedEventArgs e)
     {
         _exitButton = (Button)sender;
@@ -294,11 +330,15 @@ public partial class WaitingExamPage : UserControl
         DownloadPill.Text = manager?.HasPackage == true ? "试题包已保存（加密）" : "试题包尚未完整获取";
         DownloadPill.Level = manager?.HasPackage == true ? StatusLevel.Success : StatusLevel.Warning;
         DownloadBar.Value = manager?.HasPackage == true ? 100 : DownloadBar.Value;
-        ConfirmButton.IsEnabled = !_busy && manager?.CanConfirmParticipation == true;
+        ConfirmButton.IsEnabled = !_busy && _runtime?.LocalRecoveryChecked == true &&
+            !_runtime.HasFixedSubmission && manager?.CanConfirmParticipation == true;
         ConfirmButton.Content = manager?.Participation is null ? "确认参试" : "核对并恢复原参试";
-        RetryDownloadButton.Visibility = manager?.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended or ExamPackageManager.Phase.Withdrawn
+        RetryDownloadButton.Visibility = _runtime?.HasFixedSubmission == true ||
+            manager?.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended or ExamPackageManager.Phase.Withdrawn
             ? Visibility.Collapsed : Visibility.Visible;
-        RetryConnectionButton.Visibility = manager?.Participation is not null && !manager.ExamEnded && manager.CurrentPhase != ExamPackageManager.Phase.Revoked ? Visibility.Visible : Visibility.Collapsed;
+        RetryConnectionButton.Visibility = _runtime?.LocalRecoveryChecked == true && !_runtime.HasFixedSubmission &&
+            manager?.Participation is not null && !manager.ExamEnded && manager.CurrentPhase != ExamPackageManager.Phase.Revoked
+            ? Visibility.Visible : Visibility.Collapsed;
         if (_exitButton is not null)
         {
             _exitButton.IsEnabled = !_busy && (manager?.Participation is null || manager.CurrentPhase is ExamPackageManager.Phase.ConfirmedWaiting or ExamPackageManager.Phase.Withdrawn);
@@ -321,9 +361,21 @@ public partial class WaitingExamPage : UserControl
             _ => ("尚未确认参试", StatusLevel.Info, "试题包与考试说明全部取得后才能确认参试。"),
         };
 
+        if (_runtime?.HasFixedSubmission == true)
+        {
+            (StatePill.Text, StatePill.Level, ConfirmHint.Text) =
+                (_runtime.Answers?.HasPendingSubmission == true ? "答卷冻结待保存" : "本机答卷已固定",
+                    StatusLevel.Warning, "原冻结答卷等待可靠保存、核对和补传；本地冻结不等于服务器已收卷，不能重新开始作答。");
+        }
+        LocalStateText.Text = _runtime?.LocalStateSummary ?? "本地答题恢复尚未开始。";
+        LocalStateErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime?.LocalStateError);
+        LocalStateErrorBanner.Message = _runtime?.LocalStateError ?? string.Empty;
+        RetryLocalSaveButton.IsEnabled = !_busy && _runtime?.CanRetryLocalSave == true;
+        RetryLocalSaveButton.Visibility = _runtime?.CanRetryLocalSave == true ? Visibility.Visible : Visibility.Collapsed;
         RefreshRuntimeError();
 
-        if (manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true)
+        if (!_busy && manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true &&
+            !_runtime.HasFixedSubmission && _runtime.Answers?.Status == AnswerSessionStatus.Active)
         {
             _navigated = true;
             _navigation.GoToExamInProgress(_exam, _runtime);
@@ -347,7 +399,7 @@ public partial class WaitingExamPage : UserControl
 
     private static bool IsRecoverable(Exception error) => error is IOException or HttpRequestException or InvalidOperationException
         or OperationCanceledException or TimeoutException or CryptographicException or UnauthorizedAccessException or ArgumentException
-        or System.Net.WebSockets.WebSocketException or Microsoft.AspNetCore.SignalR.HubException;
+        or System.Data.Common.DbException or System.Net.WebSockets.WebSocketException or Microsoft.AspNetCore.SignalR.HubException;
 
     private void RefreshRuntimeError()
     {

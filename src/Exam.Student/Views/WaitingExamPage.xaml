@@ -74,6 +74,18 @@
 
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="本地答题恢复" />
+                        <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}" Margin="0,8,0,0"
+                                   Text="正在检查本机是否有未完成的固定答卷…" />
+                        <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
+                        <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
+                                Content="重试本地保存" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                Visibility="Collapsed" Click="OnRetryLocalSave" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <StackPanel>
                         <TextBlock Style="{StaticResource SectionTitle}" Text="参试确认" />
                         <TextBlock x:Name="ConfirmHint" Style="{StaticResource BodyText}" Margin="0,8,0,0"
                                    Text="试题包与考试说明全部取得后才能确认参试。" />

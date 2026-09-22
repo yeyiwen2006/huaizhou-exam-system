@@ -92,6 +92,12 @@
                                             IsOpen="True"
                                             Message="当前版本尚未提供答题与交卷功能，请联系考务人员。此页面不能用于正式考试。" />
                             <controls:Banner x:Name="RuntimeErrorBanner" Level="Danger" Margin="0,12,0,0" />
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="本地保存与恢复" Margin="0,20,0,0" />
+                            <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}" Margin="0,8,0,0" />
+                            <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
+                            <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
+                                    Content="重试本地保存" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                    Visibility="Collapsed" Click="OnRetryLocalSave" />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

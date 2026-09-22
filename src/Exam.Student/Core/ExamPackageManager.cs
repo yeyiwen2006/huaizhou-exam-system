@@ -57,6 +57,9 @@ public sealed class ExamPackageManager : IDisposable
             });
         }
         catch { _store.Dispose(); throw; }
+        // An earlier run already started this participation. A missing answer database
+        // must not be mistaken for a first-time blank exam during B04 recovery.
+        RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null;
         CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
             _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
             _state.Participation is not null ? Phase.ConfirmedWaiting : Phase.Idle;
@@ -66,6 +69,8 @@ public sealed class ExamPackageManager : IDisposable
     public Phase CurrentPhase { get; private set; }
     public string ExamId { get; }
     public string SessionId => _session.SessionId;
+    public string CandidateId => _candidateId;
+    public bool RequiresLocalAnswerRecovery { get; }
     public ServerNodeEnvelope? Server => _state.Server;
     public ExamResourceDescriptor? Descriptor => _state.Preparation?.Resources;
     public InstructionsDocument? Instructions => _state.Instructions;

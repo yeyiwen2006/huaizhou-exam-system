@@ -7,12 +7,15 @@ using Exam.Student.Core;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 答题页框。正式答题、持久保存及交卷尚未接入时禁用相关操作。
+/// 答题页框保留真实本地保存状态；真实题目交互和服务器交卷尚未接入时禁用相关操作。
 /// </summary>
 public partial class ExamInProgressPage : UserControl
 {
     private readonly ExamOverview _exam;
     private readonly StudentExamRuntime _runtime;
+    private readonly CancellationTokenSource _lifetime = new();
+    private bool _retryingLocalSave;
+    private string? _localRetryError;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
@@ -43,13 +46,15 @@ public partial class ExamInProgressPage : UserControl
         Unloaded += (_, _) =>
         {
             _clock?.Stop();
+            _lifetime.Cancel();
             _runtime.StateChanged -= OnRuntimeStateChanged;
         };
     }
 
     private void OnToggleMark(object sender, RoutedEventArgs e)
     {
-        // B03/B04 接入可持久保存的真实题目后才能启用标记。
+        // B04 is attached to the real runtime. B03 must still supply verified question IDs
+        // before this button can mutate a private mark; no placeholder question is created.
     }
 
     private void UpdateClock()
@@ -76,6 +81,25 @@ public partial class ExamInProgressPage : UserControl
 
     private void OnRuntimeStateChanged(object? sender, EventArgs e) => RefreshStatus();
 
+    private async void OnRetryLocalSave(object sender, RoutedEventArgs e)
+    {
+        if (_retryingLocalSave) { return; }
+        _retryingLocalSave = true;
+        RefreshStatus();
+        try
+        {
+            await _runtime.RetryLocalSaveAsync(_lifetime.Token);
+            _localRetryError = null;
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or
+                                          System.Data.Common.DbException or InvalidOperationException)
+        {
+            _localRetryError = "本地保存尚未恢复，原记录和待保存修改均已保留。请联系考务人员检查存储后重试。";
+        }
+        finally { _retryingLocalSave = false; RefreshStatus(); }
+    }
+
     private void RefreshStatus()
     {
         PaperBanner.Level = StatusLevel.Warning;
@@ -83,10 +107,16 @@ public partial class ExamInProgressPage : UserControl
         {
             ExamPackageManager.Phase.Ended => "服务器已结束考试。原参试记录继续保留，当前版本尚未提供完整答卷补传功能，请联系考务人员。",
             ExamPackageManager.Phase.Revoked => "当前设备的答题授权已撤销，已停止访问试题。请联系考务人员。",
-            ExamPackageManager.Phase.Unlocked => "加密试题包已按服务器授权解锁。当前版本尚未提供题目展示、作答持久保存与交卷功能，请勿用于正式考试。",
+            ExamPackageManager.Phase.Unlocked => "加密试题包已按服务器授权解锁，并已接入本地答案恢复。当前版本尚未提供真实题目展示与完整交卷功能，不能用于正式考试。",
             _ => "试题尚未完成安全解锁，不能开始答题。请联系考务人员。",
         };
         RuntimeErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime.ConnectionError) || !string.IsNullOrWhiteSpace(_runtime.Manager.LastError);
         RuntimeErrorBanner.Message = _runtime.ConnectionError ?? _runtime.Manager.LastError ?? string.Empty;
+        LocalStateText.Text = _runtime.LocalStateSummary;
+        var localError = _localRetryError ?? _runtime.LocalStateError;
+        LocalStateErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(localError);
+        LocalStateErrorBanner.Message = localError ?? string.Empty;
+        RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave ? Visibility.Visible : Visibility.Collapsed;
+        RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
     }
 }
