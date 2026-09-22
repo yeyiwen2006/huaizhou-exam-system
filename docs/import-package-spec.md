@@ -117,7 +117,7 @@ variable   = "{" ( "正确选项总数" | "选择的正确选项数" ) "}" ;
 | 源文件是否存在、字体/宏包/图片依赖、编译 | D02 |
 
 仓库不引入 JSON Schema 校验库：schema 作为对外契约与文档，校验器为实现权威，另有零依赖的一致性测试
-（`SchemaConsistencyTests`，PR#2）断言两份定义不漂移。因此**每个样例都必须通过校验器**，
+（`tests/Unit/Exam.UnitTests/Importing/SchemaConsistencyTests.cs`）断言两份定义不漂移。因此**每个样例都必须通过校验器**，
 样例集合本身就是一次对 schema 语义的检验。
 
 ### 规则标识与定位
