@@ -37,8 +37,7 @@ public enum VersioningErrorCode
     StructuralChangeRejected,
     StaleScheduleTask,
     ScheduleTaskNotDue,
-    ResourceRollbackRejected,
-    IdempotencyConflict
+    ResourceRollbackRejected
 }
 
 public sealed record ScheduleWindow(DateTimeOffset StartsAt, DateTimeOffset EndsAt);
@@ -113,22 +112,19 @@ public sealed record ExamVersionSnapshot(
 public sealed record CreateVersionedExamRequest(
     string ExamId,
     ScheduleWindow Schedule,
-    DateTimeOffset Now,
-    string RequestId = "");
+    DateTimeOffset Now);
 
 public sealed record UpdateScheduleRequest(
     string ExamId,
     long ExpectedVersion,
     ScheduleWindow Schedule,
-    DateTimeOffset Now,
-    string RequestId = "");
+    DateTimeOffset Now);
 
 public sealed record ExecuteScheduleTriggerRequest(
     string ExamId,
     long ScheduleVersion,
     ScheduleTriggerKind Trigger,
-    DateTimeOffset Now,
-    string RequestId = "");
+    DateTimeOffset Now);
 
 public sealed record PublishPaperRequest(
     string ExamId,
@@ -139,8 +135,7 @@ public sealed record PublishPaperRequest(
     PaperPublicationValidation Validation,
     string Operator,
     string Reason,
-    DateTimeOffset Now,
-    string RequestId = "");
+    DateTimeOffset Now);
 
 public sealed record PublishGradingRulesRequest(
     string ExamId,
@@ -149,20 +144,17 @@ public sealed record PublishGradingRulesRequest(
     GradingPublicationValidation Validation,
     string Operator,
     string Reason,
-    DateTimeOffset Now,
-    string RequestId = "");
+    DateTimeOffset Now);
 
 public sealed record RegisterVersionedParticipantRequest(
     string ExamId,
     string ParticipantId,
-    ParticipationBusinessState InitialState,
-    string RequestId = "");
+    ParticipationBusinessState InitialState);
 
 public sealed record ChangeParticipantStateRequest(
     string ExamId,
     string ParticipantId,
-    ParticipationBusinessState State,
-    string RequestId = "");
+    ParticipationBusinessState State);
 
 public sealed record ReportPaperTransferRequest(
     string ExamId,
@@ -170,20 +162,12 @@ public sealed record ReportPaperTransferRequest(
     long PaperVersion,
     long InstalledPaperVersion,
     PaperTransferOutcome Outcome,
-    string? Error,
-    string RequestId = "",
-    string DeviceId = "",
-    long EntryVersion = 0,
-    long AuthorizationVersion = 0);
+    string? Error);
 
 public sealed record ConfirmPaperReviewRequest(
     string ExamId,
     string ParticipantId,
-    long PaperVersion,
-    string RequestId = "",
-    string DeviceId = "",
-    long EntryVersion = 0,
-    long AuthorizationVersion = 0);
+    long PaperVersion);
 
 public sealed record VersioningResult<T>(
     bool Succeeded,

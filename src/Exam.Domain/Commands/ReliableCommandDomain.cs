@@ -67,11 +67,7 @@ public interface ICommandEventStore
         string eventId,
         CancellationToken cancellationToken = default);
 
-    ValueTask<IReadOnlyList<PersistentCommandEvent>> ClaimDueForDeviceAsync(
-        string participationId,
-        long entryVersion,
-        string deviceId,
-        long authorizationVersion,
+    ValueTask<IReadOnlyList<PersistentCommandEvent>> ListUnacknowledgedAsync(
         DateTimeOffset dueAtOrBefore,
         CancellationToken cancellationToken = default);
 

@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using Exam.Contracts.Activation;
@@ -18,20 +17,12 @@ public partial class ActivationPage : UserControl
 
     private readonly MainWindow.Navigation _navigation;
     private bool _requesting;
-    private readonly CancellationTokenSource _lifetime = new();
 
     public ActivationPage(MainWindow.Navigation navigation)
     {
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
-        if (App.Services.Device is { } device)
-        {
-            HostInput.Text = device.Host;
-            PortInput.Text = device.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        Unloaded += (_, _) => _lifetime.Cancel();
         UpdateRequestEnabled();
     }
 
@@ -39,11 +30,6 @@ public partial class ActivationPage : UserControl
 
     private void UpdateRequestEnabled()
     {
-        if (RequestButton is null || HostInput is null || PortInput is null)
-        {
-            return;
-        }
-
         RequestButton.IsEnabled = !_requesting
             && HostInput.Text.Trim().Length > 0
             && PortInput.Text.Trim().Length > 0;
@@ -73,35 +59,50 @@ public partial class ActivationPage : UserControl
         _requesting = true;
         UpdateRequestEnabled();
 
+        // 设备身份：本机生成并持久化（deviceId 与凭据在真实实现中由首次激活生成）
+        var existing = App.Services.DeviceStore.Load();
+        var deviceId = existing?.DeviceId ?? $"dev-{Guid.NewGuid().ToString("N")[..12]}";
+        var credential = existing?.Credential ?? Guid.NewGuid().ToString("N");
+        var requestId = RequestIds.New();
+
         ActivationPill.Text = "等待考务端批准…";
         ActivationPill.Level = StatusLevel.Warning;
 
         try
         {
+            // 幂等提交 + 轮询：同 RequestId 重复提交返回当前审批状态
+            var request = new SubmitActivationRequest(requestId, deviceId, credential);
             for (var attempt = 0; attempt < MaxPollAttempts; attempt++)
             {
-                Busy.Message = attempt == 0 ? "正在申请或恢复设备激活…" : "正在等待考务端批准…";
+                Busy.Message = attempt == 0 ? "正在向服务器提交激活申请…" : "正在等待考务端批准…";
                 Busy.IsBusy = true;
-                var result = await App.Services.Activation.RequestOrPollAsync(host, port, _lifetime.Token);
+                var envelope = await App.Services.Api.SubmitActivationAsync(request);
                 Busy.IsBusy = false;
+
+                if (!envelope.IsSuccess)
+                {
+                    ActivationPill.Text = "未激活";
+                    ActivationPill.Level = StatusLevel.Danger;
+                    ErrorBanner.Show(envelope.Error!.Message);
+                    return;
+                }
+
+                var result = envelope.Result!;
                 if (result.Status == ActivationStatus.Active && result.ClientNumber is not null)
                 {
-                    App.Services.ConfigureDevice(result);
-                    App.Services.StartClock();
+                    App.Services.DeviceStore.Save(new DeviceRecord(
+                        deviceId, credential, result.ClientNumber, host, port, DateTimeOffset.Now));
+                    App.Services.Session.OnActivated(result.ClientNumber);
 
                     ActivationPill.Text = $"激活成功（编号 {result.ClientNumber}）";
                     ActivationPill.Level = StatusLevel.Success;
 
+                    await Task.Delay(900);
                     _navigation.GoToLogin();
                     return;
                 }
 
-                if (result.Status == ActivationStatus.Rejected)
-                {
-                    throw new StudentIdentityException("激活申请已被拒绝，请联系考务人员。");
-                }
-
-                await Task.Delay(1500, _lifetime.Token);
+                await Task.Delay(1500);
             }
 
             throw new TimeoutException("等待考务端批准超时。");
@@ -111,22 +112,6 @@ public partial class ActivationPage : UserControl
             ActivationPill.Text = "未激活";
             ActivationPill.Level = StatusLevel.Danger;
             ErrorBanner.Show(ex.Message + " 请稍后重试。");
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-            // 离开页面只停止查询，已持久保存的申请和身份保持不变。
-        }
-        catch (Exception error) when (error is DeviceStoreException or StudentIdentityException)
-        {
-            ActivationPill.Text = "激活尚未完成";
-            ActivationPill.Level = StatusLevel.Danger;
-            ErrorBanner.Show(error.Message);
-        }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException)
-        {
-            ActivationPill.Text = "等待连接恢复";
-            ActivationPill.Level = StatusLevel.Warning;
-            ErrorBanner.Show("未收到服务器确认，请检查连接后重试。原设备身份和激活申请已保留。");
         }
         finally
         {

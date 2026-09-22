@@ -11,10 +11,6 @@ public interface IParticipationPersistence
 
 public interface IParticipationTransaction
 {
-    bool IsActiveDevice(string deviceId);
-
-    bool IsExamEntryCurrent(ExamEntrySnapshot expected);
-
     StudentSession? FindSession(string sessionId);
 
     EntryPreparation? FindPreparation(string preparationId);
@@ -97,13 +93,6 @@ public sealed class InMemoryParticipationPersistence : IParticipationPersistence
 
     private sealed class Transaction(State state) : IParticipationTransaction
     {
-        // The in-memory reference implementation has no activation or exam projection tables.
-        // Its injected directories/credential validator perform these checks. PostgreSQL overrides
-        // both methods with row locks so the production check and write share one transaction.
-        public bool IsActiveDevice(string deviceId) => true;
-
-        public bool IsExamEntryCurrent(ExamEntrySnapshot expected) => true;
-
         public StudentSession? FindSession(string sessionId) => state.Sessions.GetValueOrDefault(sessionId);
 
         public EntryPreparation? FindPreparation(string preparationId) =>

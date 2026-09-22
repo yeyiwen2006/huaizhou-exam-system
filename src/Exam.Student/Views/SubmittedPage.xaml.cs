@@ -1,11 +1,11 @@
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Exam.Contracts.Submissions;
 
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 只接受当前考生的服务器持久化回执，3 秒后返回选择页；同场考试保持不可重入。
+/// 已成功交卷页：传输成功后显示，3 秒后跳转选择考试页面。
+/// 再次进入同一考试将重新从空白答卷开始（B05 接入再次进入拦截）。
 /// </summary>
 public partial class SubmittedPage : UserControl
 {
@@ -13,10 +13,8 @@ public partial class SubmittedPage : UserControl
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private int _remain = 3;
 
-    public SubmittedPage(MainWindow.Navigation navigation, SubmissionReceipt receipt)
+    public SubmittedPage(MainWindow.Navigation navigation)
     {
-        ArgumentNullException.ThrowIfNull(receipt);
-        App.Services.Session.RecordSubmission(receipt);
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
@@ -26,13 +24,12 @@ public partial class SubmittedPage : UserControl
         Unloaded += (_, _) => _timer.Stop();
     }
 
-    private async void OnTick(object? sender, EventArgs e)
+    private void OnTick(object? sender, EventArgs e)
     {
         _remain--;
         if (_remain <= 0)
         {
             _timer.Stop();
-            await App.Services.Session.ReleaseExamAsync();
             _navigation.GoToExamSelection();
             return;
         }

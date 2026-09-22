@@ -1,470 +1,381 @@
 using System.IO;
-using System.Net.Http;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
-using Exam.Contracts.Resources;
-using Exam.Contracts.Student;
-using Exam.Infrastructure.Security;
 using Exam.Student.Core;
 
 namespace Exam.StudentUnitTests;
 
-public sealed class ExamPackageManagerTests
+/// <summary>
+/// 受控假服务：不依赖 MockStudentApi 的演示延迟与魔法考试号，
+/// 每个用例显式配置成功/失败路径。
+/// </summary>
+public sealed class FakeStudentApi : IStudentApi
+{
+    public byte[] PackageBytes { get; set; } = Array.Empty<byte>();
+
+    public byte[] Key { get; set; } = SyntheticExamPackage.CreateKey();
+
+    public InstructionsDocument? Instructions { get; set; } =
+        new(1, new[] { "说明第一行", "说明第二行" });
+
+    /// <summary>下载至该字节数后抛出 IO 异常（模拟中断/超时）；null 表示正常完成。</summary>
+    public int? FailDownloadAtBytes { get; set; }
+
+    /// <summary>确认参试时服务器侧返回“考试已结束”。</summary>
+    public bool ExamEndedOnServer { get; set; }
+
+    /// <summary>确认参试时返回答题态（迟到进入情景）。</summary>
+    public bool ConfirmAsAnswering { get; set; }
+
+    public long ExpectedPaperVersion { get; set; } = 1;
+
+    public byte[]? PlaintextUsedToSeal { get; private set; }
+
+    public ExamResourceDescriptor Descriptor => BuildDescriptor();
+
+    public ExamResourceDescriptor BuildDescriptor(long? packageLengthOverride = null)
+    {
+        var plaintext = SyntheticExamPackage.CreatePlaintext("fake-exam", ExpectedPaperVersion);
+        PlaintextUsedToSeal = plaintext;
+        PackageBytes = SyntheticExamPackage.Seal(plaintext, Key);
+        return new ExamResourceDescriptor(
+            "https://fake.local/pkg.bin",
+            packageLengthOverride ?? PackageBytes.Length,
+            ExpectedPaperVersion,
+            1);
+    }
+
+    public Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(
+        SubmitActivationRequest request, CancellationToken ct = default)
+        => throw new NotSupportedException("B02 状态机不使用激活接口。");
+
+    public Task<ApiEnvelope<StudentSessionResult>> LoginAsync(
+        LoginStudentRequest request, CancellationToken ct = default)
+        => throw new NotSupportedException("B02 状态机不使用登录接口。");
+
+    public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(
+        PrepareExamEntryRequest request, CancellationToken ct = default)
+        => throw new NotSupportedException("B02 状态机不使用准备接口（由页面驱动）。");
+
+    public Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(CancellationToken ct = default)
+        => throw new NotSupportedException("B02 状态机不使用概览接口。");
+
+    public Task<InstructionsDocument?> GetInstructionsAsync(
+        string sessionId, string examId, long instructionsVersion, CancellationToken ct = default)
+        => Task.FromResult(Instructions);
+
+    public async IAsyncEnumerable<byte[]> DownloadPackageChunksAsync(
+        ExamResourceDescriptor descriptor,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var sent = 0;
+        const int chunkSize = 64;
+        while (sent < PackageBytes.Length)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (FailDownloadAtBytes is int limit && sent >= limit)
+            {
+                throw new IOException("模拟下载中断。");
+            }
+
+            var size = Math.Min(chunkSize, PackageBytes.Length - sent);
+            yield return PackageBytes[sent..(sent + size)];
+            sent += size;
+            await Task.Delay(1, ct);
+        }
+    }
+
+    public Task<ApiEnvelope<ParticipationResult>?> ConfirmParticipationAsync(
+        ConfirmParticipationRequest request, CancellationToken ct = default)
+    {
+        if (ExamEndedOnServer)
+        {
+            return Task.FromResult<ApiEnvelope<ParticipationResult>?>(
+                Fail<ParticipationResult>(ParticipationErrorCodes.EntryNotAllowed, "考试已结束，不能新增参试。"));
+        }
+
+        if (request.DownloadedPaperVersion != ExpectedPaperVersion)
+        {
+            return Task.FromResult<ApiEnvelope<ParticipationResult>?>(
+                Fail<ParticipationResult>(ParticipationErrorCodes.PreparationVersionMismatch, "试题包或考试说明未就绪，不能确认参试。"));
+        }
+
+        return Task.FromResult<ApiEnvelope<ParticipationResult>?>(new ApiEnvelope<ParticipationResult>(
+            "fake", "node", 1, "corr",
+            new ParticipationResult(
+                "part-1", request.ExamId, "cand-1",
+                ConfirmAsAnswering ? ParticipationBusinessState.Answering : ParticipationBusinessState.Waiting,
+                "device-1", 1, 1, 1, "unlock:fake"),
+            null));
+    }
+
+    public Task<ApiEnvelope<ParticipationResult>?> WithdrawParticipationAsync(
+        WithdrawParticipationRequest request, CancellationToken ct = default)
+        => Task.FromResult<ApiEnvelope<ParticipationResult>?>(new ApiEnvelope<ParticipationResult>(
+            "fake", "node", 1, "corr",
+            new ParticipationResult(
+                request.ParticipationId, string.Empty, "cand-1",
+                ParticipationBusinessState.NotParticipating, "device-1", 1, 1, 1, null),
+            null));
+
+    public Task<byte[]?> ResolveUnlockKeyAsync(string unlockReference, CancellationToken ct = default)
+        => Task.FromResult(unlockReference == "unlock:fake" ? Key : null);
+
+    private static ApiEnvelope<T> Fail<T>(string code, string message) => new(
+        "fake", "node", 1, "corr", default, new ApiError(code, message));
+}
+
+public sealed class ExamPackageManagerTests : IDisposable
+{
+    private readonly FakeStudentApi _api = new();
+    private readonly string _root;
+    private readonly ExamPackageManager _manager;
+
+    public ExamPackageManagerTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "hz-exam-tests", Guid.NewGuid().ToString("N"));
+        _manager = new ExamPackageManager(_api, _root);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+    }
+
+    private Task<bool> DownloadNormalAsync() =>
+        _manager.DownloadAsync("sess-1", "fake-exam", _api.Descriptor);
+
+    [Fact]
+    public async Task Download_Completes_AtomicEncryptedFileAndInstructions()
+    {
+        var ok = await DownloadNormalAsync();
+
+        Assert.True(ok);
+        Assert.True(_manager.HasPackage);
+        Assert.True(_manager.HasInstructions);
+        Assert.True(File.Exists(_manager.PackageFilePath));
+        Assert.Equal(ExamPackageManager.Phase.Downloaded, _manager.CurrentPhase);
+        Assert.Equal(2, _manager.Instructions!.Lines.Count);
+    }
+
+    [Fact]
+    public async Task ConfirmBlocked_WhenPackageMissing()
+    {
+        _api.FailDownloadAtBytes = 32; // 下载中途失败
+
+        var ok = await DownloadNormalAsync();
+
+        Assert.False(ok);
+        Assert.False(_manager.HasPackage);
+        Assert.False(_manager.CanConfirmParticipation);
+        Assert.False(File.Exists(_manager.PackageFilePath));
+        Assert.Empty(Directory.GetFiles(_root, "*.part"));
+        Assert.Empty(Directory.GetFiles(_root, "*.pkg"));
+    }
+
+    [Fact]
+    public async Task ConfirmBlocked_WhenInstructionsMissing()
+    {
+        _api.Instructions = null;
+
+        var ok = await DownloadNormalAsync();
+
+        Assert.False(ok); // 说明缺失视为准备未完成
+        Assert.True(_manager.HasPackage);
+        Assert.False(_manager.HasInstructions);
+        Assert.False(_manager.CanConfirmParticipation);
+    }
+
+    [Fact]
+    public async Task ConfirmBlocked_WhenExamEnded_AfterDownloadComplete()
+    {
+        await DownloadNormalAsync();
+
+        _manager.OnExamEnded(); // 下载完成后考试结束（本地/服务器判定）
+
+        Assert.False(_manager.CanConfirmParticipation);
+
+        var result = await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+        Assert.Null(result); // 状态机直接拒绝，不发起请求
+    }
+
+    [Fact]
+    public async Task ConfirmFailsOnServer_WhenExamEndedDuringDownload()
+    {
+        _api.ExamEndedOnServer = true; // 服务器侧：结束后下载才完成不能新增参试
+        await DownloadNormalAsync();
+
+        var result = await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+
+        Assert.NotNull(result);
+        Assert.False(result!.IsSuccess);
+        Assert.Equal(ParticipationErrorCodes.EntryNotAllowed, result.Error!.Code);
+        Assert.Null(_manager.ParticipationId);
+    }
+
+    [Fact]
+    public async Task NoPlaintext_BeforeStartCommand_EvenAfterConfirm()
+    {
+        await DownloadNormalAsync();
+        var confirm = await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+        Assert.True(confirm!.IsSuccess);
+
+        // 磁盘：只有密文（不含明文标记）
+        var onDisk = await File.ReadAllBytesAsync(_manager.PackageFilePath);
+        Assert.DoesNotContain(Encoding.UTF8.GetBytes("synthetic-student-package"), onDisk);
+
+        // 内存：开考前无明文，且提前解锁被硬约束拒绝
+        Assert.Null(_manager.UnlockedPayload);
+        Assert.False(_manager.ExamStarted);
+        Assert.False(await _manager.UnlockAsync());
+    }
+
+    [Fact]
+    public async Task Unlock_Succeeds_AfterStartCommand()
+    {
+        await DownloadNormalAsync();
+        await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+
+        var ok = await _manager.HandleStartCommandAsync(StartDelivery());
+
+        Assert.True(ok);
+        Assert.Equal(ExamPackageManager.Phase.Unlocked, _manager.CurrentPhase);
+        Assert.NotNull(_manager.UnlockedPayload);
+        Assert.Equal(_api.PlaintextUsedToSeal, _manager.UnlockedPayload);
+    }
+
+    [Fact]
+    public async Task Unlock_Succeeds_Immediately_WhenAlreadyAnswering()
+    {
+        _api.ConfirmAsAnswering = true; // 迟到进入：服务器确认时已告知答题态
+        await DownloadNormalAsync();
+
+        var confirm = await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+        Assert.Equal(ParticipationBusinessState.Answering, confirm!.Result!.BusinessState);
+
+        var ok = await _manager.UnlockAsync();
+        Assert.True(ok);
+        Assert.Equal(_api.PlaintextUsedToSeal, _manager.UnlockedPayload);
+    }
+
+    [Fact]
+    public async Task StartCommand_Ignored_BeforeConfirm()
+    {
+        await DownloadNormalAsync();
+
+        var ok = await _manager.HandleStartCommandAsync(StartDelivery());
+
+        Assert.False(ok); // 未确认参试：开考指令不产生明文
+        Assert.Null(_manager.UnlockedPayload);
+    }
+
+    [Fact]
+    public async Task LengthMismatch_TreatedAsFailure_NoFinalFile()
+    {
+        var descriptor = _api.BuildDescriptor(packageLengthOverride: _api.PackageBytes.Length + 99);
+
+        var ok = await _manager.DownloadAsync("sess-1", "fake-exam", descriptor);
+
+        Assert.False(ok);
+        Assert.False(_manager.HasPackage);
+        Assert.Empty(Directory.GetFiles(_root, "*.pkg"));
+    }
+
+    [Fact]
+    public async Task CanceledDownload_ThrowsAndCleansPartialFile()
+    {
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _manager.DownloadAsync("sess-1", "fake-exam", _api.Descriptor, null, cts.Token));
+
+        Assert.Empty(Directory.GetFiles(_root, "*.part"));
+        Assert.Empty(Directory.GetFiles(_root, "*.pkg"));
+        Assert.False(_manager.HasPackage);
+    }
+
+    [Fact]
+    public async Task WrongUnlockReference_FailsToUnlock()
+    {
+        await DownloadNormalAsync();
+        await _manager.ConfirmParticipationAsync("sess-1", "fake-exam");
+
+        // 开考指令携带错误的解锁引用 → 服务器换不出密钥 → 解锁失败
+        var ok = await _manager.HandleStartCommandAsync(StartDelivery("unlock:unknown"));
+
+        Assert.False(ok);
+        Assert.Null(_manager.UnlockedPayload);
+    }
+
+    private static CommandDelivery StartDelivery(string unlockReference = "unlock:fake") => new(
+        Server: new ServerNodeEnvelope("fake", "node", 1),
+        EventId: "evt-1",
+        ExamId: "fake-exam",
+        ParticipationId: "part-1",
+        EntryVersion: 1,
+        EventType: CommandEventType.Start,
+        StateVersion: 1,
+        TargetDeviceId: "device-1",
+        TargetAuthorizationVersion: 1,
+        ResourceVersion: 1,
+        ProtectedUnlockReference: unlockReference,
+        Metadata: new Dictionary<string, string>(),
+        CreatedAt: DateTimeOffset.Now,
+        DeliveryAttempt: 1);
+}
+
+public sealed class SyntheticExamPackageTests
 {
     [Fact]
-    public async Task WaitingStoresOnlyCiphertext_AndRealV2StartUnlocksThenAcknowledges()
+    public void RoundTrip_Succeeds()
     {
-        using var fixture = await Fixture.CreateAsync();
-        using var manager = fixture.Manager();
-        Assert.True(await manager.PrepareAndDownloadAsync());
-        Assert.NotNull(manager.Instructions);
-        Assert.False(await manager.UnlockAsync());
-        Assert.Equal(0, fixture.Api.UnlockCalls);
-        Assert.Null(manager.UnlockedPayload);
-        Assert.Equal(fixture.Api.Ciphertext, await File.ReadAllBytesAsync(manager.PackageFilePath));
-        Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
-        Assert.False(manager.CanConfirmParticipation);
-        Assert.Null(await manager.ConfirmParticipationAsync());
-        Assert.Single(fixture.Api.Confirms);
-        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start()));
-        Assert.Equal(fixture.Api.Plaintext, manager.UnlockedPayload);
-        Assert.Equal(CommandProcessingResult.Applied, Assert.Single(fixture.Api.Acks).ProcessingResult);
-        Assert.All(fixture.Api.LastKey!, item => Assert.Equal(0, item));
-        var recovery = await File.ReadAllBytesAsync(Directory.GetFiles(fixture.Root, "control.protected", SearchOption.AllDirectories).Single());
-        Assert.False(recovery.AsSpan().IndexOf(fixture.Api.Plaintext) >= 0);
-    }
+        var key = SyntheticExamPackage.CreateKey();
+        var plaintext = SyntheticExamPackage.CreatePlaintext("demo-exam", 3);
 
-    [Theory]
-    [InlineData("truncated")]
-    [InlineData("oversized")]
-    [InlineData("instructions")]
-    public async Task IncompleteOrWrongVersionResourcesNeverConfirm(string failure)
-    {
-        using var fixture = await Fixture.CreateAsync();
-        if (failure == "truncated") fixture.Api.DownloadBytes = fixture.Api.Ciphertext[..^1];
-        if (failure == "oversized") fixture.Api.DownloadBytes = [.. fixture.Api.Ciphertext, 0];
-        if (failure == "instructions") fixture.Api.InstructionsVersion = 2;
-        using var manager = fixture.Manager();
-        Assert.False(await manager.PrepareAndDownloadAsync());
-        Assert.False(manager.CanConfirmParticipation);
-        Assert.Null(await manager.ConfirmParticipationAsync());
-        Assert.Empty(fixture.Api.Confirms);
-        Assert.Empty(Directory.GetFiles(fixture.Root, "*.part", SearchOption.AllDirectories));
+        var package = SyntheticExamPackage.Seal(plaintext, key);
+
+        Assert.True(SyntheticExamPackage.TryUnseal(package, key, out var decrypted));
+        Assert.Equal(plaintext, decrypted);
     }
 
     [Fact]
-    public async Task PreparationAndConfirmationLostResponsesReplaySameRequestsAcrossRestart()
+    public void WrongKey_Fails()
     {
-        using var fixture = await Fixture.CreateAsync();
-        fixture.Api.DropPrepare = true;
-        using (var first = fixture.Manager())
-            await Assert.ThrowsAsync<HttpRequestException>(() => first.PrepareAndDownloadAsync());
-        using (var second = fixture.Manager())
-        {
-            Assert.True(await second.PrepareAndDownloadAsync());
-            Assert.Equal(fixture.Api.Prepares[0], fixture.Api.Prepares[1]);
-            fixture.Api.DropConfirm = true;
-            await Assert.ThrowsAsync<HttpRequestException>(() => second.ConfirmParticipationAsync());
-            Assert.True(second.HasPendingConfirmation);
-        }
-        using var restored = fixture.Manager();
-        Assert.True(restored.HasPendingConfirmation);
-        Assert.True(await restored.PrepareAndDownloadAsync());
-        Assert.Equal(fixture.Api.Confirms[0], fixture.Api.Confirms[1]);
-        Assert.False(restored.HasPendingConfirmation);
+        var key = SyntheticExamPackage.CreateKey();
+        var other = SyntheticExamPackage.CreateKey();
+        var package = SyntheticExamPackage.Seal(
+            SyntheticExamPackage.CreatePlaintext("demo-exam", 1), key);
+
+        Assert.False(SyntheticExamPackage.TryUnseal(package, other, out _));
     }
 
     [Fact]
-    public async Task ExitResolvesAmbiguousConfirmation_ThenUsesCurrentVersionAndStableWithdrawalId()
+    public void TamperedPackage_FailsAuthentication()
     {
-        using var fixture = await Fixture.CreateAsync();
-        using (var manager = fixture.Manager())
-        {
-            Assert.True(await manager.PrepareAndDownloadAsync());
-            fixture.Api.DropConfirm = true;
-            await Assert.ThrowsAsync<HttpRequestException>(() => manager.ConfirmParticipationAsync());
-            fixture.Api.DropWithdraw = true;
-            await Assert.ThrowsAsync<HttpRequestException>(() => manager.WithdrawAsync());
-            Assert.Equal(fixture.Api.Confirms[0], fixture.Api.Confirms[1]);
-            Assert.Equal(7, Assert.Single(fixture.Api.Withdrawals).ExpectedVersion);
-        }
-        using var restored = fixture.Manager();
-        var result = await restored.WithdrawAsync();
-        Assert.Equal(ParticipationBusinessState.NotParticipating, result?.Result?.BusinessState);
-        Assert.Equal(fixture.Api.Withdrawals[0], fixture.Api.Withdrawals[1]);
-        Assert.Equal(ExamPackageManager.Phase.Withdrawn, restored.CurrentPhase);
-    }
+        var key = SyntheticExamPackage.CreateKey();
+        var package = SyntheticExamPackage.Seal(
+            SyntheticExamPackage.CreatePlaintext("demo-exam", 1), key);
 
-    [Theory]
-    [InlineData("server")]
-    [InlineData("epoch")]
-    [InlineData("exam")]
-    [InlineData("participation")]
-    [InlineData("entry")]
-    [InlineData("device")]
-    [InlineData("authorization")]
-    [InlineData("paper")]
-    public async Task ForeignAndStaleStartCommandsCannotReleaseKeys(string mismatch)
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using var manager = fixture.Manager();
-        Assert.True(await manager.PrepareAndDownloadAsync());
-        await manager.ConfirmParticipationAsync();
-        var command = fixture.Api.Start();
-        command = mismatch switch
-        {
-            "server" => command with { Server = command.Server with { ServerId = "another-server" } },
-            "epoch" => command with { Server = command.Server with { ServerEpoch = 0 } },
-            "exam" => command with { ExamId = "another-exam" },
-            "participation" => command with { ParticipationId = "another-participant" },
-            "entry" => command with { EntryVersion = 99 },
-            "device" => command with { TargetDeviceId = "another-device" },
-            "authorization" => command with { TargetAuthorizationVersion = 99 },
-            _ => command with { ResourceVersion = 99 }
-        };
-        Assert.False(await manager.HandleCommandAsync(command));
-        Assert.Equal(0, fixture.Api.UnlockCalls);
-        Assert.Null(manager.UnlockedPayload);
-        Assert.Empty(fixture.Api.Acks);
+        package[^3] ^= 0xFF; // 篡改密文/标签
+
+        Assert.False(SyntheticExamPackage.TryUnseal(package, key, out _));
     }
 
     [Fact]
-    public async Task CorruptCiphertextNeverAcknowledgesStart_AndCanActuallyBeRedownloaded()
+    public void SealedPackage_ContainsNoPlaintextMarker()
     {
-        using var fixture = await Fixture.CreateAsync();
-        fixture.Api.DownloadBytes = fixture.Api.Ciphertext.ToArray();
-        fixture.Api.DownloadBytes[^1] ^= 0x42;
-        using var manager = fixture.Manager();
-        Assert.True(await manager.PrepareAndDownloadAsync());
-        await manager.ConfirmParticipationAsync();
-        Assert.False(await manager.HandleCommandAsync(fixture.Api.Start()));
-        Assert.False(manager.HasPackage);
-        Assert.Null(manager.UnlockedPayload);
-        Assert.Empty(fixture.Api.Acks);
-        fixture.Api.DownloadBytes = fixture.Api.Ciphertext;
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        Assert.True(await manager.PrepareAndDownloadAsync());
-        await manager.ConfirmParticipationAsync();
-        Assert.Equal(2, fixture.Api.DownloadCalls);
-        Assert.Equal(fixture.Api.Plaintext, manager.UnlockedPayload);
-        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start()));
-        Assert.Single(fixture.Api.Acks);
-    }
+        var key = SyntheticExamPackage.CreateKey();
+        var plaintext = SyntheticExamPackage.CreatePlaintext("demo-exam", 1);
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AckLossAndRestartPreserveAckId_AndPreviouslyAckedStartStillReauthorizesAndDecrypts(bool loseAck)
-    {
-        using var fixture = await Fixture.CreateAsync();
-        var start = fixture.Api.Start();
-        using (var manager = fixture.Manager())
-        {
-            await manager.PrepareAndDownloadAsync();
-            await manager.ConfirmParticipationAsync();
-            fixture.Api.DropAck = loseAck;
-            if (loseAck) await Assert.ThrowsAsync<HttpRequestException>(() => manager.HandleCommandAsync(start));
-            else Assert.True(await manager.HandleCommandAsync(start));
-        }
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        using var restored = new ExamPackageManager(fixture.Api, fixture.Root, fixture.Device,
-            fixture.Session with { SessionId = "new-login-session" }, FakePackageApi.ExamId);
-        Assert.Null(restored.UnlockedPayload);
-        Assert.False(await restored.UnlockAsync());
-        Assert.Equal(1, fixture.Api.UnlockCalls);
-        Assert.True(await restored.PrepareAndDownloadAsync());
-        await restored.ConfirmParticipationAsync();
-        Assert.Equal(2, fixture.Api.UnlockCalls);
-        Assert.Equal(fixture.Api.Plaintext, restored.UnlockedPayload);
-        Assert.True(await restored.HandleCommandAsync(start));
-        Assert.Equal(fixture.Api.Acks[0], fixture.Api.Acks[1]);
-    }
+        var package = SyntheticExamPackage.Seal(plaintext, key);
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CachedRecoveryKeyCannotBypassRevokedAuthorization(bool missingErrorIdentity)
-    {
-        using var fixture = await Fixture.CreateAsync();
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        using (var first = fixture.Manager())
-        {
-            await first.PrepareAndDownloadAsync();
-            await first.ConfirmParticipationAsync();
-            Assert.NotNull(first.UnlockedPayload);
-        }
-        fixture.Api.DenyUnlock = true;
-        fixture.Api.OmitErrorIdentity = missingErrorIdentity;
-        using var restored = fixture.Manager();
-        Assert.False(await restored.UnlockAsync());
-        await restored.PrepareAndDownloadAsync();
-        await restored.ConfirmParticipationAsync();
-        Assert.Null(restored.UnlockedPayload);
-        Assert.Equal(ExamPackageManager.Phase.Revoked, restored.CurrentPhase);
-    }
-
-    [Fact]
-    public async Task HigherAuthorizationEventForThisDeviceStopsDisplay_ButOtherDevicesDoNot()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        using var manager = fixture.Manager();
-        await manager.PrepareAndDownloadAsync();
-        await manager.ConfirmParticipationAsync();
-        var change = fixture.Api.Start() with
-        {
-            EventId = "decision",
-            EventType = CommandEventType.DeviceDecided,
-            TargetAuthorizationVersion = 2,
-            ProtectedUnlockReference = null
-        };
-        Assert.False(await manager.HandleCommandAsync(change with { TargetDeviceId = "other-device" }));
-        Assert.NotNull(manager.UnlockedPayload);
-        Assert.False(await manager.HandleCommandAsync(change));
-        Assert.Null(manager.UnlockedPayload);
-        Assert.Equal(ExamPackageManager.Phase.Revoked, manager.CurrentPhase);
-        Assert.Empty(fixture.Api.Acks);
-    }
-
-    [Fact]
-    public async Task ControlStorageFailureCannotSendAnUnrecoverableMutation()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using var manager = fixture.Manager();
-        Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(manager.PackageFilePath)!, "control.protected"));
-        await Assert.ThrowsAnyAsync<IOException>(() => manager.PrepareAndDownloadAsync());
-        Assert.Empty(fixture.Api.Prepares);
-        Assert.False(manager.CanConfirmParticipation);
-    }
-
-    [Fact]
-    public async Task AuthorizationLossClearsVisiblePlaintextEvenWhenItsJournalCannotBeSaved()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        using var manager = fixture.Manager();
-        await manager.PrepareAndDownloadAsync();
-        await manager.ConfirmParticipationAsync();
-        var visibleBytes = Assert.IsType<byte[]>(manager.UnlockedPayload);
-        var statePath = Directory.GetFiles(fixture.Root, "control.protected", SearchOption.AllDirectories).Single();
-        File.Move(statePath, statePath + ".fault-test-original");
-        Directory.CreateDirectory(statePath);
-        await Assert.ThrowsAnyAsync<IOException>(() => manager.InvalidateAuthorizationAsync());
-        Assert.Null(manager.UnlockedPayload);
-        Assert.All(visibleBytes, value => Assert.Equal(0, value));
-        Assert.Equal(ExamPackageManager.Phase.Revoked, manager.CurrentPhase);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RevocationOrEndImmediatelyStopsAConcurrentUnlock_AndOldResultCannotPublish(bool end)
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using var manager = fixture.Manager();
-        await manager.PrepareAndDownloadAsync();
-        await manager.ConfirmParticipationAsync();
-        fixture.Api.UnlockEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        fixture.Api.ContinueUnlock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var start = manager.HandleCommandAsync(fixture.Api.Start());
-        await fixture.Api.UnlockEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Task stop = end
-            ? manager.HandleCommandAsync(fixture.Api.Start() with
-            {
-                EventId = "end-racing-unlock",
-                EventType = CommandEventType.End,
-                ProtectedUnlockReference = null,
-                StateVersion = 2
-            })
-            : manager.InvalidateAuthorizationAsync();
-        Assert.Equal(end ? ExamPackageManager.Phase.Ended : ExamPackageManager.Phase.Revoked, manager.CurrentPhase);
-        Assert.Null(manager.UnlockedPayload);
-        fixture.Api.ContinueUnlock.TrySetResult();
-        Assert.False(await start);
-        await stop;
-        Assert.Null(manager.UnlockedPayload);
-        Assert.DoesNotContain(fixture.Api.Acks, acknowledgement => acknowledgement.EventId == "start");
-    }
-
-    [Fact]
-    public async Task EndIsDurableAndLaterStartNeverReopens_EndedRecoveryDoesNotFetchKey()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using (var first = fixture.Manager())
-        {
-            await first.PrepareAndDownloadAsync();
-            await first.ConfirmParticipationAsync();
-            Assert.True(await first.HandleCommandAsync(fixture.Api.Start() with
-            { EventId = "end", EventType = CommandEventType.End, ProtectedUnlockReference = null, StateVersion = 2 }));
-            Assert.True(await first.HandleCommandAsync(fixture.Api.Start()));
-            Assert.True(first.ExamEnded);
-            Assert.Null(first.UnlockedPayload);
-            Assert.Equal(CommandProcessingResult.RejectedAsStale, fixture.Api.Acks.Last().ProcessingResult);
-        }
-        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
-        fixture.Api.Lifecycle = ExamLifecycle.Ended;
-        using var restored = fixture.Manager();
-        Assert.True(restored.ExamEnded);
-        Assert.True(await restored.PrepareAndDownloadAsync());
-        await restored.ConfirmParticipationAsync();
-        Assert.Equal(ExamPackageManager.Phase.Ended, restored.CurrentPhase);
-        Assert.False(await restored.UnlockAsync());
-        Assert.Equal(0, fixture.Api.UnlockCalls);
-    }
-
-    [Fact]
-    public async Task FailedNewDownloadPreservesOldCompleteCiphertext()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using var manager = fixture.Manager();
-        await manager.PrepareAndDownloadAsync();
-        var originalPath = manager.PackageFilePath;
-        fixture.Api.PaperVersion = 2;
-        fixture.Api.DownloadBytes = fixture.Api.Ciphertext[..^1];
-        Assert.False(await manager.PrepareAndDownloadAsync());
-        Assert.Equal(fixture.Api.Ciphertext, await File.ReadAllBytesAsync(originalPath));
-        Assert.NotEqual(originalPath, manager.PackageFilePath);
-    }
-
-    [Fact]
-    public async Task StorageIsolationUsesLogicalServerCandidateAndExam_AndCannotTraversePaths()
-    {
-        using var fixture = await Fixture.CreateAsync();
-        using var first = fixture.Manager();
-        using var otherServer = new ExamPackageManager(fixture.Api, fixture.Root,
-            fixture.Device with { ServerId = "../../other-server" }, fixture.Session, FakePackageApi.ExamId);
-        using var otherCandidate = new ExamPackageManager(fixture.Api, fixture.Root,
-            fixture.Device, fixture.Session with { Candidate = fixture.Session.Candidate with { CandidateId = "../another-candidate" } },
-            FakePackageApi.ExamId);
-        using var otherExam = new ExamPackageManager(fixture.Api, fixture.Root, fixture.Device,
-            fixture.Session with { ExamIds = ["../../another-exam"] }, "../../another-exam");
-        var paths = new[] { first.PackageFilePath, otherServer.PackageFilePath, otherCandidate.PackageFilePath, otherExam.PackageFilePath };
-        Assert.Equal(4, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.All(paths, path => Assert.StartsWith(Path.GetFullPath(fixture.Root) + Path.DirectorySeparatorChar,
-            Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
-        await Task.CompletedTask;
-    }
-
-    private sealed class Fixture : IDisposable
-    {
-        public string Root { get; } = Path.Combine(Path.GetTempPath(), $"exam-package-tests-{Guid.NewGuid():N}");
-        public required FakePackageApi Api { get; init; }
-        public DeviceRecord Device { get; } = new("device", "test-credential", "20260922001", "127.0.0.1", 5443,
-            DateTimeOffset.UtcNow, "server", ActivationStatus.Active, CredentialVersion: 1, ServerEpoch: 1);
-        public StudentSessionResult Session { get; } = new("session", "device",
-            new CandidateIdentity("candidate", "合成考生", "01", "001"), [FakePackageApi.ExamId], DateTimeOffset.UtcNow);
-        public static async Task<Fixture> CreateAsync() => new() { Api = await FakePackageApi.CreateAsync() };
-        public ExamPackageManager Manager() => new(Api, Root, Device, Session, FakePackageApi.ExamId);
-        public void Dispose() { Api.Dispose(); if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
-    }
-
-    private sealed class FakePackageApi : IExamPackageApi, IDisposable
-    {
-        public const string ExamId = "exam";
-        private readonly Dictionary<string, EntryPreparationResult> _preparations = [];
-        private readonly Dictionary<string, ParticipationResult> _confirmations = [];
-        private readonly Dictionary<string, ParticipationResult> _withdrawals = [];
-        private X509Certificate2 _node = null!;
-        private EncryptedPackageEnvelope _envelope = null!;
-        public byte[] Plaintext { get; } = Encoding.UTF8.GetBytes("独立合成题包内容，用于真实v2加密链路测试。");
-        public byte[] Ciphertext { get; private set; } = [];
-        public byte[] DownloadBytes { get; set; } = [];
-        public long PaperVersion { get; set; } = 1;
-        public long InstructionsVersion { get; set; } = 1;
-        public ParticipationBusinessState BusinessState { get; set; } = ParticipationBusinessState.Waiting;
-        public ExamLifecycle Lifecycle { get; set; } = ExamLifecycle.Scheduled;
-        public bool DropPrepare { get; set; }
-        public bool DropConfirm { get; set; }
-        public bool DropWithdraw { get; set; }
-        public bool DropAck { get; set; }
-        public bool DenyUnlock { get; set; }
-        public bool OmitErrorIdentity { get; set; }
-        public int UnlockCalls { get; private set; }
-        public int DownloadCalls { get; private set; }
-        public byte[]? LastKey { get; private set; }
-        public TaskCompletionSource? UnlockEntered { get; set; }
-        public TaskCompletionSource? ContinueUnlock { get; set; }
-        public List<PrepareExamEntryRequest> Prepares { get; } = [];
-        public List<ConfirmParticipationRequest> Confirms { get; } = [];
-        public List<WithdrawParticipationRequest> Withdrawals { get; } = [];
-        public List<AcknowledgeCommandRequest> Acks { get; } = [];
-
-        public static async Task<FakePackageApi> CreateAsync()
-        {
-            using var rsa = RSA.Create(2048);
-            var certificate = new CertificateRequest("CN=B02-test-node", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-            var api = new FakePackageApi { _node = certificate.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1)) };
-            using var encrypted = new MemoryStream();
-            api._envelope = await new PackageEncryptionService(4096).EncryptAsync(new MemoryStream(api.Plaintext),
-                encrypted, "package", 1, [new("node", api._node)]);
-            api.Ciphertext = encrypted.ToArray();
-            api.DownloadBytes = api.Ciphertext;
-            return api;
-        }
-
-        public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default)
-        {
-            Prepares.Add(request);
-            if (!_preparations.TryGetValue(request.RequestId, out var preparation))
-                _preparations[request.RequestId] = preparation = new(request.RequestId, ExamId, EntryPreparationStatus.Ready,
-                    new ExamResourceDescriptor("/api/v1/resources/package", Ciphertext.Length, PaperVersion, 1),
-                    null, null, null, null, null, DateTimeOffset.UtcNow);
-            if (DropPrepare) { DropPrepare = false; throw new HttpRequestException("Synthetic lost prepare response."); }
-            return Task.FromResult(Ok(preparation));
-        }
-        public Task<ApiEnvelope<InstructionsDocument>> GetInstructionsAsync(string preparationId, string sessionId, CancellationToken ct = default) =>
-            Task.FromResult(Ok(new InstructionsDocument(InstructionsVersion, ["合成考试说明，共1个题组。", "请等待服务器开考。"])));
-        public async IAsyncEnumerable<byte[]> DownloadPackageChunksAsync(ExamResourceDescriptor descriptor, string preparationId,
-            string sessionId, [EnumeratorCancellation] CancellationToken ct = default)
-        { DownloadCalls++; ct.ThrowIfCancellationRequested(); await Task.Yield(); yield return DownloadBytes; }
-        public Task<ApiEnvelope<ParticipationResult>> ConfirmParticipationAsync(ConfirmParticipationRequest request, CancellationToken ct = default)
-        {
-            Confirms.Add(request);
-            if (!_confirmations.TryGetValue(request.RequestId, out var result))
-                _confirmations[request.RequestId] = result = new("participation", ExamId, "candidate", BusinessState,
-                    "device", 1, 1, 7, BusinessState == ParticipationBusinessState.Answering ? "resource-envelope:package" : null,
-                    Lifecycle: Lifecycle);
-            if (DropConfirm) { DropConfirm = false; throw new HttpRequestException("Synthetic lost confirmation response."); }
-            return Task.FromResult(Ok(result));
-        }
-        public Task<ApiEnvelope<ParticipationResult>> WithdrawParticipationAsync(WithdrawParticipationRequest request, CancellationToken ct = default)
-        {
-            Withdrawals.Add(request);
-            if (!_withdrawals.TryGetValue(request.RequestId, out var result))
-                _withdrawals[request.RequestId] = result = new("participation", ExamId, "candidate",
-                    ParticipationBusinessState.NotParticipating, "device", 1, 1, request.ExpectedVersion + 1, null);
-            if (DropWithdraw) { DropWithdraw = false; throw new HttpRequestException("Synthetic lost withdrawal response."); }
-            return Task.FromResult(Ok(result));
-        }
-        public async Task<ApiEnvelope<PackageUnlockMaterial>> ResolveUnlockAsync(PackageUnlockRequest request, CancellationToken ct = default)
-        {
-            UnlockCalls++;
-            UnlockEntered?.TrySetResult();
-            if (ContinueUnlock is not null) await ContinueUnlock.Task.WaitAsync(ct);
-            if (DenyUnlock) return new ApiEnvelope<PackageUnlockMaterial>(
-                OmitErrorIdentity ? string.Empty : "server", OmitErrorIdentity ? string.Empty : "node", OmitErrorIdentity ? 0 : 1,
-                request.RequestId, null, new ApiError(ErrorCodes.AuthorizationRevoked, "测试设备授权已撤销。"));
-            LastKey = PackageEncryptionService.UnwrapDataKey(_envelope, "node", _node);
-            return Ok(new PackageUnlockMaterial(_envelope.PackageId, _envelope.PaperVersion,
-                _envelope.ChunkSize, _envelope.NoncePrefix, LastKey));
-        }
-        public Task<ApiEnvelope<CommandAcknowledgement>> AcknowledgeCommandAsync(AcknowledgeCommandRequest request, CancellationToken ct = default)
-        {
-            Acks.Add(request);
-            if (DropAck) { DropAck = false; throw new HttpRequestException("Synthetic lost ACK response."); }
-            return Task.FromResult(Ok(new CommandAcknowledgement(request.EventId, request.RequestId,
-                request.ProcessingResult, request.ActualPaperVersion, request.FailureReason, DateTimeOffset.UtcNow)));
-        }
-        public CommandDelivery Start() => new(new ServerNodeEnvelope("server", "node", 1), "start", ExamId,
-            "participation", 1, CommandEventType.Start, 1, "device", 1, 1, "resource-envelope:package",
-            new Dictionary<string, string>(), DateTimeOffset.UtcNow, 1);
-        private static ApiEnvelope<T> Ok<T>(T value) => new("server", "node", 1, "correlation", value, null);
-        public void Dispose() => _node.Dispose();
+        Assert.DoesNotContain(Encoding.UTF8.GetBytes("synthetic-student-package"), package);
     }
 }

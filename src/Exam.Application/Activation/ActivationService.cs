@@ -61,37 +61,6 @@ public sealed class ActivationService(
             }), cancellationToken);
     }
 
-    public ValueTask<ActivationRequestResult> GetRequestStatusAsync(
-        GetActivationStatusRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        Require(request.ActivationRequestId, nameof(request.ActivationRequestId));
-        Require(request.DeviceId, nameof(request.DeviceId));
-        Require(request.Credential, nameof(request.Credential));
-
-        return persistence.ExecuteTransactionAsync(transaction =>
-        {
-            var activationRequest = transaction.FindActivationRequest(request.ActivationRequestId)
-                ?? throw Error(ActivationErrorCodes.ActivationRequestNotFound, "找不到激活申请。");
-            if (!string.Equals(activationRequest.DeviceId, request.DeviceId, StringComparison.Ordinal))
-            {
-                throw Error(ActivationErrorCodes.InvalidCredential, "设备凭据不匹配。");
-            }
-
-            EnsureCredential(request.Credential, activationRequest.ProtectedCredential);
-            var device = transaction.FindDevice(request.DeviceId);
-            return device is null
-                ? ToRequestResult(activationRequest)
-                : ToRequestResult(activationRequest) with
-                {
-                    Status = device.Status,
-                    ClientNumber = device.ClientNumber,
-                    CredentialVersion = device.CredentialVersion
-                };
-        }, cancellationToken);
-    }
-
     public ValueTask<ActivationResult> ApproveAsync(
         ApproveActivationRequest request,
         CancellationToken cancellationToken = default)
@@ -197,33 +166,6 @@ public sealed class ActivationService(
                 var reactivated = device.Reactivate(now);
                 transaction.SaveDevice(reactivated);
                 return ToResult(reactivated);
-            }), cancellationToken);
-    }
-
-    public ValueTask<ActivationResult> CancelOwnAsync(
-        CancelOwnActivationRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ValidateRequestId(request.RequestId);
-        Require(request.DeviceId, nameof(request.DeviceId));
-        Require(request.Credential, nameof(request.Credential));
-        var now = _timeProvider.GetUtcNow();
-
-        return persistence.ExecuteTransactionAsync(transaction =>
-            RunIdempotent(transaction, request.RequestId, "activation.cancel-own", request, () =>
-            {
-                var device = transaction.FindDevice(request.DeviceId)
-                    ?? throw Error(ActivationErrorCodes.DeviceNotFound, "找不到设备登记。");
-                EnsureCredential(request.Credential, device.ProtectedCredential);
-                if (device.Status == ActivationStatus.Revoked)
-                {
-                    return ToResult(device);
-                }
-
-                var revoked = device.Revoke(now);
-                transaction.SaveDevice(revoked);
-                return ToResult(revoked);
             }), cancellationToken);
     }
 

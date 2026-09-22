@@ -422,67 +422,6 @@ public sealed class ParticipationServiceTests
         Assert.Equal(ParticipationBusinessState.Submitted, submitted.BusinessState);
     }
 
-    [Theory]
-    [InlineData(ExamLifecycle.Running)]
-    [InlineData(ExamLifecycle.Ended)]
-    public async Task ActualParticipationResumesAfterDeadlineWithoutUnlock_AndReplayUsesCurrentState(ExamLifecycle lifecycle)
-    {
-        var fixture = await Fixture.CreateAsync();
-        var session = await fixture.LoginAsync("device-1", "secret-1", "recovery-login");
-        var preparation = await fixture.Service.PrepareEntryAsync(new("recovery-prepare", session.SessionId, Fixture.ExamId));
-        var waiting = await fixture.ConfirmAsync(session, preparation, "recovery-confirm");
-        await fixture.Service.AdvanceExamToAnsweringAsync(new("recovery-start", Fixture.ExamId));
-        fixture.Clock.SetUtcNow(Fixture.Start.AddHours(3));
-        fixture.SetExam(lifecycle, "protected-key-reference");
-
-        var resumedPreparation = await fixture.Service.PrepareEntryAsync(new("recovery-prepare-next", session.SessionId, Fixture.ExamId));
-        Assert.Equal(EntryPreparationStatus.Resume, resumedPreparation.Status);
-        var resumed = await fixture.ConfirmAsync(session, resumedPreparation, "recovery-confirm-next");
-        var oldReceipt = await fixture.ConfirmAsync(session, preparation, "recovery-confirm");
-
-        Assert.Equal(waiting.ParticipationId, resumed.ParticipationId);
-        Assert.Equal(waiting.EntryVersion, resumed.EntryVersion);
-        Assert.Equal(ParticipationBusinessState.Answering, resumed.BusinessState);
-        Assert.Equal(ExamLifecycle.Ended, resumed.Lifecycle);
-        Assert.Null(resumed.UnlockReference);
-        Assert.Equal(resumed, oldReceipt);
-
-        var otherSession = await fixture.LoginAsync("device-2", "secret-2", "recovery-other-login");
-        var pending = await fixture.Service.PrepareEntryAsync(new("recovery-other-prepare", otherSession.SessionId, Fixture.ExamId));
-        Assert.Equal(EntryPreparationStatus.DeviceDecisionPending, pending.Status);
-        Assert.Null(pending.Resources);
-
-        await fixture.Service.FinalizeAsync(new("recovery-finalize", resumed.ParticipationId,
-            resumed.AuthorizedDeviceId, resumed.EntryVersion, resumed.AuthorizationVersion));
-        var submitted = await Assert.ThrowsAsync<ParticipationRuleException>(() =>
-            fixture.ConfirmAsync(session, preparation, "recovery-confirm").AsTask());
-        Assert.Equal(ParticipationErrorCodes.AlreadySubmitted, submitted.Code);
-    }
-
-    [Fact]
-    public async Task FirstEntryAndWithdrawnRegistrationCannotUseRecoveryAfterDeadline()
-    {
-        var fixture = await Fixture.CreateAsync();
-        var session = await fixture.LoginAsync("device-1", "secret-1", "deadline-login");
-        var preparation = await fixture.Service.PrepareEntryAsync(new("deadline-prepare", session.SessionId, Fixture.ExamId));
-        fixture.Clock.SetUtcNow(Fixture.Start.AddHours(3));
-        fixture.SetExam(ExamLifecycle.Ended, null);
-        var first = await Assert.ThrowsAsync<ParticipationRuleException>(() =>
-            fixture.ConfirmAsync(session, preparation, "deadline-first-confirm").AsTask());
-        Assert.Equal(ParticipationErrorCodes.EntryNotAllowed, first.Code);
-
-        fixture.Clock.SetUtcNow(Fixture.Start.AddMinutes(-10));
-        fixture.SetExam(ExamLifecycle.Scheduled, null);
-        var waiting = await fixture.ConfirmAsync(session, preparation, "deadline-waiting-confirm");
-        await fixture.Service.WithdrawAsync(new("deadline-withdraw", session.SessionId,
-            waiting.ParticipationId, waiting.Version));
-        fixture.Clock.SetUtcNow(Fixture.Start.AddHours(3));
-        fixture.SetExam(ExamLifecycle.Ended, null);
-        var withdrawn = await Assert.ThrowsAsync<ParticipationRuleException>(() => fixture.Service.PrepareEntryAsync(
-            new("deadline-withdrawn-prepare", session.SessionId, Fixture.ExamId)).AsTask());
-        Assert.Equal(ParticipationErrorCodes.EntryNotAllowed, withdrawn.Code);
-    }
-
     private sealed class Fixture
     {
         public const string ExamId = "exam-1";

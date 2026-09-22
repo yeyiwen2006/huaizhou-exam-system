@@ -1,366 +1,458 @@
 using System.IO;
-using System.Net.Http;
-using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
-using Exam.Contracts.Common;
 using Exam.Desktop.Shared.Controls;
 using Exam.Student.Core;
 
 namespace Exam.Student.Views;
 
-/// <summary>等待页完成密文及说明下载后才确认参试，状态由服务器结果和可靠指令驱动。</summary>
+/// <summary>
+/// 等待考试页（B02）：进入后准备资源并下载加密包与说明；
+/// 齐备后“确认参试”；等待开考指令（或已开始考试直接）解密进入考试；
+/// 返回需确认并退出参试（失败可重试）；所有网络等待均有可见状态。
+/// </summary>
 public partial class WaitingExamPage : UserControl
 {
     private readonly MainWindow.Navigation _navigation;
     private readonly ExamOverview _exam;
-    private readonly CancellationTokenSource _lifetime = new();
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private StudentExamRuntime? _runtime;
-    private Button? _exitButton;
+    private readonly ExamPackageManager _manager;
+    private DispatcherTimer? _timer;
+    private bool _commandSubscribed;
     private bool _busy;
-    private bool _loaded;
-    private bool _navigated;
-    private string? _lastRuntimeError;
 
+    /// <summary>考试名称（页面 XAML 绑定）。</summary>
     public string ExamName => _exam.Name;
 
     public WaitingExamPage(MainWindow.Navigation navigation, ExamOverview exam)
     {
         _navigation = navigation;
         _exam = exam;
+        _manager = new ExamPackageManager(App.Services.Api, PackageDirectory());
         InitializeComponent();
         DataContext = App.Services.Session;
-        TimeText.Text = $"开始时间：{exam.ScheduledStart:yyyy-MM-dd HH:mm}    结束时间：{exam.ScheduledEnd:yyyy-MM-dd HH:mm}";
+
+        TimeText.Text = $"开始时间：{exam.ScheduledStart:yyyy-MM-dd HH:mm}    结束时间：{exam.ScheduledEnd:HH:mm}";
+
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => UpdateCountdown();
         _timer.Start();
         UpdateCountdown();
-        Loaded += async (_, _) =>
-        {
-            if (!_loaded)
-            {
-                _loaded = true;
-                await PrepareAndDownloadAsync();
-            }
-        };
+
+        Loaded += async (_, _) => await PrepareAndDownloadAsync();
         Unloaded += (_, _) =>
         {
-            _timer.Stop();
-            _lifetime.Cancel();
-            if (_runtime is not null)
+            _timer?.Stop();
+            if (_commandSubscribed && App.Services.CommandFeed is { } feed)
             {
-                _runtime.StateChanged -= OnRuntimeStateChanged;
+                feed.CommandReceived -= OnCommandReceived;
             }
         };
     }
 
-    private async Task PrepareAndDownloadAsync()
+    private static string PackageDirectory() => Path.Combine(App.AppDataDirectory, "packages");
+
+    /// <summary>B04 本地状态键（按服务器、考试和考生隔离）；未登录返回 null。</summary>
+    private LocalStateKey? StateKey() =>
+        App.Services.Session.Candidate?.Identity.CandidateId is { } candidateId
+            ? new LocalStateKey(App.Services.ServerKey, _exam.ExamId, candidateId)
+            : null;
+
+    /// <summary>保存 B02 恢复记录（下载/确认状态；崩溃后由下次进入读取，供恢复与 B08 重连）。</summary>
+    private async Task SavePreparationAsync(string phase, string? participationId)
     {
-        if (_busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
+        if (StateKey() is not { } key || _manager.Descriptor is not { } descriptor)
         {
             return;
         }
 
-        SetBusy(true, "正在准备并下载加密试题与考试说明…");
-        ErrorBanner.Hide();
+        var record = new PreparationRecord(
+            descriptor.PaperVersion,
+            _manager.Instructions?.Version ?? 0,
+            _manager.PackageFilePath,
+            participationId,
+            phase,
+            DateTimeOffset.Now);
         try
         {
-            if (_runtime is null)
-            {
-                _runtime = App.Services.Session.ActiveExam;
-                if (_runtime is null)
-                {
-                    if (App.Services.Api is not IExamPackageApi packageApi)
-                    {
-                        throw new InvalidOperationException("试题服务尚未配置。");
-                    }
-
-                    var manager = await Task.Run(() => new ExamPackageManager(packageApi,
-                        Path.Combine(App.AppDataDirectory, "packages"), device, session, _exam.ExamId), _lifetime.Token);
-                    if (_lifetime.IsCancellationRequested)
-                    {
-                        manager.Dispose();
-                        return;
-                    }
-
-                    _runtime = new StudentExamRuntime(manager, device);
-                    App.Services.Session.RegisterExam(_runtime);
-                }
-
-                if (_runtime.Manager.ExamId != _exam.ExamId || _runtime.Manager.SessionId != session.SessionId)
-                {
-                    throw new InvalidOperationException("考试会话不匹配。");
-                }
-
-                _runtime.StateChanged += OnRuntimeStateChanged;
-            }
-
-            var progress = new Progress<PackageDownloadProgress>(value =>
-            {
-                DownloadBar.Value = value.TotalBytes > 0 ? Math.Clamp(value.ReceivedBytes * 100.0 / value.TotalBytes, 0, 100) : 0;
-                DownloadDetail.Text = $"{value.ReceivedBytes / 1024.0:F0} / {value.TotalBytes / 1024.0:F0} KB";
-            });
-            var prepared = await _runtime.Manager.PrepareAndDownloadAsync(progress, _lifetime.Token);
-            if (_runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Withdrawn)
-            {
-                // 崩溃前退出的回执可能刚在恢复时重放成功，按已确认的退出结果返回。
-                await App.Services.Session.ReleaseExamAsync();
-                _navigated = true;
-                _navigation.GoToExamSelection();
-                return;
-            }
-
-            if (!prepared)
-            {
-                ErrorBanner.Show(_runtime.Manager.LastError ?? "试题获取失败！请重试。");
-            }
+            await App.Services.LocalState.SavePreparationAsync(key, record);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (Exception)
         {
-            return;
-        }
-        catch (Exception error) when (IsRecoverable(error))
-        {
-            ErrorBanner.Show("试题或考试说明获取失败！请检查服务器连接和本机存储后重试，原记录已保留。");
-        }
-        finally
-        {
-            SetBusy(false);
-            RefreshState();
+            // 恢复记录写失败不阻断流程（主流程状态在服务器；记录仅为恢复辅助）
         }
     }
 
-    private async void OnConfirmParticipation(object sender, RoutedEventArgs e)
+    /// <summary>崩溃恢复提示：存在本地恢复记录时告知考生（完整等待态续接由 B05/B08 接 A04 通道后实现）。</summary>
+    private async Task ShowRestoredPreparationHintAsync()
     {
-        if (_busy || _runtime is null)
+        if (StateKey() is not { } key)
         {
             return;
         }
 
-        SetBusy(true, "正在等待服务器确认参试…");
-        ErrorBanner.Hide();
         try
         {
-            var response = await _runtime.Manager.ConfirmParticipationAsync(_lifetime.Token);
-            if (response?.IsSuccess != true || response.Result is null)
+            var record = await App.Services.LocalState.LoadPreparationAsync(key);
+            if (record is { Phase: "ConfirmedWaiting" })
             {
-                ErrorBanner.Show(response?.Error?.Message ?? _runtime.Manager.LastError ?? "参试确认尚未完成，请重试原请求。");
-                return;
-            }
-
-            await ConnectNotificationsAsync();
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception error) when (IsRecoverable(error))
-        {
-            ErrorBanner.Show("参试或指令连接尚未确认，请重试。原请求和参试登记已保留。");
-        }
-        finally
-        {
-            SetBusy(false);
-            RefreshState();
-        }
-    }
-
-    private async Task ConnectNotificationsAsync()
-    {
-        if (_runtime?.Manager.Participation is not { } participation)
-        {
-            return;
-        }
-
-        var server = _runtime.Manager.Server;
-        if (server is null)
-        {
-            await App.Services.Clock.SynchronizeAsync(App.Services.Api, _lifetime.Token);
-            server = App.Services.Clock.Server ?? throw new InvalidOperationException("服务器身份尚未核实。");
-        }
-
-        await _runtime.StartNotificationsAsync(participation, server);
-    }
-
-    private async void OnRetryConnection(object sender, RoutedEventArgs e)
-    {
-        if (_busy || _runtime is null)
-        {
-            return;
-        }
-
-        SetBusy(true, "正在恢复指令连接与解锁…");
-        ErrorBanner.Hide();
-        try
-        {
-            await ConnectNotificationsAsync();
-            if (_runtime.Manager.ExamStarted && !_runtime.Manager.ExamEnded)
-            {
-                await _runtime.Manager.UnlockAsync(_lifetime.Token);
+                ShowError($"检测到本机已有此考试的确认参试记录（{record.UpdatedAt:HH:mm}）。请重新确认参试以恢复等待状态。");
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (Exception)
         {
-            return;
-        }
-        catch (Exception error) when (IsRecoverable(error))
-        {
-            ErrorBanner.Show("连接或解锁尚未恢复，请继续重试。原参试登记保持不变。");
-        }
-        finally
-        {
-            SetBusy(false);
-            RefreshState();
-        }
-    }
-
-    private async void OnGoBack(object sender, RoutedEventArgs e)
-    {
-        if (_busy || Window.GetWindow(this) is not { } window)
-        {
-            return;
-        }
-
-        var confirmed = await ConfirmDialog.ShowAsync(window, "退出考试", "确定要退出考试吗？", "确定退出", "取消", isDanger: true);
-        if (!confirmed)
-        {
-            return;
-        }
-
-        SetBusy(true, "退出处理中，正在等待服务器确认…");
-        ErrorBanner.Hide();
-        try
-        {
-            if (_runtime is not null && _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Withdrawn &&
-                (_runtime.Manager.Participation is not null || _runtime.Manager.HasPendingConfirmation))
-            {
-                var response = await _runtime.Manager.WithdrawAsync(_lifetime.Token);
-                if (response?.IsSuccess != true || response.Result?.BusinessState != ParticipationBusinessState.NotParticipating)
-                {
-                    ErrorBanner.Show(response?.Error?.Message ?? _runtime.Manager.LastError ?? "退出处理中，请重试。收到服务器确认前仍保留原参试登记。");
-                    return;
-                }
-            }
-
-            await App.Services.Session.ReleaseExamAsync();
-            _navigated = true;
-            _navigation.GoToExamSelection();
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception error) when (IsRecoverable(error))
-        {
-            ErrorBanner.Show("退出处理中，请重试。收到服务器确认前仍保留原参试登记。");
-        }
-        finally
-        {
-            SetBusy(false);
-            RefreshState();
-        }
-    }
-
-    private async void OnRetryDownload(object sender, RoutedEventArgs e) => await PrepareAndDownloadAsync();
-
-    private void OnExitButtonLoaded(object sender, RoutedEventArgs e)
-    {
-        _exitButton = (Button)sender;
-        RefreshState();
-    }
-
-    private void OnRuntimeStateChanged(object? sender, EventArgs e) => RefreshState();
-
-    private void SetBusy(bool busy, string message = "")
-    {
-        _busy = busy;
-        BusyLayer.IsBusy = busy;
-        if (message.Length > 0)
-        {
-            BusyLayer.Message = message;
-        }
-    }
-
-    private void RefreshState()
-    {
-        if (_navigated)
-        {
-            return;
-        }
-
-        var manager = _runtime?.Manager;
-        InstructionList.ItemsSource = manager?.Instructions?.Lines.Select(line => InstructionTextRenderer.Create(line, (Style)FindResource("BodyText"))).ToArray();
-        DownloadPill.Text = manager?.HasPackage == true ? "试题包已保存（加密）" : "试题包尚未完整获取";
-        DownloadPill.Level = manager?.HasPackage == true ? StatusLevel.Success : StatusLevel.Warning;
-        DownloadBar.Value = manager?.HasPackage == true ? 100 : DownloadBar.Value;
-        ConfirmButton.IsEnabled = !_busy && manager?.CanConfirmParticipation == true;
-        ConfirmButton.Content = manager?.Participation is null ? "确认参试" : "核对并恢复原参试";
-        RetryDownloadButton.Visibility = manager?.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended or ExamPackageManager.Phase.Withdrawn
-            ? Visibility.Collapsed : Visibility.Visible;
-        RetryConnectionButton.Visibility = manager?.Participation is not null && !manager.ExamEnded && manager.CurrentPhase != ExamPackageManager.Phase.Revoked ? Visibility.Visible : Visibility.Collapsed;
-        if (_exitButton is not null)
-        {
-            _exitButton.IsEnabled = !_busy && (manager?.Participation is null || manager.CurrentPhase is ExamPackageManager.Phase.ConfirmedWaiting or ExamPackageManager.Phase.Withdrawn);
-        }
-
-        (StatePill.Text, StatePill.Level, ConfirmHint.Text) = manager?.CurrentPhase switch
-        {
-            ExamPackageManager.Phase.ConfirmedWaiting when _runtime?.NotificationsStarted != true =>
-                ("原参试登记已保留", StatusLevel.Warning, "正在核对当前状态或恢复指令连接，不能据此视为已退出或开始答题。"),
-            ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参试，等待开考", StatusLevel.Info, "已计入实际参试。请保持连接，收到服务器开考指令后解锁。"),
-            ExamPackageManager.Phase.Unlocked => ("试题已解锁", StatusLevel.Success, "当前授权和试题版本已校验。"),
-            ExamPackageManager.Phase.Ended => ("服务器已结束考试", StatusLevel.Warning, "考试已结束。原参试与待补传记录继续保留，当前版本尚不能完成补传，请联系考务人员。"),
-            ExamPackageManager.Phase.Revoked => ("当前设备授权已撤销", StatusLevel.Danger, "本机不能继续答题，请联系考务人员。"),
-            ExamPackageManager.Phase.Withdrawn => ("已确认退出考试", StatusLevel.Neutral, "服务器已将本次登记移出实际参试，请返回选择考试页面。"),
-            ExamPackageManager.Phase.Downloaded when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("资料齐备，待核对原参试", StatusLevel.Success, "原参试登记继续保留。请核对并恢复原参试，服务器将返回当前授权与考试状态。"),
-            ExamPackageManager.Phase.Downloaded => ("资料齐备，尚未参试", StatusLevel.Success, "请阅读考试说明，再确认参试。确认时服务器将再次核对准入条件。"),
-            _ when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("正在恢复原参试", StatusLevel.Warning, "原参试登记继续保留，资料准备或状态核对尚未完成，请重试。"),
-            _ => ("尚未确认参试", StatusLevel.Info, "试题包与考试说明全部取得后才能确认参试。"),
-        };
-
-        RefreshRuntimeError();
-
-        if (manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true)
-        {
-            _navigated = true;
-            _navigation.GoToExamInProgress(_exam, _runtime);
+            // 读取失败不影响正常流程
         }
     }
 
     private void UpdateCountdown()
     {
-        RefreshRuntimeError();
+        var remain = _exam.ScheduledStart - DateTimeOffset.Now;
+        CountdownText.Text = remain > TimeSpan.Zero
+            ? $"距开考 {remain:hh\\:mm\\:ss}"
+            : "已到开考时间";
+    }
 
-        if (!App.Services.Clock.IsSynchronized)
+    private void SetBusy(bool busy, string message = "")
+    {
+        _busy = busy;
+        BusyLayer.IsBusy = busy;
+        if (!string.IsNullOrEmpty(message))
         {
-            CountdownText.Text = "服务器时间尚未同步";
+            BusyLayer.Message = message;
+        }
+    }
+
+    private void ShowError(string message)
+    {
+        ErrorBanner.Message = message;
+        ErrorBanner.IsOpen = true;
+    }
+
+    private void HideError() => ErrorBanner.IsOpen = false;
+
+    /// <summary>准备（进入）→ 下载加密包与考试说明。已在开始后进入走同一流程。</summary>
+    private async Task PrepareAndDownloadAsync()
+    {
+        if (_busy || _manager.CurrentPhase != ExamPackageManager.Phase.Idle)
+        {
             return;
         }
 
-        var remain = _exam.ScheduledStart - App.Services.Clock.UtcNow;
-        CountdownText.Text = remain > TimeSpan.Zero ? $"距计划开考 {remain:hh\\:mm\\:ss}" : "计划开始时间已到，请等待服务器确认";
-        // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
+        var session = App.Services.Session.LoginResult;
+        if (session is null)
+        {
+            return;
+        }
+
+        SetBusy(true, "正在准备考试…");
+        HideError();
+        try
+        {
+            var prepare = await App.Services.Api.PrepareEntryAsync(
+                new Contracts.Participation.PrepareExamEntryRequest(
+                    RequestIds.New(), session.SessionId, _exam.ExamId));
+
+            if (prepare?.IsSuccess != true || prepare.Result?.Resources is null)
+            {
+                SetBusy(false);
+                DownloadPill.Text = "准备失败";
+                DownloadPill.Level = StatusLevel.Danger;
+                ShowError(prepare?.Error?.Message ?? "当前不可进入该考试！");
+                return;
+            }
+
+            _manager.SetPreparation(prepare.Result.PreparationId);
+            await DownloadAsync(session.SessionId, prepare.Result.Resources);
+        }
+        catch (Exception ex)
+        {
+            SetBusy(false);
+            DownloadPill.Text = "准备失败";
+            DownloadPill.Level = StatusLevel.Danger;
+            ShowError($"连接失败：{ex.Message}");
+        }
     }
 
-    private static bool IsRecoverable(Exception error) => error is IOException or HttpRequestException or InvalidOperationException
-        or OperationCanceledException or TimeoutException or CryptographicException or UnauthorizedAccessException or ArgumentException
-        or System.Net.WebSockets.WebSocketException or Microsoft.AspNetCore.SignalR.HubException;
-
-    private void RefreshRuntimeError()
+    private async Task DownloadAsync(string sessionId, Contracts.Participation.ExamResourceDescriptor descriptor)
     {
-        var error = _runtime?.ConnectionError ?? _runtime?.Manager.LastError;
-        if (!string.IsNullOrWhiteSpace(error))
+        DownloadPill.Text = "下载中…";
+        DownloadPill.Level = StatusLevel.Info;
+        DownloadDetail.Text = string.Empty;
+        RetryDownloadButton.Visibility = Visibility.Collapsed;
+        DownloadBar.Value = 0;
+
+        var progress = new Progress<PackageDownloadProgress>(p =>
         {
-            ErrorBanner.Show(error);
-            _lastRuntimeError = error;
+            if (p.TotalBytes > 0)
+            {
+                DownloadBar.Value = Math.Clamp(p.ReceivedBytes * 100.0 / p.TotalBytes, 0, 100);
+                DownloadDetail.Text = $"{p.ReceivedBytes / 1024.0:F0} / {p.TotalBytes / 1024.0:F0} KB";
+            }
+        });
+
+        SetBusy(true, "正在下载试题包…");
+        var ok = false;
+        try
+        {
+            ok = await _manager.DownloadAsync(sessionId, _exam.ExamId, descriptor, progress);
         }
-        else if (_lastRuntimeError is not null && ErrorBanner.Message == _lastRuntimeError)
+        catch (OperationCanceledException)
         {
-            ErrorBanner.Hide();
-            _lastRuntimeError = null;
+        }
+        catch (Exception ex)
+        {
+            ShowError($"下载失败：{ex.Message}");
+        }
+
+        SetBusy(false);
+        OnDownloadFinished(ok);
+    }
+
+    private void OnDownloadFinished(bool ok)
+    {
+        if (ok)
+        {
+            DownloadPill.Text = "已下载（加密）";
+            DownloadPill.Level = StatusLevel.Success;
+            DownloadBar.Value = 100;
+            RetryDownloadButton.Visibility = Visibility.Collapsed;
+            _ = SavePreparationAsync("Downloaded", null);
+        }
+        else
+        {
+            DownloadPill.Text = "下载失败";
+            DownloadPill.Level = StatusLevel.Danger;
+            RetryDownloadButton.Visibility = Visibility.Visible;
+        }
+
+        RefreshConfirmGate();
+    }
+
+    /// <summary>确认参试门槛：加密包 + 考试说明齐备且考试未结束（缺一不可）。</summary>
+    private void RefreshConfirmGate()
+    {
+        var examOver = _exam.ScheduledEnd <= DateTimeOffset.Now;
+        if (examOver)
+        {
+            _manager.OnExamEnded();
+        }
+
+        if (_manager.ExamEnded)
+        {
+            ConfirmButton.IsEnabled = false;
+            ConfirmHint.Text = "考试已结束，不能新增参试。";
+            StatePill.Text = "已结束";
+            StatePill.Level = StatusLevel.Neutral;
+            return;
+        }
+
+        if (_manager.HasPackage && _manager.HasInstructions)
+        {
+            ConfirmButton.IsEnabled = _manager.CanConfirmParticipation;
+            ConfirmHint.Text = "试题包与考试说明已就绪，请确认参试。";
+            StatePill.Text = "待确认参试";
+            StatePill.Level = StatusLevel.Warning;
+        }
+        else
+        {
+            ConfirmButton.IsEnabled = false;
+            ConfirmHint.Text = _manager.HasPackage
+                ? "正在获取考试说明…"
+                : "试题包未就绪，不能确认参试。";
+        }
+    }
+
+    private async void OnRetryDownload(object sender, RoutedEventArgs e)
+    {
+        var session = App.Services.Session.LoginResult;
+        if (session is null || _manager.Descriptor is null)
+        {
+            return;
+        }
+
+        await DownloadAsync(session.SessionId, _manager.Descriptor);
+    }
+
+    private async void OnConfirmParticipation(object sender, RoutedEventArgs e)
+    {
+        var session = App.Services.Session.LoginResult;
+        if (session is null || !_manager.CanConfirmParticipation)
+        {
+            RefreshConfirmGate();
+            return;
+        }
+
+        SetBusy(true, "正在确认参试…");
+        Contracts.Common.ApiEnvelope<Contracts.Participation.ParticipationResult>? result = null;
+        try
+        {
+            result = await _manager.ConfirmParticipationAsync(session.SessionId, _exam.ExamId);
+        }
+        catch (Exception ex)
+        {
+            SetBusy(false);
+            ShowError($"确认参试失败：{ex.Message}");
+            return;
+        }
+
+        SetBusy(false);
+        if (result?.IsSuccess != true || result.Result is null)
+        {
+            ShowError(result?.Error?.Message ?? "确认参试失败，请稍后重试。");
+            RefreshConfirmGate();
+            return;
+        }
+
+        ConfirmButton.IsEnabled = false;
+
+        var state = result.Result;
+        _ = SavePreparationAsync("ConfirmedWaiting", state.ParticipationId);
+        if (state.BusinessState == Contracts.Common.ParticipationBusinessState.Answering)
+        {
+            // 已开始的考试：同一流程进入，确认后直接解锁
+            await UnlockAndEnterAsync();
+            return;
+        }
+
+        StatePill.Text = "已确认 · 等待开考";
+        StatePill.Level = StatusLevel.Info;
+        ConfirmHint.Text = "已确认参试。到达开考时间并收到指令后自动解密进入考试。";
+
+        if (App.Services.CommandFeed is { } feed && !_commandSubscribed)
+        {
+            _commandSubscribed = true;
+            feed.CommandReceived += OnCommandReceived;
+            _ = feed.StartAsync(session.SessionId, _exam.ExamId);
+        }
+    }
+
+    private async void OnCommandReceived(object? sender, Contracts.Commands.CommandDelivery delivery)
+    {
+        if (delivery.ExamId != _exam.ExamId)
+        {
+            return;
+        }
+
+        if (delivery.EventType == Contracts.Common.CommandEventType.End)
+        {
+            _manager.OnExamEnded();
+            RefreshConfirmGate();
+            ShowError("考试已结束。");
+            return;
+        }
+
+        if (delivery.EventType != Contracts.Common.CommandEventType.Start)
+        {
+            return;
+        }
+
+        // Dispatcher 上下文：指令回调可能在后台线程
+        await Dispatcher.InvokeAsync(async () => await UnlockAndEnterAsync(delivery));
+    }
+
+    private async Task UnlockAndEnterAsync(Contracts.Commands.CommandDelivery? delivery = null)
+    {
+        SetBusy(true, "正在解密试题…");
+        var ok = false;
+        try
+        {
+            ok = delivery is null
+                ? await _manager.UnlockAsync()
+                : await _manager.HandleStartCommandAsync(delivery);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"解密失败：{ex.Message}");
+        }
+
+        SetBusy(false);
+        if (!ok)
+        {
+            ShowError("试题解密失败，请监考员处理。");
+            return;
+        }
+
+        _timer?.Stop();
+        App.Services.Session.BeginExam(
+            _exam.ExamId,
+            _manager.UnlockedPayload!,
+            new ParticipationAuthorization(
+                _manager.ParticipationId!,
+                _manager.EntryVersion,
+                _manager.AuthorizationVersion,
+                _manager.Descriptor?.PaperVersion ?? 1));
+        _navigation.GoToExamInProgress(_exam);
+    }
+
+    private async void OnGoBack(object sender, RoutedEventArgs e)
+    {
+        var window = Window.GetWindow(this);
+        if (window is null)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmDialog.ShowAsync(
+            window,
+            "返回",
+            "返回选择考试页面将退出本考试（退出参试），再进入需重新下载与确认。确定返回吗？",
+            "确定返回",
+            "取消",
+            isDanger: true);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        // 退出参试需服务器确认；失败给出重试（退出确认及重试）
+        while (true)
+        {
+            var session = App.Services.Session.LoginResult;
+            if (session is null)
+            {
+                _navigation.GoToExamSelection();
+                return;
+            }
+
+            SetBusy(true, "正在退出参试…");
+            try
+            {
+                var result = await _manager.WithdrawAsync(session.SessionId, expectedVersion: 1);
+                SetBusy(false);
+                if (result?.IsSuccess == true || result is null)
+                {
+                    _timer?.Stop();
+                    _navigation.GoToExamSelection();
+                    return;
+                }
+
+                var retry = await ConfirmDialog.ShowAsync(
+                    window,
+                    "退出失败",
+                    $"退出参试失败：{result.Error?.Message}\n是否重试？",
+                    "重试退出",
+                    "留在此页");
+                if (!retry)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false);
+                var retry = await ConfirmDialog.ShowAsync(
+                    window,
+                    "退出失败",
+                    $"退出参试失败：{ex.Message}\n是否重试？",
+                    "重试退出",
+                    "留在此页");
+                if (!retry)
+                {
+                    return;
+                }
+            }
         }
     }
 }

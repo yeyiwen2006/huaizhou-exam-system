@@ -182,13 +182,7 @@ public sealed class ReliableCommandService
         IReadOnlyList<PersistentCommandEvent> candidates;
         try
         {
-            candidates = await _store.ClaimDueForDeviceAsync(
-                participationId,
-                entryVersion,
-                deviceId,
-                authorizationVersion,
-                now,
-                cancellationToken);
+            candidates = await _store.ListUnacknowledgedAsync(now, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -198,7 +192,11 @@ public sealed class ReliableCommandService
         }
 
         var deliveries = new List<CommandDelivery>();
-        foreach (var candidate in candidates)
+        foreach (var candidate in candidates.Where(commandEvent =>
+                     string.Equals(commandEvent.ParticipationId, participationId, StringComparison.Ordinal) &&
+                     commandEvent.EntryVersion == entryVersion &&
+                     string.Equals(commandEvent.TargetDeviceId, deviceId, StringComparison.Ordinal) &&
+                     commandEvent.TargetAuthorizationVersion == authorizationVersion))
         {
             if (!CanDeliver(candidate, authorization!))
             {

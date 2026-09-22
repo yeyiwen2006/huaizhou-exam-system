@@ -71,8 +71,7 @@ public sealed record ParticipationResult(
     long EntryVersion,
     long AuthorizationVersion,
     long Version,
-    string? UnlockReference,
-    ExamLifecycle? Lifecycle = null);
+    string? UnlockReference);
 
 public sealed record WithdrawParticipationRequest(
     string RequestId,

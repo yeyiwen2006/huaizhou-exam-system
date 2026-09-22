@@ -3,7 +3,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Desktop.Shared\Exam.Desktop.Shared.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- B04 本地保存与恢复：执行指南指定 Microsoft.Data.Sqlite（WAL + FULL 同步）；版本由 A 统一锁定。 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <PropertyGroup>

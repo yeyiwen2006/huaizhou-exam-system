@@ -90,38 +90,22 @@ public sealed class InMemoryCommandEventStore : ICommandEventStore
         }
     }
 
-    public ValueTask<IReadOnlyList<PersistentCommandEvent>> ClaimDueForDeviceAsync(
-        string participationId,
-        long entryVersion,
-        string deviceId,
-        long authorizationVersion,
+    public ValueTask<IReadOnlyList<PersistentCommandEvent>> ListUnacknowledgedAsync(
         DateTimeOffset dueAtOrBefore,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var due = _events.Values
+            IReadOnlyList<PersistentCommandEvent> result = _events.Values
                 .Where(commandEvent =>
                     commandEvent.NextDeliveryAt <= dueAtOrBefore &&
-                    string.Equals(commandEvent.ParticipationId, participationId, StringComparison.Ordinal) &&
-                    commandEvent.EntryVersion == entryVersion &&
-                    string.Equals(commandEvent.TargetDeviceId, deviceId, StringComparison.Ordinal) &&
-                    commandEvent.TargetAuthorizationVersion == authorizationVersion &&
                     commandEvent.Acknowledgement?.ProcessingResult is not
                         (CommandProcessingResult.Applied or CommandProcessingResult.RejectedAsStale))
                 .OrderBy(commandEvent => commandEvent.CreatedAt)
                 .ThenBy(commandEvent => commandEvent.EventId, StringComparer.Ordinal)
                 .ToArray();
-            var result = new PersistentCommandEvent[due.Length];
-            for (var index = 0; index < due.Length; index++)
-            {
-                var leased = due[index] with { NextDeliveryAt = dueAtOrBefore.AddSeconds(30) };
-                _events[leased.EventId] = leased;
-                result[index] = leased;
-            }
-
-            return ValueTask.FromResult<IReadOnlyList<PersistentCommandEvent>>(result);
+            return ValueTask.FromResult(result);
         }
     }
 

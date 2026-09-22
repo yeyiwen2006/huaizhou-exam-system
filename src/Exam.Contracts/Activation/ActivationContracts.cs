@@ -13,11 +13,6 @@ public sealed record SubmitActivationRequest(
     string DeviceId,
     string Credential);
 
-public sealed record GetActivationStatusRequest(
-    string ActivationRequestId,
-    string DeviceId,
-    string Credential);
-
 public sealed record ActivationRequestResult(
     string ActivationRequestId,
     string DeviceId,
@@ -35,11 +30,6 @@ public sealed record RevokeActivationRequest(
     string RequestId,
     string DeviceId,
     string Reason);
-
-public sealed record CancelOwnActivationRequest(
-    string RequestId,
-    string DeviceId,
-    string Credential);
 
 public sealed record ReactivateDeviceRequest(
     string RequestId,

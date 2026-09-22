@@ -1,605 +1,322 @@
 using System.IO;
-using System.Net.Http;
-using System.Security.Cryptography;
-using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
-using Exam.Contracts.Resources;
-using Exam.Contracts.Student;
 
 namespace Exam.Student.Core;
 
+/// <summary>下载进度（页面展示用）。</summary>
 public sealed record PackageDownloadProgress(long ReceivedBytes, long TotalBytes);
 
-/// <summary>B02 control operations are serialized and ambiguous requests survive in a DPAPI journal.</summary>
-public sealed class ExamPackageManager : IDisposable
+/// <summary>考试说明文档（Mock 展示层；说明下发契约缺口见 docs/b01-implementation-status.md）。</summary>
+public sealed record InstructionsDocument(long Version, IReadOnlyList<string> Lines);
+
+/// <summary>
+/// 考试包管理器：B02 核心状态机。
+/// 状态流：下载中 → 已下载（缺包/缺说明时不可确认参试）→ 已确认等待 →（收到开考指令或已在答题态）解锁。
+/// 安全约束：
+///  1. 磁盘上只有加密包，题目明文仅存在于解锁成功后的内存；
+///  2. 未收到开考指令（或服务器未告知已进入答题态）前不尝试解密；
+///  3. 考试结束后（含下载期间结束）不可再确认参试；
+///  4. 下载通过临时文件 + 原子重命名落盘，中断不留半截文件。
+/// </summary>
+public sealed class ExamPackageManager
 {
-    private const long MaximumPackageBytes = 512L * 1024 * 1024;
-    private readonly IExamPackageApi _api;
-    private readonly DeviceRecord _device;
-    private readonly StudentSessionResult _session;
-    private readonly string _candidateId;
-    private readonly PackageControlStore _store;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly object _plaintextGate = new();
-    private byte[]? _unlockedPayload;
-    private long _controlGeneration;
-    private PackageControlState _state;
-    private bool _freshPreparation;
-    private bool _authorizedThisRun;
-    private bool _terminalInMemory;
-    private bool _disposed;
+    private readonly IStudentApi _api;
+    private readonly string _storageRoot;
 
-    public ExamPackageManager(IExamPackageApi api, string storageRoot, DeviceRecord device,
-        StudentSessionResult session, string examId)
+    public ExamPackageManager(IStudentApi api, string storageRoot)
     {
-        ArgumentNullException.ThrowIfNull(api);
-        ArgumentNullException.ThrowIfNull(device);
-        ArgumentNullException.ThrowIfNull(session);
-        if (device.Status != ActivationStatus.Active || string.IsNullOrWhiteSpace(device.ServerId) ||
-            session.DeviceId != device.DeviceId || !session.ExamIds.Contains(examId, StringComparer.Ordinal))
-            throw new InvalidOperationException("当前设备和登录考生无权准备该考试。");
         _api = api;
-        _device = device;
-        _session = session;
-        ExamId = examId;
-        _candidateId = session.CandidateIdsByExam?.GetValueOrDefault(examId) ?? session.Candidate.CandidateId;
-        _store = new PackageControlStore(storageRoot, device.ServerId, device.DeviceId, _candidateId, examId);
-        try
-        {
-            _state = _store.Load(new PackageControlState
-            {
-                ServerId = device.ServerId,
-                DeviceId = device.DeviceId,
-                CandidateId = _candidateId,
-                ExamId = examId
-            });
-        }
-        catch { _store.Dispose(); throw; }
-        CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
-            _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
-            _state.Participation is not null ? Phase.ConfirmedWaiting : Phase.Idle;
+        _storageRoot = storageRoot;
+        Directory.CreateDirectory(storageRoot);
     }
 
-    public enum Phase { Idle, Downloading, Downloaded, ConfirmedWaiting, Unlocked, Ended, Revoked, Withdrawn }
-    public Phase CurrentPhase { get; private set; }
-    public string ExamId { get; }
-    public string SessionId => _session.SessionId;
-    public ServerNodeEnvelope? Server => _state.Server;
-    public ExamResourceDescriptor? Descriptor => _state.Preparation?.Resources;
-    public InstructionsDocument? Instructions => _state.Instructions;
-    public ParticipationResult? Participation => _state.Participation;
-    public string? ParticipationId => Participation?.ParticipationId;
-    public string? UnlockReference => Participation?.UnlockReference;
-    public string? LastError { get; private set; }
-    public byte[]? UnlockedPayload { get { lock (_plaintextGate) return _unlockedPayload; } }
-    public bool ExamStarted => _state.Started;
-    public bool ExamEnded => _state.Ended || _terminalInMemory;
-    public bool HasPendingConfirmation => _state.PendingConfirm is not null;
-    public bool HasPackage => IsPackageComplete();
-    public bool HasInstructions => Descriptor is { } descriptor && Instructions is { } instructions &&
-        instructions.Version == descriptor.InstructionsVersion && instructions.Lines.Count > 0;
-    public string PackageFilePath => Descriptor is { } descriptor
-        ? _store.PackagePath(descriptor.PaperVersion) : Path.Combine(_store.Root, "unprepared.epkg");
-    public bool CanConfirmParticipation => _freshPreparation && !_authorizedThisRun && HasPackage && HasInstructions &&
-        (!ExamEnded || Participation is not null) &&
-        !_state.Revoked && _state.PendingWithdraw is null;
-
-    public Task<bool> PrepareAndDownloadAsync(IProgress<PackageDownloadProgress>? progress = null,
-        CancellationToken ct = default) => LockedAsync(async () =>
+    public enum Phase
     {
-        var generation = ControlGeneration;
-        if (ExamEnded && Participation is null) { LastError = "当前考试已经结束。"; return false; }
-        _authorizedThisRun = false;
-        _freshPreparation = false;
-        ClearPlaintext();
-        if (_state.PendingWithdraw is not null)
+        Idle,
+        Downloading,
+        Downloaded,
+        ConfirmedWaiting,
+        Unlocked,
+        Ended,
+    }
+
+    public Phase CurrentPhase { get; private set; } = Phase.Idle;
+
+    /// <summary>加密包是否已完整落盘。</summary>
+    public bool HasPackage { get; private set; }
+
+    /// <summary>考试说明是否已获取。</summary>
+    public bool HasInstructions { get; private set; }
+
+    public ExamResourceDescriptor? Descriptor { get; private set; }
+    public InstructionsDocument? Instructions { get; private set; }
+    public string? ParticipationId { get; private set; }
+    public string? UnlockReference { get; private set; }
+
+    /// <summary>确认参试返回的进入版本（B04 权限核对）。</summary>
+    public long EntryVersion { get; private set; }
+
+    /// <summary>确认参试返回的授权版本（B04 权限核对；旧授权不能写进度）。</summary>
+    public long AuthorizationVersion { get; private set; }
+
+    /// <summary>解锁后的题目明文（仅内存；开考前恒为 null）。</summary>
+    public byte[]? UnlockedPayload { get; private set; }
+
+    /// <summary>服务器或本地时钟判定考试已结束（结束后不可确认参试）。</summary>
+    public bool ExamEnded { get; private set; }
+
+    /// <summary>考试是否已开始（开考指令驱动，或服务器告知已在答题态）。</summary>
+    public bool ExamStarted { get; private set; }
+
+    /// <summary>加密包落盘路径（文件内容始终为密文）。</summary>
+    public string PackageFilePath =>
+        Path.Combine(_storageRoot, $"{Descriptor?.PaperVersion.ToString() ?? "0"}.pkg");
+
+    /// <summary>是否允许确认参试：包与说明齐备、尚未结束、尚未确认。</summary>
+    public bool CanConfirmParticipation =>
+        HasPackage && HasInstructions && !ExamEnded &&
+        CurrentPhase is Phase.Downloaded or Phase.Idle;
+
+    /// <summary>
+    /// 下载加密包与考试说明。二者任一失败即视为准备未完成（不可确认参试）。
+    /// </summary>
+    public async Task<bool> DownloadAsync(
+        string sessionId,
+        string examId,
+        ExamResourceDescriptor descriptor,
+        IProgress<PackageDownloadProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentPhase is Phase.ConfirmedWaiting or Phase.Unlocked)
         {
-            await WithdrawCoreAsync(ct);
-            LastError ??= "退出结果已确认，请返回选择考试页面。";
-            return false;
+            throw new InvalidOperationException("已确认参试，不能重复下载。");
         }
-        if (_state.PendingConfirm is not null)
-        {
-            var replay = await ConfirmCoreAsync(_state.PendingConfirm, unlock: false, ct);
-            if (replay is null || !replay.IsSuccess) return false;
-        }
-        var request = _state.PendingPrepare ?? new PrepareExamEntryRequest(RequestIds.New(), SessionId, ExamId);
-        Save(_state with { PendingPrepare = request });
-        var envelope = await _api.PrepareEntryAsync(request, ct);
-        ValidateServer(envelope);
-        if (!envelope.IsSuccess || envelope.Result is not { } preparation)
-        {
-            RecordFailure(envelope.Error);
-            if (!Retryable(envelope.Error)) Save(_state with { PendingPrepare = null });
-            return false;
-        }
-        if (preparation.ExamId != ExamId || string.IsNullOrWhiteSpace(preparation.PreparationId))
-            throw new InvalidDataException("服务器返回的准备记录与当前考试不一致。");
-        Save(_state with { PendingPrepare = null, Preparation = preparation, PreparationSessionId = request.SessionId });
-        if (preparation.Status == EntryPreparationStatus.DeviceDecisionPending)
-        {
-            LastError = "该账号存在设备冲突，请等待考务人员裁决。";
-            CurrentPhase = Phase.Idle;
-            return false;
-        }
-        if (!Enum.IsDefined(preparation.Status) || preparation.Resources is not { } descriptor ||
-            descriptor.PackageLength <= 0 || descriptor.PackageLength > MaximumPackageBytes ||
-            descriptor.PaperVersion < 1 || descriptor.InstructionsVersion < 1 ||
-            string.IsNullOrWhiteSpace(descriptor.EncryptedPackageUri) ||
-            (preparation.AuthorizedDeviceId is not null && preparation.AuthorizedDeviceId != _device.DeviceId))
-            throw new InvalidDataException("服务器返回的资源或设备授权不完整。");
-        if (generation != ControlGeneration) return false;
-        _freshPreparation = true;
-        Save(_state with { Revoked = false });
+
         CurrentPhase = Phase.Downloading;
-        if (!IsPackageComplete() && !await DownloadPackageAsync(descriptor, preparation.PreparationId,
-                request.SessionId, progress, ct)) return false;
-        if (!HasInstructions)
-        {
-            var instructions = await _api.GetInstructionsAsync(preparation.PreparationId, request.SessionId, ct);
-            ValidateServer(instructions);
-            if (!instructions.IsSuccess || instructions.Result is not { } document ||
-                document.Version != descriptor.InstructionsVersion || document.Lines is null ||
-                document.Lines.Count == 0 || document.Lines.Any(string.IsNullOrWhiteSpace))
-            {
-                LastError = "考试说明获取失败！说明缺失或版本不一致。";
-                return false;
-            }
-            Save(_state with { Instructions = document });
-        }
-        if (generation != ControlGeneration) return false;
-        CurrentPhase = ExamEnded ? Phase.Ended : Phase.Downloaded;
-        LastError = null;
-        return true;
-    }, ct);
+        HasPackage = false;
+        Descriptor = descriptor;
 
-    public Task<ApiEnvelope<ParticipationResult>?> ConfirmParticipationAsync(CancellationToken ct = default) =>
-        LockedAsync(async () =>
+        var packageOk = await DownloadPackageAtomicAsync(descriptor, progress, ct);
+        if (!packageOk)
         {
-            if (!CanConfirmParticipation || Descriptor is null || Instructions is null || _state.Preparation is null)
-            {
-                LastError = "试题和考试说明尚未全部就绪，不能确认参试。";
-                return null;
-            }
-            var request = _state.PendingConfirm ?? new ConfirmParticipationRequest(RequestIds.New(),
-                _state.PreparationSessionId!, ExamId, _state.Preparation.PreparationId,
-                Descriptor.PaperVersion, Instructions.Version);
-            return await ConfirmCoreAsync(request, unlock: true, ct);
-        }, ct);
-
-    public Task<ApiEnvelope<ParticipationResult>?> WithdrawAsync(CancellationToken ct = default) =>
-        LockedAsync(() => WithdrawCoreAsync(ct), ct);
-    public Task<bool> UnlockAsync(CancellationToken ct = default) => LockedAsync(() => UnlockCoreAsync(ct), ct);
-
-    public Task InvalidateAuthorizationAsync(CancellationToken ct = default)
-    {
-        StopImmediately(ended: false);
-        LastError = "当前设备的答题授权已失效，请重新连接并由服务器核对。";
-        return LockedAsync(() =>
-        {
-            Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
-            return Task.FromResult(true);
-        }, ct);
-    }
-
-    public Task<bool> HandleCommandAsync(CommandDelivery delivery, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(delivery);
-        // A verified END stops visible content before waiting behind a long network operation.
-        if (delivery.EventType == CommandEventType.End && MatchesCurrentAuthorization(delivery)) EndLocally();
-        return LockedAsync(async () =>
-        {
-            ArgumentNullException.ThrowIfNull(delivery);
-            if (delivery.EventType == CommandEventType.DeviceDecided && Participation is { } current &&
-                delivery.Server.ServerId == _state.ServerId && delivery.Server.ServerEpoch >= (Server?.ServerEpoch ?? 1) &&
-                delivery.ExamId == ExamId && delivery.ParticipationId == current.ParticipationId &&
-                delivery.EntryVersion == current.EntryVersion && delivery.TargetDeviceId == _device.DeviceId &&
-                delivery.TargetAuthorizationVersion > current.AuthorizationVersion)
-            {
-                _authorizedThisRun = false;
-                ClearPlaintext();
-                CurrentPhase = Phase.Revoked;
-                Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
-                LastError = "当前设备的授权版本已变化，请重新进入以核对服务器授权。";
-                return false;
-            }
-            if (!MatchesCurrentAuthorization(delivery))
-            {
-                LastError = "收到过期或不属于当前设备的指令，已拒绝处理。";
-                return false;
-            }
-            AcceptServer(delivery.Server);
-            var previous = _state.Commands.SingleOrDefault(item => item.Delivery.EventId == delivery.EventId);
-            if (previous is not null)
-            {
-                if (!SameCommand(previous.Delivery, delivery))
-                    throw new InvalidDataException("相同指令标识对应了不同内容。");
-                if (delivery.EventType == CommandEventType.Start && !ExamEnded &&
-                    previous.Acknowledgement.ProcessingResult == CommandProcessingResult.Applied &&
-                    UnlockedPayload is null && !await UnlockCoreAsync(ct)) return false;
-                return await SendAcknowledgementAsync(previous, ct);
-            }
-            if (delivery.EventType == CommandEventType.Start)
-            {
-                if (ExamEnded || delivery.StateVersion < _state.LifecycleStateVersion)
-                    return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.RejectedAsStale, ct);
-                if (_state.PendingWithdraw is not null)
-                {
-                    await WithdrawCoreAsync(ct);
-                    if (_state.PendingWithdraw is not null || CurrentPhase == Phase.Withdrawn) return false;
-                }
-                if (Descriptor is null || (delivery.ResourceVersion is { } version && version != Descriptor.PaperVersion) ||
-                    _state.NewestPaperVersion > Descriptor.PaperVersion ||
-                    string.IsNullOrWhiteSpace(delivery.ProtectedUnlockReference))
-                {
-                    LastError = "试卷版本或解锁信息已变化，请重新获取考试资料。";
-                    return false;
-                }
-                Save(_state with
-                {
-                    Started = true,
-                    LifecycleStateVersion = delivery.StateVersion,
-                    Participation = Participation! with
-                    {
-                        BusinessState = ParticipationBusinessState.Answering,
-                        UnlockReference = delivery.ProtectedUnlockReference
-                    }
-                });
-                if (!await UnlockCoreAsync(ct)) return false;
-                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Applied, ct);
-            }
-            if (delivery.EventType == CommandEventType.End)
-            {
-                EndLocally();
-                Save(_state with
-                {
-                    Ended = true,
-                    ProtectedUnlockMaterial = null,
-                    LifecycleStateVersion = Math.Max(_state.LifecycleStateVersion, delivery.StateVersion)
-                });
-                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Applied, ct);
-            }
-            if (delivery.EventType == CommandEventType.DeviceDecided)
-            {
-                _authorizedThisRun = false;
-                ClearPlaintext();
-                CurrentPhase = Phase.Revoked;
-                Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
-                LastError = "设备授权已调整，请重新进入以核对当前授权。";
-                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
-            }
-            if (delivery.EventType is CommandEventType.PaperUpdated or CommandEventType.ScheduleChanged)
-            {
-                Save(_state with
-                {
-                    NewestPaperVersion = delivery.EventType == CommandEventType.PaperUpdated
-                        ? Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion ?? delivery.StateVersion)
-                        : _state.NewestPaperVersion,
-                    LifecycleStateVersion = delivery.EventType == CommandEventType.ScheduleChanged
-                        ? Math.Max(_state.LifecycleStateVersion, delivery.StateVersion) : _state.LifecycleStateVersion
-                });
-                LastError = delivery.EventType == CommandEventType.PaperUpdated
-                    ? "已收到试卷更新，当前版本尚未完成更新，请重新同步。"
-                    : "已收到考试时间更新，请重新同步考试信息。";
-                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
-            }
-            LastError = "当前页面不能处理该指令。";
+            HasInstructions = false;
             return false;
-        }, ct);
+        }
+
+        HasPackage = true;
+
+        var instructions = await _api.GetInstructionsAsync(sessionId, examId, descriptor.InstructionsVersion, ct);
+        if (instructions is null)
+        {
+            HasInstructions = false;
+            return false;
+        }
+
+        Instructions = instructions;
+        HasInstructions = true;
+        CurrentPhase = Phase.Downloaded;
+        return true;
     }
 
-    private async Task<ApiEnvelope<ParticipationResult>?> ConfirmCoreAsync(
-        ConfirmParticipationRequest request, bool unlock, CancellationToken ct)
+    /// <summary>标记考试结束（服务器结束指令或等待页超时）。</summary>
+    public void OnExamEnded()
     {
-        var generation = ControlGeneration;
-        Save(_state with { PendingConfirm = request });
-        var response = await _api.ConfirmParticipationAsync(request, ct);
-        ValidateServer(response);
-        if (!response.IsSuccess || response.Result is not { } participation)
+        ExamEnded = true;
+        if (CurrentPhase is Phase.ConfirmedWaiting or Phase.Downloaded or Phase.Downloading)
         {
-            RecordFailure(response.Error);
-            if (!Retryable(response.Error)) Save(_state with { PendingConfirm = null });
-            return response;
+            CurrentPhase = Phase.Ended;
         }
-        ValidateParticipation(participation);
-        if (participation.BusinessState is not (ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering))
-            throw new InvalidDataException("确认参试未返回可等待或恢复的参试记录。");
-        var ended = _state.Ended || participation.Lifecycle == ExamLifecycle.Ended;
-        Save(_state with
-        {
-            PendingConfirm = null,
-            Participation = participation,
-            Started = _state.Started || participation.BusinessState == ParticipationBusinessState.Answering,
-            Ended = ended,
-            Revoked = false,
-            ProtectedUnlockMaterial = ended ? null : _state.ProtectedUnlockMaterial
-        });
-        lock (_plaintextGate)
-        {
-            if (generation != _controlGeneration)
-            {
-                LastError = "确认期间考试状态或设备授权已经变化，请重新核对。";
-                return response;
-            }
-            _authorizedThisRun = true;
-        }
-        LastError = null;
-        if (ended)
-        {
-            EndLocally();
-            LastError = "考试已经结束，仅可恢复未完成的交卷任务。";
-        }
-        else
-        {
-            CurrentPhase = Phase.ConfirmedWaiting;
-            if (unlock && participation.BusinessState == ParticipationBusinessState.Answering)
-                await UnlockCoreAsync(ct);
-        }
-        return response;
     }
 
-    private async Task<ApiEnvelope<ParticipationResult>?> WithdrawCoreAsync(CancellationToken ct)
+    /// <summary>
+    /// 确认参试（前提：CanConfirmParticipation）。服务器同时校验下载版本，
+    /// 返回失败（如考试已结束）时不进入等待状态。
+    /// </summary>
+    public async Task<ApiEnvelope<ParticipationResult>?> ConfirmParticipationAsync(
+        string sessionId,
+        string examId,
+        CancellationToken ct = default)
     {
-        if (_state.PendingConfirm is not null)
+        if (!CanConfirmParticipation)
         {
-            var confirmation = await ConfirmCoreAsync(_state.PendingConfirm, unlock: false, ct);
-            if (confirmation is null || !confirmation.IsSuccess) return confirmation;
-        }
-        if (_state.PendingWithdraw is null && (Participation is null || ExamStarted || ExamEnded ||
-                Participation.BusinessState != ParticipationBusinessState.Waiting))
-        {
-            LastError = "当前状态不能退出参试，请等待服务器确认。";
             return null;
         }
-        var request = _state.PendingWithdraw ?? new WithdrawParticipationRequest(RequestIds.New(),
-            SessionId, Participation!.ParticipationId, Participation.Version);
-        Save(_state with { PendingWithdraw = request });
-        var response = await _api.WithdrawParticipationAsync(request, ct);
-        ValidateServer(response);
-        if (!response.IsSuccess || response.Result is not { } withdrawn)
-        {
-            RecordFailure(response.Error);
-            if (!Retryable(response.Error)) Save(_state with { PendingWithdraw = null });
-            return response;
-        }
-        ValidateParticipation(withdrawn);
-        if (withdrawn.ParticipationId != request.ParticipationId || withdrawn.BusinessState != ParticipationBusinessState.NotParticipating ||
-            withdrawn.EntryVersion != Participation?.EntryVersion || withdrawn.Version < request.ExpectedVersion)
-            throw new InvalidDataException("退出响应未确认当前参试登记已经退出。");
-        Save(_state with
-        {
-            PendingWithdraw = null,
-            Participation = withdrawn,
-            Started = false,
-            ProtectedUnlockMaterial = null,
-            Preparation = null,
-            PreparationSessionId = null
-        });
-        _freshPreparation = false;
-        _authorizedThisRun = false;
-        ClearPlaintext();
-        CurrentPhase = Phase.Withdrawn;
-        LastError = null;
-        return response;
-    }
 
-    private async Task<bool> UnlockCoreAsync(CancellationToken ct)
-    {
-        var generation = ControlGeneration;
-        if (!_authorizedThisRun || !ExamStarted || ExamEnded || _state.Revoked || !HasPackage ||
-            !HasInstructions || Participation is null || Descriptor is null || Server is null ||
-            string.IsNullOrWhiteSpace(UnlockReference) || _state.NewestPaperVersion > Descriptor.PaperVersion)
+        if (Descriptor is null || Instructions is null)
         {
-            LastError = "当前身份、题包或考试状态尚不允许解锁。";
-            return false;
+            return null;
         }
-        if (UnlockedPayload is not null) return true;
-        var response = await _api.ResolveUnlockAsync(new PackageUnlockRequest(RequestIds.New(),
-            Participation.ParticipationId, Participation.EntryVersion, _device.DeviceId,
-            Participation.AuthorizationVersion, Descriptor.PaperVersion, UnlockReference,
-            _state.ServerId, Server.ServerEpoch), ct);
-        using var material = response.Result;
-        ValidateServer(response);
-        if (!response.IsSuccess || material is null) { RecordFailure(response.Error); return false; }
-        if (material.PaperVersion != Descriptor.PaperVersion ||
-            !string.Equals(UnlockReference, $"resource-envelope:{material.PackageId}", StringComparison.Ordinal))
-            throw new CryptographicException("解锁材料与当前试卷版本不一致。");
-        var protectedMaterial = _store.ProtectUnlock(material);
-        await using var plaintext = new MemoryStream();
-        byte[]? completed = null;
-        try
+
+        var request = new ConfirmParticipationRequest(
+            RequestId: RequestIds.New(),
+            SessionId: sessionId,
+            ExamId: examId,
+            PreparationId: _preparationId ?? "prep-unknown",
+            DownloadedPaperVersion: Descriptor.PaperVersion,
+            DownloadedInstructionsVersion: Instructions.Version);
+
+        var result = await _api.ConfirmParticipationAsync(request, ct);
+        if (result?.IsSuccess == true && result.Result is not null)
         {
-            await using var encrypted = new FileStream(PackageFilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await PackageCiphertext.DecryptAsync(encrypted, plaintext, material, ct);
-            completed = plaintext.ToArray();
-            if (generation != ControlGeneration) return false;
-            Save(_state with { ProtectedUnlockMaterial = protectedMaterial });
-            lock (_plaintextGate)
+            ParticipationId = result.Result.ParticipationId;
+            UnlockReference = result.Result.UnlockReference;
+            EntryVersion = result.Result.EntryVersion;
+            AuthorizationVersion = result.Result.AuthorizationVersion;
+            CurrentPhase = Phase.ConfirmedWaiting;
+
+            // 已开始的考试（迟到进入）：服务器直接告知答题态，无需等待开考指令
+            if (result.Result.BusinessState == ParticipationBusinessState.Answering)
             {
-                if (generation != _controlGeneration || ExamEnded || !_authorizedThisRun) return false;
-                _unlockedPayload = completed;
-                completed = null;
-                CurrentPhase = Phase.Unlocked;
-                LastError = null;
+                NotifyExamStarted();
             }
-            return true;
         }
-        catch (CryptographicException)
-        {
-            Save(_state with { CompletedPaperVersion = null, CompletedPackageUri = null, ProtectedUnlockMaterial = null });
-            LastError = "试题解密失败！密钥或题包认证不匹配，未显示题目。";
-            return false;
-        }
-        catch (EndOfStreamException)
-        {
-            Save(_state with { CompletedPaperVersion = null, CompletedPackageUri = null, ProtectedUnlockMaterial = null });
-            LastError = "试题解密失败！题包不完整，未显示题目。";
-            return false;
-        }
-        finally
-        {
-            if (completed is not null) CryptographicOperations.ZeroMemory(completed);
-            if (plaintext.TryGetBuffer(out var buffer)) CryptographicOperations.ZeroMemory(buffer.AsSpan());
-        }
+
+        return result;
     }
 
-    private async Task<bool> DownloadPackageAsync(ExamResourceDescriptor descriptor, string preparationId,
-        string sessionId, IProgress<PackageDownloadProgress>? progress, CancellationToken ct)
+    /// <summary>等待页退出参试（服务器要求退出确认；失败由调用方提示重试）。</summary>
+    public Task<ApiEnvelope<ParticipationResult>?> WithdrawAsync(
+        string sessionId,
+        long expectedVersion,
+        CancellationToken ct = default)
     {
-        var final = _store.PackagePath(descriptor.PaperVersion);
-        Directory.CreateDirectory(Path.GetDirectoryName(final)!);
-        var temporary = final + $".{Guid.NewGuid():N}.part";
-        try
+        if (ParticipationId is null)
         {
-            await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                             64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
-                {
-                    if (chunk.Length > descriptor.PackageLength - file.Length)
-                        throw new InvalidDataException("试题下载数据超出声明的长度。");
-                    await file.WriteAsync(chunk, ct);
-                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
-                }
-                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
-                file.Flush(flushToDisk: true);
-            }
-            if (File.Exists(final)) File.Replace(temporary, final, final + ".bak");
-            else File.Move(temporary, final);
-            Save(_state with
-            {
-                CompletedPaperVersion = descriptor.PaperVersion,
-                CompletedPackageUri = descriptor.EncryptedPackageUri
-            });
-            return true;
+            return Task.FromResult<ApiEnvelope<ParticipationResult>?>(null);
         }
-        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidDataException)
+
+        return _api.WithdrawParticipationAsync(new WithdrawParticipationRequest(
+            RequestId: RequestIds.New(),
+            SessionId: sessionId,
+            ParticipationId: ParticipationId,
+            ExpectedVersion: expectedVersion), ct);
+    }
+
+    /// <summary>标记考试开始（开考指令到达）。</summary>
+    public void NotifyExamStarted() => ExamStarted = true;
+
+    /// <summary>
+    /// 收到服务器开考指令（CommandDelivery，EventType=Start）：
+    /// 标记开始、记录解锁引用并在已确认参试的前提下解锁。
+    /// </summary>
+    public async Task<bool> HandleStartCommandAsync(CommandDelivery delivery, CancellationToken ct = default)
+    {
+        if (delivery.EventType != CommandEventType.Start)
         {
-            LastError = "试题获取失败！请检查网络或磁盘后重试。";
             return false;
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+
+        if (CurrentPhase != Phase.ConfirmedWaiting)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(delivery.ProtectedUnlockReference))
+        {
+            UnlockReference = delivery.ProtectedUnlockReference;
+        }
+
+        NotifyExamStarted();
+        return await UnlockAsync(ct);
     }
 
-    private async Task<bool> RecordAndAcknowledgeAsync(CommandDelivery delivery,
-        CommandProcessingResult result, CancellationToken ct)
+    /// <summary>
+    /// 解锁：以解锁引用向服务器换取内容密钥并解密（明文仅驻内存）。
+    /// 只有已确认参试、考试已开始（开考指令或服务器告知答题态）、持有解锁引用才允许——
+    /// 等待状态下即使提前拿到解锁引用也不解密（开考前无题目明文的硬约束）。
+    /// </summary>
+    public async Task<bool> UnlockAsync(CancellationToken ct = default)
     {
-        if (_state.Commands.Count >= 4096) throw new IOException("本机指令恢复记录已达上限，请联系考务人员。");
-        var record = new ProcessedPackageCommand(delivery,
-            new AcknowledgeCommandRequest(RequestIds.New(), delivery.EventId, delivery.ParticipationId,
-                delivery.EntryVersion, _device.DeviceId, delivery.TargetAuthorizationVersion, result,
-                Descriptor?.PaperVersion, result == CommandProcessingResult.Received ? LastError : null), false);
-        Save(_state with { Commands = _state.Commands.Append(record).ToArray() });
-        return await SendAcknowledgementAsync(record, ct);
-    }
+        if (!ExamStarted || CurrentPhase != Phase.ConfirmedWaiting || !HasPackage || UnlockReference is null)
+        {
+            return false;
+        }
 
-    private async Task<bool> SendAcknowledgementAsync(ProcessedPackageCommand record, CancellationToken ct)
-    {
-        var response = await _api.AcknowledgeCommandAsync(record.Acknowledgement, ct);
-        ValidateServer(response);
-        if (!response.IsSuccess || response.Result is not { } acknowledgement)
-        { RecordFailure(response.Error); return false; }
-        if (acknowledgement.EventId != record.Delivery.EventId ||
-            acknowledgement.RequestId != record.Acknowledgement.RequestId ||
-            acknowledgement.ProcessingResult != record.Acknowledgement.ProcessingResult)
-            throw new InvalidDataException("服务器返回的指令确认与当前指令不一致。");
-        if (!record.Acknowledged)
-            Save(_state with
-            {
-                Commands = _state.Commands.Select(item => item.Delivery.EventId == record.Delivery.EventId
-                ? item with { Acknowledged = true } : item).ToArray()
-            });
+        if (!File.Exists(PackageFilePath))
+        {
+            return false;
+        }
+
+        var key = await _api.ResolveUnlockKeyAsync(UnlockReference, ct);
+        if (key is null || key.Length == 0)
+        {
+            return false;
+        }
+
+        var package = await File.ReadAllBytesAsync(PackageFilePath, ct);
+        if (!SyntheticExamPackage.TryUnseal(package, key, out var plaintext))
+        {
+            return false;
+        }
+
+        UnlockedPayload = plaintext;
+        CurrentPhase = Phase.Unlocked;
         return true;
     }
 
-    private bool IsPackageComplete() => Descriptor is { } descriptor &&
-        _state.CompletedPaperVersion == descriptor.PaperVersion && _state.CompletedPackageUri == descriptor.EncryptedPackageUri &&
-        File.Exists(_store.PackagePath(descriptor.PaperVersion)) &&
-        new FileInfo(_store.PackagePath(descriptor.PaperVersion)).Length == descriptor.PackageLength;
-    private bool MatchesCurrentAuthorization(CommandDelivery command) => Participation is { } participation &&
-        _authorizedThisRun && command.Server is not null && command.Metadata is not null && command.Server.ServerId == _state.ServerId &&
-        command.Server.ServerEpoch >= Math.Max(_device.ServerEpoch, Server?.ServerEpoch ?? 0) &&
-        !string.IsNullOrWhiteSpace(command.Server.NodeId) && !string.IsNullOrWhiteSpace(command.EventId) &&
-        command.ExamId == ExamId && command.ParticipationId == participation.ParticipationId &&
-        command.EntryVersion == participation.EntryVersion && command.TargetDeviceId == _device.DeviceId &&
-        command.TargetAuthorizationVersion == participation.AuthorizationVersion && command.StateVersion > 0;
-    private static bool SameCommand(CommandDelivery first, CommandDelivery next) =>
-        first.ExamId == next.ExamId && first.ParticipationId == next.ParticipationId && first.EntryVersion == next.EntryVersion &&
-        first.EventType == next.EventType && first.StateVersion == next.StateVersion && first.TargetDeviceId == next.TargetDeviceId &&
-        first.TargetAuthorizationVersion == next.TargetAuthorizationVersion && first.ResourceVersion == next.ResourceVersion &&
-        first.ProtectedUnlockReference == next.ProtectedUnlockReference && first.Metadata.Count == next.Metadata.Count &&
-        first.Metadata.All(pair => next.Metadata.TryGetValue(pair.Key, out var value) && pair.Value == value);
-    private void ValidateParticipation(ParticipationResult participation)
+    private async Task<bool> DownloadPackageAtomicAsync(
+        ExamResourceDescriptor descriptor,
+        IProgress<PackageDownloadProgress>? progress,
+        CancellationToken ct)
     {
-        if (participation.ExamId != ExamId || participation.CandidateId != _candidateId ||
-            participation.AuthorizedDeviceId != _device.DeviceId || string.IsNullOrWhiteSpace(participation.ParticipationId) ||
-            participation.EntryVersion < 1 || participation.AuthorizationVersion < 1 || participation.Version < 1)
-            throw new InvalidDataException("服务器返回的参试身份或授权与当前考生不一致。");
-    }
-    private void ValidateServer<T>(ApiEnvelope<T> response)
-    {
-        if (response.IsSuccess || !string.IsNullOrWhiteSpace(response.ServerId))
-            AcceptServer(new ServerNodeEnvelope(response.ServerId, response.NodeId, response.ServerEpoch));
-    }
-    private void AcceptServer(ServerNodeEnvelope server)
-    {
-        if (server.ServerId != _state.ServerId || string.IsNullOrWhiteSpace(server.NodeId) ||
-            server.ServerEpoch < Math.Max(1, Math.Max(_device.ServerEpoch, Server?.ServerEpoch ?? 0)))
-            throw new InvalidDataException("服务器身份或服务代次与当前考试不一致。");
-        if (Server != server) Save(_state with { Server = server });
-    }
-    private void Save(PackageControlState state) { _store.Save(state); _state = state; }
-    private void RecordFailure(ApiError? error)
-    {
-        LastError = error?.Message ?? "服务器未确认操作结果，请重试。";
-        if (error?.Code is ErrorCodes.AuthorizationRevoked or ErrorCodes.NotActivated or "UNAUTHORIZED")
+        var finalPath = PackageFilePath;
+        var tempPath = finalPath + ".part";
+        try
         {
-            _authorizedThisRun = false;
-            ClearPlaintext();
-            CurrentPhase = Phase.Revoked;
-            Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
+            await using (var target = File.Create(tempPath))
+            {
+                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, ct))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await target.WriteAsync(chunk, ct);
+                    progress?.Report(new PackageDownloadProgress(target.Length, descriptor.PackageLength));
+                }
+
+                await target.FlushAsync(ct);
+            }
+
+            // 长度校验（完整性；D03 定稿后改为哈希/签名校验）
+            var written = new FileInfo(tempPath).Length;
+            if (descriptor.PackageLength > 0 && written != descriptor.PackageLength)
+            {
+                throw new IOException($"试题包长度不符（预期 {descriptor.PackageLength}，实际 {written}）。");
+            }
+
+            // 原子替换：只有完整下载并校验通过才出现最终文件
+            File.Move(tempPath, finalPath, overwrite: true);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            TryDelete(tempPath);
+            throw;
+        }
+        catch (Exception)
+        {
+            // 下载失败（超时/网络/校验）：清理半截文件，保持“无包”状态
+            TryDelete(tempPath);
+            return false;
         }
     }
-    private static bool Retryable(ApiError? error) => error is null || error.Retryable ||
-        error.Code is ErrorCodes.ServiceRecovering or ErrorCodes.PersistenceFailed or ErrorCodes.NotActiveServer or
-            ErrorCodes.StaleServerEpoch or ErrorCodes.ReplicaUnavailable;
-    private async Task<T> LockedAsync<T>(Func<Task<T>> action, CancellationToken ct)
+
+    private static void TryDelete(string path)
     {
-        await _gate.WaitAsync(ct);
-        try { ObjectDisposedException.ThrowIf(_disposed, this); return await Task.Run(action, ct).ConfigureAwait(false); }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        { LastError ??= "操作尚未确认，请检查网络和本机恢复存储后重试。"; throw; }
-        finally { _gate.Release(); }
-    }
-    private long ControlGeneration { get { lock (_plaintextGate) return _controlGeneration; } }
-    private void EndLocally() => StopImmediately(ended: true);
-    private void StopImmediately(bool ended)
-    {
-        byte[]? plaintext;
-        lock (_plaintextGate)
+        try
         {
-            _controlGeneration++;
-            if (ended) _terminalInMemory = true;
-            else { _authorizedThisRun = false; _freshPreparation = false; }
-            plaintext = _unlockedPayload;
-            _unlockedPayload = null;
-            CurrentPhase = ended ? Phase.Ended : Phase.Revoked;
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
-        if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
+        catch (IOException)
+        {
+        }
     }
-    private void ClearPlaintext()
-    {
-        byte[]? plaintext;
-        lock (_plaintextGate) { plaintext = _unlockedPayload; _unlockedPayload = null; }
-        if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
-    }
-    public void Dispose()
-    {
-        _gate.Wait();
-        try { if (_disposed) return; _disposed = true; ClearPlaintext(); _store.Dispose(); }
-        finally { _gate.Release(); }
-    }
+
+    private string? _preparationId;
+
+    /// <summary>记录准备标识（服务器退出/版本核对用）。</summary>
+    public void SetPreparation(string preparationId) => _preparationId = preparationId;
 }
