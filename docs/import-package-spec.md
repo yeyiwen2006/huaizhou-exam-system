@@ -113,18 +113,34 @@ variable   = "{" ( "正确选项总数" | "选择的正确选项数" ) "}" ;
 | 类别 | 落点 |
 | --- | --- |
 | 字段存在性、类型、枚举、`additionalProperties`、路径正则、选项数量与唯一性、三题型分支、满分为常量 | JSON Schema |
-| 引用完整性、数量一致、题号与题目标识唯一、题目科目与题组一致、表达式文法与变量、满分求和、文件名规则 | 校验器实现（PR#2） |
+| 引用完整性、数量一致、题号与题目标识唯一、题目科目与题组一致、表达式文法与变量、满分求和、文件名规则 | 校验器（`Exam.Domain.Importing.ExamManifestValidator`） |
 | 源文件是否存在、字体/宏包/图片依赖、编译 | D02 |
 
-仓库不引入 JSON Schema 校验库：schema 作为对外契约与文档，校验器为实现权威，另有零依赖的一致性测试
-（`tests/Unit/Exam.UnitTests/Importing/SchemaConsistencyTests.cs`）断言两份定义不漂移。因此**每个样例都必须通过校验器**，
-样例集合本身就是一次对 schema 语义的检验。
+仓库不引入 JSON Schema 校验库：schema 作为对外契约、校验器为实现权威。两份定义由零依赖的测试守住：
+`tests/Unit/Exam.UnitTests/Importing/SchemaConsistencyTests.cs` 核对单独发布的 schema 与清单内嵌定义逐项一致，
+`ContractSchemaAlignmentTests.cs` 核对 schema 与 C# 契约（字段名、枚举、变量白名单）不漂移。
+因此**每个样例都必须通过校验器**，样例集合本身就是一次对 schema 语义的检验。
 
 ### 规则标识与定位
 
 校验结果用**稳定规则标识 + RFC 6901 JSON Pointer** 定位，传输层仍只使用既有错误码 `IMPORT_INVALID`，
 不新增错误码。清单内问题指向清单指针（如 `/groups/0/scoring/oneCorrect/correct`），
 包内文件问题指向 `file:<包内相对路径>`。规则标识见错误样包与 `expected-errors.json`。
+
+其中 26 条与 `samples/synthetic/errors/expected-errors.json` 一一对应，逐条有错误样包覆盖；
+另有 6 条为防御性规则，覆盖 schema 已声明、但错误样包未单独覆盖的约束：
+
+| 规则标识 | 说明 |
+| --- | --- |
+| `subjects.duplicateId` | 科目标识重复会让满分求和重复计入 |
+| `groups.duplicateId` | 题组标识重复会让引用不明确 |
+| `groups.maxScore.constantRequired` | 题组满分与科目满分一样必须是无变量常量 |
+| `questions.options.invalid` | 选项标识不能为空或只由空白字符组成 |
+| `questions.displayMetadata.anchorScheme` | 坐标规范只能是 `pageTopLeftNormalizedV1` |
+| `answerKey.schema.version` | 独立答案的 schemaVersion 必须为 1 |
+
+另有两类在清单整体不可用时才触发的检查，不单独配样例：必填字段缺失（`manifest.required.missing`）、
+无法解析为 JSON 或字段类型不符（`manifest.invalidJson`）。
 
 ## 7. 样例清单
 
@@ -139,6 +155,9 @@ samples/synthetic/
 
 - 全部为**合成材料**，不含任何真实试卷、答案或解析。三校真实材料在仓库外，不得入库。
 - 错误包只含清单与答案：这些夹具针对 D01 的静态校验，**不含 TeX 源文件**；文件是否存在属于 D02。
+- 错误样包已成为**可执行验收清单**：`SamplePackageTests` 遍历目录并与 `expected-errors.json` 逐条比对
+  （期望规则、定位，以及不得出现未声明的额外错误）。新增用例只需改样例与期望清单，不改测试。
+- 合计校验通过是**静态**结论：它不表示 TeX 可编译、版式正确或考试可用。
 - 合成图片为 48×32 灰度 PNG（边框加对角线的示意图），由脚本一次性生成，无版权材料。
 - 样例的编译核对使用本机 MiKTeX；**CI 上没有 TeX 发行版**，因此编译相关检查属于 D02，
   并需要独立的测试类别（D02 引入时应与 E 确认 CI 过滤条件）。
@@ -153,3 +172,8 @@ samples/synthetic/
 3. **组内题号是否必须连续**：需求与三校材料均满足连续，但需求未明文要求。D01 不强制，提请 A 裁定。
 4. **`groups[].name`、`groups[].maxScore`、`displayMetadata`** 是 D01 相对 A01 初版新增的公共字段，
    涉及 C01 表单设计，需 A 确认并同步 C。
+5. **答案完整性不在导入期强制**：导入时允许答案后补，因此本任务不要求每题都有答案；
+   「每个可评分题目都有有效答案」应由 D04 的发布门保证。
+6. **同一题目出现两条答案时本任务不报错**：按答卷与规则版本去重属 D05 的范围。
+7. **校验是静态的**：源文件是否存在、依赖是否齐全、能否编译，全部属 D02；含变量的满分求和
+   在缺答案时只置 `RequiresAnswerKeyArithmetic`，由 D04/D05 完成核对。
