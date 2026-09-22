@@ -1,0 +1,67 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+      颜色规范（浅色主题）
+      基础色板 + 语义色。
+      语义色约定（全系统统一，禁止页面另行硬编码）：
+        Brush.Answer  —— 已作答（绿色填充）
+        Brush.Mark    —— 私人标记（红色圆点）
+        Brush.Danger  —— 提交答卷 / 退出系统等危险操作（红色）
+    -->
+
+    <!-- 品牌主色 -->
+    <SolidColorBrush x:Key="Brush.Primary" Color="#1E5AA8" />
+    <SolidColorBrush x:Key="Brush.Primary.Hover" Color="#1A4F93" />
+    <SolidColorBrush x:Key="Brush.Primary.Pressed" Color="#164079" />
+    <SolidColorBrush x:Key="Brush.Primary.Soft" Color="#E8F0FA" />
+    <SolidColorBrush x:Key="Brush.Primary.Variant" Color="#5B8AD4" />
+    <SolidColorBrush x:Key="Brush.OnPrimary" Color="#FFFFFF" />
+
+    <!-- 界面基础 -->
+    <SolidColorBrush x:Key="Brush.Background" Color="#F4F6FA" />
+    <SolidColorBrush x:Key="Brush.Surface" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="Brush.Surface.Alt" Color="#EEF1F6" />
+    <SolidColorBrush x:Key="Brush.Border" Color="#D9DEE7" />
+    <SolidColorBrush x:Key="Brush.Border.Strong" Color="#B9C2D0" />
+
+    <!-- 文本 -->
+    <SolidColorBrush x:Key="Brush.Text.Primary" Color="#1F2937" />
+    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="#667085" />
+    <SolidColorBrush x:Key="Brush.Text.Disabled" Color="#9CA3AF" />
+    <SolidColorBrush x:Key="Brush.Text.OnDark" Color="#FFFFFF" />
+
+    <!-- 语义色：成功 / 已作答 -->
+    <SolidColorBrush x:Key="Brush.Success" Color="#2E9E5B" />
+    <SolidColorBrush x:Key="Brush.Success.Hover" Color="#288C50" />
+    <SolidColorBrush x:Key="Brush.Success.Pressed" Color="#227A45" />
+    <SolidColorBrush x:Key="Brush.Success.Soft" Color="#E7F6ED" />
+    <SolidColorBrush x:Key="Brush.Answer" Color="#2E9E5B" />
+    <SolidColorBrush x:Key="Brush.Answer.Soft" Color="#2E9E5B" Opacity="0.18" />
+
+    <!-- 语义色：警告 -->
+    <SolidColorBrush x:Key="Brush.Warning" Color="#D97706" />
+    <SolidColorBrush x:Key="Brush.Warning.Soft" Color="#FDF3E3" />
+
+    <!-- 语义色：危险 / 私人标记 -->
+    <SolidColorBrush x:Key="Brush.Danger" Color="#D64545" />
+    <SolidColorBrush x:Key="Brush.Danger.Hover" Color="#C03B3B" />
+    <SolidColorBrush x:Key="Brush.Danger.Pressed" Color="#A93333" />
+    <SolidColorBrush x:Key="Brush.Danger.Soft" Color="#FBEAEA" />
+    <SolidColorBrush x:Key="Brush.Mark" Color="#E04B4B" />
+
+    <!-- 语义色：信息 -->
+    <SolidColorBrush x:Key="Brush.Info" Color="#1E5AA8" />
+    <SolidColorBrush x:Key="Brush.Info.Soft" Color="#E8F0FA" />
+
+    <!-- 焦点与覆盖 -->
+    <SolidColorBrush x:Key="Brush.Focus.Ring" Color="#8FB8E8" />
+    <SolidColorBrush x:Key="Brush.Busy.Overlay" Color="#F4F6FA" Opacity="0.72" />
+
+    <!-- 阴影资源 -->
+    <DropShadowEffect x:Key="Effect.Card" BlurRadius="16" ShadowDepth="1"
+                      Direction="270" Opacity="0.10" Color="#1F2937" />
+    <DropShadowEffect x:Key="Effect.Popup" BlurRadius="24" ShadowDepth="2"
+                      Direction="270" Opacity="0.16" Color="#1F2937" />
+
+</ResourceDictionary>

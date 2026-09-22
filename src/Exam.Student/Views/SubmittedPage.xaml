@@ -1,0 +1,36 @@
+<UserControl x:Class="Exam.Student.Views.SubmittedPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls;assembly=Exam.Desktop.Shared"
+             Background="{DynamicResource Brush.Background}">
+    <Grid>
+        <controls:PageHeader Grid.Row="0"
+                             ClientNumber="{Binding ClientNumber, Mode=OneWay}"
+                             CandidateName="{Binding CandidateDisplay, Mode=OneWay}" />
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Border Background="{DynamicResource Brush.Success.Soft}"
+                    CornerRadius="999"
+                    Width="96" Height="96"
+                    HorizontalAlignment="Center">
+                <Path Data="M4 12 L10 18 L20 6"
+                      Stroke="{DynamicResource Brush.Success}"
+                      StrokeThickness="3"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round"
+                      Stretch="Uniform"
+                      Width="44" Height="44" />
+            </Border>
+            <TextBlock Text="已成功交卷"
+                       FontSize="{DynamicResource Font.Size.Display}"
+                       FontWeight="Bold"
+                       Foreground="{DynamicResource Brush.Text.Primary}"
+                       HorizontalAlignment="Center"
+                       Margin="0,24,0,0" />
+            <TextBlock x:Name="RedirectText"
+                       Style="{StaticResource CaptionText}"
+                       HorizontalAlignment="Center"
+                       Margin="0,12,0,0"
+                       Text="3 秒后自动返回选择考试页面" />
+        </StackPanel>
+    </Grid>
+</UserControl>

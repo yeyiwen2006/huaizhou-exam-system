@@ -1,0 +1,23 @@
+<UserControl x:Class="Exam.Desktop.Shared.Controls.StatusPill"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 状态标识：圆点 + 文字的胶囊标签 -->
+    <Border x:Name="Root"
+            CornerRadius="999"
+            Padding="10,3"
+            Background="{DynamicResource Brush.Surface.Alt}"
+            VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal">
+            <Ellipse x:Name="Dot"
+                     Width="8" Height="8"
+                     Fill="{DynamicResource Brush.Text.Secondary}"
+                     VerticalAlignment="Center" />
+            <TextBlock x:Name="Label"
+                       Text="未知"
+                       FontSize="{DynamicResource Font.Size.Caption}"
+                       Foreground="{DynamicResource Brush.Text.Secondary}"
+                       Margin="6,0,0,0"
+                       VerticalAlignment="Center" />
+        </StackPanel>
+    </Border>
+</UserControl>
