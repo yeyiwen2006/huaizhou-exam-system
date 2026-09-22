@@ -32,42 +32,79 @@ public static class ExamApiEndpointExtensions
         var group = api.MapGroup("/resources").WithTags("A06 Encrypted Resources");
         group.MapGet("/{resourceId}", async (
             string resourceId,
-            string participationId,
-            long entryVersion,
-            string deviceId,
-            long authorizationVersion,
+            [FromQuery] string? preparationId,
+            [FromQuery] string? sessionId,
+            [FromQuery] string? participationId,
+            [FromQuery] long? entryVersion,
+            [FromQuery] string? deviceId,
+            [FromQuery] long? authorizationVersion,
             IParticipationAccessReader accessReader,
             [FromServices] PostgresVersionedResourceStore resources,
             HttpContext context,
             IConfiguration configuration,
             CancellationToken cancellationToken) =>
         {
-            var access = await accessReader.FindAsync(participationId, cancellationToken);
-            if (access is null || access.EntryVersion != entryVersion ||
-                !string.Equals(access.AuthorizedDeviceId, deviceId, StringComparison.Ordinal) ||
-                access.AuthorizationVersion != authorizationVersion)
+            var authenticatedDeviceId = ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context);
+            VersionedEncryptedResource? resource;
+
+            if (!string.IsNullOrWhiteSpace(preparationId) && !string.IsNullOrWhiteSpace(sessionId) &&
+                string.IsNullOrWhiteSpace(participationId) && entryVersion is null &&
+                string.IsNullOrWhiteSpace(deviceId) && authorizationVersion is null)
+            {
+                resource = await resources.FindForPreparationAsync(
+                    resourceId,
+                    preparationId,
+                    sessionId,
+                    authenticatedDeviceId,
+                    cancellationToken);
+            }
+            else if (!string.IsNullOrWhiteSpace(participationId) && entryVersion is not null &&
+                     !string.IsNullOrWhiteSpace(deviceId) && authorizationVersion is not null &&
+                     string.IsNullOrWhiteSpace(preparationId) && string.IsNullOrWhiteSpace(sessionId))
+            {
+                var access = await accessReader.FindAsync(participationId, cancellationToken);
+                if (access is null || access.EntryVersion != entryVersion ||
+                    !string.Equals(access.AuthorizedDeviceId, deviceId, StringComparison.Ordinal) ||
+                    !string.Equals(access.AuthorizedDeviceId, authenticatedDeviceId, StringComparison.Ordinal) ||
+                    access.AuthorizationVersion != authorizationVersion)
+                {
+                    return ApiEndpointResults.Error(
+                        context,
+                        configuration,
+                        context.TraceIdentifier,
+                        ParticipationErrorCodes.AuthorizationRevoked,
+                        "当前设备无权下载该参试记录的题包。",
+                        StatusCodes.Status403Forbidden);
+                }
+
+                resource = await resources.FindByIdAsync(resourceId, cancellationToken);
+                if (resource is not null &&
+                    (!string.Equals(resource.ExamId, access.ExamId, StringComparison.Ordinal) ||
+                     !string.Equals(resource.ResourceKind, "paper-package", StringComparison.Ordinal) ||
+                     resource.Version != access.PaperVersion))
+                {
+                    resource = null;
+                }
+            }
+            else
             {
                 return ApiEndpointResults.Error(
                     context,
                     configuration,
                     context.TraceIdentifier,
-                    ParticipationErrorCodes.AuthorizationRevoked,
-                    "当前设备无权下载该参试记录的题包。",
-                    StatusCodes.Status403Forbidden);
+                    ParticipationErrorCodes.InvalidRequest,
+                    "必须提供完整且互斥的进入准备凭据或参试授权凭据。",
+                    StatusCodes.Status400BadRequest);
             }
 
-            var resource = await resources.FindByIdAsync(resourceId, cancellationToken);
-            if (resource is null ||
-                !string.Equals(resource.ExamId, access.ExamId, StringComparison.Ordinal) ||
-                !string.Equals(resource.ResourceKind, "paper-package", StringComparison.Ordinal) ||
-                resource.Version != access.PaperVersion)
+            if (resource is null)
             {
                 return ApiEndpointResults.Error(
                     context,
                     configuration,
                     context.TraceIdentifier,
                     "RESOURCE_NOT_FOUND",
-                    "找不到与当前参试版本匹配的题包。",
+                    "找不到与当前进入准备或参试授权匹配的题包。",
                     StatusCodes.Status404NotFound);
             }
 
