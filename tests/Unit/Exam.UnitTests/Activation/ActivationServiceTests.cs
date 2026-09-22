@@ -49,6 +49,25 @@ public sealed class ActivationServiceTests
     }
 
     [Fact]
+    public async Task ActivationStatus_ReflectsLaterApproval_AndRequiresOriginalDeviceCredential()
+    {
+        var fixture = new Fixture();
+        var pending = await fixture.Service.SubmitRequestAsync(new("apply-status", "device-status", "secret"));
+        var query = new GetActivationStatusRequest(pending.ActivationRequestId, "device-status", "secret");
+
+        Assert.Equal(ActivationStatus.Pending, (await fixture.Service.GetRequestStatusAsync(query)).Status);
+
+        var approved = await fixture.Service.ApproveAsync(new("approve-status", pending.ActivationRequestId));
+        var current = await fixture.Service.GetRequestStatusAsync(query);
+        var invalid = await Assert.ThrowsAsync<ActivationRuleException>(() =>
+            fixture.Service.GetRequestStatusAsync(query with { Credential = "wrong" }).AsTask());
+
+        Assert.Equal(ActivationStatus.Active, current.Status);
+        Assert.Equal(approved.ClientNumber, current.ClientNumber);
+        Assert.Equal(ActivationErrorCodes.InvalidCredential, invalid.Code);
+    }
+
+    [Fact]
     public async Task RevokeAndReactivate_RequireOriginalCredential_AndKeepNumber()
     {
         var fixture = new Fixture();

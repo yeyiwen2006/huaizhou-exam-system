@@ -32,11 +32,56 @@ jobs:
         run: dotnet build Huaizhou.ExamSystem.sln --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build --logger "trx;LogFileName=tests.trx"
+        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build --filter "Category!=Postgres" --logger "trx;LogFileName=tests.trx"
 
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
+          path: "**/TestResults/**/*.trx"
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: exam-ci-${{ github.run_id }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      EXAM_TEST_POSTGRES: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=exam-ci-${{ github.run_id }};SSL Mode=Disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Restore locked dependencies
+        run: dotnet restore tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --locked-mode
+
+      - name: Build integration tests
+        run: dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-restore
+
+      - name: Test PostgreSQL adapters
+        run: dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-build --filter "Category=Postgres" --logger "trx;LogFileName=postgres-tests.trx"
+
+      - name: Upload PostgreSQL test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-test-results
           path: "**/TestResults/**/*.trx"

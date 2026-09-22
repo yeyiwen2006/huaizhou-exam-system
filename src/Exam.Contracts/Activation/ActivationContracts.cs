@@ -13,6 +13,11 @@ public sealed record SubmitActivationRequest(
     string DeviceId,
     string Credential);
 
+public sealed record GetActivationStatusRequest(
+    string ActivationRequestId,
+    string DeviceId,
+    string Credential);
+
 public sealed record ActivationRequestResult(
     string ActivationRequestId,
     string DeviceId,

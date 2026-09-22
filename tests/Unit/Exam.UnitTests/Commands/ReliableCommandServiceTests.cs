@@ -26,7 +26,7 @@ public sealed class ReliableCommandServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(CommandErrorCode.KeyNotReleased, result.ErrorCode);
-        Assert.Empty((await fixture.Store.ListUnacknowledgedAsync(fixture.Clock.GetUtcNow())).ToArray());
+        Assert.Null(await fixture.Store.FindAsync("event-1"));
     }
 
     [Fact]

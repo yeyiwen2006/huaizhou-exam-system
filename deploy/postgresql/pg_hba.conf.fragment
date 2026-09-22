@@ -1,0 +1,6 @@
+# Replace addresses and certificate policy for the actual isolated examination LAN.
+# Do not use 0.0.0.0/0 and do not commit credentials.
+hostssl replication {{REPLICATION_USER}} {{STANDBY_ADDRESS}}/32 scram-sha-256
+hostssl {{DATABASE_NAME}} {{APPLICATION_USER}} {{PRIMARY_ADDRESS}}/32 scram-sha-256
+hostssl {{DATABASE_NAME}} {{APPLICATION_USER}} {{STANDBY_ADDRESS}}/32 scram-sha-256
+hostssl {{DATABASE_NAME}} {{APPLICATION_USER}} {{ADMIN_LAN_CIDR}} scram-sha-256

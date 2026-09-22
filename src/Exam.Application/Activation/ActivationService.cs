@@ -61,6 +61,29 @@ public sealed class ActivationService(
             }), cancellationToken);
     }
 
+    public ValueTask<ActivationRequestResult> GetRequestStatusAsync(
+        GetActivationStatusRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Require(request.ActivationRequestId, nameof(request.ActivationRequestId));
+        Require(request.DeviceId, nameof(request.DeviceId));
+        Require(request.Credential, nameof(request.Credential));
+
+        return persistence.ExecuteTransactionAsync(transaction =>
+        {
+            var activationRequest = transaction.FindActivationRequest(request.ActivationRequestId)
+                ?? throw Error(ActivationErrorCodes.ActivationRequestNotFound, "找不到激活申请。");
+            if (!string.Equals(activationRequest.DeviceId, request.DeviceId, StringComparison.Ordinal))
+            {
+                throw Error(ActivationErrorCodes.InvalidCredential, "设备凭据不匹配。");
+            }
+
+            EnsureCredential(request.Credential, activationRequest.ProtectedCredential);
+            return ToRequestResult(activationRequest);
+        }, cancellationToken);
+    }
+
     public ValueTask<ActivationResult> ApproveAsync(
         ApproveActivationRequest request,
         CancellationToken cancellationToken = default)
