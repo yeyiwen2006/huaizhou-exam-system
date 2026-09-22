@@ -51,7 +51,13 @@ public sealed class PostgresDatabaseFixture : IAsyncLifetime
         var testBuilder = new NpgsqlConnectionStringBuilder(_adminConnectionString)
         {
             Database = _databaseName,
-            Pooling = true
+            Pooling = true,
+            // The 300-request test exercises concurrency, not 300 physical sessions.
+            // Do not let Npgsql's default 100-session pool exhaust the CI database:
+            // leave room for health checks and operational connections, and queue
+            // excess requests in the pool without extending any timeout.
+            MinPoolSize = 0,
+            MaxPoolSize = 16
         };
         ConnectionString = testBuilder.ConnectionString;
         DataSource = new PostgresConnectionOptions(ConnectionString, ApplicationName: "Exam.IntegrationTests")
