@@ -1,23 +1,26 @@
-using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using Exam.Admin.ViewModels;
 
 namespace Exam.Admin;
 
-/// <summary>
-/// Interaction logic for MainWindow.xaml
-/// </summary>
 public partial class MainWindow : Window
 {
+    private readonly MainViewModel _viewModel;
+
     public MainWindow()
     {
         InitializeComponent();
+        _viewModel = new MainViewModel();
+        DataContext = _viewModel;
     }
+
+    private void OperatorToken_OnPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.PasswordBox passwordBox)
+        {
+            _viewModel.Connection.OperatorToken = passwordBox.Password;
+        }
+    }
+
+    private void MainWindow_OnClosed(object? sender, EventArgs e) => _viewModel.Dispose();
 }

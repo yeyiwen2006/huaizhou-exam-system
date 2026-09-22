@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Desktop.Shared\Exam.Desktop.Shared.csproj" />
   </ItemGroup>
