@@ -7,8 +7,7 @@ using Exam.Student.Core;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 等待考试页：显示全部考试说明与时间；B02 将接入加密包下载、参试确认与自动进入。
-/// 右上角红色“返回”可退回选择考试页面，此时默认退出考试。
+/// 进入准备页框。下载与参试确认接入前不显示“已参试”，也不开放题目。
 /// </summary>
 public partial class WaitingExamPage : UserControl
 {
@@ -30,7 +29,6 @@ public partial class WaitingExamPage : UserControl
         DataContext = App.Services.Session;
 
         TimeText.Text = $"开始时间：{exam.ScheduledStart:yyyy-MM-dd HH:mm}    结束时间：{exam.ScheduledEnd:yyyy-MM-dd HH:mm}";
-        InstructionList.ItemsSource = MockStudentApi.InstructionsFor(exam.ExamId);
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => UpdateCountdown();
@@ -41,20 +39,20 @@ public partial class WaitingExamPage : UserControl
 
     private void UpdateCountdown()
     {
-        var remain = _exam.ScheduledStart - DateTimeOffset.Now;
+        if (!App.Services.Clock.IsSynchronized)
+        {
+            CountdownText.Text = "服务器时间尚未同步";
+            return;
+        }
+
+        var remain = _exam.ScheduledStart - App.Services.Clock.UtcNow;
         if (remain <= TimeSpan.Zero)
         {
-            CountdownText.Text = "即将开考";
-            _timer?.Stop();
+            CountdownText.Text = "计划开始时间已到，尚未确认参试";
             return;
         }
 
         CountdownText.Text = $"距开考 {remain:hh\\:mm\\:ss}";
-        if (remain <= TimeSpan.FromMinutes(5))
-        {
-            DownloadPill.Text = "下载中…";
-            DownloadPill.Level = StatusLevel.Info;
-        }
     }
 
     private async void OnGoBack(object sender, RoutedEventArgs e)
@@ -68,7 +66,7 @@ public partial class WaitingExamPage : UserControl
         var confirmed = await ConfirmDialog.ShowAsync(
             window,
             "返回",
-            "返回选择考试页面将退出本考试，再进入需重新申请。确定返回吗？",
+            "当前尚未确认参试。确定返回选择考试页面吗？",
             "确定返回",
             "取消",
             isDanger: true);
@@ -80,9 +78,4 @@ public partial class WaitingExamPage : UserControl
         _navigation.GoToExamSelection();
     }
 
-    private void OnDemoStart(object sender, RoutedEventArgs e)
-    {
-        _timer?.Stop();
-        _navigation.GoToExamInProgress(_exam);
-    }
 }

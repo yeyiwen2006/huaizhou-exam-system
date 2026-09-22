@@ -109,6 +109,7 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(encryptionPolicy);
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentDirectory>();
 
         if (configuration.GetValue("Backup:Enabled", false))
         {

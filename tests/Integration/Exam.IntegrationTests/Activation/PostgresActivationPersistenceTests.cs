@@ -91,6 +91,44 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
     private ActivationService CreateService(TimeProvider clock, IDeviceCredentialProtector protector) =>
         new(new PostgresActivationPersistence(fixture.DataSource), protector, clock);
 
+    [Fact]
+    public async Task CancelOwnActivation_PersistsReplayAndPreservesNumberRoomAndCredential()
+    {
+        await ResetAsync();
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 9, 22, 1, 0, 0, TimeSpan.Zero));
+        var protector = new FastCredentialProtector();
+        var service = CreateService(clock, protector);
+        var pending = await service.SubmitRequestAsync(new("own-apply", "own-device", "own-secret"));
+        var active = await service.ApproveAsync(new("own-approve", pending.ActivationRequestId, "room-a"));
+        var request = new CancelOwnActivationRequest("own-cancel", active.DeviceId, "own-secret");
+
+        var wrongCredential = await Assert.ThrowsAsync<ActivationRuleException>(() =>
+            service.CancelOwnAsync(request with { Credential = "wrong" }).AsTask());
+        Assert.Equal(ActivationErrorCodes.InvalidCredential, wrongCredential.Code);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(_ => CreateService(clock, protector).CancelOwnAsync(request).AsTask()));
+        Assert.All(results, result => Assert.Equal(results[0], result));
+        var restarted = CreateService(clock, protector);
+        Assert.Equal(results[0], await restarted.CancelOwnAsync(request));
+        Assert.Equal(ActivationStatus.Revoked, results[0].Status);
+        Assert.False(await restarted.ValidateActiveDeviceAsync(active.DeviceId, "own-secret"));
+        Assert.Equal(ActivationStatus.Revoked, (await restarted.GetRequestStatusAsync(new(
+            pending.ActivationRequestId, active.DeviceId, "own-secret"))).Status);
+
+        var restored = await restarted.ReactivateAsync(new("own-reactivate", active.DeviceId, "own-secret"));
+        Assert.Equal(active.ClientNumber, restored.ClientNumber);
+        Assert.Equal(active.RoomGroupId, restored.RoomGroupId);
+        Assert.Equal(active.CredentialVersion, restored.CredentialVersion);
+        Assert.Equal(results[0], await restarted.CancelOwnAsync(request));
+        Assert.True(await restarted.ValidateActiveDeviceAsync(active.DeviceId, "own-secret"));
+
+        await using var command = fixture.DataSource.CreateCommand("""
+            SELECT COUNT(*) FROM exam.activation_idempotency WHERE request_id = 'own-cancel';
+            """);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
     private async Task ResetAsync()
     {
         await using var command = fixture.DataSource.CreateCommand("""

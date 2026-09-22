@@ -24,6 +24,7 @@ public static class ExamApiEndpointExtensions
         api.MapSubmissionApi();
         api.MapVersioningApi();
         api.MapResourceApi();
+        api.MapStudentApi();
         return endpoints;
     }
 
@@ -276,16 +277,6 @@ public static class ExamApiEndpointExtensions
             await ApiEndpointResults.ExecuteRuleAsync(
                 context, configuration, context.TraceIdentifier,
                 () => service.EnsureAuthorizedForWriteAsync(request, cancellationToken)));
-
-        group.MapPost("/finalize", async (
-            FinalizeParticipationRequest request,
-            ParticipationService service,
-            HttpContext context,
-            IConfiguration configuration,
-            CancellationToken cancellationToken) =>
-            await ApiEndpointResults.ExecuteRuleAsync(
-                context, configuration, request.RequestId,
-                () => service.FinalizeAsync(request, cancellationToken)));
 
         group.MapPost("/exams/advance-to-answering", async (
             AdvanceExamToAnsweringRequest request,

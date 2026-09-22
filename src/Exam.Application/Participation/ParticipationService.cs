@@ -429,6 +429,12 @@ public sealed class ParticipationService(
         }, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// State-machine reference operation for isolated participation tests only.
+    /// Do not expose this method through an API or CLI: production submission must
+    /// persist the final answers, receipt and submitted state in the single A05
+    /// submission transaction reached through /api/v1/submissions/final.
+    /// </summary>
     public async ValueTask<ParticipationResult> FinalizeAsync(
         FinalizeParticipationRequest request,
         CancellationToken cancellationToken = default)

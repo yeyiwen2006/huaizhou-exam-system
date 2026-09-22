@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using Exam.Contracts.Common;
@@ -17,6 +18,7 @@ public partial class ExamSelectionPage : UserControl
 {
     private readonly MainWindow.Navigation _navigation;
     private readonly ObservableCollection<ExamRow> _rows = new();
+    private bool _requesting;
 
     public ExamSelectionPage(MainWindow.Navigation navigation)
     {
@@ -39,18 +41,28 @@ public partial class ExamSelectionPage : UserControl
         Busy.IsBusy = true;
         try
         {
-            var overviews = await App.Services.Api.GetExamOverviewsAsync();
-            var enrolled = App.Services.Session.LoginResult?.ExamIds;
+            if (App.Services.Session.LoginResult is not { } session)
+            {
+                _navigation.GoToLogin();
+                return;
+            }
+
+            var overviews = await App.Services.Api.GetExamOverviewsAsync(session.SessionId);
+            var enrolled = session.ExamIds;
             _rows.Clear();
             foreach (var exam in overviews)
             {
-                if (enrolled is not null && !enrolled.Contains(exam.ExamId))
+                if (!enrolled.Contains(exam.ExamId))
                 {
                     continue;
                 }
 
                 _rows.Add(new ExamRow(exam));
             }
+        }
+        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
+        {
+            EntryBanner.Show("考试列表获取失败，请检查连接后重试。");
         }
         finally
         {
@@ -60,7 +72,7 @@ public partial class ExamSelectionPage : UserControl
 
     private async void OnEnterExam(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string examId })
+        if (_requesting || sender is not Button { Tag: string examId })
         {
             return;
         }
@@ -70,18 +82,31 @@ public partial class ExamSelectionPage : UserControl
             return;
         }
 
+        if (App.Services.Session.HasSubmitted(examId))
+        {
+            EntryBanner.Show("当前不可进入该考试！");
+            return;
+        }
+
         EntryBanner.Hide();
         Busy.Message = "正在请求进入考试…";
         Busy.IsBusy = true;
+        _requesting = true;
         ApiEnvelope<EntryPreparationResult> envelope;
         try
         {
             var request = new PrepareExamEntryRequest(RequestIds.New(), session.SessionId, examId);
             envelope = await App.Services.Api.PrepareEntryAsync(request);
         }
+        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
+        {
+            EntryBanner.Show("未收到进入考试的确认，请检查连接后重试。");
+            return;
+        }
         finally
         {
             Busy.IsBusy = false;
+            _requesting = false;
         }
 
         if (!envelope.IsSuccess)
@@ -95,9 +120,19 @@ public partial class ExamSelectionPage : UserControl
             return;
         }
 
-        var overview = _rows.FirstOrDefault(r => r.ExamId == examId)?.Overview
-            ?? new ExamOverview(examId, examId, DateTimeOffset.Now, DateTimeOffset.Now.AddHours(2),
-                Array.Empty<string>(), ExamLifecycle.Scheduled);
+        if (envelope.Result!.Status == EntryPreparationStatus.DeviceDecisionPending)
+        {
+            EntryBanner.Show("当前账号已在其他设备登记，请等待考务人员裁决。");
+            return;
+        }
+
+        var overview = _rows.FirstOrDefault(r => r.ExamId == examId)?.Overview;
+        if (overview is null || envelope.Result.ExamId != examId)
+        {
+            EntryBanner.Show("考试信息已变化，请重新获取考试列表。");
+            return;
+        }
+
         _navigation.GoToWaitingExam(overview);
     }
 
@@ -122,7 +157,7 @@ public partial class ExamSelectionPage : UserControl
         }
 
         App.Services.Session.Logout();
-        _navigation.GoToLogin();
+        Application.Current.Shutdown();
     }
 
     /// <summary>考试行展示模型。</summary>
@@ -133,6 +168,7 @@ public partial class ExamSelectionPage : UserControl
             Overview = exam;
             ExamId = exam.ExamId;
             Name = exam.Name;
+            CategoryText = string.IsNullOrWhiteSpace(exam.CategoryName) ? "未设置类别" : $"类别：{exam.CategoryName}";
             TimeText = $"{exam.ScheduledStart:yyyy-MM-dd HH:mm} — {exam.ScheduledEnd:HH:mm}";
             SubjectsText = exam.Subjects.Count == 0
                 ? string.Empty
@@ -158,5 +194,9 @@ public partial class ExamSelectionPage : UserControl
         public string TimeText { get; }
 
         public string SubjectsText { get; }
+
+        public string CategoryText { get; }
     }
+
+    private async void OnRefresh(object sender, RoutedEventArgs e) => await LoadExamsAsync();
 }
