@@ -4,11 +4,17 @@ using Exam.Contracts.ServiceManagement;
 using Exam.Server.Api;
 using Exam.Server.Realtime;
 using Exam.Server.Runtime;
+using Exam.Server.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSignalR();
+builder.Services.AddSignalR().AddJsonProtocol(options =>
+{
+    // HTTP and SignalR carry the same contracts, including string-valued enums.
+    // HTTP JSON options do not apply to hub argument binding.
+    options.PayloadSerializerOptions = JsonDefaults.Create();
+});
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     var defaults = JsonDefaults.Create();
@@ -100,6 +106,7 @@ app.MapGet("/api/system/time", (IConfiguration configuration, TimeProvider timeP
 if (databaseConfigured)
 {
     app.MapExamApi();
+    app.MapExamDiagnostics();
     app.MapHub<ExamEventHub>("/hubs/exam-events");
     if (builder.Configuration.GetValue("Backup:Enabled", false))
     {

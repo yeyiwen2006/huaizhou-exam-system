@@ -99,6 +99,15 @@ public interface ICollectionCompletionStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Production collection evaluation uses only the transactional authoritative roster.</summary>
+public interface IAuthoritativeCollectionCompletionStore
+{
+    ValueTask<CollectionCompletedNotification?> EvaluateAsync(string examId, CancellationToken cancellationToken = default);
+    ValueTask<int> ProcessPendingAsync(int limit = 100, CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<CollectionCompletedNotification>> ReadEventsAsync(
+        string examId, long afterRosterVersion, int limit = 100, CancellationToken cancellationToken = default);
+}
+
 public static class SubmissionPolicy
 {
     public static string? ValidateAnswers(IReadOnlyDictionary<string, AnswerValue>? answers)

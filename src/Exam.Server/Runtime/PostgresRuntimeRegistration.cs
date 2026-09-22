@@ -19,6 +19,7 @@ using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.Server.Realtime;
+using Exam.Server.Capacity;
 using Npgsql;
 
 namespace Exam.Server.Runtime;
@@ -60,7 +61,14 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(new ExamApiSecurityOptions(operatorToken, operatorId));
 
         var timeout = configuration.GetValue("Database:CommandTimeoutSeconds", 30);
-        var dataSource = new PostgresConnectionOptions(connectionString, timeout).CreateDataSource();
+        var connectionOptions = new PostgresConnectionOptions(connectionString, timeout,
+            MaximumPoolSize: configuration.GetValue<int?>("Database:MaximumPoolSize"),
+            MinimumPoolSize: configuration.GetValue<int?>("Database:MinimumPoolSize"),
+            ConnectionTimeoutSeconds: configuration.GetValue("Database:ConnectionTimeoutSeconds", 15));
+        var capacity = DatabaseCapacityOptions.Read(configuration, connectionOptions.BuildConnectionSettings().MaxPoolSize,
+            production: !allowUninitializedFailoverState);
+        services.AddExamCapacity(configuration, capacity);
+        var dataSource = connectionOptions.CreateDataSource();
         services.AddSingleton(dataSource);
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
@@ -88,9 +96,18 @@ public static class PostgresRuntimeRegistration
 
         services.AddSingleton<ISubmissionStore, PostgresSubmissionStore>();
         services.AddSingleton<IGradingTaskQueue, PostgresGradingTaskQueue>();
-        services.AddSingleton<ICollectionCompletionStore, PostgresCollectionCompletionStore>();
-        services.AddSingleton<SubmissionService>();
+        services.AddSingleton<PostgresCollectionCompletionStore>();
+        services.AddSingleton<ICollectionCompletionStore>(provider => provider.GetRequiredService<PostgresCollectionCompletionStore>());
+        services.AddSingleton<IAuthoritativeCollectionCompletionStore>(provider => provider.GetRequiredService<PostgresCollectionCompletionStore>());
+        var maxConcurrentWrites = configuration.GetValue("Database:MaxConcurrentWrites", 32);
+        if (maxConcurrentWrites is < 1 or > 1024)
+            throw new InvalidOperationException("Database:MaxConcurrentWrites 必须在 1 至 1024 之间。");
+        services.AddSingleton(provider => new SubmissionService(
+            provider.GetRequiredService<ISubmissionStore>(), provider.GetRequiredService<IGradingTaskQueue>(),
+            maxConcurrentWrites, provider.GetRequiredService<TimeProvider>(),
+            accessReader: provider.GetRequiredService<IParticipationAccessReader>()));
         services.AddSingleton<CollectionCompletionService>();
+        services.AddHostedService<CollectionCompletionWorker>();
         services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();
         services.AddSingleton<PostgresScheduleProcessor>();
         services.AddHostedService<PostgresScheduleWorker>();
@@ -161,12 +178,15 @@ public static class PostgresRuntimeRegistration
 public sealed class PostgresReadinessProbe(
     NpgsqlDataSource dataSource,
     PostgresMigrationRunner migrations,
-    ActiveNodeGuard activeNode)
+    ActiveNodeGuard activeNode,
+    DatabaseCapacityProbe? capacity = null)
 {
     public async Task<(bool Ready, string? Reason)> CheckAsync(CancellationToken cancellationToken)
     {
         try
         {
+            if (capacity is not null && await capacity.CheckAsync(cancellationToken) is { } capacityFailure)
+                return (false, capacityFailure);
             await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
             await using var command = new NpgsqlCommand(
                 "SELECT migration_name FROM exam.schema_migrations;",
@@ -191,7 +211,7 @@ public sealed class PostgresReadinessProbe(
         }
         catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
         {
-            return (false, $"PostgreSQL 不可用：{exception.Message}");
+            return (false, "PostgreSQL 不可用或连接等待超时，请检查数据库服务和受保护配置。");
         }
     }
 }
