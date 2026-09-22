@@ -55,10 +55,16 @@ public sealed class RosterViewModel : BindableBase
         }
 
         Entries.Add(entry);
+        if (_pendingPreview is not null)
+        {
+            _pendingPreview = null;
+            PreviewRows.Clear();
+            ConfirmImportCommand.RaiseCanExecuteChanged();
+        }
         Name = string.Empty;
         ClassText = string.Empty;
         AdmissionNo = string.Empty;
-        Status = $"已加入本地名册，共 {Entries.Count} 人；班级和准考证号保持文本格式。";
+        Status = $"已加入本地名册，共 {Entries.Count} 人；若先前有导入预览，现已失效，需重新选择文件。";
     }
 
     private void CreateTemplate()

@@ -15,6 +15,9 @@ public sealed class MainViewModel : IDisposable
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
         Dependencies = new DependencyStatusViewModel();
+        ImportRevision = new ImportRevisionViewModel(_api);
+        Reports = new ReportsWorkspaceViewModel();
+        HighAvailability = new HighAvailabilityWorkspaceViewModel();
     }
 
     public ConnectionViewModel Connection { get; }
@@ -23,6 +26,9 @@ public sealed class MainViewModel : IDisposable
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
     public DependencyStatusViewModel Dependencies { get; }
+    public ImportRevisionViewModel ImportRevision { get; }
+    public ReportsWorkspaceViewModel Reports { get; }
+    public HighAvailabilityWorkspaceViewModel HighAvailability { get; }
 
     public void Dispose() => _api.Dispose();
 }
@@ -81,7 +87,7 @@ public sealed class ConnectionViewModel : BindableBase
         _api.Configure(ServerAddress, OperatorToken, OperatorId);
         await _api.CheckConnectionAsync();
         IsConnected = true;
-        Status = "服务器已就绪，当前考务身份可用于正式 API 请求。";
+        Status = "服务器已就绪，令牌可访问考务接口；操作者身份将在写请求时由服务器校验。";
     }
 
     private void SetError(Exception exception)

@@ -7,15 +7,23 @@ using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
+using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 
 namespace Exam.Admin.Services;
 
 public sealed class AdminApiClient : IDisposable
 {
-    private HttpClient _httpClient = new();
+    private readonly HttpMessageHandler? _messageHandler;
+    private HttpClient _httpClient;
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
     private string _operatorId = string.Empty;
+
+    public AdminApiClient(HttpMessageHandler? messageHandler = null)
+    {
+        _messageHandler = messageHandler;
+        _httpClient = CreateClient();
+    }
 
     public bool IsConfigured => _httpClient.BaseAddress is not null &&
                                 _httpClient.DefaultRequestHeaders.Authorization is not null &&
@@ -26,9 +34,10 @@ public sealed class AdminApiClient : IDisposable
     public void Configure(string baseAddress, string operatorToken, string operatorId)
     {
         if (!Uri.TryCreate(baseAddress.Trim(), UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback))
         {
-            throw new ArgumentException("服务器地址必须是有效的 http 或 https 地址。", nameof(baseAddress));
+            throw new ArgumentException("服务器地址必须使用 HTTPS；仅本机测试允许 HTTP。", nameof(baseAddress));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(operatorToken);
@@ -37,7 +46,8 @@ public sealed class AdminApiClient : IDisposable
         var normalized = uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
             ? uri
             : new Uri(uri.AbsoluteUri + '/', UriKind.Absolute);
-        var configuredClient = new HttpClient { BaseAddress = normalized };
+        var configuredClient = CreateClient();
+        configuredClient.BaseAddress = normalized;
         configuredClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);
         var previousClient = Interlocked.Exchange(ref _httpClient, configuredClient);
         previousClient.Dispose();
@@ -51,6 +61,33 @@ public sealed class AdminApiClient : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             throw new AdminApiException("SERVICE_NOT_READY", $"服务器就绪检查失败：HTTP {(int)response.StatusCode}。", response.StatusCode);
+        }
+
+        // The health endpoint is public. A missing exam on the operator-only route must carry
+        // the official error envelope; a proxy's generic 404 does not prove authentication.
+        using var authResponse = await _httpClient.GetAsync(
+            $"api/v1/versioning/exams/{Guid.NewGuid():N}", cancellationToken);
+        ApiEnvelope<JsonElement>? authEnvelope = null;
+        if (authResponse.StatusCode == HttpStatusCode.NotFound)
+        {
+            try
+            {
+                authEnvelope = await authResponse.Content.ReadFromJsonAsync<ApiEnvelope<JsonElement>>(
+                    _json, cancellationToken);
+            }
+            catch (JsonException)
+            {
+                // An intermediary may return an HTML/plain-text 404 page.
+            }
+        }
+
+        if (authResponse.StatusCode != HttpStatusCode.NotFound ||
+            authEnvelope?.Error?.Code != "EXAM_NOT_FOUND")
+        {
+            throw new AdminApiException(
+                "OPERATOR_AUTH_FAILED",
+                $"考务身份验证失败：HTTP {(int)authResponse.StatusCode}。",
+                authResponse.StatusCode);
         }
     }
 
@@ -78,6 +115,15 @@ public sealed class AdminApiClient : IDisposable
             cancellationToken);
     }
 
+    public async Task<ExamVersionSnapshot> GetExamAsync(
+        string examId,
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<ExamVersionSnapshot>(
+            HttpMethod.Get,
+            $"api/v1/versioning/exams/{Uri.EscapeDataString(examId)}",
+            null,
+            cancellationToken);
+
     public async Task<ActivationResult> ApproveActivationAsync(
         string activationRequestId,
         string? roomGroupId,
@@ -103,6 +149,16 @@ public sealed class AdminApiClient : IDisposable
         await SendAsync<IReadOnlyList<ParticipationResult>>(
             HttpMethod.Get,
             $"api/v1/participation/exams/{Uri.EscapeDataString(examId)}/actual",
+            null,
+            cancellationToken);
+
+    public async Task<IReadOnlyList<CollectionCompletedNotification>> ListCollectionEventsAsync(
+        string examId,
+        long afterRosterVersion,
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<IReadOnlyList<CollectionCompletedNotification>>(
+            HttpMethod.Get,
+            $"api/v1/submissions/collection/events?examId={Uri.EscapeDataString(examId)}&afterRosterVersion={afterRosterVersion}",
             null,
             cancellationToken);
 
@@ -154,7 +210,8 @@ public sealed class AdminApiClient : IDisposable
                 null,
                 cancellationToken);
         }
-        catch (AdminApiException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        catch (AdminApiException exception) when (
+            exception.StatusCode == HttpStatusCode.NotFound && exception.Code == "EXAM_NOT_FOUND")
         {
             return null;
         }
@@ -207,7 +264,15 @@ public sealed class AdminApiClient : IDisposable
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    public void Dispose() => _httpClient.Dispose();
+    private HttpClient CreateClient() => _messageHandler is null
+        ? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        : new HttpClient(_messageHandler, disposeHandler: false);
+
+    public void Dispose()
+    {
+        _httpClient.Dispose();
+        _messageHandler?.Dispose();
+    }
 }
 
 public sealed class AdminApiException(string code, string message, HttpStatusCode statusCode)

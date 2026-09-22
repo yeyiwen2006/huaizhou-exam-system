@@ -8,6 +8,7 @@ public sealed class ActivationRoomViewModel : BindableBase
 {
     private readonly AdminApiClient _api;
     private string _newGroupName = string.Empty;
+    private string _selectedGroupName = string.Empty;
     private RoomGroupDraft? _selectedGroup;
     private string _activationRequestId = string.Empty;
     private string _approvalRoomGroupId = string.Empty;
@@ -18,6 +19,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     {
         _api = api;
         AddGroupCommand = new RelayCommand(AddGroup);
+        RenameGroupCommand = new RelayCommand(RenameGroup, () => SelectedGroup is not null);
         RemoveGroupCommand = new RelayCommand(RemoveGroup, () => SelectedGroup is not null);
         ApproveCommand = new AsyncRelayCommand(ApproveAsync, onError: SetError);
         QueryDeviceCommand = new AsyncRelayCommand(QueryDeviceAsync, onError: SetError);
@@ -27,6 +29,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     public ObservableCollection<ActivationDeviceRow> Devices { get; } = [];
 
     public string NewGroupName { get => _newGroupName; set => SetProperty(ref _newGroupName, value); }
+    public string SelectedGroupName { get => _selectedGroupName; set => SetProperty(ref _selectedGroupName, value); }
     public RoomGroupDraft? SelectedGroup
     {
         get => _selectedGroup;
@@ -34,7 +37,9 @@ public sealed class ActivationRoomViewModel : BindableBase
         {
             if (SetProperty(ref _selectedGroup, value))
             {
+                SelectedGroupName = value?.Name ?? string.Empty;
                 RemoveGroupCommand.RaiseCanExecuteChanged();
+                RenameGroupCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -44,6 +49,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
 
     public RelayCommand AddGroupCommand { get; }
+    public RelayCommand RenameGroupCommand { get; }
     public RelayCommand RemoveGroupCommand { get; }
     public AsyncRelayCommand ApproveCommand { get; }
     public AsyncRelayCommand QueryDeviceCommand { get; }
@@ -84,6 +90,28 @@ public sealed class ActivationRoomViewModel : BindableBase
         Groups.Remove(SelectedGroup);
         SelectedGroup = null;
         Status = "空房间组已从本地草稿删除。";
+    }
+
+    private void RenameGroup()
+    {
+        if (SelectedGroup is null)
+        {
+            return;
+        }
+        var name = SelectedGroupName.Trim();
+        if (name.Length == 0 || Groups.Any(group => group != SelectedGroup &&
+                                                     StringComparer.Ordinal.Equals(group.Name, name)))
+        {
+            Status = "房间组名称不能为空，也不能与已有组重复。";
+            return;
+        }
+
+        var oldGroup = SelectedGroup;
+        var index = Groups.IndexOf(oldGroup);
+        var renamed = oldGroup with { Name = name };
+        Groups[index] = renamed;
+        SelectedGroup = renamed;
+        Status = "房间组已在本地草稿中改名；正式持久化仍等待 A 的房间组 API。";
     }
 
     private async Task ApproveAsync()

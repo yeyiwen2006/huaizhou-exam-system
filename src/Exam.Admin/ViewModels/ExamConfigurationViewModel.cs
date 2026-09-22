@@ -99,15 +99,16 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var subjectIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var subject in Subjects)
         {
-            if (string.IsNullOrWhiteSpace(subject.SubjectId) || !subjectIds.Add(subject.SubjectId.Trim()))
+            if (string.IsNullOrWhiteSpace(subject.SubjectId) || subject.SubjectId.Trim().Length > 128 ||
+                !subjectIds.Add(subject.SubjectId.Trim()))
             {
                 errors.Add($"科目“{subject.Name}”的标识为空或重复。");
             }
-            if (string.IsNullOrWhiteSpace(subject.Name))
+            if (string.IsNullOrWhiteSpace(subject.Name) || subject.Name.Length > 64)
             {
                 errors.Add($"科目 {subject.SubjectId} 缺少名称。");
             }
-            if (!ScoreConstant().IsMatch(subject.MaxScore.Trim()))
+            if (subject.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(subject.MaxScore.Trim()))
             {
                 errors.Add($"科目“{subject.Name}”满分必须是有限十进制常量。");
             }
@@ -129,7 +130,11 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
     private void AddSubject()
     {
-        var number = Subjects.Count + 1;
+        var number = 1;
+        while (Subjects.Any(subject => StringComparer.Ordinal.Equals(subject.SubjectId, $"subject-{number}")))
+        {
+            number++;
+        }
         var subject = new SubjectDraftViewModel($"subject-{number}", $"科目{number}", "100");
         Subjects.Add(subject);
         SelectedSubject = subject;
@@ -154,7 +159,13 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             return;
         }
-        var number = SelectedSubject.Groups.Count + 1;
+        var number = 1;
+        while (SelectedSubject.Groups.Any(group =>
+                   StringComparer.Ordinal.Equals(group.GroupId, $"{SelectedSubject.SubjectId}-group-{number}") ||
+                   group.Order == number))
+        {
+            number++;
+        }
         var group = new GroupDraftViewModel
         {
             GroupId = $"{SelectedSubject.SubjectId}-group-{number}",
@@ -214,6 +225,14 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             builder.AppendLine($"{subject.Name}（满分{subject.MaxScore}分）");
             foreach (var group in subject.Groups.OrderBy(group => group.Order))
             {
+                var pointsPerQuestion = group.Type switch
+                {
+                    "single" => group.Correct,
+                    "multiple" => group.AllCorrect,
+                    "indeterminate" when group.Correct == group.AllCorrect => group.Correct,
+                    "indeterminate" => $"{group.Correct}分或{group.AllCorrect}",
+                    _ => "题型无效"
+                };
                 var scoring = group.Type switch
                 {
                     "single" => $"选对得{group.Correct}分，不选得{group.OneBlank}分，选错得{group.OneWrong}分。",
@@ -221,7 +240,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                     "indeterminate" => $"若有一个正确答案，选对得{group.Correct}分，不选得{group.OneBlank}分，选错得{group.OneWrong}分；若有多个正确答案，全部选对得{group.AllCorrect}分，选对但不全得{group.PartialCorrect}分，不选得{group.MultipleBlank}分，选错得{group.MultipleWrong}分。",
                     _ => "题型无效，无法生成计分说明。"
                 };
-                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，共计{group.MaxScore}分。{scoring}");
+                var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
+                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore}分。{scoring}{abstain}");
             }
         }
         return builder.ToString().TrimEnd();
@@ -244,11 +264,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         ICollection<string> errors)
     {
         var label = $"科目“{subject.Name}”题组“{group.Name}”";
-        if (string.IsNullOrWhiteSpace(group.GroupId) || !groupIds.Add(group.GroupId.Trim()))
+        if (string.IsNullOrWhiteSpace(group.GroupId) || group.GroupId.Trim().Length > 128 ||
+            !groupIds.Add(group.GroupId.Trim()))
         {
             errors.Add($"{label}的标识为空或重复。");
         }
-        if (string.IsNullOrWhiteSpace(group.Name))
+        if (string.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 64)
         {
             errors.Add($"{label}缺少名称。");
         }
@@ -264,7 +285,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             errors.Add($"{label}题量必须为 1–9999。");
         }
-        if (!ScoreConstant().IsMatch(group.MaxScore.Trim()))
+        if (group.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(group.MaxScore.Trim()))
         {
             errors.Add($"{label}满分必须是有限十进制常量。");
         }
@@ -281,7 +302,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
     private static void ValidateExpressions(string label, ICollection<string> errors, params string[] expressions)
     {
-        if (expressions.Any(expression => string.IsNullOrWhiteSpace(expression) || !ScoreExpression().IsMatch(expression)))
+        if (expressions.Any(expression => string.IsNullOrWhiteSpace(expression) || expression.Length > 200 ||
+                                          !ScoreExpression().IsMatch(expression)))
         {
             errors.Add($"{label}计分表达式只能使用有限十进制、两个规定变量、四则运算和括号。");
         }
@@ -303,7 +325,9 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                !Regex.IsMatch(stem, "^(COM|LPT)[1-9]$", RegexOptions.CultureInvariant);
     }
 
-    private void SetError(Exception exception) => Status = $"保存失败：{exception.Message}";
+    private void SetError(Exception exception) => Status = exception is AdminApiException apiError
+        ? $"保存失败（{apiError.Code}）：{apiError.Message}"
+        : $"保存失败：{exception.Message}";
 
     [GeneratedRegex("^[+-]?[0-9]+(?:\\.[0-9]+)?$", RegexOptions.CultureInvariant)]
     private static partial Regex ScoreConstant();
