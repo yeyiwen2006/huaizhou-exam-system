@@ -292,6 +292,93 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="C05 导入与修订">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="考试版本与客户端更新" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <DockPanel Margin="0,0,0,10">
+                                    <Button DockPanel.Dock="Right" Content="查询正式版本" Style="{StaticResource Btn.Primary}" Command="{Binding ImportRevision.LoadVersionCommand}"/>
+                                    <TextBox Text="{Binding ImportRevision.ExamId, UpdateSourceTrigger=PropertyChanged}" ToolTip="考试 ID"/>
+                                </DockPanel>
+                                <TextBlock Text="{Binding ImportRevision.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
+                                <WrapPanel Margin="0,0,0,10">
+                                    <TextBlock Text="计划版本：" Style="{StaticResource BodyText}"/><TextBlock Text="{Binding ImportRevision.ScheduleVersion}" Style="{StaticResource BodyText}" Margin="0,0,24,0"/>
+                                    <TextBlock Text="题包版本：" Style="{StaticResource BodyText}"/><TextBlock Text="{Binding ImportRevision.PaperVersion}" Style="{StaticResource BodyText}" Margin="0,0,24,0"/>
+                                    <TextBlock Text="计分版本：" Style="{StaticResource BodyText}"/><TextBlock Text="{Binding ImportRevision.GradingVersion}" Style="{StaticResource BodyText}"/>
+                                </WrapPanel>
+                                <TextBlock Text="{Binding ImportRevision.PublicationState}" Style="{StaticResource BodyText}" Margin="0,0,0,10"/>
+                                <DataGrid ItemsSource="{Binding ImportRevision.ParticipantUpdates}" Height="240">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="参试者 ID" Binding="{Binding ParticipantId}" Width="*"/>
+                                        <DataGridTextColumn Header="业务状态" Binding="{Binding ExamState}" Width="110"/>
+                                        <DataGridTextColumn Header="目标题包版本" Binding="{Binding TargetPaperVersion}" Width="130"/>
+                                        <DataGridTextColumn Header="已安装版本" Binding="{Binding InstalledPaperVersion}" Width="110"/>
+                                        <DataGridTextColumn Header="更新状态" Binding="{Binding PaperUpdateState}" Width="130"/>
+                                        <DataGridTextColumn Header="最近错误" Binding="{Binding LastError}" Width="2*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="逐题导入与考试中修订" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="修改原因草稿" Style="{StaticResource FormLabel}"/>
+                                <TextBox Text="{Binding ImportRevision.ChangeReason, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
+                                <WrapPanel>
+                                    <Button Content="逐题导入：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
+                                    <Button Content="预览：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
+                                    <Button Content="发布修订：接口未提供" IsEnabled="False"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="C06 报告与服务">
+                <Border Style="{StaticResource Card}" Margin="14">
+                    <StackPanel>
+                        <TextBlock Text="五类正式报表" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                        <ComboBox ItemsSource="{Binding Reports.ReportTypes}" SelectedItem="{Binding Reports.SelectedReport}" Width="320" HorizontalAlignment="Left" Margin="0,0,0,10"/>
+                        <TextBlock Text="{Binding Reports.AvailabilityText}" Style="{StaticResource BodyText}" Margin="0,0,0,14"/>
+                        <TextBlock Text="报告未生成、考试未结束、答卷未收齐、重算中、报告可用是独立状态；正式状态须由服务器报告 API 返回。" Style="{StaticResource CaptionText}" Margin="0,0,0,14"/>
+                        <WrapPanel Margin="0,0,0,14">
+                            <Button Content="读取报告：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
+                            <Button Content="Excel 正式导出：接口未提供" IsEnabled="False"/>
+                        </WrapPanel>
+                        <TextBlock Text="服务管理" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                        <TextBlock Text="服务启动、停止及运行指标缺少 GUI/CLI 共用的正式操作入口。" Style="{StaticResource CaptionText}"/>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <TabItem Header="C07 主备管理">
+                <Border Style="{StaticResource Card}" Margin="14">
+                    <StackPanel>
+                        <TextBlock Text="主备与保护状态" Style="{StaticResource SectionTitle}" Margin="0,0,0,12"/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="主节点" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding HighAvailability.ActiveNode}" Style="{StaticResource BodyText}"/>
+                            <TextBlock Grid.Row="1" Text="备节点" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding HighAvailability.StandbyNode}" Style="{StaticResource BodyText}"/>
+                            <TextBlock Grid.Row="2" Text="复制状态" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding HighAvailability.ReplicationState}" Style="{StaticResource BodyText}"/>
+                            <TextBlock Grid.Row="3" Text="保护模式" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding HighAvailability.ProtectionMode}" Style="{StaticResource BodyText}"/>
+                            <TextBlock Grid.Row="4" Text="备份状态" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding HighAvailability.BackupState}" Style="{StaticResource BodyText}"/>
+                            <TextBlock Grid.Row="5" Text="隔离检查" Style="{StaticResource FormLabel}"/><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding HighAvailability.IsolationCheck}" Style="{StaticResource BodyText}"/>
+                        </Grid>
+                        <TextBlock Text="{Binding HighAvailability.OperationStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,14"/>
+                        <WrapPanel>
+                            <Button Content="隔离检查：接口未提供" IsEnabled="False" Margin="0,0,8,8"/>
+                            <Button Content="接管：接口未提供" IsEnabled="False" Margin="0,0,8,8"/>
+                            <Button Content="单机应急：接口未提供" IsEnabled="False" Margin="0,0,8,8"/>
+                            <Button Content="重建备机：接口未提供" IsEnabled="False" Margin="0,0,8,8"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
             <TabItem Header="C05–C07 依赖状态">
                 <Border Style="{StaticResource Card}" Margin="14">
                     <StackPanel>
