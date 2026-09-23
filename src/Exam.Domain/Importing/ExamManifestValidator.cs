@@ -39,10 +39,29 @@ public sealed class ExamManifestValidator
     public ImportValidationReport Validate(ExamManifest? manifest, AnswerKeyFile? answerKey = null)
     {
         var issues = new List<ImportIssue>();
-
         if (manifest is null)
         {
-            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, "/", "清单为空。"));
+            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, string.Empty, "清单为空。"));
+            return new ImportValidationReport(issues);
+        }
+
+        // GUI 直接构造 DTO 也必须经过同一套结构检查，不能绕过 null、必填字段或 schema 边界。
+        // 直接扫描内存中的 JsonElement，不读写文件，也不重新反序列化已有 DTO。
+        var options = ImportJson.Create();
+        try
+        {
+            ManifestShapeScanner.Scan(JsonSerializer.SerializeToElement(manifest, options), isManifest: true, issues);
+            if (answerKey is not null)
+            {
+                ManifestShapeScanner.Scan(JsonSerializer.SerializeToElement(answerKey, options), isManifest: false, issues);
+            }
+        }
+        catch (JsonException exception)
+        {
+            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, PointerFromJsonPath(exception.Path), exception.Message));
+        }
+        if (issues.Count > 0)
+        {
             return new ImportValidationReport(issues);
         }
 
@@ -66,9 +85,10 @@ public sealed class ExamManifestValidator
         ValidateExamName(manifest, issues);
         ValidateSubjects(manifest, issues);
         ValidateGroups(manifest, issues);
+        ValidateResourceRoots(manifest, issues);
         ValidateQuestions(manifest, issues);
-        var requiresAnswerArithmetic = ValidateFullScores(manifest, answerKey, issues);
-        ValidateAnswerKey(manifest, answerKey, issues);
+        var correctCounts = ValidateAnswerKey(manifest, answerKey, issues);
+        var requiresAnswerArithmetic = ValidateFullScores(manifest, correctCounts, issues);
         return requiresAnswerArithmetic;
     }
 
@@ -187,7 +207,7 @@ public sealed class ExamManifestValidator
                 ValidateScoringExpressions(group, pointer, issues);
             }
 
-            if (!string.IsNullOrWhiteSpace(group.MaxScore) && !ScoreConstantRules.IsValid(group.MaxScore))
+            if (group.MaxScore is not null && !ScoreConstantRules.IsValid(group.MaxScore))
             {
                 issues.Add(ImportIssue.Error(
                     ManifestRuleIds.GroupMaxScoreConstantRequired,
@@ -280,6 +300,28 @@ public sealed class ExamManifestValidator
         };
 
         issues.Add(ImportIssue.Error(rule, pointer, check.Message));
+    }
+
+    private static void ValidateResourceRoots(ExamManifest manifest, List<ImportIssue> issues)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < manifest.ResourceRoots.Count; i++)
+        {
+            var path = manifest.ResourceRoots[i];
+            if (!PackagePathRules.IsRelativeAndInside(path)
+                || path.Length > PackagePathRules.MaxLength
+                || !PackagePathRules.HasValidWindowsSegments(path))
+            {
+                issues.Add(ImportIssue.Error(ManifestRuleIds.ResourceRootInvalid, $"/resourceRoots/{i}",
+                    "共享资源目录必须是合法的包内 Windows 相对路径，不能使用绝对路径、父目录、设备名或数据流。"));
+                continue;
+            }
+            if (!seen.Add(PackagePathRules.Normalize(path)))
+            {
+                issues.Add(ImportIssue.Error(ManifestRuleIds.ResourceRootDuplicate, $"/resourceRoots/{i}",
+                    $"共享资源目录重复（按 Windows 路径规范化后比较）：{path}。"));
+            }
+        }
     }
 
     private static void ValidateQuestions(ExamManifest manifest, List<ImportIssue> issues)
@@ -403,7 +445,16 @@ public sealed class ExamManifestValidator
             return;
         }
 
-        var fileName = PackagePathRules.Normalize(question.Source).Split('/')[^1];
+        var normalized = PackagePathRules.Normalize(question.Source);
+        var lastSeparator = normalized.LastIndexOf('/');
+        if (lastSeparator >= 0 && !PackagePathRules.HasValidWindowsSegments(normalized[..lastSeparator]))
+        {
+            issues.Add(ImportIssue.Error(ManifestRuleIds.QuestionSourcePathEscapes, sourcePointer,
+                "题目源文件的目录包含 Windows 非法路径段、设备名或数据流。"));
+            return;
+        }
+
+        var fileName = normalized.Split('/')[^1];
         var nameReason = WindowsFileNameRules.Describe(fileName);
         if (nameReason is not null)
         {
@@ -448,7 +499,7 @@ public sealed class ExamManifestValidator
             return;
         }
 
-        if (metadata.AnchorScheme is { Length: > 0 } scheme && !string.Equals(scheme, AnchorScheme, StringComparison.Ordinal))
+        if (metadata.AnchorScheme is { } scheme && !string.Equals(scheme, AnchorScheme, StringComparison.Ordinal))
         {
             issues.Add(ImportIssue.Error(
                 ManifestRuleIds.QuestionDisplayAnchorScheme,
@@ -468,16 +519,9 @@ public sealed class ExamManifestValidator
     }
 
     /// <summary>满分求和。返回值表示是否有满分只能拿到答案后才能核对。</summary>
-    private static bool ValidateFullScores(ExamManifest manifest, AnswerKeyFile? answerKey, List<ImportIssue> issues)
+    private static bool ValidateFullScores(
+        ExamManifest manifest, IReadOnlyDictionary<string, int> correctCounts, List<ImportIssue> issues)
     {
-        var correctCounts = answerKey?.Answers
-            .Where(answer => !string.IsNullOrWhiteSpace(answer.QuestionId))
-            .GroupBy(answer => answer.QuestionId, StringComparer.Ordinal)
-            .ToDictionary(
-                grouping => grouping.Key,
-                grouping => grouping.First().CorrectOptionIds?.Count ?? 0,
-                StringComparer.Ordinal);
-
         var groupTotals = new Dictionary<string, (ExactRational Total, bool Complete)>(StringComparer.Ordinal);
 
         for (var index = 0; index < manifest.Groups.Count; index++)
@@ -488,12 +532,11 @@ public sealed class ExamManifestValidator
 
             foreach (var question in manifest.Questions.Where(question => question.GroupId == group.GroupId))
             {
-                int? correctCount = correctCounts is not null
-                                    && correctCounts.TryGetValue(question.QuestionId, out var count)
+                int? correctCount = correctCounts.TryGetValue(question.QuestionId, out var count)
                     ? count
                     : null;
 
-                if (correctCount is not { } count2 || !TryQuestionFullScore(group, count2, out var fullScore))
+                if (correctCount is not { } count2 || !TryQuestionFullScore(group, index, question.QuestionNo, count2, issues, out var fullScore))
                 {
                     complete = false;
                     continue;
@@ -563,7 +606,9 @@ public sealed class ExamManifestValidator
         return requiresAnswerArithmetic;
     }
 
-    private static bool TryQuestionFullScore(ManifestGroup group, int correctOptionCount, out ExactRational value)
+    private static bool TryQuestionFullScore(
+        ManifestGroup group, int groupIndex, int questionNo, int correctOptionCount,
+        List<ImportIssue> issues, out ExactRational value)
     {
         value = ExactRational.Zero;
         if (correctOptionCount < 1 || group.Scoring is null)
@@ -571,113 +616,138 @@ public sealed class ExamManifestValidator
             return false;
         }
 
-        // 一个正确选项走 oneCorrect.correct，多个正确选项走 multipleCorrect.allCorrect；
-        // 该题满分即这两条分支的得分，也是需求「每题满分取选对或全部选对的得分」的落点。
         var expression = correctOptionCount == 1
             ? group.Scoring.OneCorrect?.Correct
             : group.Scoring.MultipleCorrect?.AllCorrect;
-
+        var branch = correctOptionCount == 1 ? "oneCorrect/correct" : "multipleCorrect/allCorrect";
+        var pointer = $"/groups/{groupIndex}/scoring/{branch}";
         var check = ScoreExpressionParser.Check(expression);
         if (!check.IsValid || check.Root is null)
         {
+            // 静态表达式错误已由 ValidateScoringExpressions 报告，不重复诊断。
             return false;
         }
 
         try
         {
-            // 全部选对时选择的正确选项数等于正确选项总数。
             value = ScoreExpressionParser.Evaluate(check.Root, correctOptionCount, correctOptionCount);
+            if (!value.IsFiniteDecimal)
+            {
+                issues.Add(ImportIssue.Error(ManifestRuleIds.ScoreExpressionNonTerminatingDecimal, pointer,
+                    $"第 {questionNo} 题代入参考答案后的满分为 {value}，不是有限小数；不能靠题间求和抵消。"));
+                return false;
+            }
             return true;
         }
         catch (DivideByZeroException)
         {
+            issues.Add(ImportIssue.Error(ManifestRuleIds.ScoreExpressionDivisionByZero, pointer,
+                $"第 {questionNo} 题代入参考答案后满分表达式发生除零。"));
             return false;
         }
     }
 
-    private static void ValidateAnswerKey(ExamManifest manifest, AnswerKeyFile? answerKey, List<ImportIssue> issues)
+    /// <summary>只把属于本考试、匹配题目且无歧义的合法答案用于满分计算。</summary>
+    private static IReadOnlyDictionary<string, int> ValidateAnswerKey(
+        ExamManifest manifest, AnswerKeyFile? answerKey, List<ImportIssue> issues)
     {
+        var correctCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         if (answerKey is null)
         {
-            return;
+            return correctCounts;
         }
 
+        var headerValid = true;
         if (answerKey.SchemaVersion != 1)
         {
-            issues.Add(ImportIssue.Error(
-                ManifestRuleIds.AnswerKeySchemaVersion,
-                "/answerKey/schemaVersion",
+            issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeySchemaVersion, "/schemaVersion",
                 $"不支持的答案 schemaVersion：{answerKey.SchemaVersion}；当前只支持 1。"));
+            headerValid = false;
+        }
+        if (string.IsNullOrWhiteSpace(answerKey.ExamId))
+        {
+            Required(false, "/examId", "examId", issues);
+            headerValid = false;
+        }
+        else if (!string.Equals(answerKey.ExamId, manifest.ExamId, StringComparison.Ordinal))
+        {
+            issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyExamIdMismatch, "/examId",
+                $"答案所属考试 {answerKey.ExamId} 与清单考试 {manifest.ExamId} 不一致。"));
+            headerValid = false;
         }
 
         var questionsById = manifest.Questions
             .Where(question => !string.IsNullOrWhiteSpace(question.QuestionId))
             .GroupBy(question => question.QuestionId, StringComparer.Ordinal)
             .ToDictionary(grouping => grouping.Key, grouping => grouping.First(), StringComparer.Ordinal);
-
         var groupsById = manifest.Groups
             .Where(group => !string.IsNullOrWhiteSpace(group.GroupId))
             .GroupBy(group => group.GroupId, StringComparer.Ordinal)
             .ToDictionary(grouping => grouping.Key, grouping => grouping.First(), StringComparer.Ordinal);
+        var duplicateIds = answerKey.Answers.GroupBy(answer => answer.QuestionId, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 0; i < answerKey.Answers.Count; i++)
         {
             var answer = answerKey.Answers[i];
             var pointer = $"/answers/{i}";
-
+            var previousIssueCount = issues.Count;
+            if (!seen.Add(answer.QuestionId))
+            {
+                issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyDuplicateQuestion, $"{pointer}/questionId",
+                    $"参考答案重复声明题目 {answer.QuestionId}；即使内容相同也不能静默取第一条。"));
+            }
             if (string.IsNullOrWhiteSpace(answer.QuestionId)
                 || !questionsById.TryGetValue(answer.QuestionId, out var question))
             {
-                issues.Add(ImportIssue.Error(
-                    ManifestRuleIds.AnswerKeyUnknownQuestion,
-                    $"{pointer}/questionId",
+                issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyUnknownQuestion, $"{pointer}/questionId",
                     $"答案引用了清单中不存在的题目：{answer.QuestionId}。"));
                 continue;
             }
-
             if (answer.QuestionNo != question.QuestionNo)
             {
-                issues.Add(ImportIssue.Error(
-                    ManifestRuleIds.AnswerKeyQuestionNoMismatch,
-                    $"{pointer}/questionNo",
+                issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyQuestionNoMismatch, $"{pointer}/questionNo",
                     $"答案题号 {answer.QuestionNo} 与清单题号 {question.QuestionNo} 不一致。"));
             }
 
-            var correct = answer.CorrectOptionIds ?? [];
-            var declared = question.Options ?? [];
-            var notDeclared = correct
-                .Where(option => !declared.Contains(option, StringComparer.Ordinal))
-                .ToList();
-
+            var correct = answer.CorrectOptionIds!;
+            var declared = question.Options!;
+            var notDeclared = correct.Where(option => !declared.Contains(option, StringComparer.Ordinal)).ToList();
             if (notDeclared.Count > 0)
             {
-                issues.Add(ImportIssue.Error(
-                    ManifestRuleIds.AnswerKeyOptionNotDeclared,
-                    $"{pointer}/correctOptionIds",
+                issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyOptionNotDeclared, $"{pointer}/correctOptionIds",
                     $"答案的正确选项不在该题选项之内：{string.Join('、', notDeclared)}。"));
                 continue;
             }
 
-            if (groupsById.TryGetValue(question.GroupId, out var group) && ParseType(group.Type) is { } type)
+            if (!groupsById.TryGetValue(question.GroupId, out var group) || ParseType(group.Type) is not { } type)
             {
-                var valid = type switch
+                continue;
+            }
+            var valid = type switch
+            {
+                QuestionTypeKind.Single => correct.Count == 1,
+                QuestionTypeKind.Multiple => correct.Count >= 2,
+                _ => correct.Count >= 1
+            };
+            if (!valid)
+            {
+                var requirement = type switch
                 {
-                    QuestionTypeKind.Single => correct.Count == 1,
-                    QuestionTypeKind.Multiple => correct.Count >= 2,
-                    _ => correct.Count >= 1
+                    QuestionTypeKind.Single => "恰好一个",
+                    QuestionTypeKind.Multiple => "至少两个",
+                    _ => "至少一个"
                 };
-
-                if (!valid)
-                {
-                    issues.Add(ImportIssue.Error(
-                        ManifestRuleIds.AnswerKeyCorrectCount,
-                        $"{pointer}/correctOptionIds",
-                        type == QuestionTypeKind.Single
-                            ? $"单项选择题必须恰好一个正确选项，当前为 {correct.Count} 个。"
-                            : $"该题组题型要求至少两个正确选项，当前为 {correct.Count} 个。"));
-                }
+                issues.Add(ImportIssue.Error(ManifestRuleIds.AnswerKeyCorrectCount, $"{pointer}/correctOptionIds",
+                    $"该题组题型要求{requirement}正确选项，当前为 {correct.Count} 个。"));
+            }
+            if (headerValid && issues.Count == previousIssueCount && !duplicateIds.Contains(answer.QuestionId))
+            {
+                correctCounts.Add(answer.QuestionId, correct.Count);
             }
         }
+        return correctCounts;
     }
 
     private static QuestionTypeKind? ParseType(string? type) => type switch
@@ -702,7 +772,7 @@ public sealed class ExamManifestValidator
         manifest = null!;
         if (string.IsNullOrWhiteSpace(json))
         {
-            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, "/", "清单内容为空。"));
+            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, string.Empty, "清单内容为空。"));
             return false;
         }
 
@@ -732,7 +802,7 @@ public sealed class ExamManifestValidator
     private static bool TryReadAnswerKey(string? json, List<ImportIssue> issues, out AnswerKeyFile? answerKey)
     {
         answerKey = null;
-        if (string.IsNullOrWhiteSpace(json))
+        if (json is null)
         {
             return true;
         }
@@ -771,7 +841,7 @@ public sealed class ExamManifestValidator
 
         if (value is null)
         {
-            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, "/", $"{label}内容为空。"));
+            issues.Add(ImportIssue.Error(ManifestRuleIds.InvalidJson, string.Empty, $"{label}内容为空。"));
             return false;
         }
 
@@ -783,12 +853,12 @@ public sealed class ExamManifestValidator
     {
         if (string.IsNullOrEmpty(path))
         {
-            return "/";
+            return string.Empty;
         }
 
         var pointer = path.Replace("$", string.Empty, StringComparison.Ordinal);
         pointer = pointer.Replace("[", "/", StringComparison.Ordinal).Replace("]", string.Empty, StringComparison.Ordinal);
         pointer = pointer.Replace('.', '/');
-        return pointer.Length == 0 ? "/" : pointer;
+        return pointer;
     }
 }

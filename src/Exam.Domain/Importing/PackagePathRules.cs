@@ -37,6 +37,14 @@ public static class PackagePathRules
         return true;
     }
 
+    /// <summary>
+    /// 按 Windows 规则检查每段目录或文件名；与只检查相对路径形状的 IsRelativeAndInside 分开。
+    /// 这不是文件系统边界证明；符号链接、联接点与实际依赖的解析仍须由 D02 在访问时检查。
+    /// </summary>
+    internal static bool HasValidWindowsSegments(string path) =>
+        path.Split(['/', '\\']).All(segment =>
+            segment.Length == 0 || segment == "." || WindowsFileNameRules.IsValidFileName(segment));
+
     /// <summary>统一分隔符为 /，合并重复分隔符并去掉开头的 ./；不做越界判断。</summary>
     public static string Normalize(string path)
     {

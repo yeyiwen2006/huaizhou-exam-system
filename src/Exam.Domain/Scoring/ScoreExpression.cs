@@ -299,7 +299,8 @@ public static class ScoreExpressionParser
                 }
 
                 Position++;
-                var operand = ParseFactor(out error);
+                // factor = ["-"] primary：一元负号不能连续作用，嵌套须显式加括号。
+                var operand = ParsePrimary(out error);
                 _depth--;
                 return operand is null ? null : new ScoreNegation(operand);
             }

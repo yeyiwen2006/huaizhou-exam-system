@@ -49,6 +49,8 @@ public sealed class NamingRulesTests
     [Theory]
     [InlineData("questions/演示考试_1.tex")]
     [InlineData("演示考试_1.tex")]
+    [InlineData("演示考试_1.TEX")]
+    [InlineData("questions/演示考试_1.TeX")]
     [InlineData("questions/演示考试.tex")]
     [InlineData("questions/演示考试_1.pdf")]
     [InlineData("questions/演示考试_x.tex")]

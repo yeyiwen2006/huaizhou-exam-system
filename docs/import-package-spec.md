@@ -19,7 +19,9 @@
 ```
 
 - `resourceRoots` 列出需要收集的共享资源目录（如 `figures`、`styles`）。**列出的目录必须存在于包内**；
-  是否存在由 D02 的依赖检查定位报错，D01 只校验路径形式。
+  是否存在由 D02 的依赖检查定位报错；D01 检查路径形式、每段 Windows 名称与规范化后的重复路径。
+  `styles`、`./styles/`、`STYLES` 视为重复；路径不得包含设备名、数据流或结尾空格/句点等非法目录段。
+  符号链接与联接点是否越界必须由 D02 在实际解析依赖时另行检查，静态路径检查不能代替该检查。
 - 包来源可以是目录或 ZIP；两者的校验结论必须一致。路径一律相对包根目录，保留子目录结构。
   ZIP 中越出包根的条目（`..`、绝对路径、盘符）一律拒绝。
 - 导入按**数值题号**与清单顺序进行，不使用字典序（避免 1、10、2 的次序）。
@@ -27,12 +29,13 @@
 
 ## 2. 文件命名
 
-- 每题为**一个文件**，命名为 `<考试名称>_<题号>.tex`。
+- 每题为**一个文件**，命名为 `<考试名称>_<题号>.tex`；扩展名按 Windows 习惯不区分大小写，schema 与解析器一致。
 - **以最后一个下划线之后的十进制数字识别题号**；该数字必须与清单中该题的 `questionNo` 一致。
   例：`考试_名称_10.tex` 的题号为 10。
 - 文件名前缀必须等于清单的 `examName`。
 - 创建考试时必须检查 `examName` 能否用作 Windows 文件名：禁止 `< > : " / \ | ? *` 与控制字符，
   禁止保留设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1`…`COM9`、`LPT1`…`LPT9`），禁止结尾空格或句点。
+  同样拒绝 Windows 保留的 `COM¹`…`COM³`、`LPT¹`…`LPT³`；`.名称` 本身不是设备名，不应误拒。
   该检查**不使用 `Path.GetInvalidFileNameChars()`**（各平台语义不同），由项目自行实现。
 
 ## 3. 清单字段
@@ -52,6 +55,23 @@
 - `options` 只登记**选项标识**，顺序即原卷显示顺序；选项文本与版式保留在原版 PDF 中，客户端不重新排版。
 - 题组 `name` 与 `maxScore` 是 D01 相对 A01 初版新增的字段：`requirements.md` 要求题组有「独立标识、
   **名称**、顺序、题量及计分规则」，且「题组与科目满分逐题求和」。
+
+### 独立答案与输入边界
+
+`answer-key.examId` 必须与清单一致；同一 `questionId` 只能有一条答案，`correctOptionIds` 也不得重复。
+无论重复条目的内容相同还是冲突，都拒绝导入，不按首条或末条静默覆盖。未通过考试、题号、选项、题型
+校验的答案不参与满分计算，避免污染结果或产生误导的汇总差异。
+
+JSON 入口拒绝缺失必填字段、显式 `null`、null 数组成员、重复属性、错误类型与超出 schema 上下界的数据。
+不把带引号的数字隐式转为整数；数值为整数的 `1.0`、`1e0` 按 JSON Schema 语义接受，
+不经过浮点或 decimal 舍入。此规则仅用于整数字段，计分表达式的文法不变。
+GUI 直接构造 DTO 时也经过同一结构检查；DTO 中可选字段的 `null`
+代表“未声明”，序列化时省略，而必填字段缺失仍报错。显示元数据不能是空对象，页数、选项与显示文本
+的数量、长度和唯一性都按 schema 检查。
+
+导入期允许不传答案或只提供部分答案，此时 `RequiresAnswerKeyArithmetic` 表示尚未完成满分核对。
+`ValidateJson` 的答案参数只有 `null` 表示未提供，传入空字符串或纯空白不是合法答案文件。
+调用方必须先检查 `IsValid`，不能把“未完成核对”当作可发布证明。
 
 ## 4. 计分规则
 
@@ -84,8 +104,10 @@ variable   = "{" ( "正确选项总数" | "选择的正确选项数" ) "}" ;
   `{选择的正确选项数}` 为考生所选选项中属于正确答案的个数。ASCII 写法一律视为非法变量。
 - 静态可判的拒绝：非法字符、未知变量、括号不配、**常量分母为零**、**整条表达式为常量且约分后分母含
   2 与 5 以外质因子**（例如 `1/3`）。
-- 依赖作答的表达式（含变量的和）不在导入期判定，改由 D04 在**发布前枚举每题所有合法作答情形**校验
-  最终逐题分为有限小数（`requirements.md`：「发布前校验所有合法作答情况，最终逐题分必须为有限小数」）。
+- 已持有合法参考答案时，D01 将正确选项数代入满分分支，逐题拒绝除零与非有限小数；
+  例如三题各为 `1/3`，不能因合计为 `1` 就放行。中间分数约分后整体有限（如 `(1/3)*3`）仍允许。
+- 其他依赖作答的情形由 D04 在**发布前枚举每题所有合法作答情形**校验最终逐题分为有限小数。
+  D01 的满分核对不代替这一发布门。
 - 科目与题组满分不是表达式，而是无变量的有限十进制常量。
 
 ## 5. 显示元数据与选项标记
@@ -112,23 +134,27 @@ variable   = "{" ( "正确选项总数" | "选择的正确选项数" ) "}" ;
 
 | 类别 | 落点 |
 | --- | --- |
-| 字段存在性、类型、枚举、`additionalProperties`、路径正则、选项数量与唯一性、三题型分支、满分为常量 | JSON Schema |
-| 引用完整性、数量一致、题号与题目标识唯一、题目科目与题组一致、表达式文法与变量、满分求和、文件名规则 | 校验器（`Exam.Domain.Importing.ExamManifestValidator`） |
+| 字段存在性、类型、长度与数值边界、`additionalProperties`、数组数量与唯一性 | JSON Schema 声明，`ManifestShapeScanner` 执行 |
+| 引用完整性、题型与分支、数量一致、标识唯一、答案关联、表达式文法与变量、满分求和、文件名与路径规则 | 校验器（`Exam.Domain.Importing.ExamManifestValidator`） |
 | 源文件是否存在、字体/宏包/图片依赖、编译 | D02 |
 
 仓库不引入 JSON Schema 校验库：schema 作为对外契约、校验器为实现权威。两份定义由零依赖的测试守住：
 `tests/Unit/Exam.UnitTests/Importing/SchemaConsistencyTests.cs` 核对单独发布的 schema 与清单内嵌定义逐项一致，
-`ContractSchemaAlignmentTests.cs` 核对 schema 与 C# 契约（字段名、枚举、变量白名单）不漂移。
+`ContractSchemaAlignmentTests.cs` 核对 schema 与 C# 契约（字段名、枚举、变量白名单）不漂移；
+`ImportReviewRegressionTests.cs` 读取公开 schema，自动生成缺字段、null、错误类型、上下界与唯一性变异，
+并覆盖 DTO 入口、跨文件关联、路径与逐题满分缺陷。
 因此**每个样例都必须通过校验器**，样例集合本身就是一次对 schema 语义的检验。
 
 ### 规则标识与定位
 
 校验结果用**稳定规则标识 + RFC 6901 JSON Pointer** 定位，传输层仍只使用既有错误码 `IMPORT_INVALID`，
 不新增错误码。清单内问题指向清单指针（如 `/groups/0/scoring/oneCorrect/correct`），
-包内文件问题指向 `file:<包内相对路径>`。规则标识见错误样包与 `expected-errors.json`。
+答案问题相对答案 JSON 根定位（如 `/answers/0/questionId`，版本错误为 `/schemaVersion`，不带 `/answerKey` 前缀）。
+JSON 根指针为空字符串，字段名中的 `~`、`/` 分别转义为 `~0`、`~1`；不是用 `/` 代表根。
+未来包内文件问题使用 `file:<包内相对路径>`。规则标识见 `ManifestRuleIds` 与错误样包。
 
-其中 26 条与 `samples/synthetic/errors/expected-errors.json` 一一对应，逐条有错误样包覆盖；
-另有 6 条为防御性规则，覆盖 schema 已声明、但错误样包未单独覆盖的约束：
+`samples/synthetic/errors/expected-errors.json` 中 26 个错误样包的既有规则与位置保持兼容。
+此外的防御性规则覆盖错误样包未单独涵盖的约束，例如：
 
 | 规则标识 | 说明 |
 | --- | --- |
@@ -138,6 +164,12 @@ variable   = "{" ( "正确选项总数" | "选择的正确选项数" ) "}" ;
 | `questions.options.invalid` | 选项标识不能为空或只由空白字符组成 |
 | `questions.displayMetadata.anchorScheme` | 坐标规范只能是 `pageTopLeftNormalizedV1` |
 | `answerKey.schema.version` | 独立答案的 schemaVersion 必须为 1 |
+| `manifest.schema.constraint` | schema 声明的字符串、数组、整数边界及非空对象约束 |
+| `manifest.duplicateField` | 同一 JSON 对象中重复属性，包含不同转义写法的同名字段 |
+| `manifest.resourceRoots.invalid` / `manifest.resourceRoots.duplicate` | 非法或规范化后重复的资源目录 |
+| `rule.answerKey.examIdMismatch` | 独立答案不属于本清单的考试 |
+| `rule.answerKey.duplicateQuestion` | 参考答案重复声明同一题目 |
+| `rule.answerKey.optionsDuplicate` | 参考答案的正确选项集合包含重复元素 |
 
 另有两类在清单整体不可用时才触发的检查，不单独配样例：必填字段缺失（`manifest.required.missing`）、
 无法解析为 JSON 或字段类型不符（`manifest.invalidJson`）。
@@ -174,6 +206,6 @@ samples/synthetic/
    涉及 C01 表单设计，需 A 确认并同步 C。
 5. **答案完整性不在导入期强制**：导入时允许答案后补，因此本任务不要求每题都有答案；
    「每个可评分题目都有有效答案」应由 D04 的发布门保证。
-6. **同一题目出现两条答案时本任务不报错**：按答卷与规则版本去重属 D05 的范围。
-7. **校验是静态的**：源文件是否存在、依赖是否齐全、能否编译，全部属 D02；含变量的满分求和
-   在缺答案时只置 `RequiresAnswerKeyArithmetic`，由 D04/D05 完成核对。
+6. **答案条目重复已在 D01 拒绝**：这是参考答案文件自身的有效性约束；D05 的答卷/规则版本去重是另一件事。
+7. **校验是静态的**：源文件是否存在、依赖是否齐全、能否编译，全部属 D02。缺答案时满分核对
+   仍未完成；即使持有答案且满分核对通过，D04 的全部合法作答情形与完整性发布门也不能省略。

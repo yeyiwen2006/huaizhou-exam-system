@@ -14,6 +14,7 @@ public static class WindowsFileNameRules
     private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CON", "PRN", "AUX", "NUL",
+        "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
     };
@@ -65,11 +66,7 @@ public static class WindowsFileNameRules
 
         stem = stem.TrimEnd(' ', '.');
 
-        if (stem.Length == 0)
-        {
-            return "文件名不能只由句点组成。";
-        }
-
+        // .name 是合法名称；纯句点名称已由上面的结尾句点规则拒绝。
         if (ReservedNames.Contains(stem))
         {
             return $"“{stem}”是 Windows 保留设备名，不能用作文件名。";
