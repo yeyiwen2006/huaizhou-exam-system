@@ -74,8 +74,10 @@
                                     <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
                                     <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                                     <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" Command="{Binding Exam.RefreshInstructionsCommand}"/>
+                                    <Button Content="加载服务器计划" Style="{StaticResource ActionButton}" Command="{Binding Exam.LoadScheduleCommand}"/>
                                     <Button Content="保存计划到服务器" Style="{StaticResource Btn.Primary}" Margin="0,0,8,8" Command="{Binding Exam.SaveScheduleCommand}"/>
                                 </WrapPanel>
+                                <TextBlock Text="{Binding Exam.ScheduleVersionText}" Style="{StaticResource CaptionText}"/>
                                 <TextBlock Text="{Binding Exam.Status}" Style="{StaticResource CaptionText}"/>
                             </StackPanel>
                         </Border>
@@ -98,8 +100,14 @@
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="groupId" Binding="{Binding GroupId, UpdateSourceTrigger=PropertyChanged}" Width="160"/>
                                         <DataGridTextColumn Header="题组名" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
-                                        <DataGridComboBoxColumn Header="type" SelectedItemBinding="{Binding Type, UpdateSourceTrigger=PropertyChanged}"
-                                                                ItemsSource="{Binding DataContext.Exam.QuestionTypes, RelativeSource={RelativeSource AncestorType=Window}}" Width="130"/>
+                                        <DataGridTemplateColumn Header="type" Width="130">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox SelectedItem="{Binding Type, UpdateSourceTrigger=PropertyChanged}"
+                                                              ItemsSource="{Binding DataContext.Exam.QuestionTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                         <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                         <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
@@ -121,7 +129,7 @@
                                 <StackPanel><TextBlock Text="校验结果" Style="{StaticResource SectionTitle}"/><TextBlock Text="{Binding Exam.ValidationSummary}" Style="{StaticResource BodyText}" Margin="0,8,0,0"/></StackPanel>
                             </Border>
                             <Border Grid.Column="1" Style="{StaticResource Card}" Margin="6,0,0,0">
-                                <StackPanel><TextBlock Text="考生计分说明" Style="{StaticResource SectionTitle}"/><TextBox Text="{Binding Exam.InstructionsText}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="150" Margin="0,8,0,0" VerticalScrollBarVisibility="Auto"/></StackPanel>
+                                <StackPanel><TextBlock Text="考生计分说明" Style="{StaticResource SectionTitle}"/><TextBox Text="{Binding Exam.InstructionsText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="150" Margin="0,8,0,0" VerticalScrollBarVisibility="Auto"/></StackPanel>
                             </Border>
                         </Grid>
                     </StackPanel>
@@ -163,7 +171,7 @@
                         </Border>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="当前本地名册" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="本进程名册草稿（关闭即丢失，未写入服务器）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
                                 <DataGrid ItemsSource="{Binding Roster.Entries}" Height="220">
                                     <DataGrid.Columns><DataGridTextColumn Header="姓名" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="*"/><DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="*"/></DataGrid.Columns>
                                 </DataGrid>
@@ -178,11 +186,15 @@
                     <StackPanel Margin="14">
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                             <StackPanel>
-                                <TextBlock Text="房间组本地草稿" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="房间组内存草稿（非服务器分组）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
                                 <DockPanel>
                                     <Button DockPanel.Dock="Right" Content="新增" Style="{StaticResource Btn.Primary}" Command="{Binding Activation.AddGroupCommand}"/>
                                     <Button DockPanel.Dock="Right" Content="删除空组" Style="{StaticResource Btn.Danger}" Margin="8,0" Command="{Binding Activation.RemoveGroupCommand}"/>
                                     <TextBox Text="{Binding Activation.NewGroupName, UpdateSourceTrigger=PropertyChanged}"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,8,0,0">
+                                    <Button DockPanel.Dock="Right" Content="重命名草稿" Style="{StaticResource Btn.Secondary}" Command="{Binding Activation.RenameGroupCommand}"/>
+                                    <TextBox Text="{Binding Activation.SelectedGroupName, UpdateSourceTrigger=PropertyChanged}" ToolTip="选中草稿的新名称"/>
                                 </DockPanel>
                                 <DataGrid ItemsSource="{Binding Activation.Groups}" SelectedItem="{Binding Activation.SelectedGroup}" Height="145" Margin="0,10,0,0">
                                     <DataGrid.Columns><DataGridTextColumn Header="房间组 ID" Binding="{Binding RoomGroupId}" Width="2*"/><DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/></DataGrid.Columns>
@@ -227,12 +239,28 @@
                                     <TextBox Width="220" Text="{Binding Monitoring.ExamId, UpdateSourceTrigger=PropertyChanged}" ToolTip="考试 ID"/>
                                 </DockPanel>
                                 <TextBlock Text="{Binding Monitoring.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
-                                <DataGrid ItemsSource="{Binding Monitoring.FilteredRows}" Height="275">
+                                <DataGrid ItemsSource="{Binding Monitoring.FilteredRows}" SelectedItem="{Binding Monitoring.SelectedRow}" Height="275">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="参与 ID" Binding="{Binding ParticipationId}" Width="*"/><DataGridTextColumn Header="考生 ID" Binding="{Binding CandidateId}" Width="*"/>
                                         <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="100"/><DataGridTextColumn Header="授权设备" Binding="{Binding AuthorizedDeviceId}" Width="*"/>
                                         <DataGridTextColumn Header="entryVer" Binding="{Binding EntryVersion}" Width="85"/><DataGridTextColumn Header="authVer" Binding="{Binding AuthorizationVersion}" Width="85"/>
                                         <DataGridTextColumn Header="采集" Binding="{Binding CollectionState}" Width="90"/><DataGridTextColumn Header="连接" Binding="{Binding ConnectionState}" Width="110"/><DataGridTextColumn Header="当前题号" Binding="{Binding CurrentQuestion}" Width="110"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="服务器收齐事件（手动查询）" Style="{StaticResource SectionTitle}"/>
+                                <Button Content="查询收齐事件" Style="{StaticResource ActionButton}" Command="{Binding Monitoring.RefreshCollectionEventsCommand}" HorizontalAlignment="Left"/>
+                                <TextBlock Text="{Binding Monitoring.CollectionStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,8"/>
+                                <DataGrid ItemsSource="{Binding Monitoring.CollectionEvents}" Height="145">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="事件 ID" Binding="{Binding EventId}" Width="*"/>
+                                        <DataGridTextColumn Header="考试" Binding="{Binding ExamId}" Width="*"/>
+                                        <DataGridTextColumn Header="名单版本" Binding="{Binding RosterVersion}" Width="100"/>
+                                        <DataGridTextColumn Header="参与人数" Binding="{Binding ParticipantCount}" Width="100"/>
+                                        <DataGridTextColumn Header="收齐时间" Binding="{Binding CompletedAt}" Width="2*"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </StackPanel>

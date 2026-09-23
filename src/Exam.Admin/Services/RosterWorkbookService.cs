@@ -1,3 +1,5 @@
+using System.IO;
+using System.IO.Compression;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 
@@ -5,6 +7,9 @@ namespace Exam.Admin.Services;
 
 public sealed partial class RosterWorkbookService
 {
+    private const long MaxWorkbookBytes = 10 * 1024 * 1024;
+    private const long MaxExpandedBytes = 50 * 1024 * 1024;
+    private const int MaxRows = 10_000;
     public const string NameHeader = "姓名";
     public const string ClassHeader = "班级";
     public const string AdmissionHeader = "准考证号";
@@ -25,17 +30,46 @@ public sealed partial class RosterWorkbookService
 
     public RosterPreview ReadPreview(string path, IReadOnlyCollection<RosterEntryDraft> existing)
     {
-        using var workbook = new XLWorkbook(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        ValidateWorkbookSize(stream);
+        stream.Position = 0;
+        using var workbook = new XLWorkbook(stream);
+        if (workbook.Worksheets.Count != 1)
+            throw new RosterImportException("名册必须只有一个工作表，不能静默忽略其他工作表。");
         var sheet = workbook.Worksheets.FirstOrDefault()
                     ?? throw new RosterImportException("工作簿中没有工作表。");
 
         ValidateHeaders(sheet);
         var rows = new List<RosterPreviewRow>();
         var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
+        if (lastRow - 1 > MaxRows)
+        {
+            throw new RosterImportException($"名册超过 {MaxRows} 行，请拆分文件后分别预览。 ");
+        }
         var admissionIndex = existing.ToDictionary(row => row.AdmissionNo, StringComparer.Ordinal);
+        var earlierRows = new Dictionary<string, RosterPreviewRow>(StringComparer.Ordinal);
 
         for (var rowNumber = 2; rowNumber <= lastRow; rowNumber++)
         {
+            if (sheet.Row(rowNumber).CellsUsed().Any(cell => cell.Address.ColumnNumber > 3))
+            {
+                rows.Add(new RosterPreviewRow(rowNumber, "", "", "", RosterPreviewState.Error,
+                    "只允许姓名、班级、准考证号三列。"));
+                continue;
+            }
+            if (Enumerable.Range(1, 3).Any(column => sheet.Cell(rowNumber, column).HasFormula))
+            {
+                rows.Add(new RosterPreviewRow(rowNumber, "", "", "", RosterPreviewState.Error,
+                    "名册不接受公式，请粘贴为文本值后重试。"));
+                continue;
+            }
+            if (Enumerable.Range(2, 2).Any(column =>
+                    !sheet.Cell(rowNumber, column).IsEmpty() && sheet.Cell(rowNumber, column).DataType != XLDataType.Text))
+            {
+                rows.Add(new RosterPreviewRow(rowNumber, "", "", "", RosterPreviewState.Error,
+                    "班级和准考证号必须以文本存储；数字格式可能已丢失前导零或精度，请核对原始名单后重新录入文本。"));
+                continue;
+            }
             var name = ReadText(sheet.Cell(rowNumber, 1));
             var classText = ReadText(sheet.Cell(rowNumber, 2));
             var admissionNo = ReadText(sheet.Cell(rowNumber, 3));
@@ -61,8 +95,7 @@ public sealed partial class RosterWorkbookService
                 }
             }
 
-            var earlier = rows.FirstOrDefault(row =>
-                StringComparer.Ordinal.Equals(row.AdmissionNo, admissionNo) && admissionNo.Length > 0);
+            earlierRows.TryGetValue(admissionNo, out var earlier);
             if (issues.Count == 0 && earlier is not null)
             {
                 if (StringComparer.Ordinal.Equals(earlier.Name, name) &&
@@ -78,13 +111,18 @@ public sealed partial class RosterWorkbookService
                 }
             }
 
-            rows.Add(new RosterPreviewRow(
+            var previewRow = new RosterPreviewRow(
                 rowNumber,
                 name,
                 classText,
                 admissionNo,
                 state,
-                string.Concat(issues).Trim()));
+                string.Concat(issues).Trim());
+            rows.Add(previewRow);
+            if (admissionNo.Length > 0)
+            {
+                earlierRows.TryAdd(admissionNo, previewRow);
+            }
         }
 
         return new RosterPreview(rows);
@@ -95,6 +133,8 @@ public sealed partial class RosterWorkbookService
 
     private static void ValidateHeaders(IXLWorksheet sheet)
     {
+        if (sheet.Row(1).CellsUsed().Any(cell => cell.HasFormula))
+            throw new RosterImportException("表头不接受公式，请使用模板中的固定文本表头。");
         var actual = Enumerable.Range(1, 3)
             .Select(column => ReadText(sheet.Cell(1, column)))
             .ToArray();
@@ -137,7 +177,26 @@ public sealed partial class RosterWorkbookService
         }
     }
 
-    private static string ReadText(IXLCell cell) => cell.GetFormattedString().Trim();
+    private static string ReadText(IXLCell cell) => cell.GetString().Trim();
+
+    private static void ValidateWorkbookSize(Stream stream)
+    {
+        if (stream.Length > MaxWorkbookBytes)
+        {
+            throw new RosterImportException("Excel 文件超过 10 MB 限额。");
+        }
+
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        long expanded = 0;
+        foreach (var entry in archive.Entries)
+        {
+            expanded = checked(expanded + entry.Length);
+            if (expanded > MaxExpandedBytes || archive.Entries.Count > 1_000)
+            {
+                throw new RosterImportException("Excel 文件解压规模超过安全限额。");
+            }
+        }
+    }
 
     [GeneratedRegex("^[0-9]+$", RegexOptions.CultureInvariant)]
     private static partial Regex DigitsOnly();

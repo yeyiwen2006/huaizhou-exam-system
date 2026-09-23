@@ -6,9 +6,9 @@ public sealed class DependencyStatusViewModel
 {
     public ObservableCollection<DependencyStatusRow> Items { get; } =
     [
-        new("C05 成绩查询", "等待 D05", "当前 Contracts/Server 没有正式成绩查询 API；C 不在考务端计算或伪造成绩。"),
-        new("C06 报告导出", "等待 D05", "当前没有正式成绩报告/导出 API；C 不自行聚合统计结果。"),
-        new("C07 双机热备", "等待 A05/E01", "当前可见契约没有服务器主备状态机与手动切换 API；C 只负责未来的状态展示与操作入口。")
+        new("C05 导入与考试中修改", "待接入", "已有 D01 schema 和 A06 版本接口；编译导入、预览与规则发布的完整联调仍未完成。"),
+        new("C06 报表与服务页面", "等待 A/D/E 接口", "完整成绩报表和导出 HTTP 接口尚未提供；不在 GUI 中另算排名或伪造导出结果。"),
+        new("C07 主备管理", "等待 A08 管理入口", "已有主备公共契约；考务端所需状态查询与接管管理 HTTP 接口尚未接通。")
     ];
 }
 

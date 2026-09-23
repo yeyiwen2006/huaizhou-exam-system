@@ -11,7 +11,7 @@ public sealed class RosterViewModel : BindableBase
     private string _name = string.Empty;
     private string _classText = string.Empty;
     private string _admissionNo = string.Empty;
-    private string _status = "名册仅保存在当前工作区；服务器尚未提供正式名册写入 API。";
+    private string _status = "名册仅在当前进程内存中，关闭程序即丢失；服务器尚未提供正式名册写入 API。";
     private RosterPreview? _pendingPreview;
 
     public RosterViewModel(RosterWorkbookService workbooks, IFileDialogService dialogs)
@@ -22,6 +22,7 @@ public sealed class RosterViewModel : BindableBase
         CreateTemplateCommand = new RelayCommand(CreateTemplate);
         ImportPreviewCommand = new RelayCommand(ImportPreview);
         ConfirmImportCommand = new RelayCommand(ConfirmImport, () => _pendingPreview is { HasErrors: false, NewCount: > 0 });
+        Entries.CollectionChanged += (_, _) => InvalidatePreview();
     }
 
     public ObservableCollection<RosterEntryDraft> Entries { get; } = [];
@@ -36,6 +37,13 @@ public sealed class RosterViewModel : BindableBase
     public RelayCommand CreateTemplateCommand { get; }
     public RelayCommand ImportPreviewCommand { get; }
     public RelayCommand ConfirmImportCommand { get; }
+
+    private void InvalidatePreview()
+    {
+        _pendingPreview = null;
+        PreviewRows.Clear();
+        ConfirmImportCommand.RaiseCanExecuteChanged();
+    }
 
     private void AddManual()
     {
@@ -58,7 +66,7 @@ public sealed class RosterViewModel : BindableBase
         Name = string.Empty;
         ClassText = string.Empty;
         AdmissionNo = string.Empty;
-        Status = $"已加入本地名册，共 {Entries.Count} 人；班级和准考证号保持文本格式。";
+        Status = $"已加入本地名册，共 {Entries.Count} 人；若先前有导入预览，现已失效，需重新选择文件。";
     }
 
     private void CreateTemplate()
@@ -119,6 +127,7 @@ public sealed class RosterViewModel : BindableBase
             return;
         }
 
+        InvalidatePreview();
         foreach (var row in preview.Rows.Where(row => row.State == RosterPreviewState.New))
         {
             Entries.Add(new RosterEntryDraft(row.Name, row.ClassText, row.AdmissionNo));
@@ -128,6 +137,6 @@ public sealed class RosterViewModel : BindableBase
         _pendingPreview = null;
         PreviewRows.Clear();
         ConfirmImportCommand.RaiseCanExecuteChanged();
-        Status = $"已整体加入本地名册 {added} 条，共 {Entries.Count} 人。服务器写入仍等待 A 的正式 API。";
+        Status = $"已整体加入本地名册 {added} 条，共 {Entries.Count} 人。仅本进程内存有效，关闭即丢失，尚未写入服务器。";
     }
 }

@@ -78,14 +78,16 @@ public sealed class ConnectionViewModel : BindableBase
     {
         IsConnected = false;
         Status = "正在检查服务器…";
+        _api.Disconnect();
         _api.Configure(ServerAddress, OperatorToken, OperatorId);
         await _api.CheckConnectionAsync();
         IsConnected = true;
-        Status = "服务器已就绪，当前考务身份可用于正式 API 请求。";
+        Status = "服务器已就绪，考务令牌已验证；操作者身份仍由服务器在写请求中核对。";
     }
 
     private void SetError(Exception exception)
     {
+        _api.Disconnect();
         IsConnected = false;
         Status = $"连接失败：{exception.Message}";
     }

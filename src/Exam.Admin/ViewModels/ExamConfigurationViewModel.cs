@@ -21,16 +21,33 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private string _status = "可离线编辑完整结构；服务器当前只能持久化 examId 和起止时间。";
     private string _validationSummary = string.Empty;
     private string _instructionsText = string.Empty;
+    private long? _expectedScheduleVersion;
+    private long _contextVersion;
+    private long _editVersion;
+    private long _scheduleOperation;
+
+    public string ScheduleVersionText => _expectedScheduleVersion is { } version
+        ? $"已加载计划版本 {version}；保存时使用此版本，冲突不会自动覆盖。"
+        : "尚未加载服务器计划；保存只会尝试新建，不会覆盖已有考试。";
+
+    private void ResetScheduleContext()
+    {
+        _contextVersion++;
+        _expectedScheduleVersion = null;
+        OnPropertyChanged(nameof(ScheduleVersionText));
+    }
 
     public ExamConfigurationViewModel(AdminApiClient api)
     {
         _api = api;
+        _api.ConfigurationChanged += (_, _) => ResetScheduleContext();
         AddSubjectCommand = new RelayCommand(AddSubject);
         RemoveSubjectCommand = new RelayCommand(RemoveSubject, () => SelectedSubject is not null);
         AddGroupCommand = new RelayCommand(AddGroup, () => SelectedSubject is not null);
         RemoveGroupCommand = new RelayCommand(RemoveGroup, () => SelectedSubject?.SelectedGroup is not null);
         RefreshInstructionsCommand = new RelayCommand(RefreshInstructions);
         SaveScheduleCommand = new AsyncRelayCommand(SaveScheduleAsync, onError: SetError);
+        LoadScheduleCommand = new AsyncRelayCommand(LoadScheduleAsync, onError: SetError);
         AddSubject();
         RefreshInstructions();
     }
@@ -38,17 +55,23 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     public ObservableCollection<SubjectDraftViewModel> Subjects { get; } = [];
     public IReadOnlyList<string> QuestionTypes { get; } = ["single", "multiple", "indeterminate"];
 
-    public string ExamId { get => _examId; set => SetProperty(ref _examId, value); }
+    public string ExamId
+    {
+        get => _examId;
+        set { if (SetProperty(ref _examId, value)) ResetScheduleContext(); }
+    }
     public string Name { get => _name; set => SetProperty(ref _name, value); }
     public string CategoryName { get => _categoryName; set => SetProperty(ref _categoryName, value); }
-    public string ScheduledStartText { get => _scheduledStartText; set => SetProperty(ref _scheduledStartText, value); }
-    public string ScheduledEndText { get => _scheduledEndText; set => SetProperty(ref _scheduledEndText, value); }
+    public string ScheduledStartText { get => _scheduledStartText; set { if (SetProperty(ref _scheduledStartText, value)) _editVersion++; } }
+    public string ScheduledEndText { get => _scheduledEndText; set { if (SetProperty(ref _scheduledEndText, value)) _editVersion++; } }
 
     public SubjectDraftViewModel? SelectedSubject
     {
         get => _selectedSubject;
         set
         {
+            if (_selectedSubject is not null) _selectedSubject.PropertyChanged -= SelectedSubjectChanged;
+            if (value is not null) value.PropertyChanged += SelectedSubjectChanged;
             if (SetProperty(ref _selectedSubject, value))
             {
                 RemoveSubjectCommand.RaiseCanExecuteChanged();
@@ -68,6 +91,31 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     public RelayCommand RemoveGroupCommand { get; }
     public RelayCommand RefreshInstructionsCommand { get; }
     public AsyncRelayCommand SaveScheduleCommand { get; }
+    public AsyncRelayCommand LoadScheduleCommand { get; }
+
+    private void SelectedSubjectChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(SubjectDraftViewModel.SelectedGroup))
+            RemoveGroupCommand.RaiseCanExecuteChanged();
+    }
+
+    public async Task LoadScheduleAsync()
+    {
+        var examId = ExamId.Trim();
+        if (examId.Length == 0) { Status = "请填写考试 ID。"; return; }
+        var context = _contextVersion;
+        var edits = _editVersion;
+        var operation = ++_scheduleOperation;
+        var snapshot = await _api.GetExamAsync(examId);
+        if (context != _contextVersion || edits != _editVersion || operation != _scheduleOperation) return;
+        if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId))
+            throw new InvalidOperationException("服务器返回了不同考试的计划，已拒绝使用。");
+        ScheduledStartText = snapshot.Schedule.StartsAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+        ScheduledEndText = snapshot.Schedule.EndsAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+        _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
+        OnPropertyChanged(nameof(ScheduleVersionText));
+        Status = $"已加载服务器计划版本 {_expectedScheduleVersion}；其他配置仍为本进程草稿。";
+    }
 
     public IReadOnlyList<string> Validate()
     {
@@ -97,17 +145,19 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         }
 
         var subjectIds = new HashSet<string>(StringComparer.Ordinal);
+        var groupIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var subject in Subjects)
         {
-            if (string.IsNullOrWhiteSpace(subject.SubjectId) || !subjectIds.Add(subject.SubjectId.Trim()))
+            if (string.IsNullOrWhiteSpace(subject.SubjectId) || subject.SubjectId.Trim().Length > 128 ||
+                !subjectIds.Add(subject.SubjectId.Trim()))
             {
                 errors.Add($"科目“{subject.Name}”的标识为空或重复。");
             }
-            if (string.IsNullOrWhiteSpace(subject.Name))
+            if (string.IsNullOrWhiteSpace(subject.Name) || subject.Name.Length > 64)
             {
                 errors.Add($"科目 {subject.SubjectId} 缺少名称。");
             }
-            if (!ScoreConstant().IsMatch(subject.MaxScore.Trim()))
+            if (subject.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(subject.MaxScore.Trim()))
             {
                 errors.Add($"科目“{subject.Name}”满分必须是有限十进制常量。");
             }
@@ -116,7 +166,6 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                 errors.Add($"科目“{subject.Name}”至少需要一个题组。");
             }
 
-            var groupIds = new HashSet<string>(StringComparer.Ordinal);
             var orders = new HashSet<int>();
             foreach (var group in subject.Groups)
             {
@@ -129,8 +178,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
     private void AddSubject()
     {
-        var number = Subjects.Count + 1;
-        var subject = new SubjectDraftViewModel($"subject-{number}", $"科目{number}", "100");
+        var number = 1;
+        while (Subjects.Any(subject => StringComparer.Ordinal.Equals(subject.SubjectId, $"subject-{number}")))
+        {
+            number++;
+        }
+        var subject = new SubjectDraftViewModel($"subject-{number}", $"科目{number}", "10");
         Subjects.Add(subject);
         SelectedSubject = subject;
         AddGroup();
@@ -154,7 +207,13 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             return;
         }
-        var number = SelectedSubject.Groups.Count + 1;
+        var number = 1;
+        while (SelectedSubject.Groups.Any(group =>
+                   StringComparer.Ordinal.Equals(group.GroupId, $"{SelectedSubject.SubjectId}-group-{number}") ||
+                   group.Order == number))
+        {
+            number++;
+        }
         var group = new GroupDraftViewModel
         {
             GroupId = $"{SelectedSubject.SubjectId}-group-{number}",
@@ -162,7 +221,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             Type = "single",
             Order = number,
             QuestionCount = 10,
-            MaxScore = "30"
+            MaxScore = "10"
         };
         SelectedSubject.Groups.Add(group);
         SelectedSubject.SelectedGroup = group;
@@ -181,7 +240,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         RefreshInstructions();
     }
 
-    private async Task SaveScheduleAsync()
+    public async Task SaveScheduleAsync()
     {
         RefreshInstructions();
         var errors = Validate();
@@ -193,7 +252,15 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
         TryReadSchedule(out var start, out var end);
         Status = "正在保存服务器当前支持的考试计划字段…";
-        var snapshot = await _api.SaveScheduleAsync(ExamId.Trim(), new ScheduleWindow(start, end));
+        var examId = ExamId.Trim();
+        var context = _contextVersion;
+        var operation = ++_scheduleOperation;
+        var snapshot = await _api.SaveScheduleAsync(examId, new ScheduleWindow(start, end), _expectedScheduleVersion);
+        if (context != _contextVersion || operation != _scheduleOperation) return;
+        if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId))
+            throw new InvalidOperationException("服务器返回了不同考试的保存结果，请核对原服务器，不能视为保存成功。");
+        _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
+        OnPropertyChanged(nameof(ScheduleVersionText));
         Status = $"计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}。名称、类别、科目、题组和计分规则仍为本地草稿，等待 A 的正式元数据 API。";
     }
 
@@ -201,7 +268,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     {
         var errors = Validate();
         ValidationSummary = errors.Count == 0
-            ? "本地字段已按审阅到的 D01 分支 schema 结构校验；正式 schema 尚未合入当前主线，表达式求值和满分一致性仍须 D04 服务验证。"
+            ? "已按主线 D01 schema 检查字段、长度与字符集；这不是计分发布校验。表达式语法、求值及满分一致性仍须 D04 服务验证。"
             : string.Join(Environment.NewLine, errors.Select(error => $"• {error}"));
         InstructionsText = BuildInstructions();
     }
@@ -214,6 +281,14 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             builder.AppendLine($"{subject.Name}（满分{subject.MaxScore}分）");
             foreach (var group in subject.Groups.OrderBy(group => group.Order))
             {
+                var pointsPerQuestion = group.Type switch
+                {
+                    "single" => group.Correct,
+                    "multiple" => group.AllCorrect,
+                    "indeterminate" when group.Correct == group.AllCorrect => group.Correct,
+                    "indeterminate" => $"{group.Correct}分或{group.AllCorrect}",
+                    _ => "题型无效"
+                };
                 var scoring = group.Type switch
                 {
                     "single" => $"选对得{group.Correct}分，不选得{group.OneBlank}分，选错得{group.OneWrong}分。",
@@ -221,7 +296,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                     "indeterminate" => $"若有一个正确答案，选对得{group.Correct}分，不选得{group.OneBlank}分，选错得{group.OneWrong}分；若有多个正确答案，全部选对得{group.AllCorrect}分，选对但不全得{group.PartialCorrect}分，不选得{group.MultipleBlank}分，选错得{group.MultipleWrong}分。",
                     _ => "题型无效，无法生成计分说明。"
                 };
-                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，共计{group.MaxScore}分。{scoring}");
+                var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
+                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore}分。{scoring}{abstain}");
             }
         }
         return builder.ToString().TrimEnd();
@@ -244,11 +320,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         ICollection<string> errors)
     {
         var label = $"科目“{subject.Name}”题组“{group.Name}”";
-        if (string.IsNullOrWhiteSpace(group.GroupId) || !groupIds.Add(group.GroupId.Trim()))
+        if (string.IsNullOrWhiteSpace(group.GroupId) || group.GroupId.Trim().Length > 128 ||
+            !groupIds.Add(group.GroupId.Trim()))
         {
             errors.Add($"{label}的标识为空或重复。");
         }
-        if (string.IsNullOrWhiteSpace(group.Name))
+        if (string.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 64)
         {
             errors.Add($"{label}缺少名称。");
         }
@@ -264,7 +341,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             errors.Add($"{label}题量必须为 1–9999。");
         }
-        if (!ScoreConstant().IsMatch(group.MaxScore.Trim()))
+        if (group.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(group.MaxScore.Trim()))
         {
             errors.Add($"{label}满分必须是有限十进制常量。");
         }
@@ -281,7 +358,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
     private static void ValidateExpressions(string label, ICollection<string> errors, params string[] expressions)
     {
-        if (expressions.Any(expression => string.IsNullOrWhiteSpace(expression) || !ScoreExpression().IsMatch(expression)))
+        if (expressions.Any(expression => string.IsNullOrWhiteSpace(expression) || expression.Length > 200 ||
+                                          !ScoreExpression().IsMatch(expression)))
         {
             errors.Add($"{label}计分表达式只能使用有限十进制、两个规定变量、四则运算和括号。");
         }
@@ -298,12 +376,14 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             return false;
         }
-        var stem = Path.GetFileNameWithoutExtension(value).ToUpperInvariant();
+        var stem = value.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
         return stem is not ("CON" or "PRN" or "AUX" or "NUL") &&
                !Regex.IsMatch(stem, "^(COM|LPT)[1-9]$", RegexOptions.CultureInvariant);
     }
 
-    private void SetError(Exception exception) => Status = $"保存失败：{exception.Message}";
+    private void SetError(Exception exception) => Status = exception is AdminApiException apiError
+        ? $"保存失败（{apiError.Code}）：{apiError.Message}"
+        : $"保存失败：{exception.Message}";
 
     [GeneratedRegex("^[+-]?[0-9]+(?:\\.[0-9]+)?$", RegexOptions.CultureInvariant)]
     private static partial Regex ScoreConstant();
