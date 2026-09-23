@@ -76,6 +76,20 @@ public sealed class WpfBindingSmokeTests
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名草稿") && button.Command is not null);
                     if ((string)tab.Header == "C04 监控与处置")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
+                    if ((string)tab.Header == "C05 导入与修订")
+                    {
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "查询正式版本") &&
+                            ReferenceEquals(button.Command, viewModel.ImportRevision.LoadVersionCommand));
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "发布修订：接口未提供") && !button.IsEnabled);
+                    }
+                    if ((string)tab.Header == "C06 报告与服务")
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "Excel 正式导出：接口未提供") && !button.IsEnabled);
+                    if ((string)tab.Header == "C07 主备管理")
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "接管：接口未提供") && !button.IsEnabled);
                 }
                 listener.Flush();
                 Assert.Equal(string.Empty, output.ToString());

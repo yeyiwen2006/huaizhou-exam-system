@@ -15,6 +15,9 @@ public sealed class MainViewModel : IDisposable
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
         Dependencies = new DependencyStatusViewModel();
+        ImportRevision = new ImportRevisionViewModel(_api);
+        Reports = new ReportsWorkspaceViewModel();
+        HighAvailability = new HighAvailabilityWorkspaceViewModel();
     }
 
     public ConnectionViewModel Connection { get; }
@@ -23,6 +26,9 @@ public sealed class MainViewModel : IDisposable
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
     public DependencyStatusViewModel Dependencies { get; }
+    public ImportRevisionViewModel ImportRevision { get; }
+    public ReportsWorkspaceViewModel Reports { get; }
+    public HighAvailabilityWorkspaceViewModel HighAvailability { get; }
 
     public void Dispose() => _api.Dispose();
 }
