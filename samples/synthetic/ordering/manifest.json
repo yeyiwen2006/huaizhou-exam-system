@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-ordering",
+  "examName": "排序合成考试",
+  "subjects": [
+    {
+      "subjectId": "subject-d",
+      "name": "科目丁",
+      "maxScore": "3"
+    }
+  ],
+  "groups": [
+    {
+      "groupId": "group-d-single",
+      "subjectId": "subject-d",
+      "name": "一、单项选择题",
+      "type": "single",
+      "order": 1,
+      "questionCount": 3,
+      "maxScore": "3",
+      "scoring": {
+        "oneCorrect": {
+          "correct": "1",
+          "blank": "0",
+          "wrong": "0"
+        }
+      }
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "q-d-010",
+      "questionNo": 10,
+      "subjectId": "subject-d",
+      "groupId": "group-d-single",
+      "source": "questions/排序合成考试_10.tex",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "displayMetadata": {
+        "optionCaptions": [
+          "A.",
+          "B.",
+          "C.",
+          "D."
+        ]
+      }
+    },
+    {
+      "questionId": "q-d-002",
+      "questionNo": 2,
+      "subjectId": "subject-d",
+      "groupId": "group-d-single",
+      "source": "questions/排序合成考试_2.tex",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "displayMetadata": {
+        "optionCaptions": [
+          "A.",
+          "B.",
+          "C.",
+          "D."
+        ]
+      }
+    },
+    {
+      "questionId": "q-d-001",
+      "questionNo": 1,
+      "subjectId": "subject-d",
+      "groupId": "group-d-single",
+      "source": "questions/排序合成考试_1.tex",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "displayMetadata": {
+        "optionCaptions": [
+          "A.",
+          "B.",
+          "C.",
+          "D."
+        ]
+      }
+    }
+  ],
+  "resourceRoots": [
+    "styles"
+  ]
+}

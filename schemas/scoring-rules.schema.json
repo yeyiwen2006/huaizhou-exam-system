@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huaizhou.example/schemas/scoring-rules.schema.json",
+  "title": "Per-group scoring rules",
+  "description": "题组计分规则。要求见 requirements.md「考试配置与计分」：规则支持有限十进制常量、{正确选项总数}、{选择的正确选项数}、加减乘除和括号，由专用解析器计算，禁止任意代码、非法变量和除零；发布前校验所有合法作答情况，最终逐题分必须为有限小数。本 schema 只约束结构与字符集，表达式的文法、常量求值与变量语义由 D04 的专用解析器实现，见 docs/import-package-spec.md。",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
+    "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
+  },
+  "$defs": {
+    "scoreConstant": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "无变量的有限十进制常量，用于科目与题组满分；允许前导正负号与小数点，不允许变量、运算符或括号。需求中只有「每小题…分」使用变量，满分本身始终是常量。",
+      "pattern": "^[+-]?[0-9]+(?:\\.[0-9]+)?$"
+    },
+    "scoreExpression": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "有限十进制常量、{正确选项总数}、{选择的正确选项数}、加减乘除和括号组成的专用表达式。本 pattern 只允许数字、四则运算符、括号、空白和两个完整变量名，禁止任意代码、非法字符与未成对花括号；括号配对、常量除零与常量部分是否有限小数由校验器判定。",
+      "pattern": "^(?![\\s]*$)(?:[0-9.+\\-*/() \\t]|\\{正确选项总数\\}|\\{选择的正确选项数\\})+$"
+    },
+    "oneCorrect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correct", "blank", "wrong"],
+      "description": "「一个正确选项」的分支，多项选择题不使用。",
+      "properties": {
+        "correct": { "$ref": "#/$defs/scoreExpression" },
+        "blank": { "$ref": "#/$defs/scoreExpression" },
+        "wrong": { "$ref": "#/$defs/scoreExpression" }
+      }
+    },
+    "multipleCorrect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allCorrect", "partialCorrect", "blank", "wrong"],
+      "description": "「多个正确选项」的分支，单项选择题不使用。",
+      "properties": {
+        "allCorrect": { "$ref": "#/$defs/scoreExpression" },
+        "partialCorrect": { "$ref": "#/$defs/scoreExpression" },
+        "blank": { "$ref": "#/$defs/scoreExpression" },
+        "wrong": { "$ref": "#/$defs/scoreExpression" }
+      }
+    },
+    "singleGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oneCorrect"],
+      "description": "type 为 single 的题组：只使用 oneCorrect。",
+      "properties": { "oneCorrect": { "$ref": "#/$defs/oneCorrect" } }
+    },
+    "multipleGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["multipleCorrect"],
+      "description": "type 为 multiple 的题组：只使用 multipleCorrect。",
+      "properties": { "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" } }
+    },
+    "indeterminateGroupRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oneCorrect", "multipleCorrect"],
+      "description": "type 为 indeterminate 的题组：必须同时提供两项分支。",
+      "properties": {
+        "oneCorrect": { "$ref": "#/$defs/oneCorrect" },
+        "multipleCorrect": { "$ref": "#/$defs/multipleCorrect" }
+      }
+    }
+  }
+}

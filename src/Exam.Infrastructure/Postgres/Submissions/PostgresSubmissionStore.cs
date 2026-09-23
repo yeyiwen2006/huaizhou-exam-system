@@ -23,6 +23,14 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
     }
 
+    private static DateTimeOffset CanonicalizeTimestamp(DateTimeOffset timestamp)
+    {
+        var utc = timestamp.ToUniversalTime();
+        return new DateTimeOffset(
+            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
+            TimeSpan.Zero);
+    }
+
     public async ValueTask SetAuthorizationStateAsync(
         SubmissionAuthorizationState state,
         CancellationToken cancellationToken = default)
@@ -63,6 +71,7 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        persistedAt = CanonicalizeTimestamp(persistedAt);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
@@ -187,6 +196,7 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        persistedAt = CanonicalizeTimestamp(persistedAt);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,

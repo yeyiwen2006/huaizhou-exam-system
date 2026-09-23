@@ -10,7 +10,7 @@ public sealed class SubmissionService : IDisposable
     private readonly IGradingTaskQueue _gradingQueue;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string> _receiptIdFactory;
-    private readonly SemaphoreSlim _writeSlots;
+    private readonly SubmissionWriteAdmission _writeSlots;
     private readonly IParticipationAccessReader? _accessReader;
 
     public SubmissionService(
@@ -19,7 +19,9 @@ public sealed class SubmissionService : IDisposable
         int maxConcurrentWrites = 32,
         TimeProvider? timeProvider = null,
         Func<string>? receiptIdFactory = null,
-        IParticipationAccessReader? accessReader = null)
+        IParticipationAccessReader? accessReader = null,
+        int maxQueuedWritesPerClass = 300,
+        TimeSpan? writeQueueTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(gradingQueue);
@@ -33,7 +35,8 @@ public sealed class SubmissionService : IDisposable
         _timeProvider = timeProvider ?? TimeProvider.System;
         _receiptIdFactory = receiptIdFactory ?? (() => Guid.NewGuid().ToString("N"));
         _accessReader = accessReader;
-        _writeSlots = new SemaphoreSlim(maxConcurrentWrites, maxConcurrentWrites);
+        _writeSlots = new SubmissionWriteAdmission(maxConcurrentWrites, maxQueuedWritesPerClass,
+            writeQueueTimeout ?? TimeSpan.FromSeconds(5));
     }
 
     public async ValueTask<SubmissionOperationResult<PersistedProgress>> SyncProgressAsync(
@@ -49,7 +52,7 @@ public sealed class SubmissionService : IDisposable
                 validationError);
         }
 
-        if (!await _writeSlots.WaitAsync(0, cancellationToken))
+        if (!await _writeSlots.EnterAsync(final: false, cancellationToken))
         {
             return SubmissionOperationResult<PersistedProgress>.Failure(
                 SubmissionErrorCode.ServiceRecovering,
@@ -111,7 +114,7 @@ public sealed class SubmissionService : IDisposable
                 validationError);
         }
 
-        if (!await _writeSlots.WaitAsync(0, cancellationToken))
+        if (!await _writeSlots.EnterAsync(final: true, cancellationToken))
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.ServiceRecovering,
@@ -272,16 +275,29 @@ public sealed class CollectionCompletionService
     private readonly ISubmissionStore _submissionStore;
     private readonly ICollectionCompletionStore _completionStore;
     private readonly TimeProvider _timeProvider;
+    private readonly IAuthoritativeCollectionCompletionStore? _authoritativeStore;
 
     public CollectionCompletionService(
         ISubmissionStore submissionStore,
         ICollectionCompletionStore completionStore,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IAuthoritativeCollectionCompletionStore? authoritativeStore = null)
     {
         _submissionStore = submissionStore ?? throw new ArgumentNullException(nameof(submissionStore));
         _completionStore = completionStore ?? throw new ArgumentNullException(nameof(completionStore));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _authoritativeStore = authoritativeStore;
     }
+
+    public ValueTask<CollectionCompletedNotification?> EvaluateAsync(
+        string examId, CancellationToken cancellationToken = default) =>
+        (_authoritativeStore ?? throw new InvalidOperationException("权威收齐存储未配置。"))
+        .EvaluateAsync(examId, cancellationToken);
+
+    public ValueTask<IReadOnlyList<CollectionCompletedNotification>> ReadEventsAsync(
+        string examId, long afterRosterVersion, int limit = 100, CancellationToken cancellationToken = default) =>
+        (_authoritativeStore ?? throw new InvalidOperationException("权威收齐存储未配置。"))
+        .ReadEventsAsync(examId, afterRosterVersion, limit, cancellationToken);
 
     public async ValueTask<CollectionCompletedNotification?> EvaluateAsync(
         string examId,
@@ -289,6 +305,12 @@ public sealed class CollectionCompletionService
         IReadOnlyCollection<string> actualParticipationIds,
         CancellationToken cancellationToken = default)
     {
+        // Compatibility for old internal callers: supplied rosters never control production decisions.
+        if (_authoritativeStore is not null)
+        {
+            return await _authoritativeStore.EvaluateAsync(examId, cancellationToken);
+        }
+
         if (string.IsNullOrWhiteSpace(examId))
         {
             throw new ArgumentException("考试标识不能为空。", nameof(examId));

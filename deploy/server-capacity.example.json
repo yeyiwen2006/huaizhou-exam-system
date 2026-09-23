@@ -1,0 +1,24 @@
+{
+  "Database": {
+    "MaximumPoolSize": 32,
+    "MinimumPoolSize": 0,
+    "ConnectionTimeoutSeconds": 15,
+    "CommandTimeoutSeconds": 30,
+    "MaxConcurrentWrites": 32,
+    "Capacity": {
+      "PostgresMaxConnections": 100,
+      "PostgresReservedConnections": 3,
+      "MaximumServerProcesses": 2,
+      "OtherConnections": 5,
+      "OperationsReserveConnections": 10
+    }
+  },
+  "RequestCapacity": {
+    "CriticalPermits": 11,
+    "ApiPermits": 16,
+    "ResourcePermits": 4,
+    "QueueLimit": 300,
+    "QueueTimeoutMilliseconds": 5000,
+    "TransportConnectionLimit": 2048
+  }
+}

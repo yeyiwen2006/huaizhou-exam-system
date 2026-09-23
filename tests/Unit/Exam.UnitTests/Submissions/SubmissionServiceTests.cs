@@ -330,7 +330,8 @@ public sealed class SubmissionServiceTests
             1);
         await inner.SetAuthorizationStateAsync(authorization);
         var blocking = new BlockingSubmissionStore(inner);
-        using var service = new SubmissionService(blocking, new InMemoryGradingTaskQueue(), maxConcurrentWrites: 1);
+        using var service = new SubmissionService(blocking, new InMemoryGradingTaskQueue(), maxConcurrentWrites: 1,
+            maxQueuedWritesPerClass: 0);
         var firstRequest = new SubmitFinalAnswersRequest(
             "request-1", "submission-1", "exam-1", "candidate-1", "participation-1",
             1, "device-1", 1, 1, Answer("A"));

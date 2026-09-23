@@ -1,0 +1,17 @@
+% 合成共享样式（图形与化学式样包）。仅用于仓库内的合成样包，不含任何真实试卷内容。
+% 每个导入包自带共享样式，因此本样式同样定义选项标记约定，与 three-types 的样式保持同一约定。
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{exam-chemistry}[2026/09/22 v1 synthetic chemistry style]
+
+\RequirePackage{amsmath}
+\RequirePackage{graphicx}
+\RequirePackage{mhchem}
+\RequirePackage{hyperref}
+
+% \optmark{题目标识}{选项标识}：在选项字母处建立零尺寸命名目标，不改变外观与占位。
+\DeclareRobustCommand{\optmark}[2]{\hypertarget{opt:#1:#2}{}}
+
+% 合成自定义命令，模拟真实试卷中的专用宏与单位宏。
+% \syntheticamount 在文本与数学模式下都可用，故用 \ensuremath。
+\newcommand{\syntheticamount}[2]{\ensuremath{#1\,\mathrm{#2}}}
+\newcommand{\syntheticfigure}[1]{\includegraphics[width=0.34\linewidth]{#1}}

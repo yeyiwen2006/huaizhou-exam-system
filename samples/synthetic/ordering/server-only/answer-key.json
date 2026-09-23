@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-ordering",
+  "answers": [
+    {
+      "questionId": "q-d-001",
+      "questionNo": 1,
+      "correctOptionIds": [
+        "A"
+      ]
+    },
+    {
+      "questionId": "q-d-002",
+      "questionNo": 2,
+      "correctOptionIds": [
+        "C"
+      ]
+    },
+    {
+      "questionId": "q-d-010",
+      "questionNo": 10,
+      "correctOptionIds": [
+        "B"
+      ]
+    }
+  ]
+}

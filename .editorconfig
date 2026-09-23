@@ -16,7 +16,7 @@ end_of_line = lf
 indent_style = space
 indent_size = 2
 
-[*.tex]
+[*.{tex,sty}]
 end_of_line = lf
 
 [*.cs]

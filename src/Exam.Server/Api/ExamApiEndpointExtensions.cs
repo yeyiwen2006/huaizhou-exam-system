@@ -485,10 +485,19 @@ public static class ExamApiEndpointExtensions
                 request.RequestId,
                 () => service.EvaluateAsync(
                     request.ExamId,
-                    request.RosterVersion,
-                    request.ActualParticipationIds,
                     cancellationToken));
         });
+
+        group.MapGet("/collection/events", async (
+            string examId,
+            long afterRosterVersion,
+            CollectionCompletionService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(
+                context, configuration, context.TraceIdentifier,
+                () => service.ReadEventsAsync(examId, afterRosterVersion, 100, cancellationToken)));
 
         return group;
     }
