@@ -24,6 +24,18 @@ public enum TeXIssueCode
     /// <summary>其它排版错误（语法、未定义命令等）。</summary>
     SourceError,
 
+    /// <summary>编译超过时限被终止。</summary>
+    Timeout,
+
+    /// <summary>找不到 XeLaTeX 可执行文件或工具链不可用。</summary>
+    ToolchainMissing,
+
+    /// <summary>编译结束但没有写出 PDF。</summary>
+    OutputMissing,
+
+    /// <summary>进程返回非零退出码。</summary>
+    ProcessFailed,
+
     /// <summary>由前述错误引起的连带失败（如 Emergency stop、图形 Division by 0），不作为独立缺陷。</summary>
     Cascade,
 

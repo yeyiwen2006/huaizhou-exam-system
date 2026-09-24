@@ -7,12 +7,17 @@ public sealed record ExternalProcessResult(int ExitCode, string StandardOutput, 
 
 public interface IExternalProcessRunner
 {
+    /// <summary>
+    /// 运行外部工具。workingDirectory 为空时使用可执行文件所在目录；逐题编译需要以导入包根目录
+    /// 为工作目录，包内的相对路径（含 \graphicspath）才会按包结构解析。
+    /// </summary>
     Task<ExternalProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null);
 }
 
 public sealed class ExternalProcessRunner : IExternalProcessRunner
@@ -24,7 +29,8 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable))
         {
@@ -36,6 +42,12 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
+        if (workingDirectory is not null
+            && (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory)))
+        {
+            throw new DirectoryNotFoundException($"外部工具的工作目录不存在或不是绝对路径：{workingDirectory}");
+        }
+
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -43,7 +55,7 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(executable)!
+            WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(executable)!
         };
         foreach (var argument in arguments)
         {
