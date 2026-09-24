@@ -1,43 +1,72 @@
 name: 任务卡
-description: 按 A01-E07 建立可独立验收的开发任务
-title: "[任务编号] "
-labels: ["task"]
+description: 按A/B/C/D/E/F/T板块登记开发或团队测试任务
+title: '[任务编号] '
+labels:
+- task
 body:
-  - type: input
-    id: owner
-    attributes:
-      label: 负责人
-    validations:
-      required: true
-  - type: input
-    id: reviewers
-    attributes:
-      label: 审查人
-    validations:
-      required: true
-  - type: textarea
-    id: scope
-    attributes:
-      label: 范围与输出
-      description: 写明输入、输出和不在本任务范围内的内容。
-    validations:
-      required: true
-  - type: textarea
-    id: dependencies
-    attributes:
-      label: 依赖
-      description: 列出前置任务、契约、样例和环境。
-    validations:
-      required: true
-  - type: textarea
-    id: acceptance
-    attributes:
-      label: 验收条件
-      description: 使用可以实际检查的条件，避免只写“功能正常”。
-    validations:
-      required: true
-  - type: textarea
-    id: verification
-    attributes:
-      label: 验证记录
-      description: 完成时补充环境、输入、预期、实际结果和未执行项。
+- type: markdown
+  attributes:
+    value: 所有PR代码审查、修正复核与合并统一由A（@yeyiwen2006）负责。开发期间持续模块测试；T01/T02仅在全部代码完成后执行整体测试，并各自包含修复回归。编号与边界见docs/task-map.md。
+- type: input
+  id: task_code
+  attributes:
+    label: 当前任务编号
+    description: 使用A、B、C、D、E、F或T前缀；T只有T01和T02两张整体测试总单。
+  validations:
+    required: true
+- type: input
+  id: owner
+  attributes:
+    label: 开发或统筹负责人
+    description: 填角色和已确认GitHub账号；T任务填写A统筹及具体执行分工。
+  validations:
+    required: true
+- type: textarea
+  id: scope
+  attributes:
+    label: 范围与输出
+    description: 明确输入、输出、不在范围内的部分，以及拆分任务的来源和去向。
+  validations:
+    required: true
+- type: textarea
+  id: start_now
+  attributes:
+    label: 可立即开展的工作
+    description: 区分不依赖其他完整模块的工作与后续真实接线。
+  validations:
+    required: true
+- type: textarea
+  id: dependencies
+  attributes:
+    label: 真实接线与环境前置
+    description: 使用当前任务码/Issue，写清需要的接口或产物；不用旧阶段码，不以整卡关闭制造循环依赖。
+  validations:
+    required: true
+- type: textarea
+  id: module_tests
+  attributes:
+    label: 开发期模块测试
+    description: 列适用单元、接口、真实数据库/文件、GUI、并发、故障恢复和回归；不等T01才第一次测试。
+  validations:
+    required: true
+- type: textarea
+  id: code_delivery
+  attributes:
+    label: 代码交付条件
+    description: 真实实现与接线、模块测试、CI及A审查要求；与最终整体环境验收分开。
+  validations:
+    required: true
+- type: textarea
+  id: acceptance
+  attributes:
+    label: 整体验收与关闭条件
+    description: 关联T01/T02及Sxx，明确修复/复测证据；测试轮次内已包含修复，不另设修复总单。
+  validations:
+    required: true
+- type: textarea
+  id: verification
+  attributes:
+    label: 实际验证记录
+    description: 填写提交/运行包、环境、输入、预期、实际、执行人、证据及未执行项；代码合并不等于整体通过。
+  validations:
+    required: false
