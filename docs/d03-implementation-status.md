@@ -1,60 +1,47 @@
 # D03 实施状态
 
-本文记录 D03「定位与学生包」的**第一批交付**：不依赖坐标约定的部分（允许清单组包、参考答案隔离、
-完整包加密与版本产物）。依据 `requirements.md`「逐题导入、原版显示与加密」、
-`agent-implementation-guide.md` 第 165–168 行（选项标记、允许清单、AES-GCM 与解锁）与 239 行（D03 任务卡）。
+本次交付学生包文件选择、服务器专用资源隔离、ZIP 组包和既有 HEXAMPKG v2 加密格式的接入。PR #50 经审查修正后作为 D03 的部分交付，Issue #26 保持打开。
 
-**选项定位与学生包的另一半尚未开始**：hyperref 隐藏选项标记、PDF 区域提取与归一化坐标依赖
-**B03 的坐标约定**，B03 尚未落地，因此本任务不猜其结构（见文末）。
+## 已实现行为
 
-## 逐项实现
+- 元数据先经过 D01 的完整结构及语义校验，再从受控 DTO 重新生成。必填字段、空集合、题号、引用及路径规则不再只依赖反序列化。
+- 默认进包内容为 manifest.json 和逐题 PDF。PDF 已嵌入编译时使用的图片、字体及版式，不分发 TeX 源码和编译样式。
+- resourceRoots 只限定附加资源的可选目录。调用方经导入预览确认后，通过 DisplayResourcePaths 提供逐文件允许清单，目前接受 PDF、PNG、JPEG 并核对文件头。未选择的文件记入排除列表；必需文件缺失、重复或被拒绝时整个组包失败。
+- 路径检查复用 PathBoundary，拒绝越界路径、符号链接和目录联接。输入文件读入受限内存快照；完整内容中的答案字段检查作为补充，取消原来的 64 KiB 取样。
+- CompiledQuestions 按 questionId 接收本次 D02 返回的成功编译结果，直接读取各 compile-* 目录里的 OutputPdfPath。省略该参数时可使用调用方准备的平铺目录，调用方必须确认该目录只含本次已验收的产物。
+- 指定 EncryptedPackagePath 时直接从内存生成 ZIP 并加密，StudentPackageDirectory 不产生明文。未指定加密路径时，显式生成服务器侧预览目录。
+- 每次加密使用独立临时文件，完成后刷新并移动到最终路径；取消及失败时清理本次临时文件。已有密文不覆盖，新旧产物可以分别保留，后续下载应复用既有密文及信封。
+- 预览目录通过独立暂存目录发布。产物与材料、编译输入目录分离，不修改输入材料。
 
-| 项目 | 当前实现 |
-| --- | --- |
-| 允许清单组包 | `StudentPackageBuilder`：只复制清单允许的路径（**默认拒绝**，绝不「先全量复制再删除」），进包的是无答案元数据、逐题 PDF、清单 `resourceRoots` 声明的资源 |
-| 参考答案隔离 | `StudentPackageAllowlist`：`server-only/` 一律不进包；路径关键词（答案/解析/answer/solution）与**内容字段检查**双重判定 |
-| 不能仅按扩展名筛选 | 内容检查按**字段名**判定：可解析的 JSON 走属性名（含嵌套），其余文本只认带引号的字段名——避免把样式文件里名为 `\answers`、`solution` 的宏误判成答案数据 |
-| 无答案元数据 | 学生端包内的 `manifest.json` 用 D01 的严格读取校验，并再按内容规则核对一次；测试逐条断言包内任何条目都不含 `correctOptionIds` |
-| 完整包加密 | 直接复用既有 `PackageEncryptionService`（HEXAMPKG v2，每版本独立随机密钥、12 字节 nonce、16 字节 tag），不另造格式；服务端与学生端已按同一格式编解码 |
-| 版本产物 | 加密产物按 `packageId` + `paperVersion` 命名并落在独立目录；`EncryptedPackageEnvelope` 交回调用方，由 A06/A08 的既有链路入库与下发 |
-| 半成品保护 | 加密先写 `.partial` 再原子改名，避免半成品替换当前产物；明文只在内存里，不落盘 |
-| 材料目录零改动 | 产物目录与加密产物都必须在导入包之外（越界直接抛错）；包根前后文件清单一致由测试断言 |
-| 包内明文布局 | 一个 ZIP，条目名即包内相对路径：`manifest.json`、`questions/<考试名称_题号>.pdf`、清单声明的资源。**该布局由 D03 定义，需与 B03 一起确认后定稿** |
+## 调用约定与限制
 
-## 测试范围
+StudentPackageRequest 的两个可选属性属于组包输入，不定义 B03 的坐标格式。DisplayResourcePaths 默认空列表。CompiledQuestions 的键必须与清单 questionId 一一对应，失败编译结果不能退回读取旧 PDF。
 
-`tests/Unit/Exam.UnitTests` 下共 **46** 项，不需要 PostgreSQL 或 TeX，随现有流水线执行：
+清单最大 8 MiB，待打包文件合计最大 256 MiB，单个资源目录遍历最多 10000 个文件或目录。超过限制时停止组包；最大实际题包的容量验收仍归后续接线测试。
 
-| 测试类 | 数量 | 覆盖 |
-| --- | --- | --- |
-| `StudentPackageAllowlistTests` | 36 | 服务器专用目录识别（含大小写、反斜杠、`./` 前缀）、答案/解析关键词、JSON 字段与嵌套字段、非 JSON 文本只认带引号字段、样式宏不误伤 |
-| `StudentPackageBuilderTests` | 10 | 组包分离服务器专用内容；**用学生端解码器读回加密产物**并逐条断言无答案字段；答案类资源被排除但其余保留；缺 PDF / 缺资源目录 / 缺清单被挡下；未定义字段的清单被严格读取拒绝；产物目录越界与非空目录被拒绝；**材料目录零改动** |
+文件头和字段检查不能判断图片或 PDF 正文的语义，也不能证明压缩附件中绝无答案。材料必须来自已验收的题目编译结果，附加资源仍需在导入预览逐项确认。调用方应在组包期间保持材料和编译目录不被其他进程修改。
 
-## 本机验证
+## 本次验证
 
-Windows 11，.NET SDK 10.0.401，`--configuration Release`，基线为已合并 `main`：
+环境为 Windows、.NET SDK 10.0.401、TeX Live 2025。输入均为合成材料。
 
 ```powershell
 dotnet restore Huaizhou.ExamSystem.sln --locked-mode
-dotnet build Huaizhou.ExamSystem.sln --no-restore -c Release   # 0 警告 0 错误
+dotnet build Huaizhou.ExamSystem.sln --no-restore -c Release
 dotnet test Huaizhou.ExamSystem.sln --no-build -c Release --filter "Category!=Postgres"
-# 918 项通过：Exam.UnitTests 683、学生端 89、管理端 76、学生身份 25、集成 23、负载基础 22
 ```
 
-加密往返不是「自己加密自己解密」了事：测试用**学生端使用的 `PackageCiphertext.DecryptAsync`
-与 `PackageUnlockMaterial`** 读回产物，再解开 ZIP 逐条核对条目与内容。
+依赖还原成功，Release 构建 0 警告、0 错误。1029 项测试通过，分别为领域及基础设施单元测试 784、学生端 89、管理端 76、学生身份 25、集成 33、负载工具 22。
 
-## 尚未完成及归属
+新增回归覆盖越界资源根、无效清单、未经选择的资源混入、64 KiB 之后的答案字段、目录联接、取消、加密失败重试、已有密文保护及加密模式不生成明文目录。真实 TeX 用例编译两道合成题，确认它们位于不同的编译目录，再用学生端 PackageCiphertext 解码并读取两个 PDF。该用例标记 Category=Latex，普通 Windows CI 不运行，本机已实跑。
 
-- **选项定位**：hyperref 隐藏外观的选项标记、PdfPig 提取区域、按 `pageTopLeftNormalizedV1`
-  归一化坐标。依赖 **B03 的坐标约定**；本任务只固定了该规范名与「圆钮第 i 个 ↔ `options[i]`」的绑定约定，
-  **不猜坐标结构**。PdfPig 尚未引入（新增依赖需同步 `packages.lock.json`）。
-- **版本产物入库**：`PostgresVersionedResourceStore` 的写入与查询属 A06/A08 既有链路，
-  本任务只产出加密产物与信封；实库往返尚未在本机验证。
-- **包内明文布局需 B03 确认**：布局由 D03 定义（见上表），但消费方是 B03，未经确认前不当作已定契约。
-- **解锁链路**：密钥下发与解锁由 A04 负责，本任务不涉及。
-- **GUI/CLI 入口**：依赖检查、编译与组包的 GUI/CLI 由 C05 与 E 的框架提供。
-- **交叉审查**：按分工由 B 核对版式、A 审查执行边界、E 独立核算；本任务尚未完成交叉审查。
+PostgreSQL 检查由 PR 最新提交的独立 CI 执行，记录见 [PR 审查记录](reviews/pr50-d03-student-package.md)。本地未连接数据库。
 
-以上是本机实现与自动化测试证据，**不等于**真实试卷组包、300 台设备下载、版式与选项绑定验收通过。
-任何未列为完成的场景不得写成已通过。
+## 剩余工作
+
+- D/B 共同明确并由 A 确认选项坐标契约，继续实现隐藏标记、区域提取和 pageTopLeftNormalizedV1 归一化，不等待 B03 全部完成。
+- 确认学生包显示布局并完成 B03、C05、CLI 的实际接线。
+- 完成版本入库、密钥下发、新旧版本独立下载及恢复验证。
+- 完成真实试卷的版式、选项绑定和资源内容验收，以及 T01/T02 的对应场景。
+
+上述剩余项继续由 #26 跟踪。代码及模块检查通过不代表这些场景已经验收。

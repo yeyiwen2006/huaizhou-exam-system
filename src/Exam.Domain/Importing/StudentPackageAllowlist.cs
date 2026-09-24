@@ -3,7 +3,8 @@ using System.Text.Json;
 namespace Exam.Domain.Importing;
 
 /// <summary>
-/// 学生端包的允许清单规则。依据 requirements.md「逐题导入、原版显示与加密」：
+/// 学生端包逐文件允许清单的补充拒绝规则。通过本类检查不代表文件已获准进包。
+/// 依据 requirements.md「逐题导入、原版显示与加密」：
 /// 「学生端包按允许文件清单生成，仅含试题 PDF、题目所需图片、必要显示资源和无答案元数据」、
 /// 「答案、解析及其专用资源留在服务器，不直接分发原始目录」。
 ///
@@ -39,8 +40,7 @@ public static class StudentPackageAllowlist
             return false;
         }
 
-        var firstSegment = normalized.Split('/')[0];
-        if (!string.Equals(firstSegment, ServerOnlyDirectory, StringComparison.OrdinalIgnoreCase))
+        if (!normalized.Split('/').Contains(ServerOnlyDirectory, StringComparer.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -171,6 +171,12 @@ public static class StudentPackageAllowlist
     /// </summary>
     public static bool IsAllowed(string? relativePath, string? content, out string? rejectionReason)
     {
+        if (!PackagePathRules.IsRelativeAndInside(relativePath) ||
+            !PackagePathRules.HasValidWindowsSegments(relativePath!))
+        {
+            rejectionReason = "必须使用有效的包内相对路径。";
+            return false;
+        }
         if (IsServerOnly(relativePath, out rejectionReason)
             || LooksLikeAnswerResource(relativePath, out rejectionReason)
             || ContainsAnswerBearingJson(content, out rejectionReason))
@@ -195,11 +201,7 @@ public static class StudentPackageAllowlist
             return null;
         }
 
-        var normalized = relativePath.Replace('\\', '/').Trim();
-        while (normalized.StartsWith("./", StringComparison.Ordinal))
-        {
-            normalized = normalized[2..];
-        }
+        var normalized = PackagePathRules.Normalize(relativePath);
 
         return normalized.Length == 0 ? null : normalized;
     }

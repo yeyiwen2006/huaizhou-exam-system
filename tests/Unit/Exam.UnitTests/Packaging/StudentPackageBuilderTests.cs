@@ -7,6 +7,8 @@ using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
 using Exam.Infrastructure.Packaging;
 using Exam.Infrastructure.Security;
+using Exam.Infrastructure.Compilation;
+using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.UnitTests.Packaging;
 
@@ -73,6 +75,8 @@ public sealed class StudentPackageBuilderTests : IDisposable
         WriteFile(Path.Combine(_packageRoot, "manifest.json"), ManifestJson);
         WriteFile(Path.Combine(_packageRoot, "questions", "合成样题考试_1.tex"), "\\documentclass{ctexart}");
         WriteFile(Path.Combine(_packageRoot, "figures", "chemistry", "q-figure-01.png"), "synthetic-png");
+        File.WriteAllBytes(Path.Combine(_packageRoot, "figures", "chemistry", "q-figure-01.png"),
+            Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="));
         WriteFile(Path.Combine(_packageRoot, "styles", "合成样式.sty"), "% 合成共享样式");
         WriteFile(
             Path.Combine(_packageRoot, "server-only", "answer-key.json"),
@@ -106,7 +110,7 @@ public sealed class StudentPackageBuilderTests : IDisposable
         Assert.Contains("manifest.json", result.Plan.IncludedPaths);
         Assert.Contains("questions/合成样题考试_1.pdf", result.Plan.IncludedPaths);
         Assert.Contains("figures/chemistry/q-figure-01.png", result.Plan.IncludedPaths);
-        Assert.Contains("styles/合成样式.sty", result.Plan.IncludedPaths);
+        Assert.DoesNotContain("styles/合成样式.sty", result.Plan.IncludedPaths);
 
         // 输出目录里不得出现任何服务器专用内容。
         var written = Directory
@@ -264,7 +268,91 @@ public sealed class StudentPackageBuilderTests : IDisposable
     }
 
     private StudentPackageRequest Request() =>
-        new(_packageRoot, _compilationOutput, _studentDirectory, PackageId, PaperVersion);
+        new(_packageRoot, _compilationOutput, _studentDirectory, PackageId, PaperVersion)
+        { DisplayResourcePaths = ["figures/chemistry/q-figure-01.png"] };
+
+    [Theory]
+    [InlineData("\"resourceRoots\": [\"figures\", \"styles\"]", "\"resourceRoots\": [\"../outside\"]")]
+    [InlineData("\"questions\": [", "\"questions\": null, \"ignored\": [")]
+    [InlineData("\"schemaVersion\": 1", "\"schemaVersion\": 99")]
+    [InlineData("\"questionNo\": 1", "\"questionNo\": 2")]
+    public async Task Build_InvalidManifest_IsRejectedBeforeWriting(string before, string after)
+    {
+        WriteFile(Path.Combine(_root, "outside", "private.txt"), "synthetic secret");
+        WriteFile(Path.Combine(_packageRoot, "manifest.json"), ManifestJson.Replace(before, after));
+
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.MetadataInvalid);
+        Assert.False(Directory.Exists(_studentDirectory) && Directory.EnumerateFiles(_studentDirectory, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task Build_ResourceDirectoryIsNotAFileAllowlist()
+    {
+        WriteFile(Path.Combine(_packageRoot, "figures", "notes.dat"), "{\"correctOptionIds\":[\"B\"]}");
+        WriteFile(Path.Combine(_packageRoot, "styles", "notes.txt"), new string(' ', 70000) + "{\"answers\":[\"B\"]}");
+
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+
+        Assert.True(result.Succeeded, Describe(result));
+        Assert.DoesNotContain("figures/notes.dat", result.Plan.IncludedPaths);
+        Assert.DoesNotContain("styles/notes.txt", result.Plan.IncludedPaths);
+        Assert.DoesNotContain("styles/合成样式.sty", result.Plan.IncludedPaths);
+    }
+
+    [Fact]
+    public async Task Build_EncryptionDoesNotWritePlaintextFiles()
+    {
+        using var node = CreateCertificate("node-a");
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with
+        {
+            EncryptedPackagePath = _encryptedPath,
+            Recipients = [new NodeKeyRecipient("node-a", node)]
+        });
+
+        Assert.True(result.Succeeded, Describe(result));
+        Assert.False(Directory.Exists(_studentDirectory) && Directory.EnumerateFileSystemEntries(_studentDirectory).Any());
+    }
+
+    [Fact]
+    public async Task Build_ExistingEncryptedVersionIsNeverOverwritten()
+    {
+        WriteFile(_encryptedPath, "previous version");
+        using var node = CreateCertificate("node-a");
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with
+        {
+            EncryptedPackagePath = _encryptedPath,
+            Recipients = [new NodeKeyRecipient("node-a", node)]
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("previous version", File.ReadAllText(_encryptedPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(_encryptedPath)!, "*.partial"));
+    }
+
+    [Fact]
+    public async Task Build_EncryptionFailureLeavesNoPartialOrPlaintextAndCanRetry()
+    {
+        using var node = CreateCertificate("node-a");
+        var builder = new StudentPackageBuilder(new PackageEncryptionService(4096,
+            new ManagedNodeEncryptionPolicy(new HashSet<string> { "node-b" })));
+        var request = Request() with
+        {
+            EncryptedPackagePath = _encryptedPath,
+            Recipients = [new NodeKeyRecipient("node-a", node)]
+        };
+
+        var failed = await builder.BuildAsync(request);
+
+        Assert.False(failed.Succeeded);
+        Assert.Contains(failed.Issues, issue => issue.Code == StudentPackageIssueCode.EncryptionFailed);
+        Assert.False(File.Exists(_encryptedPath));
+        Assert.Empty(Directory.GetFiles(_root, "*.partial", SearchOption.AllDirectories));
+        Assert.False(Directory.Exists(_studentDirectory) && Directory.EnumerateFileSystemEntries(_studentDirectory).Any());
+        Assert.True((await new StudentPackageBuilder(_encryption).BuildAsync(request)).Succeeded);
+    }
 
     private async Task<byte[]> DecryptAsStudentWould(EncryptedPackageEnvelope envelope, X509Certificate2 node)
     {
@@ -280,6 +368,128 @@ public sealed class StudentPackageBuilderTests : IDisposable
         using var plaintext = new MemoryStream();
         await PackageCiphertext.DecryptAsync(ciphertext, plaintext, material);
         return plaintext.ToArray();
+    }
+
+    [Theory]
+    [InlineData("questions")]
+    [InlineData("resourceRoots")]
+    public async Task Build_NullManifestCollectionsReturnAnIssue(string property)
+    {
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(ManifestJson)!;
+        manifest[property] = null;
+        WriteFile(Path.Combine(_packageRoot, "manifest.json"), manifest.ToJsonString());
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.MetadataInvalid);
+    }
+
+    [Theory]
+    [InlineData("styles/合成样式.sty")]
+    [InlineData("figures/missing.png")]
+    [InlineData("../private.png")]
+    public async Task Build_RequiredResourceFailureStopsWholePackage(string path)
+    {
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with { DisplayResourcePaths = [path] });
+        Assert.False(result.Succeeded);
+        Assert.False(Directory.Exists(_studentDirectory));
+    }
+
+    [Fact]
+    public async Task Build_AnswerFieldsAfter64KiBAreRejectedEvenWithImageHeader()
+    {
+        var image = Path.Combine(_packageRoot, "figures", "chemistry", "q-figure-01.png");
+        await File.AppendAllTextAsync(image, new string(' ', 70000) + "{\"correctOptionIds\":[\"B\"]}", Encoding.UTF8);
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.RequiredResourceRejected);
+        Assert.False(Directory.Exists(_studentDirectory));
+    }
+
+    [Fact]
+    public async Task Build_DefaultResourceListContainsOnlyMetadataAndQuestionPdfs()
+    {
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with { DisplayResourcePaths = [] });
+        Assert.True(result.Succeeded, Describe(result));
+        Assert.Equal(new[] { "manifest.json", "questions/合成样题考试_1.pdf" }, result.Plan.IncludedPaths);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Build_LinkedResourceOrOutputIsRejected(bool outputLink)
+    {
+        var external = Path.Combine(_root, "external");
+        Directory.CreateDirectory(external);
+        var link = outputLink ? _studentDirectory : Path.Combine(_packageRoot, "figures", "linked");
+        if (OperatingSystem.IsWindows())
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var arg in new[] { "/d", "/c", "mklink", "/J", link, external }) start.ArgumentList.Add(arg);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        else Directory.CreateSymbolicLink(link, external);
+        try
+        {
+            var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+            Assert.False(result.Succeeded);
+            Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.PathEscaped);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(external));
+        }
+        finally { Directory.Delete(link); }
+    }
+
+    [Fact]
+    public async Task Build_CancelledRequestDoesNotWriteArtifacts()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new StudentPackageBuilder(_encryption).BuildAsync(Request(), cts.Token));
+        Assert.False(Directory.Exists(_studentDirectory));
+    }
+
+    [Fact]
+    [Trait("Category", "Latex")]
+    public async Task Build_RealD02CompilationResultsRoundTripThroughStudentDecoder()
+    {
+        var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
+        Assert.NotNull(toolchain);
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(ManifestJson)!;
+        var question2 = manifest["questions"]![0]!.DeepClone();
+        question2["questionId"] = "q-002";
+        question2["questionNo"] = 2;
+        question2["source"] = "questions/合成样题考试_2.tex";
+        manifest["questions"]!.AsArray().Add(question2);
+        manifest["groups"]![0]!["questionCount"] = 2;
+        manifest["groups"]![0]!["maxScore"] = "2";
+        manifest["subjects"]![0]!["maxScore"] = "2";
+        WriteFile(Path.Combine(_packageRoot, "manifest.json"), manifest.ToJsonString());
+        var compiler = new XeLaTeXCompiler(new ExternalProcessRunner(), toolchain!);
+        var compiled = new Dictionary<string, TeXCompileResult>();
+        for (var number = 1; number <= 2; number++)
+        {
+            var source = $"questions/合成样题考试_{number}.tex";
+            WriteFile(Path.Combine(_packageRoot, source),
+                "\\documentclass{article}\n\\begin{document}\nSynthetic question " + number + ". A B C D.\n\\end{document}");
+            var result = await compiler.CompileAsync(new TeXCompileRequest(_packageRoot, source, _compilationOutput));
+            Assert.True(result.Succeeded, string.Join("; ", result.Issues.Select(issue => issue.Message)));
+            compiled.Add($"q-00{number}", result);
+        }
+        Assert.NotEqual(Path.GetDirectoryName(compiled["q-001"].OutputPdfPath), Path.GetDirectoryName(compiled["q-002"].OutputPdfPath));
+        using var node = CreateCertificate("node-a");
+        var packaged = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with
+        {
+            CompiledQuestions = compiled, EncryptedPackagePath = _encryptedPath,
+            Recipients = [new NodeKeyRecipient("node-a", node)], DisplayResourcePaths = []
+        });
+        Assert.True(packaged.Succeeded, Describe(packaged));
+        using var archive = new ZipArchive(new MemoryStream(await DecryptAsStudentWould(packaged.Envelope!, node)));
+        Assert.Equal(3, archive.Entries.Count);
+        Assert.All(archive.Entries.Where(entry => entry.FullName.EndsWith(".pdf", StringComparison.Ordinal)), entry => Assert.True(entry.Length > 1000));
+        Assert.False(Directory.Exists(_studentDirectory));
     }
 
     private static string ReadEntry(ZipArchive archive, string name)

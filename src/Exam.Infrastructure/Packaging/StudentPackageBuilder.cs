@@ -1,14 +1,15 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-
 using Exam.Contracts.Importing;
 using Exam.Domain.Importing;
 using Exam.Infrastructure.Security;
+using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.Infrastructure.Packaging;
 
-/// <summary>一次学生端组包的输入。产物目录与加密产物都必须在导入包之外。</summary>
+/// <summary>服务器侧组包输入。输出必须与材料、编译目录分离。</summary>
 public sealed record StudentPackageRequest(
     string PackageRoot,
     string CompilationOutputDirectory,
@@ -16,7 +17,17 @@ public sealed record StudentPackageRequest(
     string PackageId,
     long PaperVersion,
     string? EncryptedPackagePath = null,
-    IReadOnlyList<NodeKeyRecipient>? Recipients = null);
+    IReadOnlyList<NodeKeyRecipient>? Recipients = null)
+{
+    /// <summary>由导入预览确认的逐文件显示资源清单。resourceRoots 只限定可选范围；默认不附带原始资源。</summary>
+    public IReadOnlyList<string> DisplayResourcePaths { get; init; } = [];
+
+    /// <summary>
+    /// 按 questionId 传入本次 D02 成功编译结果，支持 compile-* 独立目录。
+    /// 省略时读取调用方准备的平铺 PDF 目录；调用方须保证仅含本次已验收产物。
+    /// </summary>
+    public IReadOnlyDictionary<string, TeXCompileResult>? CompiledQuestions { get; init; }
+}
 
 public sealed record StudentPackageResult(
     bool Succeeded,
@@ -26,388 +37,337 @@ public sealed record StudentPackageResult(
     IReadOnlyList<StudentPackageIssue> Issues);
 
 /// <summary>
-/// 生成学生端包并加密。依据 requirements.md「逐题导入、原版显示与加密」：
-/// 按允许文件清单生成，仅含试题 PDF、题目所需图片、必要显示资源和无答案元数据；
-/// 答案、解析及其专用资源留在服务器；整个包用 AES-GCM 加密，每个发布版本独立随机密钥，
-/// 同一产物可重复下载（重复下载复用已加密的产物，不重新加密）。
-///
-/// 加密直接复用基础设施里已有的 <see cref="PackageEncryptionService"/>（HEXAMPKG v2）与既有信封格式，
-/// 不另造格式：服务端与学生端已按同一格式编解码。
-///
-/// 包内明文是一个 ZIP，条目名即包内相对路径：
-///   manifest.json（无答案元数据）、questions/&lt;考试名称_题号&gt;.pdf、以及清单 resourceRoots 下的资源。
-/// **该布局由 D03 定义，仍需与 B03 一起确认后定稿**；确认前不把它写进需求侧文档当作已定契约。
-/// 明文始终留在内存里，不落盘，避免加密前出现可读的中间文件。
+/// 仅打包重新生成的清单、逐题 PDF 和逐文件确认的显示资源。
+/// 加密模式从内存快照生成 ZIP，不写出明文目录；未指定加密路径时显式生成服务器预览目录。
+/// ZIP 布局仍待 D03/B03 接线确认。本服务不承担 PDF 正文、图片语义或选项坐标验收。
 /// </summary>
 public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
 {
-    /// <summary>内容检查的取样长度：只读前 64 KiB 判断是否夹带答案字段。</summary>
-    public const int ContentSampleBytes = 64 * 1024;
-
-    private const string QuestionsPrefix = "questions/";
-
-    private static readonly string[] TextLikeExtensions =
-    [
-        ".json", ".txt", ".tex", ".sty", ".cls", ".md", ".csv", ".xml"
-    ];
-
+    public const int MaxPackageBytes = 256 * 1024 * 1024;
+    private const int MaxMetadataBytes = 8 * 1024 * 1024;
     private readonly PackageEncryptionService _encryption =
         encryption ?? throw new ArgumentNullException(nameof(encryption));
 
     public async Task<StudentPackageResult> BuildAsync(
-        StudentPackageRequest request,
-        CancellationToken cancellationToken = default)
+        StudentPackageRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-
-        var packageRoot = RequireDirectory(request.PackageRoot, nameof(request.PackageRoot));
-        var compilationOutput = RequireDirectory(
-            request.CompilationOutputDirectory, nameof(request.CompilationOutputDirectory));
-        RequireOutsidePackageRoot(
-            request.StudentPackageDirectory, packageRoot, nameof(request.StudentPackageDirectory));
-        var studentDirectory = RequireEmptyDirectory(request.StudentPackageDirectory);
-
-        if (request.EncryptedPackagePath is { } encryptedPath)
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.PackageId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(request.PaperVersion, 1);
+        ArgumentNullException.ThrowIfNull(request.DisplayResourcePaths);
+        var packageRoot = RequireDirectory(request.PackageRoot);
+        var compilationRoot = RequireDirectory(request.CompilationOutputDirectory);
+        var studentDirectory = RequireAbsolute(request.StudentPackageDirectory);
+        RequireOutside(studentDirectory, packageRoot);
+        RequireOutside(studentDirectory, compilationRoot);
+        RequireEmpty(studentDirectory);
+        var target = request.EncryptedPackagePath is null ? null : RequireAbsolute(request.EncryptedPackagePath);
+        if (target is not null)
         {
-            RequireOutsidePackageRoot(encryptedPath, packageRoot, nameof(request.EncryptedPackagePath));
+            RequireOutside(target, packageRoot);
+            RequireOutside(target, compilationRoot);
+            RequireOutside(target, studentDirectory);
         }
-
         var issues = new List<StudentPackageIssue>();
-        var included = new List<string>();
         var excluded = new List<StudentPackageExclusion>();
-
-        var (manifest, manifestText) = ReadManifest(packageRoot, issues);
-        if (manifest is null || manifestText is null)
-        {
-            return Failed(string.Empty, request.PaperVersion, included, excluded, issues);
-        }
-
-        if (manifest.Questions.Count == 0)
-        {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.NoQuestions, "清单里没有题目，不能组包。"));
-        }
-
-        // 1. 无答案元数据。清单本身不含答案，但仍按内容规则核对一次，避免源头被改。
-        if (StudentPackageAllowlist.ContainsAnswerBearingJson(manifestText, out var manifestReason))
-        {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.AnswerResourceDetected,
-                $"清单内容被判定夹带答案，已停止组包：{manifestReason}",
-                StudentPackagePlan.MetadataFileName));
-        }
-        else
-        {
-            included.Add(StudentPackagePlan.MetadataFileName);
-        }
-
-        // 2. 逐题编译好的 PDF。jobname 与源文件基名一致，与 D02 的编译产物命名对齐。
-        foreach (var question in manifest.Questions)
-        {
-            var jobName = Path.GetFileNameWithoutExtension(question.Source);
-            var destination = $"{QuestionsPrefix}{jobName}.pdf";
-            var source = Path.Combine(compilationOutput, jobName + ".pdf");
-
-            if (!File.Exists(source))
-            {
-                issues.Add(new StudentPackageIssue(
-                    StudentPackageIssueCode.QuestionPdfMissing,
-                    $"找不到题目 {question.QuestionNo} 编译好的 PDF（{jobName}.pdf）。漏题或编译失败不得发布半份试卷。",
-                    destination));
-                continue;
-            }
-
-            if (StudentPackageAllowlist.IsAllowed(destination, null, out var reason))
-            {
-                included.Add(destination);
-            }
-            else
-            {
-                // 必需文件被允许清单挡下：不是「排除可疑文件」，而是包本身有问题，必须停止。
-                issues.Add(new StudentPackageIssue(
-                    StudentPackageIssueCode.RequiredResourceRejected,
-                    $"必需的题目 PDF 被允许清单挡下：{reason}",
-                    destination));
-            }
-        }
-
-        // 3. 清单声明的资源目录（题图与共享样式），逐个文件按允许清单判定。
-        foreach (var resourceRoot in manifest.ResourceRoots)
-        {
-            CollectResourceRoot(packageRoot, resourceRoot, included, excluded, issues);
-        }
-
-        if (issues.Count > 0)
-        {
-            return Failed(manifest.ExamId, request.PaperVersion, included, excluded, issues);
-        }
-
-        var plan = new StudentPackagePlan(
-            manifest.ExamId,
-            request.PaperVersion,
-            included.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            excluded.OrderBy(exclusion => exclusion.Path, StringComparer.Ordinal).ToList());
-
+        var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+        var examId = string.Empty;
+        StudentPackageResult Fail() => new(false,
+            new StudentPackagePlan(examId, request.PaperVersion, files.Keys.ToArray(), excluded),
+            null, null, issues);
         try
         {
-            WriteStudentPackage(packageRoot, compilationOutput, studentDirectory, plan);
-
-            string? artifactPath = null;
-            EncryptedPackageEnvelope? envelope = null;
-            if (request.EncryptedPackagePath is { } target)
+            PathBoundary.RejectExistingReparsePoints(packageRoot, packageRoot);
+            PathBoundary.RejectExistingReparsePoints(compilationRoot, compilationRoot);
+            PathBoundary.RejectExistingReparsePoints(studentDirectory, studentDirectory);
+            if (target is not null)
             {
-                (artifactPath, envelope) = await EncryptAsync(
-                    request, plan, studentDirectory, target, cancellationToken);
+                PathBoundary.RejectExistingReparsePoints(target, target);
+                if (File.Exists(target) || Directory.Exists(target))
+                {
+                    issues.Add(new(StudentPackageIssueCode.EncryptionFailed, "加密产物已存在，请复用既有产物或使用新的版本路径。"));
+                    return Fail();
+                }
             }
-
-            return new StudentPackageResult(true, plan, artifactPath, envelope, issues);
+            var manifestPath = Resolve(packageRoot, StudentPackagePlan.MetadataFileName);
+            if (!File.Exists(manifestPath))
+            {
+                issues.Add(new(StudentPackageIssueCode.MetadataInvalid, "导入包缺少 manifest.json。"));
+                return Fail();
+            }
+            var manifestText = ReadUtf8(ReadBounded(manifestPath, MaxMetadataBytes));
+            var validation = new ExamManifestValidator().ValidateJson(manifestText);
+            if (!validation.IsValid)
+            {
+                issues.AddRange(validation.Issues.Select(issue => new StudentPackageIssue(
+                    StudentPackageIssueCode.MetadataInvalid, issue.Message, issue.Location)));
+                return Fail();
+            }
+            var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestText, ImportJson.Create())!;
+            examId = manifest.ExamId;
+            // 从受控 DTO 重新生成，后续不再重读原始清单。
+            var metadata = JsonSerializer.SerializeToUtf8Bytes(manifest, ImportJson.Create());
+            files.Add(StudentPackagePlan.MetadataFileName, metadata);
+            long totalBytes = metadata.Length;
+            void AddFile(string relative, string source)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (files.Keys.Any(existing => string.Equals(existing, relative, StringComparison.OrdinalIgnoreCase)))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "包内路径重复。", relative));
+                    return;
+                }
+                var bytes = ReadBounded(source, checked((int)(MaxPackageBytes - totalBytes)));
+                // 完整内容的补充字段检查，不按后缀或前 64 KiB 取样放行。
+                if (!StudentPackageAllowlist.IsAllowed(relative, Encoding.UTF8.GetString(bytes), out var reason))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, reason!, relative));
+                    return;
+                }
+                if (!HasDisplaySignature(relative, bytes))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "显示文件类型或文件头不符合约定。", relative));
+                    return;
+                }
+                totalBytes += bytes.Length;
+                files.Add(relative, bytes);
+            }
+            if (request.CompiledQuestions is { } compiled &&
+                (compiled.Count != manifest.Questions.Count || compiled.Keys.Any(id => !manifest.Questions.Any(q => q.QuestionId == id))))
+                issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "编译结果必须与清单中的题目逐一对应。"));
+            foreach (var question in manifest.Questions)
+            {
+                var pdfName = Path.GetFileNameWithoutExtension(question.Source.Replace('\\', '/')) + ".pdf";
+                var destination = "questions/" + pdfName;
+                var source = Resolve(compilationRoot, pdfName);
+                if (request.CompiledQuestions is { } results)
+                {
+                    if (!results.TryGetValue(question.QuestionId, out var result) || result is null ||
+                        !result.Succeeded || result.OutputPdfPath is null || result.Issues.Count != 0 ||
+                        !string.Equals(Path.GetFileName(result.OutputPdfPath), pdfName, StringComparison.Ordinal))
+                    {
+                        issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "题目缺少本次成功编译的 PDF。", destination));
+                        continue;
+                    }
+                    source = PathBoundary.ResolveWithinRoot(compilationRoot, result.OutputPdfPath, "编译 PDF 路径越界。");
+                }
+                if (!File.Exists(source))
+                {
+                    issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "找不到题目编译好的 PDF。", destination));
+                    continue;
+                }
+                AddFile(destination, source);
+            }
+            var resourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in manifest.ResourceRoots)
+            {
+                var directory = Resolve(packageRoot, PackagePathRules.Normalize(root));
+                if (!Directory.Exists(directory))
+                {
+                    issues.Add(new(StudentPackageIssueCode.ResourceRootMissing, "清单声明的资源目录不存在。", root));
+                    continue;
+                }
+                CollectResources(packageRoot, directory, resourcePaths, cancellationToken);
+            }
+            var requestedResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in request.DisplayResourcePaths)
+            {
+                if (!PackagePathRules.IsRelativeAndInside(path))
+                {
+                    issues.Add(new(StudentPackageIssueCode.PathEscaped, "显示资源必须使用包内相对路径。", path));
+                    continue;
+                }
+                var relative = PackagePathRules.Normalize(path);
+                if (!requestedResources.Add(relative))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "显示资源清单重复。", relative));
+                    continue;
+                }
+                if (!resourcePaths.TryGetValue(relative, out var actual))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredImageMissing, "显示资源不存在或未处于声明的资源目录中。", relative));
+                    continue;
+                }
+                if (actual.StartsWith("questions/", StringComparison.OrdinalIgnoreCase) ||
+                    !StudentPackageAllowlist.IsAllowed(actual, null, out _))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "必需资源被路径规则拒绝。", actual));
+                    continue;
+                }
+                AddFile(actual, Resolve(packageRoot, actual));
+            }
+            foreach (var path in resourcePaths.Order(StringComparer.Ordinal))
+            {
+                if (!requestedResources.Contains(path))
+                {
+                    StudentPackageAllowlist.IsAllowed(path, null, out var reason);
+                    excluded.Add(new(path, reason ?? "未列入逐文件显示资源允许清单；编译依赖不随学生包分发。"));
+                }
+            }
+            if (issues.Count != 0) return Fail();
+            var plan = new StudentPackagePlan(examId, request.PaperVersion, files.Keys.ToArray(), excluded);
+            if (target is not null)
+            {
+                var envelope = await EncryptAsync(request, files, target, cancellationToken);
+                return new(true, plan, target, envelope, issues);
+            }
+            WritePreview(files, studentDirectory, cancellationToken);
+            return new(true, plan, null, null, issues);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException) { throw; }
+        catch (UnauthorizedAccessException)
         {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.EncryptionFailed,
-                $"组包或加密失败：{exception.Message}"));
-            return Failed(manifest.ExamId, request.PaperVersion, included, excluded, issues);
+            issues.Add(new(StudentPackageIssueCode.PathEscaped, "文件路径越界、经过重解析点或没有访问权限。"));
         }
+        catch (DecoderFallbackException)
+        {
+            issues.Add(new(StudentPackageIssueCode.MetadataInvalid, "清单必须使用有效的 UTF-8 编码。"));
+        }
+        catch (Exception exception) when (exception is IOException or CryptographicException or ArgumentException)
+        {
+            issues.Add(new(StudentPackageIssueCode.EncryptionFailed, "组包或加密失败，未发布产物。请检查文件、容量及节点证书配置。"));
+        }
+        return Fail();
     }
 
-    private async Task<(string Path, EncryptedPackageEnvelope Envelope)> EncryptAsync(
-        StudentPackageRequest request,
-        StudentPackagePlan plan,
-        string studentDirectory,
-        string encryptedPath,
-        CancellationToken cancellationToken)
+    private async Task<EncryptedPackageEnvelope> EncryptAsync(StudentPackageRequest request,
+        SortedDictionary<string, byte[]> files, string target, CancellationToken cancellationToken)
     {
-        var recipients = request.Recipients ?? [];
-        var temporary = encryptedPath + ".partial";
-        EncryptedPackageEnvelope envelope;
-
-        using (var plaintext = new MemoryStream())
+        var directory = Path.GetDirectoryName(target)!;
+        PathBoundary.RejectExistingReparsePoints(directory, directory);
+        Directory.CreateDirectory(directory);
+        var temporary = target + "." + Guid.NewGuid().ToString("N") + ".partial";
+        try
         {
-            WriteZip(studentDirectory, plan, plaintext);
+            using var plaintext = new MemoryStream();
+            using (var zip = new ZipArchive(plaintext, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var (path, bytes) in files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var entry = zip.CreateEntry(path, CompressionLevel.Optimal);
+                    entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                    using var stream = entry.Open();
+                    stream.Write(bytes);
+                }
+            }
             plaintext.Position = 0;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(encryptedPath))!);
-            await using (var ciphertext = new FileStream(
-                             temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+            EncryptedPackageEnvelope envelope;
+            await using (var ciphertext = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                envelope = await _encryption.EncryptAsync(
-                    plaintext,
-                    ciphertext,
-                    request.PackageId,
-                    plan.PaperVersion,
-                    recipients,
-                    cancellationToken);
+                envelope = await _encryption.EncryptAsync(plaintext, ciphertext, request.PackageId,
+                    request.PaperVersion, request.Recipients ?? [], cancellationToken);
+                ciphertext.Flush(flushToDisk: true);
             }
+            cancellationToken.ThrowIfCancellationRequested();
+            PathBoundary.RejectExistingReparsePoints(target, target);
+            File.Move(temporary, target, overwrite: false);
+            return envelope;
         }
-
-        // 半成品不得替换当前资源：先写临时文件，完整加密后再改名。
-        File.Move(temporary, encryptedPath, overwrite: true);
-        return (encryptedPath, envelope);
-    }
-
-    /// <summary>把计划内的条目按确定性顺序写成一个 ZIP；顺序固定使相同输入得到相同的明文。</summary>
-    private static void WriteZip(string studentDirectory, StudentPackagePlan plan, Stream destination)
-    {
-        using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
-        foreach (var relativePath in plan.IncludedPaths)
+        finally
         {
-            var source = Path.Combine(studentDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            var entry = archive.CreateEntry(relativePath, CompressionLevel.Optimal);
-            using var entryStream = entry.Open();
-            using var file = File.OpenRead(source);
-            file.CopyTo(entryStream);
+            if (File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
-    /// <summary>
-    /// 按计划把文件写进学生端包目录。计划里只存相对路径，来源在这里区分：
-    /// 无答案元数据取自包根，questions/ 下的 PDF 取自编译产物目录，其余资源按包内相对路径取自包根。
-    /// </summary>
-    private static void WriteStudentPackage(
-        string packageRoot,
-        string compilationOutput,
-        string studentDirectory,
-        StudentPackagePlan plan)
+    private static void WritePreview(SortedDictionary<string, byte[]> files, string target, CancellationToken token)
     {
-        foreach (var relativePath in plan.IncludedPaths)
-        {
-            var destination = Path.Combine(
-                studentDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-
-            var source = ResolveSource(packageRoot, compilationOutput, relativePath);
-            File.Copy(source, destination, overwrite: true);
-        }
-    }
-
-    private static string ResolveSource(string packageRoot, string compilationOutput, string relativePath)
-    {
-        if (string.Equals(relativePath, StudentPackagePlan.MetadataFileName, StringComparison.Ordinal))
-        {
-            return Path.Combine(packageRoot, StudentPackagePlan.MetadataFileName);
-        }
-
-        if (relativePath.StartsWith(QuestionsPrefix, StringComparison.Ordinal))
-        {
-            return Path.Combine(compilationOutput, relativePath[QuestionsPrefix.Length..]);
-        }
-
-        return Path.Combine(packageRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-    }
-
-    private static void CollectResourceRoot(
-        string packageRoot,
-        string resourceRoot,
-        List<string> included,
-        List<StudentPackageExclusion> excluded,
-        List<StudentPackageIssue> issues)
-    {
-        var directory = Path.Combine(packageRoot, resourceRoot.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(directory))
-        {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.ResourceRootMissing,
-                $"清单声明的资源目录不存在：{resourceRoot}。",
-                resourceRoot));
-            return;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-        {
-            var relativePath = Path.GetRelativePath(packageRoot, file).Replace('\\', '/');
-            if (StudentPackageAllowlist.IsAllowed(relativePath, SampleText(file), out var reason))
-            {
-                included.Add(relativePath);
-            }
-            else
-            {
-                // 排除可疑文件是预期行为，不是缺陷；原因记进计划供导入预览展示。
-                excluded.Add(new StudentPackageExclusion(relativePath, reason!));
-            }
-        }
-    }
-
-    private static string? SampleText(string path)
-    {
-        var extension = Path.GetExtension(path);
-        if (!TextLikeExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var length = (int)Math.Min(stream.Length, ContentSampleBytes);
-        var buffer = new byte[length];
-        var read = stream.ReadAtLeast(buffer, length, throwOnEndOfStream: false);
-        return Encoding.UTF8.GetString(buffer, 0, read);
-    }
-
-    private static (ExamManifest? Manifest, string? Text) ReadManifest(
-        string packageRoot,
-        List<StudentPackageIssue> issues)
-    {
-        var path = Path.Combine(packageRoot, StudentPackagePlan.MetadataFileName);
-        if (!File.Exists(path))
-        {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.MetadataInvalid,
-                $"导入包里没有清单：{StudentPackagePlan.MetadataFileName}"));
-            return (null, null);
-        }
-
-        var text = File.ReadAllText(path);
+        var parent = Path.GetDirectoryName(target)!;
+        PathBoundary.RejectExistingReparsePoints(parent, parent);
+        Directory.CreateDirectory(parent);
+        var staging = Path.Combine(parent, ".student-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
         try
         {
-            // 必须用 D01 的严格设置：它拒绝未定义字段、重复字段、带引号的整数与非法 Unicode。
-            var manifest = JsonSerializer.Deserialize<ExamManifest>(text, ImportJson.Create());
-            if (manifest is null)
+            foreach (var (relative, bytes) in files)
             {
-                issues.Add(new StudentPackageIssue(
-                    StudentPackageIssueCode.MetadataInvalid, "清单内容为空。"));
-                return (null, null);
+                token.ThrowIfCancellationRequested();
+                var path = Resolve(staging, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, bytes);
             }
-
-            return (manifest, text);
+            token.ThrowIfCancellationRequested();
+            PathBoundary.RejectExistingReparsePoints(target, target);
+            RequireEmpty(target);
+            if (Directory.Exists(target)) Directory.Delete(target, recursive: false);
+            Directory.Move(staging, target);
         }
-        catch (JsonException exception)
+        finally
         {
-            issues.Add(new StudentPackageIssue(
-                StudentPackageIssueCode.MetadataInvalid,
-                $"清单不符合约定：{exception.Message}"));
-            return (null, null);
+            // 只清理本次创建的目录，不递归删除请求指定的目标。
+            PathBoundary.ResolveWithinRoot(parent, staging, "临时目录越界。");
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
         }
     }
 
-    private static StudentPackageResult Failed(
-        string examId,
-        long paperVersion,
-        List<string> included,
-        List<StudentPackageExclusion> excluded,
-        List<StudentPackageIssue> issues) =>
-        new(
-            false,
-            new StudentPackagePlan(examId, paperVersion, included, excluded),
-            null,
-            null,
-            issues);
-
-    private static string RequireDirectory(string path, string parameterName)
+    private static void CollectResources(string root, string directory, HashSet<string> paths, CancellationToken token)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
-        if (!Path.IsPathFullyQualified(path))
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        var count = 0;
+        while (pending.TryPop(out var current))
         {
-            throw new ArgumentException("必须是绝对路径。", parameterName);
+            foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+            {
+                token.ThrowIfCancellationRequested();
+                if (++count > 10000) throw new IOException("资源数量超限。");
+                PathBoundary.ResolveWithinRoot(root, entry, "资源路径越界。");
+                if (Directory.Exists(entry)) pending.Push(entry);
+                else paths.Add(Path.GetRelativePath(root, entry).Replace('\\', '/'));
+            }
         }
-
-        if (!Directory.Exists(path))
-        {
-            throw new DirectoryNotFoundException($"目录不存在：{path}");
-        }
-
-        return Path.GetFullPath(path);
     }
 
-    private static string RequireEmptyDirectory(string path)
+    private static byte[] ReadBounded(string path, int maximum)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length > maximum) throw new IOException("文件超过组包容量限制。");
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1) throw new IOException("读取期间文件变化。");
+        return bytes;
+    }
+
+    private static string ReadUtf8(byte[] bytes) => new UTF8Encoding(false, true).GetString(
+        bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble) ? bytes.AsSpan(3) : bytes);
+
+    private static bool HasDisplaySignature(string path, byte[] bytes) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".pdf" => bytes.AsSpan().StartsWith("%PDF-"u8),
+        ".png" => bytes.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
+        ".jpg" or ".jpeg" => bytes.AsSpan().StartsWith(new byte[] { 255, 216, 255 }),
+        _ => false
+    };
+
+    private static string Resolve(string root, string relative) => PathBoundary.ResolveWithinRoot(root,
+        Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)), "包内文件路径越界。");
+
+    private static string RequireAbsolute(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (!Path.IsPathFullyQualified(path))
-        {
-            throw new ArgumentException("学生端包目录必须是绝对路径。", nameof(path));
-        }
+        if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("必须是绝对路径。", nameof(path));
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    }
 
-        var full = Path.GetFullPath(path);
-        if (Directory.Exists(full) && Directory.EnumerateFileSystemEntries(full).Any())
-        {
-            throw new InvalidOperationException(
-                $"学生端包目录必须为空，避免上一次的残留内容混入新包：{full}");
-        }
-
-        Directory.CreateDirectory(full);
+    private static string RequireDirectory(string path)
+    {
+        var full = RequireAbsolute(path);
+        if (!Directory.Exists(full)) throw new DirectoryNotFoundException("输入目录不存在。");
         return full;
     }
 
-    /// <summary>产物目录不得位于导入包之内：材料目录必须保持零改动。</summary>
-    private static void RequireOutsidePackageRoot(string path, string packageRoot, string parameterName)
+    private static void RequireEmpty(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
-        if (!Path.IsPathFullyQualified(path))
-        {
-            throw new ArgumentException("必须是绝对路径。", parameterName);
-        }
+        if (File.Exists(path) || Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any())
+            throw new InvalidOperationException("学生端包预览目录必须为空。");
+    }
 
-        var full = Path.GetFullPath(path);
-        var relative = Path.GetRelativePath(packageRoot, full);
-        var inside = relative == "." ||
-                     (!Path.IsPathFullyQualified(relative) &&
-                      relative != ".." &&
-                      !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
-
-        if (inside)
-        {
-            throw new ArgumentException(
-                $"产物不得写回导入包目录，材料目录必须保持零改动：{full}",
-                parameterName);
-        }
+    private static void RequireOutside(string path, string root)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        if (relative == "." || !Path.IsPathFullyQualified(relative) && relative != ".." &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new ArgumentException("产物必须在材料、编译输入及其他输出目录之外。");
     }
 }
