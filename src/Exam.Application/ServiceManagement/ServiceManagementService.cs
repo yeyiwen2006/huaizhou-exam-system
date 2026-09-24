@@ -20,6 +20,16 @@ public interface IStartupReadinessProbe
         CancellationToken cancellationToken);
 }
 
+public interface IServiceConfigurationStore
+{
+    Task<ServiceConfiguration> LoadAsync(CancellationToken cancellationToken = default);
+
+    Task<ServiceConfiguration> SaveAsync(
+        ServiceConfiguration requested,
+        long expectedVersion,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IBackupCoordinator
 {
     Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken cancellationToken);
@@ -33,6 +43,7 @@ public sealed class ServiceManagementService
     private readonly IStartupReadinessProbe _readiness;
     private readonly IBackupCoordinator _backups;
     private readonly IClock _clock;
+    private readonly IServiceConfigurationStore _configurationStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, BackupResult> _completedBackups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RestoreResult> _completedRestores = new(StringComparer.Ordinal);
@@ -46,7 +57,8 @@ public sealed class ServiceManagementService
         IManagedBusinessHost host,
         IStartupReadinessProbe readiness,
         IBackupCoordinator backups,
-        IClock clock)
+        IClock clock,
+        IServiceConfigurationStore configurationStore)
     {
         Validate(configuration);
         _configuration = configuration;
@@ -54,11 +66,46 @@ public sealed class ServiceManagementService
         _readiness = readiness;
         _backups = backups;
         _clock = clock;
+        _configurationStore = configurationStore ?? throw new ArgumentNullException(nameof(configurationStore));
         _status = host.Status;
     }
 
-    public ServiceStatusSnapshot GetStatus() =>
-        new(_status, _configuration, _checks, _clock.UtcNow, _lastError);
+    public static async Task<ServiceManagementService> LoadAsync(
+        IServiceConfigurationStore configurationStore,
+        IManagedBusinessHost host,
+        IStartupReadinessProbe readiness,
+        IBackupCoordinator backups,
+        IClock clock,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configurationStore);
+        var configuration = await configurationStore.LoadAsync(cancellationToken);
+        return new ServiceManagementService(
+            configuration, host, readiness, backups, clock, configurationStore);
+    }
+
+    public ServiceStatusSnapshot GetStatus()
+    {
+        var actual = _host.Status;
+        if (actual == BusinessServiceStatus.Faulted && _status != BusinessServiceStatus.Faulted)
+        {
+            _status = BusinessServiceStatus.Faulted;
+            _lastError = "无法核对业务宿主状态，须检查本机服务控制器。";
+        }
+        else if (_status == BusinessServiceStatus.Running && actual != BusinessServiceStatus.Running)
+        {
+            _status = BusinessServiceStatus.Faulted;
+            _lastError = "业务宿主已停止或退出，须检查实际进程状态。";
+        }
+        else if ((_status is BusinessServiceStatus.Stopped or BusinessServiceStatus.Recovering) &&
+                 actual == BusinessServiceStatus.Running)
+        {
+            _status = BusinessServiceStatus.Faulted;
+            _lastError = "业务宿主意外运行，须先隔离并核对实际进程状态。";
+        }
+
+        return new(_status, _configuration, _checks, _clock.UtcNow, _lastError);
+    }
 
     public async Task<ServiceConfiguration> ConfigureAsync(
         ServiceConfiguration requested,
@@ -68,7 +115,8 @@ public sealed class ServiceManagementService
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_status is not BusinessServiceStatus.Stopped and not BusinessServiceStatus.Faulted)
+            if ((_status is BusinessServiceStatus.Running or BusinessServiceStatus.Starting or BusinessServiceStatus.Stopping) ||
+                (_host.Status is not BusinessServiceStatus.Stopped and not BusinessServiceStatus.Faulted))
             {
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "业务服务运行时不能修改本机服务配置。");
             }
@@ -79,7 +127,8 @@ public sealed class ServiceManagementService
             }
 
             Validate(requested);
-            _configuration = requested with { Version = expectedVersion + 1 };
+            var next = await _configurationStore.SaveAsync(requested, expectedVersion, cancellationToken);
+            _configuration = next;
             _checks = [];
             _lastError = null;
             return _configuration;
@@ -95,13 +144,37 @@ public sealed class ServiceManagementService
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_status == BusinessServiceStatus.Running)
+            var current = GetStatus();
+            if (current.Status == BusinessServiceStatus.Running)
             {
-                return GetStatus();
+                return current;
+            }
+
+            if (_host.Status == BusinessServiceStatus.Running)
+            {
+                throw new DomainRuleException(
+                    ErrorCodes.VersionConflict,
+                    "业务宿主已在管理流程之外运行，须先停止并核对实际状态。");
             }
 
             _status = BusinessServiceStatus.Recovering;
-            _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
+            try
+            {
+                _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "启动检查未完成，须检查受保护的本机诊断记录。";
+                throw new DomainRuleException(
+                    ErrorCodes.ServiceRecovering,
+                    "启动检查未完成，业务写入保持关闭。", retryable: true);
+            }
+            if (_checks.Count == 0)
+            {
+                _lastError = "启动检查没有返回任何结果，业务写入保持关闭。";
+                throw new DomainRuleException(ErrorCodes.ServiceRecovering, _lastError, retryable: true);
+            }
             var blocking = _checks.Where(check => !check.Passed && check.BlocksWrites).ToArray();
             if (blocking.Length > 0)
             {
@@ -113,14 +186,30 @@ public sealed class ServiceManagementService
             {
                 _status = BusinessServiceStatus.Starting;
                 await _host.StartAsync(cancellationToken);
+                if (_host.Status != BusinessServiceStatus.Running)
+                {
+                    throw new InvalidOperationException("业务宿主未达到运行状态。");
+                }
                 _status = BusinessServiceStatus.Running;
                 _lastError = null;
-                return GetStatus();
+                var started = GetStatus();
+                if (started.Status != BusinessServiceStatus.Running)
+                {
+                    throw new InvalidOperationException("业务宿主状态在启动完成后发生变化。");
+                }
+
+                return started;
             }
-            catch (Exception ex) when (ex is not DomainRuleException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _status = BusinessServiceStatus.Faulted;
-                _lastError = ex.Message;
+                _lastError = "启动已取消，须核对实际业务宿主状态。";
+                throw;
+            }
+            catch (Exception)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "业务服务启动失败，须检查受保护的本机诊断记录。";
                 throw new DomainRuleException(ErrorCodes.PersistenceFailed, "业务服务启动失败，管理入口仍保持可用。", retryable: true);
             }
         }
@@ -135,22 +224,40 @@ public sealed class ServiceManagementService
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_status == BusinessServiceStatus.Stopped)
+            var current = GetStatus();
+            if (current.Status == BusinessServiceStatus.Stopped)
             {
-                return GetStatus();
+                return current;
             }
 
             try
             {
                 _status = BusinessServiceStatus.Stopping;
                 await _host.StopAsync(cancellationToken);
+                if (_host.Status != BusinessServiceStatus.Stopped)
+                {
+                    throw new InvalidOperationException("业务宿主未达到停止状态。");
+                }
                 _status = BusinessServiceStatus.Stopped;
-                return GetStatus();
+                _lastError = null;
+                var stopped = GetStatus();
+                if (stopped.Status != BusinessServiceStatus.Stopped)
+                {
+                    throw new InvalidOperationException("业务宿主状态在停止完成后发生变化。");
+                }
+
+                return stopped;
             }
-            catch (Exception ex) when (ex is not DomainRuleException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _status = BusinessServiceStatus.Faulted;
-                _lastError = ex.Message;
+                _lastError = "停止已取消，须核对实际业务宿主状态。";
+                throw;
+            }
+            catch (Exception)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "业务服务停止失败，须检查实际进程及受保护的本机诊断记录。";
                 throw new DomainRuleException(ErrorCodes.PersistenceFailed, "业务服务停止失败，须检查实际进程状态。", retryable: true);
             }
         }
@@ -218,7 +325,7 @@ public sealed class ServiceManagementService
 
             await _backups.RestoreAsync(request, cancellationToken);
             _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
-            if (_checks.Any(check => !check.Passed && check.BlocksWrites))
+            if (_checks.Count == 0 || _checks.Any(check => !check.Passed && check.BlocksWrites))
             {
                 throw new DomainRuleException(ErrorCodes.ServiceRecovering, "恢复数据未通过启动检查，业务写入保持关闭。", retryable: true);
             }
