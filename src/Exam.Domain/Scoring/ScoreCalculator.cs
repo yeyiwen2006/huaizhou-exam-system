@@ -7,7 +7,7 @@ namespace Exam.Domain.Scoring;
 
 /// <summary>
 /// 一道题的计分输入。计分分支按**参考答案的选项数量**选择（1 个走 oneCorrect，多个走 multipleCorrect），
-/// 与 D01 校验器的逐题满分判定保持一致；题组题型只决定配置里有哪些分支可用。
+/// 与 D01 校验器保持一致；题组题型同时限定参考答案数量和可达作答范围。
 /// </summary>
 public sealed record QuestionRule(
     string QuestionId,
@@ -15,7 +15,13 @@ public sealed record QuestionRule(
     string SubjectId,
     IReadOnlyList<string> OptionIds,
     IReadOnlyList<string> CorrectOptionIds,
-    ManifestGroupScoring? Scoring);
+    ManifestGroupScoring? Scoring)
+{
+    /// <summary>从清单题组传入，用于校验答案数量及合法作答范围。</summary>
+    public QuestionTypeKind Type { get; init; } = QuestionTypeKind.Indeterminate;
+
+    public bool AllowAbstain { get; init; }
+}
 
 /// <summary>一份答卷的标识，用于把计分结果与原答卷对应。</summary>
 public sealed record GradeIdentity(
@@ -42,7 +48,17 @@ public static class ScoreCalculator
     {
         ArgumentNullException.ThrowIfNull(rule);
 
-        if (answer is null || answer.Kind != AnswerKind.Selected || answer.OptionIds.Count == 0)
+        var ruleProblem = ValidateRuleShape(rule);
+        if (ruleProblem is not null) throw new ArgumentException(ruleProblem.Message, nameof(rule));
+        var answerProblem = ValidateAnswer(rule, answer);
+        if (answerProblem is not null) throw new ArgumentException(answerProblem, nameof(answer));
+
+        return DetermineValidOutcome(rule, answer!);
+    }
+
+    private static AnswerOutcome DetermineValidOutcome(QuestionRule rule, AnswerValue answer)
+    {
+        if (answer.Kind != AnswerKind.Selected)
         {
             return AnswerOutcome.Blank;
         }
@@ -68,14 +84,33 @@ public static class ScoreCalculator
         ArgumentNullException.ThrowIfNull(answers);
         ArgumentNullException.ThrowIfNull(identity);
 
+        if (string.IsNullOrWhiteSpace(identity.SubmissionId) || string.IsNullOrWhiteSpace(identity.ExamId) ||
+            string.IsNullOrWhiteSpace(identity.CandidateId) || identity.GradingVersion < 1)
+            return new(false, "答卷标识或计分版本不合法。", null);
+
+        var ruleProblems = ValidatePublishable(rules);
+        if (ruleProblems.Count != 0)
+            return new(false, $"计分规则不合法（{ruleProblems[0].Code}）：{ruleProblems[0].Message}", null);
+
+        var answerIds = answers.Keys.ToHashSet(StringComparer.Ordinal);
+        if (rules.Any(rule => !answerIds.Contains(rule.QuestionId)))
+            return new(false, $"答卷缺少题目记录（{ScoreRuleCodes.AnswerMissing}）；未作答必须显式传入 Empty。", null);
+        if (answerIds.Count != rules.Count)
+            return new(false, "答卷包含不属于本套规则的题目。", null);
+        foreach (var rule in rules)
+        {
+            var problem = ValidateAnswer(rule, answers[rule.QuestionId]);
+            if (problem is not null) return new(false, $"题目 {rule.QuestionNo} 的答案不合法：{problem}", null);
+        }
+
         var questionGrades = new List<QuestionGrade>();
         var subjectRaw = new Dictionary<string, ExactRational>(StringComparer.Ordinal);
         var subjectOrder = new List<string>();
 
         foreach (var rule in rules)
         {
-            var answer = answers.TryGetValue(rule.QuestionId, out var value) ? value : null;
-            var outcome = DetermineOutcome(rule, answer);
+            var answer = answers[rule.QuestionId];
+            var outcome = DetermineValidOutcome(rule, answer);
 
             if (!TryResolveExpression(rule, outcome, out var expression, out var problemCode, out var message))
             {
@@ -176,8 +211,27 @@ public static class ScoreCalculator
         ArgumentNullException.ThrowIfNull(rules);
         var problems = new List<ScoreRuleProblem>();
 
+        if (rules.Count == 0)
+        {
+            problems.Add(new(ScoreRuleCodes.RuleInvalid, "计分规则不能为空。"));
+            return problems;
+        }
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var numbers = new HashSet<int>();
+
         foreach (var rule in rules)
         {
+            var shapeProblem = ValidateRuleShape(rule);
+            if (shapeProblem is not null)
+            {
+                problems.Add(shapeProblem);
+                continue;
+            }
+            if (!ids.Add(rule.QuestionId) || !numbers.Add(rule.QuestionNo))
+            {
+                problems.Add(new(ScoreRuleCodes.RuleInvalid, "题目标识和全卷题号不得重复。", rule.QuestionId));
+                continue;
+            }
             problems.AddRange(ValidateQuestion(rule));
         }
 
@@ -186,27 +240,7 @@ public static class ScoreCalculator
 
     private static IEnumerable<ScoreRuleProblem> ValidateQuestion(QuestionRule rule)
     {
-        if (rule.CorrectOptionIds.Count == 0)
-        {
-            yield return new ScoreRuleProblem(
-                ScoreRuleCodes.CorrectOptionMissing,
-                $"题目 {rule.QuestionNo} 没有配置正确答案。",
-                rule.QuestionId);
-            yield break;
-        }
-
-        var notDeclared = rule.CorrectOptionIds
-            .Where(option => !Contains(rule.OptionIds, option))
-            .ToList();
-        if (notDeclared.Count > 0)
-        {
-            yield return new ScoreRuleProblem(
-                ScoreRuleCodes.CorrectOptionNotDeclared,
-                $"题目 {rule.QuestionNo} 的正确答案不在选项之内：{string.Join('、', notDeclared)}。",
-                rule.QuestionId);
-            yield break;
-        }
-
+        // 集合、题型及参考答案的形状已经由 ValidateRuleShape 校验。
         var correctCount = rule.CorrectOptionIds.Count;
         var hasIncorrectOption = rule.OptionIds.Count > correctCount;
 
@@ -240,7 +274,7 @@ public static class ScoreCalculator
             yield break;
         }
 
-        foreach (var (outcome, selectedCorrectCount) in EnumerateReachableOutcomes(correctCount, hasIncorrectOption))
+        foreach (var (outcome, selectedCorrectCount) in EnumerateReachableOutcomes(correctCount, hasIncorrectOption, rule.Type))
         {
             if (!TryResolveExpression(rule, outcome, out var expression, out var code, out var message))
             {
@@ -318,7 +352,8 @@ public static class ScoreCalculator
     /// </summary>
     private static IEnumerable<(AnswerOutcome Outcome, int SelectedCorrectCount)> EnumerateReachableOutcomes(
         int correctCount,
-        bool hasIncorrectOption)
+        bool hasIncorrectOption,
+        QuestionTypeKind type)
     {
         yield return (AnswerOutcome.Blank, 0);
         yield return (AnswerOutcome.Correct, correctCount);
@@ -333,8 +368,9 @@ public static class ScoreCalculator
             yield break;
         }
 
-        // 选错时可能选中 0 到 correctCount-1 个正确选项，再加上至少一个错误选项。
-        for (var selected = 0; selected < correctCount; selected++)
+        // 多选及不定项可以选齐全部正确选项并额外选错；单选选错时选对数只能为 0。
+        var maximum = type == QuestionTypeKind.Single ? 0 : correctCount;
+        for (var selected = 0; selected <= maximum; selected++)
         {
             yield return (AnswerOutcome.Wrong, selected);
         }
@@ -394,6 +430,47 @@ public static class ScoreCalculator
         }
 
         return answer.OptionIds.Count(option => Contains(rule.CorrectOptionIds, option));
+    }
+
+    private static ScoreRuleProblem? ValidateRuleShape(QuestionRule? rule)
+    {
+        if (rule is null || string.IsNullOrWhiteSpace(rule.QuestionId) || rule.QuestionNo < 1 ||
+            string.IsNullOrWhiteSpace(rule.SubjectId) || !Enum.IsDefined(rule.Type))
+            return new(ScoreRuleCodes.RuleInvalid, "题目标识、题号、科目和题型必须有效。", rule?.QuestionId);
+        if (rule.OptionIds is null || rule.OptionIds.Count is < 2 or > 26 ||
+            rule.OptionIds.Any(string.IsNullOrWhiteSpace) ||
+            rule.OptionIds.Distinct(StringComparer.Ordinal).Count() != rule.OptionIds.Count)
+            return new(ScoreRuleCodes.RuleInvalid, "选项必须为 2 至 26 个非空且不重复的标识。", rule.QuestionId);
+        if (rule.CorrectOptionIds is null || rule.CorrectOptionIds.Count == 0)
+            return new(ScoreRuleCodes.CorrectOptionMissing, "参考答案不能为空。", rule.QuestionId);
+        if (rule.CorrectOptionIds.Any(string.IsNullOrWhiteSpace) ||
+            rule.CorrectOptionIds.Distinct(StringComparer.Ordinal).Count() != rule.CorrectOptionIds.Count)
+            return new(ScoreRuleCodes.RuleInvalid, "参考答案选项不能为空或重复。", rule.QuestionId);
+        if (rule.CorrectOptionIds.Any(option => !Contains(rule.OptionIds, option)))
+            return new(ScoreRuleCodes.CorrectOptionNotDeclared,
+                $"参考答案包含未声明的选项：{string.Join('、', rule.CorrectOptionIds.Where(option => !Contains(rule.OptionIds, option)))}。", rule.QuestionId);
+        if (rule.Type == QuestionTypeKind.Single && rule.CorrectOptionIds.Count != 1 ||
+            rule.Type == QuestionTypeKind.Multiple && rule.CorrectOptionIds.Count < 2)
+            return new(ScoreRuleCodes.RuleInvalid, "参考答案数量与单项或多项题型不符。", rule.QuestionId);
+        return null;
+    }
+
+    private static string? ValidateAnswer(QuestionRule rule, AnswerValue? answer)
+    {
+        if (answer is null || !Enum.IsDefined(answer.Kind) || answer.OptionIds is null)
+            return "缺少答案记录或作答类型无效。";
+        if (answer.Kind == AnswerKind.Selected && answer.OptionIds.Count == 0 ||
+            answer.Kind != AnswerKind.Selected && answer.OptionIds.Count != 0)
+            return "作答类型与选项数量不符。";
+        if (answer.OptionIds.Any(string.IsNullOrWhiteSpace) ||
+            answer.OptionIds.Distinct(StringComparer.Ordinal).Count() != answer.OptionIds.Count ||
+            answer.OptionIds.Any(option => !Contains(rule.OptionIds, option)))
+            return "选项包含空值、重复项或未声明的标识。";
+        if (rule.Type == QuestionTypeKind.Single && answer.OptionIds.Count > 1)
+            return "单项选择题只能选择一个普通选项。";
+        if (!rule.AllowAbstain && answer.Kind == AnswerKind.Abstain)
+            return "本题未启用不作答选项。";
+        return null;
     }
 
     private static bool Contains(IReadOnlyList<string> options, string option) =>

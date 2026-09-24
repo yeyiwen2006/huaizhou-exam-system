@@ -129,17 +129,15 @@ public sealed class ScoreCalculatorTests
     }
 
     [Fact]
-    public void Grade_MissingAnswerForAQuestion_IsTreatedAsBlank()
+    public void Grade_MissingAnswerForAQuestion_FailsInsteadOfFabricatingBlank()
     {
-        // 刻意固化的行为：A05 应保证冻结答卷覆盖全部题目；缺项按不选计分，
-        // 不把「漏答」误判成计分失败，也不编造分数。
+        // 漏传记录不能与显式的 Empty 作答混淆。
         var rule = SingleChoiceRule(correct: "3", blank: "0", wrong: "-0.75");
 
         var outcome = ScoreCalculator.Grade([rule], new Dictionary<string, AnswerValue>(), Identity());
 
-        Assert.True(outcome.Succeeded, outcome.FailureReason);
-        Assert.Equal(AnswerOutcome.Blank, outcome.Grade!.Questions[0].Outcome);
-        Assert.Equal("0", outcome.Grade.Questions[0].ExactScore);
+        Assert.False(outcome.Succeeded);
+        Assert.Null(outcome.Grade);
     }
 
     [Fact]
@@ -202,6 +200,76 @@ public sealed class ScoreCalculatorTests
     private static string Score(QuestionRule rule, AnswerValue answer) =>
         Grade(rule, answer).Grade!.Questions[0].ExactScore;
 
+    [Fact]
+    public void Grade_DuplicateSelectedOptionsCannotReceiveFullCredit()
+    {
+        var result = Grade(MultipleChoiceRule(["A", "B"]), AnswerValue.Selected("A", "A"));
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Grade);
+    }
+
+    [Fact]
+    public void Grade_UnknownOptionIsInvalidRatherThanAnOrdinaryWrongAnswer()
+    {
+        var result = Grade(SingleChoiceRule("3", "0", "-1"), AnswerValue.Selected("unknown"));
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Grade);
+    }
+
+    [Fact]
+    public void Grade_AllCorrectPlusWrongUsesActualSelectedCorrectCount()
+    {
+        var rule = MultipleChoiceRule(["A", "B"]) with
+        {
+            Scoring = new ManifestGroupScoring(null, new ManifestMultipleCorrect("2", "1", "0", "-{选择的正确选项数}"))
+        };
+        var result = Grade(rule, AnswerValue.Selected("A", "B", "D"));
+        Assert.True(result.Succeeded, result.FailureReason);
+        var question = Assert.Single(result.Grade!.Questions);
+        Assert.Equal(AnswerOutcome.Wrong, question.Outcome);
+        Assert.Equal("-2", question.ExactScore);
+        Assert.Equal("0", result.Grade.ExactTotalScore);
+    }
+
+    [Fact]
+    public void Grade_RejectsSingleChoiceMultipleSelectionAndDisabledAbstain()
+    {
+        var rule = SingleChoiceRule("3", "0", "-1") with { Type = QuestionTypeKind.Single, AllowAbstain = false };
+        Assert.False(Grade(rule, AnswerValue.Selected("A", "B")).Succeeded);
+        Assert.False(Grade(rule, AnswerValue.Abstain()).Succeeded);
+        Assert.True(Grade(rule, AnswerValue.Empty()).Succeeded);
+    }
+
+    [Fact]
+    public void Grade_InvalidAnswerShapesFailWithoutScores()
+    {
+        var rule = SingleChoiceRule("3", "0", "-1");
+        var answers = new AnswerValue[]
+        {
+            new((Exam.Contracts.Common.AnswerKind)99, []),
+            AnswerValue.Selected(),
+            new(Exam.Contracts.Common.AnswerKind.Empty, ["A"]),
+            new(Exam.Contracts.Common.AnswerKind.Selected, null!),
+            null!
+        };
+        foreach (var answer in answers)
+        {
+            var result = Grade(rule, answer);
+            Assert.False(result.Succeeded);
+            Assert.Null(result.Grade);
+        }
+    }
+
+    [Fact]
+    public void Grade_DuplicateRulesAndForeignQuestionsCannotBeSilentlyIgnored()
+    {
+        var rule = SingleChoiceRule("3", "0", "-1");
+        var answers = new Dictionary<string, AnswerValue> { [rule.QuestionId] = AnswerValue.Selected("A") };
+        Assert.False(ScoreCalculator.Grade([rule, rule], answers, Identity()).Succeeded);
+        answers.Add("foreign", AnswerValue.Empty());
+        Assert.False(ScoreCalculator.Grade([rule], answers, Identity()).Succeeded);
+    }
+
     private static GradeOutcome Grade(QuestionRule rule, AnswerValue answer) =>
         ScoreCalculator.Grade(
             [rule],
@@ -220,7 +288,7 @@ public sealed class ScoreCalculatorTests
             ["A"],
             new ManifestGroupScoring(
                 new ManifestOneCorrect(correct, blank, wrong),
-                new ManifestMultipleCorrect(correct, "2", blank, wrong)));
+                new ManifestMultipleCorrect(correct, "2", blank, wrong))) { AllowAbstain = true };
 
     /// <summary>多个正确选项的题：走 multipleCorrect 分支。</summary>
     private static QuestionRule MultipleChoiceRule(IReadOnlyList<string> correctOptionIds) =>

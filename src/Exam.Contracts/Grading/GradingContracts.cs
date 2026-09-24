@@ -50,6 +50,9 @@ public sealed record ScoreRuleProblem(
 /// <summary>计分规则问题的稳定标识。</summary>
 public static class ScoreRuleCodes
 {
+    /// <summary>规则集合、题目标识、选项集合或题型不合法。</summary>
+    public const string RuleInvalid = "score.ruleInvalid";
+
     /// <summary>参考答案里有选项不在该题选项之内。</summary>
     public const string CorrectOptionNotDeclared = "score.correctOptionNotDeclared";
 

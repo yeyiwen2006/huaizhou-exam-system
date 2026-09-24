@@ -177,4 +177,55 @@ public sealed class ScoreRuleValidationTests
         IReadOnlyList<string> correctOptionIds,
         ManifestGroupScoring scoring) =>
         new("q-001", 1, "subject-1", ["A", "B", "C", "D"], correctOptionIds, scoring);
+
+    [Fact]
+    public void ValidatePublishable_AllCorrectOptionsPlusWrongOptionIsReachable()
+    {
+        var rule = Rule(["A", "B"], new ManifestGroupScoring(null,
+            new ManifestMultipleCorrect("2", "1", "0", "1/({正确选项总数}-{选择的正确选项数})")));
+
+        Assert.Contains(ScoreCalculator.ValidatePublishable([rule]), problem => problem.Code == ScoreRuleCodes.DivisionByZero);
+    }
+
+    [Fact]
+    public void ValidatePublishable_DuplicateQuestionCannotBeCountedTwice()
+    {
+        var rule = Rule(["A"], new ManifestGroupScoring(new ManifestOneCorrect("1", "0", "0"), null));
+        Assert.NotEmpty(ScoreCalculator.ValidatePublishable([rule, rule]));
+    }
+
+    [Fact]
+    public void ValidatePublishable_DuplicateCorrectOptionsAreInvalid()
+    {
+        var rule = Rule(["A", "A"], new ManifestGroupScoring(null, new ManifestMultipleCorrect("2", "1", "0", "0")));
+        Assert.NotEmpty(ScoreCalculator.ValidatePublishable([rule]));
+    }
+
+    [Fact]
+    public void ValidatePublishable_SingleChoiceDoesNotEnumerateImpossibleExtraSelection()
+    {
+        var rule = Rule(["A"], new ManifestGroupScoring(
+            new ManifestOneCorrect("1", "0", "1/(1-{选择的正确选项数})"), null))
+            with { Type = QuestionTypeKind.Single };
+        Assert.Empty(ScoreCalculator.ValidatePublishable([rule]));
+        Assert.Contains(ScoreCalculator.ValidatePublishable([rule with { Type = QuestionTypeKind.Indeterminate }]),
+            problem => problem.Code == ScoreRuleCodes.DivisionByZero);
+    }
+
+    [Theory]
+    [InlineData(QuestionTypeKind.Single, 2)]
+    [InlineData(QuestionTypeKind.Multiple, 1)]
+    public void ValidatePublishable_QuestionTypeMustMatchAnswerKey(QuestionTypeKind type, int count)
+    {
+        var rule = Rule(new[] { "A", "B" }.Take(count).ToArray(), new ManifestGroupScoring(
+            new ManifestOneCorrect("1", "0", "0"), new ManifestMultipleCorrect("2", "1", "0", "0")))
+            with { Type = type };
+        Assert.Contains(ScoreCalculator.ValidatePublishable([rule]), problem => problem.Code == ScoreRuleCodes.RuleInvalid);
+    }
+
+    [Fact]
+    public void ValidatePublishable_EmptyRuleSetIsInvalid()
+    {
+        Assert.Contains(ScoreCalculator.ValidatePublishable([]), problem => problem.Code == ScoreRuleCodes.RuleInvalid);
+    }
 }
