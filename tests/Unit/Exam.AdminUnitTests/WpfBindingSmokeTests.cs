@@ -14,11 +14,13 @@ namespace Exam.AdminUnitTests;
 public sealed class WpfBindingSmokeTests
 {
     [Fact]
+    [Trait("Category", "Wpf")]
     public async Task MainWindow_AllTabsLoad_QuestionTypeCanBeChanged_WithoutBindingErrors()
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
+            Exception? failure = null;
             App? application = null;
             MainWindow? window = null;
             using var output = new StringWriter();
@@ -79,20 +81,29 @@ public sealed class WpfBindingSmokeTests
                 }
                 listener.Flush();
                 Assert.Equal(string.Empty, output.ToString());
-                completion.SetResult();
+
             }
-            catch (Exception exception) { completion.TrySetException(exception); }
+            catch (Exception exception) { failure = exception; }
             finally
             {
-                window?.Close();
-                application?.Shutdown();
-                source.Listeners.Remove(listener);
-                source.Switch.Level = previousLevel;
+                try { window?.Close(); application?.Shutdown(); }
+                catch (Exception error) { failure ??= error; }
+                finally
+                {
+                    source.Listeners.Remove(listener);
+                    source.Switch.Level = previousLevel;
+                    try { if (!Dispatcher.CurrentDispatcher.HasShutdownFinished) Dispatcher.CurrentDispatcher.InvokeShutdown(); }
+                    catch (Exception error) { failure ??= error; }
+                }
             }
+            // Completion means cleanup has also finished, not only the assertions.
+            if (failure is null) completion.TrySetResult();
+            else completion.TrySetException(failure);
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)), "WPF 测试线程没有退出。");
     }
 
     private static void DrainDispatcher()
