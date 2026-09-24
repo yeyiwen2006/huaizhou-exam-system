@@ -13,7 +13,7 @@ public static class StudentPackageLayout
 
     private static readonly string[] AnswerKeywords = ["答案", "解析", "answer", "solution"];
 
-    public static bool IsCanonicalPath(string? path) => !string.IsNullOrWhiteSpace(path) && path.Length <= MaxPathLength &&
+    public static bool IsSafePath(string? path) => !string.IsNullOrWhiteSpace(path) && path.Length <= MaxPathLength &&
         !path.Contains('\\') && !path.Any(c => char.IsControl(c) || ":*?\"<>|".Contains(c)) &&
         path.Split('/').All(ValidSegment);
 
@@ -26,8 +26,8 @@ public static class StudentPackageLayout
                 "123456789¹²³".Contains(stem[3]));
     }
 
-    public static bool IsDisplayPath(string path) => IsCanonicalPath(path) &&
-        !path.Split('/').Contains("server-only", StringComparer.OrdinalIgnoreCase) &&
+    public static bool IsDisplayPath(string? path) => IsSafePath(path) &&
+        !path!.Split('/').Contains("server-only", StringComparer.OrdinalIgnoreCase) &&
         !AnswerKeywords.Any(keyword => path.Contains(keyword, StringComparison.OrdinalIgnoreCase)) &&
         Path.GetExtension(path).ToLowerInvariant() is ".pdf" or ".png" or ".jpg" or ".jpeg";
 

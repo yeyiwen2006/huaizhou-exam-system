@@ -43,8 +43,8 @@ public sealed class MergedPrIntegrationTests
         var queue = new InMemoryGradingTaskQueue();
         await store.SetAuthorizationStateAsync(new("exam", "candidate", "participation", 1, "device", 1,
             ParticipationBusinessState.Answering, 1, 1));
-        var rules = fixture.Rules();
-        using var service = new SubmissionService(store, queue, paperReader: _ => rules.Structure);
+        var rules = fixture.ImportedRules();
+        using var service = new SubmissionService(store, queue, paperReader: id => id == rules.ExamId ? rules.Structure : null);
         var request = new SubmitFinalAnswersRequest(frozen.RequestId!, frozen.SubmissionId, "exam", "candidate",
             frozen.ParticipationId!, frozen.EntryVersion, frozen.DeviceId!, frozen.AuthorizationVersion,
             frozen.PaperVersion, frozen.FrozenAnswers);
@@ -199,10 +199,12 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
         [new("q1", 1, "subject", "single", "questions/衔接合成考试_1.tex", ["A", "B", "C", "D"], null),
          new("q2", 2, "subject", "multiple", "questions/衔接合成考试_2.tex", ["A", "B", "C", "D"], null)], []);
 
-    public ImportedGradingRules Rules() => ImportedGradingRules.Create(JsonSerializer.Serialize(Manifest, ImportJson.Create()),
-        JsonSerializer.Serialize(new AnswerKeyFile(1, Manifest.ExamId, [new("q1", 1, ["A"]), new("q2", 2, ["A", "B"])]), ImportJson.Create()));
+    public ImportedGradingRules ImportedRules() => ImportedGradingRules.Create(
+        JsonSerializer.Serialize(Manifest, ImportJson.Create()),
+        JsonSerializer.Serialize(new AnswerKeyFile(1, Manifest.ExamId,
+            [new("q1", 1, ["A"]), new("q2", 2, ["A", "B"])]), ImportJson.Create()));
 
-    public static StudentPaperManifest CreateDisplayManifest()
+    public static StudentPaperManifest CreateStudentManifest()
     {
         var manifest = CreateManifest();
         var structure = ImportedGradingRules.BuildStructure(manifest);

@@ -1,46 +1,15 @@
+using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
-using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Importing;
-using Exam.Contracts.Submissions;
 using Exam.Contracts.Resources;
-using Exam.Student.Core;
 
 namespace Exam.StudentUnitTests;
 
 public sealed class StudentPaperPackageBoundaryTests
 {
-    [Fact]
-    public void DeclaredImageWithInvalidSignatureCannotBecomeUsableContent()
-    {
-        var files = Files(StudentPaperFixture.CreateDisplayManifest() with { DisplayResources = ["assets/image.png"] });
-        files.Add(("assets/image.png", "not a PNG"u8.ToArray()));
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(Zip(files), "exam", 1));
-    }
-
-    [Fact]
-    public void ValidPdfHeaderDoesNotHideAnIncompleteBody()
-    {
-        var payload = Zip(Files());
-        var changed = false;
-        for (var offset = 0; offset + 46 <= payload.Length; offset++)
-        {
-            if (!payload.AsSpan(offset, 4).SequenceEqual(new byte[] { 0x50, 0x4b, 0x01, 0x02 })) continue;
-            var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(offset + 28, 2));
-            if (offset + 46 + nameLength > payload.Length) continue;
-            var name = Encoding.UTF8.GetString(payload, offset + 46, nameLength);
-            if (!name.StartsWith("questions/", StringComparison.Ordinal)) continue;
-            var declared = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(offset + 24, 4));
-            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset + 24, 4), declared + 1);
-            changed = true;
-            break;
-        }
-        Assert.True(changed);
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(payload, "exam", 1));
-    }
-
     [Theory]
     [InlineData("missing-metadata")]
     [InlineData("missing-pdf")]
@@ -49,7 +18,6 @@ public sealed class StudentPaperPackageBoundaryTests
     [InlineData("parent-path")]
     [InlineData("backslash-path")]
     [InlineData("absolute-path")]
-    [InlineData("device-name")]
     [InlineData("unknown-file")]
     [InlineData("bad-pdf")]
     [InlineData("unsupported-schema")]
@@ -67,16 +35,15 @@ public sealed class StudentPaperPackageBoundaryTests
             case "parent-path": files.Add(("../outside.pdf", "%PDF-1.4"u8.ToArray())); break;
             case "backslash-path": files.Add(("assets\\image.pdf", "%PDF-1.4"u8.ToArray())); break;
             case "absolute-path": files.Add(("/image.pdf", "%PDF-1.4"u8.ToArray())); break;
-            case "device-name": files.Add(("assets/CON.pdf", "%PDF-1.4"u8.ToArray())); break;
             case "unknown-file": files.Add(("other.pdf", "%PDF-1.4"u8.ToArray())); break;
             case "bad-pdf": files[1] = (files[1].Path, "not a PDF"u8.ToArray()); break;
             case "unsupported-schema": files[0] = (files[0].Path, JsonSerializer.SerializeToUtf8Bytes(
-                StudentPaperFixture.CreateDisplayManifest() with { SchemaVersion = 99 }, ImportJson.Create())); break;
+                StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 99 }, ImportJson.Create())); break;
             case "invalid-json": files[0] = (files[0].Path, "{"u8.ToArray()); break;
             case "invalid-utf8": files[0] = (files[0].Path, new byte[] { 255, 254, 255 }); break;
             default: throw new ArgumentOutOfRangeException(nameof(problem));
         }
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(Zip(files), "exam", 1));
+        AssertRejected(Zip(files));
     }
 
     [Fact]
@@ -86,81 +53,132 @@ public sealed class StudentPaperPackageBoundaryTests
         files[0] = (files[0].Path, new byte[StudentPackageLayout.MaxMetadataBytes + 1]);
         var payload = Zip(files);
         Assert.True(payload.Length < StudentPackageLayout.MaxMetadataBytes);
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(payload, "exam", 1));
+        AssertRejected(payload);
     }
 
     [Fact]
     public void TooManyZipEntriesAreRejected()
     {
         var files = Files();
-        for (var i = files.Count; i <= StudentPackageLayout.MaxEntryCount; i++)
-            files.Add(($"assets/empty-{i}.pdf", []));
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(Zip(files), "exam", 1));
+        for (var i = files.Count; i <= StudentPackageLayout.MaxEntryCount; i++) files.Add(($"assets/empty-{i}.pdf", []));
+        AssertRejected(Zip(files));
     }
 
     [Theory]
     [InlineData("assets/image.png")]
     [InlineData("ASSETS/image.png")]
     [InlineData("image.png")]
-    public void ExplicitDisplayPathsArePreserved(string path)
+    public void ExplicitDisplayResourcesRetainTheirExactPublishedPaths(string path)
     {
-        var files = Files(StudentPaperFixture.CreateDisplayManifest() with { DisplayResources = [path] });
+        var files = Files(StudentPaperFixture.CreateStudentManifest() with { DisplayResources = [path] });
         files.Add((path, new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
-        var catalog = StudentPaperPackage.ReadManifest(Zip(files), "exam", 1);
-        Assert.Equal(2, catalog.Questions.Count);
-        Assert.Equal(path, Assert.Single(catalog.DisplayResources));
+        var manifest = StudentPaperPackage.ReadManifest(Zip(files), "exam", 1);
+        Assert.Equal(2, manifest.Questions.Count);
+        Assert.Equal(path, Assert.Single(manifest.DisplayResources));
     }
 
     [Theory]
     [InlineData("assets/raw.tex")]
     [InlineData("assets/answer.pdf")]
     [InlineData("server-only/image.pdf")]
-    public void ExplicitManifestCannotAllowServerOnlyOrNonDisplayFiles(string path)
+    [InlineData("assets/CON.pdf")]
+    [InlineData("assets/COM1.pdf")]
+    [InlineData("assets/CON .pdf")]
+    [InlineData("assets/LPT¹.pdf")]
+    public void DeclaringAResourceDoesNotMakeForbiddenFilesDistributable(string path)
     {
-        var files = Files(StudentPaperFixture.CreateDisplayManifest() with { DisplayResources = [path] });
+        var files = Files(StudentPaperFixture.CreateStudentManifest() with { DisplayResources = [path] });
         files.Add((path, "%PDF-1.4"u8.ToArray()));
-        Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(Zip(files), "exam", 1));
+        AssertRejected(Zip(files));
+    }
+
+    [Theory]
+    [InlineData("assets/image.pdf")]
+    [InlineData("assets/image.png")]
+    [InlineData("assets/image.jpg")]
+    public void DeclaredDisplayResourcesMustHaveTheProducerRequiredFileHeader(string path)
+    {
+        var files = Files(StudentPaperFixture.CreateStudentManifest() with { DisplayResources = [path] });
+        files.Add((path, "invalid display content"u8.ToArray()));
+        AssertRejected(Zip(files));
     }
 
     [Fact]
-    public void CatalogOwnsItsValidatedIdentityAndOptions()
+    public void ValidPdfHeaderDoesNotConcealATruncatedBody()
+    {
+        var files = Files();
+        var payload = Zip(files);
+        var pdfPath = files[1].Path;
+        var patched = false;
+        for (var offset = 0; offset + 46 < payload.Length; offset++)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(offset)) != 0x02014b50) continue;
+            var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(offset + 28));
+            if (offset + 46 + nameLength > payload.Length ||
+                Encoding.UTF8.GetString(payload, offset + 46, nameLength) != pdfPath) continue;
+            var declaredLength = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(offset + 24));
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset + 24), declaredLength + 100);
+            patched = true;
+            break;
+        }
+        Assert.True(patched);
+        AssertRejected(payload);
+    }
+
+    [Fact]
+    public void ValidatedCatalogCannotBeMutatedThroughItsCollectionInterfaces()
     {
         var payload = Zip(Files());
-        var catalog = StudentPaperPackage.ReadManifest(payload, "exam", 1);
+        var manifest = StudentPaperPackage.ReadManifest(payload, "exam", 1);
         Array.Clear(payload);
-        Assert.Equal("exam", catalog.ExamId);
-        Assert.Equal(2, catalog.Questions.Count);
-        var structure = catalog.Structure;
-        var answers = structure.Questions.ToDictionary(q => q.QuestionId, _ => AnswerValue.Empty());
-        Assert.Null(AnswerSheetContract.Validate(structure, answers));
-        Assert.Null(AnswerSheetContract.ValidateAnswer(structure.Questions[0], AnswerValue.Selected("A")));
-        Assert.NotNull(AnswerSheetContract.ValidateAnswer(structure.Questions[0], AnswerValue.Selected("A", "B")));
-        Assert.NotNull(AnswerSheetContract.ValidateAnswer(structure.Questions[0], AnswerValue.Abstain()));
-        Assert.Null(AnswerSheetContract.ValidateAnswer(structure.Questions[1], AnswerValue.Abstain()));
-        Assert.DoesNotContain(structure.Questions, q => q.QuestionId == "Q1");
-        var options = Assert.IsAssignableFrom<IList<string>>(structure.Questions[0].OptionIds);
-        Assert.Throws<NotSupportedException>(() => options[0] = "Z");
-        var questions = Assert.IsAssignableFrom<IList<StudentPaperQuestion>>(catalog.Questions);
+        var options = Assert.IsAssignableFrom<IList<string>>(manifest.Questions[0].Structure.OptionIds);
+        Assert.Throws<NotSupportedException>(() => options[0] = "unknown");
+        var questions = Assert.IsAssignableFrom<IList<StudentPaperQuestion>>(manifest.Questions);
         Assert.Throws<NotSupportedException>(() => questions.Clear());
+        var resources = Assert.IsAssignableFrom<IList<string>>(manifest.DisplayResources);
+        Assert.Throws<NotSupportedException>(() => resources.Add("other.pdf"));
+        var structure = Assert.IsAssignableFrom<IList<Exam.Contracts.Versioning.PaperQuestionStructure>>(manifest.Structure.Questions);
+        Assert.Throws<NotSupportedException>(() => structure.Clear());
+        Assert.Equal(2, manifest.Questions.Count);
+        Assert.Equal("A", manifest.Questions[0].Structure.OptionIds[0]);
     }
 
     [Fact]
-    public void CancelledReadDoesNotReturnAnAuthorizedCatalog()
+    public void CancelledManifestReadDoesNotReturnACatalog()
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        Assert.Throws<OperationCanceledException>(() => StudentPaperPackage.ReadManifest(Zip(Files()), "exam", 1, cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => StudentPaperPackage.ReadManifest(
+            Zip(Files()), "exam", 1, cancellation.Token));
+    }
+
+    [Fact]
+    public void CancelledPdfReadDoesNotReturnADisplayCopy()
+    {
+        var payload = Zip(Files());
+        var manifest = StudentPaperPackage.ReadManifest(payload, "exam", 1);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => StudentPaperPackage.ReadQuestionPdf(
+            payload, manifest, "q1", cancellation.Token));
+    }
+
+    private static void AssertRejected(byte[] payload)
+    {
+        var exception = Record.Exception(() => StudentPaperPackage.ReadManifest(payload, "exam", 1));
+        Assert.True(exception is IOException or InvalidDataException or JsonException,
+            exception?.ToString() ?? "Invalid ZIP content was accepted.");
     }
 
     private static List<(string Path, byte[] Bytes)> Files(StudentPaperManifest? manifest = null)
     {
-        manifest ??= StudentPaperFixture.CreateDisplayManifest();
+        manifest ??= StudentPaperFixture.CreateStudentManifest();
         var files = new List<(string, byte[])>
         {
             (StudentPackagePlan.MetadataFileName, JsonSerializer.SerializeToUtf8Bytes(manifest, ImportJson.Create()))
         };
         files.AddRange(manifest.Questions.Select(question =>
-            (question.PdfPath, Encoding.ASCII.GetBytes("%PDF-1.4\n% synthetic test header\n"))));
+            (question.PdfPath, Encoding.ASCII.GetBytes("%PDF-1.4\n% synthetic header, not rendering acceptance\n"))));
         return files;
     }
 

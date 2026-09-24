@@ -25,7 +25,7 @@ public sealed record StudentPaperManifest(int SchemaVersion, string ExamId, stri
 public static class StudentPaperPackage
 {
     public const int MaxPackageBytes = StudentPackageLayout.MaxContentBytes;
-    public const string ManifestPath = "manifest.json";
+    public const string ManifestPath = StudentPackagePlan.MetadataFileName;
 
     public static StudentPaperManifest ReadManifest(byte[] payload, string examId, long paperVersion, CancellationToken cancellationToken = default)
     {
@@ -46,7 +46,7 @@ public static class StudentPaperPackage
         foreach (var entry in zip.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!StudentPackageLayout.IsCanonicalPath(entry.FullName) || !paths.Add(entry.FullName) || entry.Length < 0 ||
+            if (!StudentPackageLayout.IsSafePath(entry.FullName) || !paths.Add(entry.FullName) || entry.Length < 0 ||
                 entry.Length > MaxPackageBytes || (total += entry.Length) > MaxPackageBytes)
                 throw new InvalidDataException("试题包含重复、越界路径或超出大小限制。");
         }
@@ -71,7 +71,7 @@ public static class StudentPaperPackage
         }
         foreach (var resource in manifest.DisplayResources)
         {
-            if (!StudentPackageLayout.IsCanonicalPath(resource) || resource.StartsWith("questions/", StringComparison.OrdinalIgnoreCase) || !expected.Add(resource))
+            if (!StudentPackageLayout.IsSafePath(resource) || resource.StartsWith("questions/", StringComparison.OrdinalIgnoreCase) || !expected.Add(resource))
                 throw new InvalidDataException("显示资源清单无效。");
             ValidateDisplayEntry(zip, resource, cancellationToken);
         }
@@ -91,13 +91,14 @@ public static class StudentPaperPackage
         };
     }
 
-    public static byte[] ReadQuestionPdf(byte[] payload, StudentPaperManifest manifest, string questionId)
+    public static byte[] ReadQuestionPdf(byte[] payload, StudentPaperManifest manifest, string questionId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var question = manifest.Questions.SingleOrDefault(q => q.Structure.QuestionId == questionId)
             ?? throw new ArgumentException("未知题目。", nameof(questionId));
         using var stream = new MemoryStream(payload, writable: false);
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
-        return ReadEntry(zip, question.PdfPath, MaxPackageBytes);
+        return ReadEntry(zip, question.PdfPath, MaxPackageBytes, cancellationToken);
     }
 
     private static byte[] ReadEntry(ZipArchive zip, string path, int limit, CancellationToken token = default)
@@ -177,7 +178,7 @@ public static class StudentPaperPackage
                 !numbers.Add(q.QuestionNo) || q.GroupId is null || !groups.TryGetValue(q.GroupId, out var subject) || subject != q.SubjectId ||
                 q.QuestionType is not ("single" or "multiple" or "indeterminate") ||
                 q.OptionIds is null || q.OptionIds.Count is < 2 or > 26 || q.OptionIds.Any(string.IsNullOrWhiteSpace) ||
-                q.OptionIds.Distinct(StringComparer.Ordinal).Count() != q.OptionIds.Count || !StudentPackageLayout.IsCanonicalPath(item!.PdfPath) ||
+                q.OptionIds.Distinct(StringComparer.Ordinal).Count() != q.OptionIds.Count || !StudentPackageLayout.IsSafePath(item!.PdfPath) ||
                 (item.OptionCaptions is { } captions && (captions.Count != q.OptionIds.Count || captions.Any(string.IsNullOrWhiteSpace))))
                 throw new InvalidDataException("题目清单无效。");
         }
