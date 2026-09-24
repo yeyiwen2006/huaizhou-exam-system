@@ -1,24 +1,24 @@
 name: 任务卡
-description: 按A/B/C/D/E/F/T板块登记开发或团队测试任务
+description: 按A/B/C/D/E/F/T板块登记开发、团队测试或最终交付任务
 title: '[任务编号] '
 labels:
 - task
 body:
 - type: markdown
   attributes:
-    value: 所有PR代码审查、修正复核与合并统一由A（@yeyiwen2006）负责。开发期间持续模块测试；T01/T02仅在全部代码完成后执行整体测试，并各自包含修复回归。编号与边界见docs/task-map.md。
+    value: 所有PR代码审查、修正复核与合并统一由A（@yeyiwen2006）负责。开发期间持续模块测试；T01/T02仅在全部代码完成后执行整体测试，并各自包含修复回归；T03在T02通过后由A负责最终交付。编号与边界见docs/task-map.md。
 - type: input
   id: task_code
   attributes:
     label: 当前任务编号
-    description: 使用A、B、C、D、E、F或T前缀；T只有T01和T02两张整体测试总单。
+    description: 使用A、B、C、D、E、F或T前缀；T01/T02是整体测试总单，T03是A负责的最终交付任务。
   validations:
     required: true
 - type: input
   id: owner
   attributes:
     label: 开发或统筹负责人
-    description: 填角色和已确认GitHub账号；T任务填写A统筹及具体执行分工。
+    description: 填角色和已确认GitHub账号；T01/T02填写A统筹及具体执行分工，T03填写A。
   validations:
     required: true
 - type: textarea
@@ -60,7 +60,7 @@ body:
   id: acceptance
   attributes:
     label: 整体验收与关闭条件
-    description: 关联T01/T02及Sxx，明确修复/复测证据；测试轮次内已包含修复，不另设修复总单。
+    description: 关联T01/T02及Sxx，明确修复/复测证据；测试轮次内已包含修复，不另设修复总单；T03填写验收版本一致性及发布移交条件。
   validations:
     required: true
 - type: textarea

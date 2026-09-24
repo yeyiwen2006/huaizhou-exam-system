@@ -6,7 +6,9 @@
 
 仓库已经具备 A02 至 A06 的 PostgreSQL 18 持久化、正式 HTTP API、设备授权的 SignalR 持久指令补发、通用 HTTP CLI、版本化加密题包存储、基础备份/隔离恢复以及现归F02的主备控制基础设施。内存实现仅供单元测试；生产环境缺少 PostgreSQL 连接或考务令牌时会拒绝启用业务入口。逐项完成度、实测范围和仍需两台真实主机完成的限制见 [A 组实施状态](docs/a-implementation-status.md)。
 
-当前任务与Issue对应见[任务映射](docs/task-map.md)。F（@Nostalgia-cy）负责服务管理、主备与恢复；D03保持由D开发；E负责测试基础设施。全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，最后固定交付版本。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
+当前任务与Issue对应见[任务映射](docs/task-map.md)。六人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjaiqi）、E（@WorldChangerczx）、F（@Nostalgia-cy）。
+
+F负责服务管理、主备与恢复；D03保持由D开发；E负责测试基础设施。全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
 
 ## 开发环境
 
