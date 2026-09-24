@@ -88,3 +88,15 @@ dotnet test Huaizhou.ExamSystem.sln --no-build --configuration Release
 - 回退原则：保留原部署与数据；新管理宿主故障时业务写入保持关闭，先核对实际进程；配置失败保留旧版本；不自动恢复旧数据库、不覆盖较新答卷、不自动迁移或升级。
 
 下一步：继续完成独立管理宿主、受控 Windows 服务启停、启动自检和恢复接线；在 Windows 上补跑完整三项检查与真实服务/恢复模块验证。通过 PR 交 A 审查，不自行合并主分支。
+
+## Windows 后续实施与实测（2026-09-24）
+
+从远端 `codex/f01-service-management` 的 `32f97fde` 核对并检出，随后获取最新 `origin/main` (`5d2233c`)。为避免强制推送既有共享分支，从最新 main 新建 `codex/f01-service-management-followup` 并拣入原 F01 提交；远端原分支和 main 均未修改。
+
+本批增加受控 Windows 服务控制适配器：服务名称在部署时固定并校验，使用 Windows Service Control Manager 查询、启动和停止，仅在观察到目标服务状态后返回；超时、查询失败及取消不报告启停成功。`ServiceManagementService` 同样在宿主操作返回后复核实际状态，恢复后的启动检查若无结果则拒绝通过。新增针对未达目标状态、取消、空恢复检查和服务状态轮询的单元测试。
+
+该适配器目前仅实现 **Windows 服务进程状态**，尚未接入独立管理宿主，也不代表 `/health/ready` 已通过。管理传输与停机时的授权契约、数据库/证书/资源/事件/定时检查组合及隔离恢复后的业务核对仍需按上文由 A 确认并接线；本批不将 F01 标记完成。
+
+Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 PowerShell 完成，Release 构建 0 警告、0 错误；F01 专项 `FullyQualifiedName~ServiceManagement` 40/40 通过。正常用户 PowerShell 把 `TEMP` 指向隔离工作目录后，报告标准 Windows 分类测试 `Category!=Postgres&Category!=Latex` 全部通过；该次仅有用户结果反馈，未保存原始测试报告。另用隔离程序检查受控启停及 Windows SCM 不存在服务的错误路径。外部依赖验证按仓库测试计划继续；本批没有安装和操作真实考试业务服务。
+
+真实 Windows 服务启停、管理宿主停机可用性及隔离恢复后的继续收卷仍未验收。仓库不包含本机日志、配置秘密或运行数据。

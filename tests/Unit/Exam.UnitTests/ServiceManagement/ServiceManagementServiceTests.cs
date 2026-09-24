@@ -42,6 +42,46 @@ public sealed class ServiceManagementServiceTests
     }
 
     [Fact]
+    public async Task Start_RejectsHostThatNeverBecomesRunning()
+    {
+        var host = new FakeHost { StartResult = BusinessServiceStatus.Starting };
+        var service = CreateService(host, [new StartupCheckResult("database", true, "ok", true)]);
+
+        var error = await Assert.ThrowsAsync<DomainRuleException>(() => service.StartAsync());
+
+        Assert.Equal(ErrorCodes.PersistenceFailed, error.Code);
+        Assert.Equal(BusinessServiceStatus.Faulted, service.GetStatus().Status);
+        Assert.Equal(BusinessServiceStatus.Starting, host.Status);
+    }
+
+    [Fact]
+    public async Task Start_CancellationDoesNotReportSuccess()
+    {
+        using var source = new CancellationTokenSource();
+        var host = new FakeHost { CancelOnStart = source };
+        var service = CreateService(host, [new StartupCheckResult("database", true, "ok", true)]);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.StartAsync(source.Token));
+
+        Assert.Equal(BusinessServiceStatus.Faulted, service.GetStatus().Status);
+        Assert.Equal(BusinessServiceStatus.Stopped, host.Status);
+    }
+
+    [Fact]
+    public async Task Stop_RejectsHostThatKeepsRunning()
+    {
+        var host = new FakeHost { StopResult = BusinessServiceStatus.Running };
+        var service = CreateService(host, [new StartupCheckResult("database", true, "ok", true)]);
+        await service.StartAsync();
+
+        var error = await Assert.ThrowsAsync<DomainRuleException>(() => service.StopAsync());
+
+        Assert.Equal(ErrorCodes.PersistenceFailed, error.Code);
+        Assert.Equal(BusinessServiceStatus.Faulted, service.GetStatus().Status);
+        Assert.Equal(BusinessServiceStatus.Running, host.Status);
+    }
+
+    [Fact]
     public async Task Start_RejectsMissingChecks_AndAllowsConfigurationRepair()
     {
         var host = new FakeHost();
@@ -141,6 +181,17 @@ public sealed class ServiceManagementServiceTests
     }
 
     [Fact]
+    public void Status_ReportsHostStateQueryFailure()
+    {
+        var host = new FakeHost();
+        var service = CreateService(host, []);
+        host.Status = BusinessServiceStatus.Faulted;
+
+        Assert.Equal(BusinessServiceStatus.Faulted, service.GetStatus().Status);
+        Assert.NotNull(service.GetStatus().LastError);
+    }
+
+    [Fact]
     public async Task Start_RejectsUnmanagedRunningHost()
     {
         var host = new FakeHost();
@@ -179,6 +230,17 @@ public sealed class ServiceManagementServiceTests
         Assert.Equal(ErrorCodes.InvalidInput, error.Code);
     }
 
+    [Fact]
+    public async Task Restore_RejectsMissingReadinessChecks()
+    {
+        var service = CreateService(new FakeHost(), []);
+
+        var error = await Assert.ThrowsAsync<DomainRuleException>(() => service.RestoreAsync(
+            new RestoreRequest("restore-1", "backup-1", "D:\\safe-backup", "admin")));
+
+        Assert.Equal(ErrorCodes.ServiceRecovering, error.Code);
+    }
+
     private static ServiceManagementService CreateService(
         FakeHost host,
         IReadOnlyList<StartupCheckResult> checks,
@@ -199,15 +261,27 @@ public sealed class ServiceManagementServiceTests
     {
         public BusinessServiceStatus Status { get; set; } = BusinessServiceStatus.Stopped;
 
+        public BusinessServiceStatus StartResult { get; set; } = BusinessServiceStatus.Running;
+
+        public BusinessServiceStatus StopResult { get; set; } = BusinessServiceStatus.Stopped;
+
+        public CancellationTokenSource? CancelOnStart { get; set; }
+
         public Task StartAsync(CancellationToken cancellationToken)
         {
-            Status = BusinessServiceStatus.Running;
+            if (CancelOnStart is not null)
+            {
+                CancelOnStart.Cancel();
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            Status = StartResult;
             return Task.CompletedTask;
         }
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
-            Status = BusinessServiceStatus.Stopped;
+            Status = StopResult;
             return Task.CompletedTask;
         }
     }

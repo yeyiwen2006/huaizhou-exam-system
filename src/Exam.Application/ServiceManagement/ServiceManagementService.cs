@@ -87,11 +87,14 @@ public sealed class ServiceManagementService
     public ServiceStatusSnapshot GetStatus()
     {
         var actual = _host.Status;
-        if (_status == BusinessServiceStatus.Running && actual != BusinessServiceStatus.Running)
+        if (actual == BusinessServiceStatus.Faulted && _status != BusinessServiceStatus.Faulted)
         {
-            _status = actual == BusinessServiceStatus.Stopped
-                ? BusinessServiceStatus.Faulted
-                : actual;
+            _status = BusinessServiceStatus.Faulted;
+            _lastError = "无法核对业务宿主状态，须检查本机服务控制器。";
+        }
+        else if (_status == BusinessServiceStatus.Running && actual != BusinessServiceStatus.Running)
+        {
+            _status = BusinessServiceStatus.Faulted;
             _lastError = "业务宿主已停止或退出，须检查实际进程状态。";
         }
         else if ((_status is BusinessServiceStatus.Stopped or BusinessServiceStatus.Recovering) &&
@@ -141,9 +144,10 @@ public sealed class ServiceManagementService
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (GetStatus().Status == BusinessServiceStatus.Running)
+            var current = GetStatus();
+            if (current.Status == BusinessServiceStatus.Running)
             {
-                return GetStatus();
+                return current;
             }
 
             if (_host.Status == BusinessServiceStatus.Running)
@@ -182,11 +186,27 @@ public sealed class ServiceManagementService
             {
                 _status = BusinessServiceStatus.Starting;
                 await _host.StartAsync(cancellationToken);
+                if (_host.Status != BusinessServiceStatus.Running)
+                {
+                    throw new InvalidOperationException("业务宿主未达到运行状态。");
+                }
                 _status = BusinessServiceStatus.Running;
                 _lastError = null;
-                return GetStatus();
+                var started = GetStatus();
+                if (started.Status != BusinessServiceStatus.Running)
+                {
+                    throw new InvalidOperationException("业务宿主状态在启动完成后发生变化。");
+                }
+
+                return started;
             }
-            catch (Exception ex) when (ex is not DomainRuleException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "启动已取消，须核对实际业务宿主状态。";
+                throw;
+            }
+            catch (Exception)
             {
                 _status = BusinessServiceStatus.Faulted;
                 _lastError = "业务服务启动失败，须检查受保护的本机诊断记录。";
@@ -204,19 +224,37 @@ public sealed class ServiceManagementService
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (GetStatus().Status == BusinessServiceStatus.Stopped)
+            var current = GetStatus();
+            if (current.Status == BusinessServiceStatus.Stopped)
             {
-                return GetStatus();
+                return current;
             }
 
             try
             {
                 _status = BusinessServiceStatus.Stopping;
                 await _host.StopAsync(cancellationToken);
+                if (_host.Status != BusinessServiceStatus.Stopped)
+                {
+                    throw new InvalidOperationException("业务宿主未达到停止状态。");
+                }
                 _status = BusinessServiceStatus.Stopped;
-                return GetStatus();
+                _lastError = null;
+                var stopped = GetStatus();
+                if (stopped.Status != BusinessServiceStatus.Stopped)
+                {
+                    throw new InvalidOperationException("业务宿主状态在停止完成后发生变化。");
+                }
+
+                return stopped;
             }
-            catch (Exception ex) when (ex is not DomainRuleException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "停止已取消，须核对实际业务宿主状态。";
+                throw;
+            }
+            catch (Exception)
             {
                 _status = BusinessServiceStatus.Faulted;
                 _lastError = "业务服务停止失败，须检查实际进程及受保护的本机诊断记录。";
@@ -287,7 +325,7 @@ public sealed class ServiceManagementService
 
             await _backups.RestoreAsync(request, cancellationToken);
             _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
-            if (_checks.Any(check => !check.Passed && check.BlocksWrites))
+            if (_checks.Count == 0 || _checks.Any(check => !check.Passed && check.BlocksWrites))
             {
                 throw new DomainRuleException(ErrorCodes.ServiceRecovering, "恢复数据未通过启动检查，业务写入保持关闭。", retryable: true);
             }
