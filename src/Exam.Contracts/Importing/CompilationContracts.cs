@@ -40,7 +40,10 @@ public enum TeXIssueCode
     Cascade,
 
     /// <summary>版式溢出警告（Overfull/Underfull box），不阻止发布。</summary>
-    OverfullBox
+    OverfullBox,
+
+    /// <summary>输入、进程内存或编译产物超过资源上限。</summary>
+    ResourceLimit
 }
 
 /// <summary>

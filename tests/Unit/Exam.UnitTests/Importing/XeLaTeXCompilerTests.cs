@@ -16,6 +16,7 @@ public sealed class XeLaTeXCompilerTests : IDisposable
     private readonly string _root;
     private readonly string _packageRoot;
     private readonly string _outputDirectory;
+    private string? _runDirectory;
 
     public XeLaTeXCompilerTests()
     {
@@ -68,7 +69,7 @@ public sealed class XeLaTeXCompilerTests : IDisposable
         Assert.Equal(Path.GetFullPath(_packageRoot), runner.WorkingDirectory);
         Assert.Contains("-no-shell-escape", runner.Arguments!);
         Assert.Contains(runner.Arguments!, argument => argument.StartsWith("-output-directory=", StringComparison.Ordinal));
-        Assert.Equal(SourceRelativePath, runner.Arguments![^1]);
+        Assert.Equal("./" + SourceRelativePath, runner.Arguments![^1]);
     }
 
     [Fact]
@@ -203,21 +204,149 @@ public sealed class XeLaTeXCompilerTests : IDisposable
     }
 
     private XeLaTeXCompiler CreateCompiler(IExternalProcessRunner runner, TimeSpan? timeout = null) =>
-        new(runner, new XeLaTeXToolchain(@"C:\fake\xelatex.exe", XeLaTeXPlatform.MiKTeX), timeout);
+        new(PrepareRunner(runner), new XeLaTeXToolchain(@"C:\fake\xelatex.exe", XeLaTeXPlatform.MiKTeX), timeout);
+
+    private IExternalProcessRunner PrepareRunner(IExternalProcessRunner runner)
+    {
+        if (runner is FakeProcessRunner fake)
+        {
+            fake.OnOutputDirectory = path => _runDirectory = path;
+        }
+        return runner;
+    }
+
+    [Fact]
+    public async Task CompileAsync_PreexistingArtifacts_CannotSatisfyNewRun()
+    {
+        Directory.CreateDirectory(_outputDirectory);
+        var oldPdf = Path.Combine(_outputDirectory, JobName + ".pdf");
+        File.WriteAllText(oldPdf, "previous valid pdf");
+        File.WriteAllText(Path.Combine(_outputDirectory, JobName + ".log"),
+            $"Output written on {JobName}.pdf (1 page).");
+        var result = await CreateCompiler(new FakeProcessRunner()).CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Null(result.OutputPdfPath);
+        Assert.Equal("previous valid pdf", File.ReadAllText(oldPdf));
+    }
+
+    [Theory]
+    [InlineData(@"\input ../outside.tex")]
+    [InlineData(@"\includegraphics{/outside.png}")]
+    [InlineData(@"\ShellEscape{echo probe}")]
+    [InlineData(@"\write 18{echo probe}")]
+    [InlineData(@"\RequirePackage{../outside}")]
+    [InlineData(@"\openout\stream=questions/source.tex")]
+    public async Task CompileAsync_NestedStyleViolation_DoesNotStartProcess(string source)
+    {
+        Directory.CreateDirectory(Path.Combine(_packageRoot, "styles"));
+        File.WriteAllText(Path.Combine(_packageRoot, "styles", "nested.sty"), source);
+        var runner = new FakeProcessRunner();
+        var result = await CreateCompiler(runner).CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Null(runner.Arguments);
+        Assert.Contains(result.Issues, issue => issue.Message.Contains("nested.sty", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompileAsync_LogOverLimit_CannotBeAcceptedFromPrefix()
+    {
+        var runner = new FakeProcessRunner
+        {
+            OnRun = () =>
+            {
+                WriteLog($"Output written on {JobName}.pdf (1 page).\n" + new string('x', XeLaTeXCompiler.MaxLogBytes));
+                WritePdf();
+            }
+        };
+        var result = await CreateCompiler(runner).CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Null(result.OutputPdfPath);
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.ResourceLimit);
+    }
+
+    [Fact]
+    public async Task CompileAsync_ResourceLimit_IsBlocking()
+    {
+        var result = await CreateCompiler(new FakeProcessRunner
+        {
+            Failure = new ProcessResourceLimitException("输出超限")
+        }).CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Null(result.OutputPdfPath);
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.ResourceLimit);
+    }
+
+    [Fact]
+    public async Task CompileAsync_FailedRunNeverExposesPartialPdf()
+    {
+        var result = await CreateCompiler(new FakeProcessRunner
+        {
+            Result = new ExternalProcessResult(1, "", ""),
+            OnRun = () =>
+            {
+                WriteLog($"! Undefined control sequence.\nl.7 \\badmacro\nOutput written on {JobName}.pdf (1 page).");
+                WritePdf();
+            }
+        }).CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Null(result.OutputPdfPath);
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.SourceError
+            && issue.File == SourceRelativePath && issue.Line == 7);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CompileAsync_LinkedPackageDependencyOrOutput_IsRejected(bool linkOutput)
+    {
+        var target = Path.Combine(_root, "link-target");
+        Directory.CreateDirectory(target);
+        var link = linkOutput ? _outputDirectory : Path.Combine(_packageRoot, "figures");
+        // Windows 用普通账户也能创建的目录联接，避免没有 symlink 权限时漏测边界。
+        if (OperatingSystem.IsWindows())
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            foreach (var argument in new[] { "/d", "/c", "mklink", "/J", link, target })
+            {
+                start.ArgumentList.Add(argument);
+            }
+            using var process = System.Diagnostics.Process.Start(start)!;
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        else
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        try
+        {
+            var runner = new FakeProcessRunner();
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => CreateCompiler(runner).CompileAsync(Request()));
+            Assert.Null(runner.Arguments);
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
 
     private TeXCompileRequest Request() =>
         new(_packageRoot, SourceRelativePath, _outputDirectory);
 
     private void WriteLog(string content)
     {
-        Directory.CreateDirectory(_outputDirectory);
-        File.WriteAllText(Path.Combine(_outputDirectory, JobName + ".log"), content);
+        File.WriteAllText(Path.Combine(_runDirectory!, JobName + ".log"), content);
     }
 
     private void WritePdf()
     {
-        Directory.CreateDirectory(_outputDirectory);
-        File.WriteAllText(Path.Combine(_outputDirectory, JobName + ".pdf"), "%PDF-1.4 合成占位");
+        File.WriteAllText(Path.Combine(_runDirectory!, JobName + ".pdf"), "%PDF-1.4 合成占位");
     }
 
     private sealed class FakeProcessRunner : IExternalProcessRunner
@@ -227,6 +356,7 @@ public sealed class XeLaTeXCompilerTests : IDisposable
         public Exception? Failure { get; init; }
 
         public Action? OnRun { get; init; }
+        public Action<string>? OnOutputDirectory { get; set; }
 
         public IReadOnlyList<string>? Arguments { get; private set; }
 
@@ -238,10 +368,12 @@ public sealed class XeLaTeXCompilerTests : IDisposable
             IReadOnlyDictionary<string, string> environment,
             TimeSpan timeout,
             CancellationToken cancellationToken = default,
-            string? workingDirectory = null)
+            string? workingDirectory = null,
+            ExternalProcessLimits? limits = null)
         {
             Arguments = arguments;
             WorkingDirectory = workingDirectory;
+            OnOutputDirectory?.Invoke(arguments.Single(argument => argument.StartsWith("-output-directory=", StringComparison.Ordinal))[18..]);
 
             if (Failure is not null)
             {

@@ -104,7 +104,8 @@ public sealed class PostgresBackupPersistenceTests(PostgresDatabaseFixture fixtu
             IReadOnlyDictionary<string, string> environment,
             TimeSpan timeout,
             CancellationToken cancellationToken = default,
-            string? workingDirectory = null)
+            string? workingDirectory = null,
+            ExternalProcessLimits? limits = null)
         {
             if (Path.GetFileName(executable).Equals("pg_basebackup.exe", StringComparison.OrdinalIgnoreCase))
             {

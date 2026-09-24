@@ -15,6 +15,56 @@ namespace Exam.Infrastructure.Compilation;
 /// </summary>
 public sealed class PackageContentChecker
 {
+    /// <summary>编译前检查整个包，避免嵌套 TeX、样式或图片通过目录联接逃出边界。</summary>
+    public IReadOnlyList<TeXIssue> CheckCompilationInputs(string packageRoot)
+    {
+        var root = RequireDirectory(packageRoot);
+        var issues = new List<TeXIssue>();
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var entries = 0;
+        while (pending.TryPop(out var directory))
+        {
+            PathBoundary.ResolveWithinRoot(root, directory, "导入包目录越界。");
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory))
+            {
+                if (++entries > 10000)
+                {
+                    issues.Add(new TeXIssue(TeXIssueCode.ResourceLimit, "导入包超过 10000 个文件或目录。"));
+                    return issues;
+                }
+
+                PathBoundary.ResolveWithinRoot(root, path, "导入包文件越界。");
+                if (Directory.Exists(path))
+                {
+                    pending.Push(path);
+                    continue;
+                }
+
+                var extension = Path.GetExtension(path);
+                if (!new[] { ".tex", ".sty", ".cls", ".def", ".cfg" }.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var relative = Path.GetRelativePath(root, path);
+                if (new FileInfo(path).Length > XeLaTeXCompiler.MaxLogBytes)
+                {
+                    issues.Add(new TeXIssue(TeXIssueCode.ResourceLimit, "TeX 源文件超过 8 MiB。", relative));
+                    continue;
+                }
+
+                var declaration = TeXSourceInspector.Inspect(File.ReadAllText(path, System.Text.Encoding.UTF8));
+                issues.AddRange(declaration.Violations.Select(issue => issue with
+                {
+                    Message = $"{relative}：{issue.Message}"
+                }));
+            }
+        }
+
+        return issues;
+    }
+
     /// <summary>
     /// 逐条图片引用按 \graphicspath 的顺序尝试解析；没有一条候选存在时报 MissingPicture，
     /// 并把尝试过的候选路径一并给出，便于定位。

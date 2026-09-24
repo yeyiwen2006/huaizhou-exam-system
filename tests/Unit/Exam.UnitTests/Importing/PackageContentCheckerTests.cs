@@ -10,6 +10,13 @@ namespace Exam.UnitTests.Importing;
 /// </summary>
 public sealed class PackageContentCheckerTests : IDisposable
 {
+    [Fact]
+    public void CheckImages_ExtensionlessSubdirectoryUnderGraphicsPath_IsFound()
+    {
+        WriteFile("figures/chemistry/diagram.png", "synthetic");
+        Assert.Empty(_checker.CheckImages(_packageRoot, Declaration(["figures/"], ["chemistry/diagram"])));
+    }
+
     private readonly string _root;
     private readonly string _packageRoot;
     private readonly PackageContentChecker _checker = new();

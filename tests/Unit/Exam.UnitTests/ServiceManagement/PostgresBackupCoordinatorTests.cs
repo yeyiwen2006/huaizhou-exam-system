@@ -148,7 +148,8 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
             IReadOnlyDictionary<string, string> environment,
             TimeSpan timeout,
             CancellationToken cancellationToken = default,
-            string? workingDirectory = null)
+            string? workingDirectory = null,
+            ExternalProcessLimits? limits = null)
         {
             Calls.Add(Path.GetFileName(executable));
             if (Path.GetFileName(executable).Equals("pg_basebackup.exe", StringComparison.OrdinalIgnoreCase))

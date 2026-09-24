@@ -13,7 +13,8 @@ public enum XeLaTeXPlatform
 /// <summary>
 /// 一次逐题编译的输入。PackageRoot 为导入包根目录（也是 XeLaTeX 的工作目录，
 /// 这样清单与 \graphicspath 里的相对路径才能按包内结构解析）；
-/// OutputDirectory 必须是包根之外的独立目录，编译产物不写回材料目录。
+/// OutputDirectory 必须是包根之外的目录。每次调用在其中创建独立子目录，产物不写回材料目录；
+/// 调用方使用结果中的 OutputPdfPath，不按源文件名拼接产物路径。
 /// </summary>
 public sealed record TeXCompileRequest(
     string PackageRoot,

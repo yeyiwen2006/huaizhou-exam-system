@@ -25,6 +25,12 @@ public static class XeLaTeXInvocation
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceRelativePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        if (!PackagePathRules.IsRelativeAndInside(sourceRelativePath)
+            || !PackagePathRules.HasValidWindowsSegments(sourceRelativePath)
+            || !sourceRelativePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("源文件必须是包内有效的相对 .tex 路径。", nameof(sourceRelativePath));
+        }
 
         var arguments = new List<string>();
 
@@ -33,8 +39,10 @@ public static class XeLaTeXInvocation
             case XeLaTeXPlatform.MiKTeX:
                 arguments.Add("-disable-installer");
                 arguments.Add("-disable-write18");
+                arguments.Add("-dont-parse-first-line");
                 break;
             case XeLaTeXPlatform.TeXLive:
+                arguments.Add("-no-parse-first-line");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(platform), platform, "未知的 TeX 发行版。");
@@ -47,7 +55,8 @@ public static class XeLaTeXInvocation
         arguments.Add($"-output-directory={outputDirectory}");
 
         // 相对路径按包根目录解析，因此必须以包根目录为工作目录运行。
-        arguments.Add(sourceRelativePath);
+        // ./ 防止根目录下以 - 或 & 开头的合法文件名被解释成选项或格式命令。
+        arguments.Add("./" + PackagePathRules.Normalize(sourceRelativePath));
         return arguments;
     }
 

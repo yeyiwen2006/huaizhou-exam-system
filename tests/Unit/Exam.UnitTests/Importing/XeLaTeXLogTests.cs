@@ -10,6 +10,18 @@ namespace Exam.UnitTests.Importing;
 /// </summary>
 public sealed class XeLaTeXLogTests
 {
+    [Theory]
+    [InlineData("LaTeX Font Warning: Font shape `TU/NoSuchFont/m/n' undefined\n(Font) using `TU/lmr/m/n' instead on input line 4.")]
+    [InlineData("LaTeX Font Warning: Some font shapes were not available, defaults substituted.")]
+    [InlineData("Missing character: There is no 中 (U+4E2D) in font cmr10!")]
+    [InlineData("! Illegal unit of measure (pt inserted).\nl.4 \\hspace{bad}")]
+    public void Read_PdfWithSubstitutionMissingGlyphOrStandaloneError_IsNotClean(string diagnostic)
+    {
+        var report = XeLaTeXLogReader.Read(diagnostic + "\nOutput written on synthetic.pdf (1 page).");
+        Assert.True(report.HasOutput);
+        Assert.False(report.IsClean);
+    }
+
     [Fact]
     public void Read_SuccessfulRun_ReportsPagesAndNoBlockingIssues()
     {
@@ -209,6 +221,7 @@ public sealed class XeLaTeXLogTests
         var error = Assert.Single(report.Issues);
         Assert.Equal(TeXIssueCode.SourceError, error.Code);
         Assert.True(error.IsBlocking);
+        Assert.Equal(9, error.Line);
     }
 
     [Fact]

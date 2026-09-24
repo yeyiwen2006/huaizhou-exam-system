@@ -56,6 +56,14 @@ public sealed class XeLaTeXRealToolchainTests : IDisposable
 
         // 材料目录保持零改动：编译产物不得写回包目录。
         Assert.Equal(before, SnapshotPackage());
+
+        // 可选验收输出，只导出此测试生成的合成 PDF，便于独立渲染核对。
+        var artifacts = Environment.GetEnvironmentVariable("EXAM_TEST_TEX_ARTIFACTS");
+        if (!string.IsNullOrWhiteSpace(artifacts))
+        {
+            Directory.CreateDirectory(artifacts);
+            File.Copy(result.OutputPdfPath!, Path.Combine(artifacts, "synthetic-question.pdf"), overwrite: true);
+        }
     }
 
     [Fact]
@@ -118,19 +126,95 @@ public sealed class XeLaTeXRealToolchainTests : IDisposable
         Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.ShellEscapeAttempt);
         Assert.False(result.Succeeded);
 
-        // 顺带钉住「退出码不可信」：这条编译退出码为 0、也写出了 PDF。
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(result.Report.HasOutput);
+        // 编译入口必须执行静态检查，已知违规在启动进程之前阻断。
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Null(result.OutputPdfPath);
     }
 
     private XeLaTeXCompiler CreateCompiler()
     {
-        var toolchain = XeLaTeXToolchain.TryDetect();
+        // 由实际版本输出选发行版，不能把 PATH 上任意 xelatex 当成 MiKTeX。
+        var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
         Assert.True(
             toolchain is not null,
             "本机没有可用的 XeLaTeX。Category=Latex 的用例需要 TeX 发行版（本项目要求 XeLaTeX）。");
 
-        return new XeLaTeXCompiler(new ExternalProcessRunner(), toolchain!, TimeSpan.FromMinutes(3));
+        var runner = new ExternalProcessRunner();
+        var version = runner.RunAsync(toolchain!.ExecutablePath, ["--version"],
+            new Dictionary<string, string>(), TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+        Assert.Equal(0, version.ExitCode);
+        Assert.True(version.StandardOutput.Contains("MiKTeX", StringComparison.OrdinalIgnoreCase)
+                    || version.StandardOutput.Contains("TeX Live", StringComparison.OrdinalIgnoreCase));
+        toolchain = toolchain with
+        {
+            Platform = version.StandardOutput.Contains("MiKTeX", StringComparison.OrdinalIgnoreCase)
+                ? XeLaTeXPlatform.MiKTeX : XeLaTeXPlatform.TeXLive
+        };
+        return new XeLaTeXCompiler(runner, toolchain, TimeSpan.FromMinutes(3));
+    }
+
+    [Fact]
+    public async Task CompileAsync_MissingPackage_IsLocated()
+    {
+        BuildPackage(true, "\\usepackage{no-such-synthetic-package-2026}");
+        var result = await CreateCompiler().CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        // 缺包时 TeX 在交互提示前只保证给出依赖名；不把随后停机的位置误当成声明行。
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.MissingPackage
+            && issue.File == "no-such-synthetic-package-2026.sty");
+        Assert.Null(result.OutputPdfPath);
+    }
+
+    [Fact]
+    public async Task CompileAsync_DefaultFontSubstitution_IsBlockingEvenWithPdf()
+    {
+        BuildPackage(true);
+        File.WriteAllText(Path.Combine(_packageRoot, SourceRelativePath),
+            "\\documentclass{article}\\begin{document}\\fontfamily{NoSuchSyntheticFont}\\selectfont Probe\\end{document}");
+        var result = await CreateCompiler().CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.True(result.Report.HasOutput);
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.MissingFont);
+        Assert.Null(result.OutputPdfPath);
+    }
+
+    [Fact]
+    public async Task CompileAsync_RetryWithSameFileName_DoesNotOverwritePreviousPdf()
+    {
+        BuildPackage(true);
+        var compiler = CreateCompiler();
+        var first = await compiler.CompileAsync(Request());
+        Assert.True(first.Succeeded, Describe(first));
+        var previous = File.ReadAllBytes(first.OutputPdfPath!);
+        var source = Path.Combine(_packageRoot, SourceRelativePath);
+        File.AppendAllText(source, "\n% second compile");
+        var second = await compiler.CompileAsync(Request());
+        Assert.True(second.Succeeded, Describe(second));
+        Assert.NotEqual(first.OutputPdfPath, second.OutputPdfPath);
+        Assert.Equal(previous, File.ReadAllBytes(first.OutputPdfPath!));
+    }
+
+    [Fact]
+    public async Task CompileAsync_TimeoutStopsRealEngine()
+    {
+        BuildPackage(true);
+        File.WriteAllText(Path.Combine(_packageRoot, SourceRelativePath),
+            "\\documentclass{article}\\begin{document}\\loop\\iftrue\\repeat\\end{document}");
+        var result = await CreateCompiler().CompileAsync(Request() with { Timeout = TimeSpan.FromSeconds(2) });
+        Assert.False(result.Succeeded);
+        Assert.True(result.TimedOut);
+        Assert.Null(result.OutputPdfPath);
+    }
+
+    [Fact]
+    public async Task CompileAsync_IndirectShellEscape_IsDisabledByRealEngine()
+    {
+        // 间接构造命令用于验证引擎开关本身，而非只验证静态检查器。
+        BuildPackage(true, "\\immediate\\csname write\\endcsname18{echo probe > indirect-marker.txt}");
+        var result = await CreateCompiler().CompileAsync(Request());
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == TeXIssueCode.ShellEscapeAttempt);
+        Assert.Empty(Directory.GetFiles(_root, "indirect-marker.txt", SearchOption.AllDirectories));
     }
 
     private TeXCompileRequest Request() =>

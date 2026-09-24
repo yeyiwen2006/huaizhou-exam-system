@@ -24,7 +24,7 @@ public sealed class XeLaTeXInvocationTests
         Assert.Contains(@"-output-directory=C:\work\output", arguments);
 
         // 源文件放在最后，且保持相对路径——以包根目录为工作目录才有意义。
-        Assert.Equal("questions/合成样题_1.tex", arguments[^1]);
+        Assert.Equal("./questions/合成样题_1.tex", arguments[^1]);
     }
 
     [Fact]

@@ -55,6 +55,13 @@ public static class XeLaTeXLogReader
     private static readonly Regex Overfull =
         new(@"(?:Overfull|Underfull) \\[hv]box", RegexOptions.Compiled);
 
+    private static readonly Regex ErrorLine = new(@"(?:^|\n)l\.(?<line>\d+)\s", RegexOptions.Compiled);
+
+    private static readonly Regex MissingGlyph = new(@"^Missing character: .+$", RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex FontSubstitution = new(
+        @"LaTeX Font Warning: (?:Font shape .+?undefined.+?instead|Some font shapes were not available, defaults substituted\.)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
     /// <summary>连带失败：这些错误由前面的缺依赖或致命错误引起，不作为独立缺陷上报。</summary>
     private static readonly Regex[] CascadePatterns =
     [
@@ -92,6 +99,16 @@ public static class XeLaTeXLogReader
         issues.AddRange(CollectMissingImages(log));
         issues.AddRange(CollectMissingPackages(log));
         issues.AddRange(CollectMissingFonts(log));
+        foreach (Match match in FontSubstitution.Matches(log))
+        {
+            issues.Add(new TeXIssue(TeXIssueCode.MissingFont,
+                "请求的字体或字形不可用，TeX 使用了替代字体：" + match.Value));
+        }
+        foreach (Match match in MissingGlyph.Matches(logText))
+        {
+            issues.Add(new TeXIssue(TeXIssueCode.SourceError,
+                "字体缺少实际使用的字符，PDF 内容不完整：" + match.Value.Trim()));
+        }
 
         foreach (Match match in ShellEscapeDisabled.Matches(log))
         {
@@ -105,17 +122,32 @@ public static class XeLaTeXLogReader
         //    注意不能按「折叠后的记录是否以 ! 开头」判断——折行会把上一条记录并进错误块。
         foreach (var block in EnumerateErrorBlocks(logText))
         {
+            var lineMatch = ErrorLine.Match(block);
+            int? line = lineMatch.Success ? int.Parse(lineMatch.Groups["line"].Value, CultureInfo.InvariantCulture) : null;
             if (IsHandledByDependencyRules(block))
             {
+                // 缺字体/宏包的详细错误块也带 l.N；保留它而不只记录依赖名。
+                if (line is not null)
+                {
+                    for (var index = 0; index < issues.Count; index++)
+                    {
+                        if (issues[index].Line is null && issues[index].File is { } name
+                            && block.Contains(name, StringComparison.Ordinal))
+                        {
+                            issues[index] = issues[index] with { Line = line };
+                        }
+                    }
+                }
                 continue;
             }
 
-            var isCascade = CascadePatterns.Any(pattern => pattern.IsMatch(block));
+            var isCascade = issues.Any(issue => issue.IsBlocking)
+                            && CascadePatterns.Any(pattern => pattern.IsMatch(block));
             issues.Add(new TeXIssue(
                 isCascade ? TeXIssueCode.Cascade : TeXIssueCode.SourceError,
                 FirstLine(block),
                 null,
-                null,
+                line,
                 !isCascade));
         }
 
@@ -146,8 +178,12 @@ public static class XeLaTeXLogReader
                 continue;
             }
 
-            var previous = current.ToString().TrimEnd();
-            if (previous.EndsWith('.') || previous.EndsWith('!') || previous.EndsWith('?'))
+            var last = current.Length - 1;
+            while (last >= 0 && char.IsWhiteSpace(current[last]))
+            {
+                last--;
+            }
+            if (last >= 0 && current[last] is '.' or '!' or '?')
             {
                 records.Add(current.ToString());
                 current.Clear();
@@ -187,7 +223,10 @@ public static class XeLaTeXLogReader
                 end++;
             }
 
-            yield return Fold(string.Join('\n', lines[index..end]));
+            // 错误定位行保留换行，消息的硬折行仍按原规则还原。
+            var raw = string.Join('\n', lines[index..end]);
+            var line = ErrorLine.Match(raw);
+            yield return Fold(raw) + (line.Success ? "\n" + line.Value.TrimStart('\n') : string.Empty);
             index = end - 1;
         }
     }

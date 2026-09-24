@@ -12,7 +12,7 @@ public sealed record XeLaTeXToolchain(string ExecutablePath, XeLaTeXPlatform Pla
     /// 调用方也可以直接给出绝对路径（例如考务主机上固定安装的位置）。
     /// </summary>
     public static XeLaTeXToolchain? TryDetect(
-        XeLaTeXPlatform platform = XeLaTeXPlatform.MiKTeX,
+        XeLaTeXPlatform platform,
         string executableName = "xelatex")
     {
         var path = Environment.GetEnvironmentVariable("PATH");
@@ -91,6 +91,7 @@ public sealed class XeLaTeXCompiler
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var packageRoot = RequireDirectory(request.PackageRoot, nameof(request.PackageRoot));
         var outputDirectory = RequireOutsidePackageRoot(request.OutputDirectory, packageRoot);
@@ -107,13 +108,26 @@ public sealed class XeLaTeXCompiler
                 request.SourceRelativePath));
         }
 
-        Directory.CreateDirectory(outputDirectory);
-
         var timeout = request.Timeout ?? _defaultTimeout;
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromHours(6))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "编译时限必须大于零且不超过 6 小时。");
+        }
+
+        var inputIssues = new PackageContentChecker().CheckCompilationInputs(packageRoot);
+        if (inputIssues.Count > 0)
+        {
+            return new TeXCompileResult(false, -1, false,
+                new TeXCompileReport(false, 0, null, inputIssues, 0), null, inputIssues);
+        }
+
+        // 每次调用独占一个目录，重试、同名题目和并发不会读取或覆盖旧产物。
+        outputDirectory = Path.Combine(outputDirectory, "compile-" + Guid.NewGuid().ToString("N"));
         var arguments = XeLaTeXInvocation.BuildArguments(
             _toolchain.Platform,
             request.SourceRelativePath,
             outputDirectory);
+        Directory.CreateDirectory(outputDirectory);
 
         ExternalProcessResult process;
         var timedOut = false;
@@ -122,10 +136,16 @@ public sealed class XeLaTeXCompiler
             process = await _runner.RunAsync(
                 _toolchain.ExecutablePath,
                 arguments,
-                new Dictionary<string, string>(),
+                new Dictionary<string, string>
+                {
+                    ["openin_any"] = "p",
+                    ["openout_any"] = "p",
+                    ["TEXMFOUTPUT"] = outputDirectory
+                },
                 timeout,
                 cancellationToken,
-                packageRoot);
+                packageRoot,
+                new ExternalProcessLimits(1024L * 1024 * 1024, 128L * 1024 * 1024, outputDirectory));
         }
         catch (TimeoutException exception)
         {
@@ -144,13 +164,29 @@ public sealed class XeLaTeXCompiler
                 TeXIssueCode.ToolchainMissing,
                 $"无法启动 XeLaTeX：{exception.Message}"));
         }
+        catch (ProcessResourceLimitException exception)
+        {
+            return TeXCompileResult.NotStarted(new TeXIssue(TeXIssueCode.ResourceLimit, exception.Message));
+        }
 
         // 日志与 PDF 都按 jobname（源文件基名）命名。
         var jobName = Path.GetFileNameWithoutExtension(sourcePath);
         var logPath = Path.Combine(outputDirectory, jobName + ".log");
         var pdfPath = Path.Combine(outputDirectory, jobName + ".pdf");
 
+        PathBoundary.ResolveWithinRoot(outputDirectory, logPath, "编译日志越出输出目录。");
+        PathBoundary.ResolveWithinRoot(outputDirectory, pdfPath, "PDF 越出输出目录。");
+        if (File.Exists(logPath) && new FileInfo(logPath).Length > MaxLogBytes)
+        {
+            return TeXCompileResult.NotStarted(new TeXIssue(TeXIssueCode.ResourceLimit, "编译日志超过 8 MiB，拒绝截断后判定成功。"));
+        }
+
         var report = XeLaTeXLogReader.Read(ReadLog(logPath));
+        report = report with
+        {
+            Issues = report.Issues.Select(issue => issue.File is null
+                ? issue with { File = request.SourceRelativePath } : issue).ToList()
+        };
         var outputPdfProduced = File.Exists(pdfPath) && new FileInfo(pdfPath).Length > 0;
 
         var outcome = XeLaTeXInvocation.Evaluate(process.ExitCode, timedOut, outputPdfProduced, report);
@@ -160,7 +196,7 @@ public sealed class XeLaTeXCompiler
             process.ExitCode,
             timedOut,
             report,
-            outputPdfProduced ? pdfPath : null,
+            outcome.Succeeded ? pdfPath : null,
             outcome.Issues);
     }
 
@@ -204,6 +240,7 @@ public sealed class XeLaTeXCompiler
         }
 
         var full = Path.GetFullPath(outputDirectory);
+        PathBoundary.RejectExistingReparsePoints(full, full);
         var relative = Path.GetRelativePath(packageRoot, full);
         var insidePackage = relative == "." ||
                             (!Path.IsPathFullyQualified(relative) &&

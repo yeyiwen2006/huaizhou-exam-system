@@ -155,8 +155,8 @@ public sealed class TeXSourceInspectorTests
     }
 
     [Theory]
-    [InlineData("q-figure-01.png", "figures/chemistry/", "figures/chemistry/q-figure-01.png")]
-    [InlineData("q-figure-01.png", "figures/physics/", "figures/physics/q-figure-01.png")]
+    [InlineData("q-figure-01.png", "figures/chemistry/", "q-figure-01.png")]
+    [InlineData("q-figure-01.png", "figures/physics/", "q-figure-01.png")]
     [InlineData("figures/chemistry/q-figure-01.png", "figures/physics/", "figures/chemistry/q-figure-01.png")]
     public void ResolveImageCandidates_UsesGraphicsRootsUnlessPathIsExplicit(
         string reference,
@@ -177,7 +177,7 @@ public sealed class TeXSourceInspectorTests
             ["figures/chemistry/", "figures/physics/"]);
 
         Assert.Equal(
-            ["figures/chemistry/q-figure-01.png", "figures/physics/q-figure-01.png", "q-figure-01.png"],
+            ["q-figure-01.png", "figures/chemistry/q-figure-01.png", "figures/physics/q-figure-01.png"],
             candidates);
     }
 
@@ -215,9 +215,9 @@ public sealed class TeXSourceInspectorTests
     }
 
     [Fact]
-    public void Inspect_GraphicsPathWildcardRoot_IsNotAViolation()
+    public void Inspect_GraphicsPathWildcardRoot_IsRejected()
     {
-        // kpathsea 允许 `**` 递归通配，图片搜索路径不能按 Windows 文件名逐段校验。
+        // graphicspath 需要实际目录；** 不能作为 Windows 目录名交给文件检查。
         const string source = """
             \documentclass{ctexart}
             \graphicspath{{figures/**/}}
@@ -229,7 +229,7 @@ public sealed class TeXSourceInspectorTests
         var declaration = TeXSourceInspector.Inspect(source);
 
         Assert.Equal(["figures/**/"], declaration.GraphicsRoots);
-        Assert.Empty(declaration.Violations);
+        Assert.NotEmpty(declaration.Violations);
     }
 
     [Fact]

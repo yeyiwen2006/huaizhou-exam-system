@@ -21,11 +21,11 @@ public static class TeXSourceInspector
     };
 
     private static readonly Regex DocumentClass = new(
-        @"\\documentclass\s*(?:\[[^\]]*\])?\s*\{(?<name>[^{}]+)\}",
+        @"\\(?:documentclass|LoadClass)\s*(?:\[[^\]]*\])?\s*\{(?<name>[^{}]+)\}",
         RegexOptions.Compiled);
 
     private static readonly Regex UsePackage = new(
-        @"\\usepackage\s*(?:\[[^\]]*\])?\s*\{(?<names>[^{}]+)\}",
+        @"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{(?<names>[^{}]+)\}",
         RegexOptions.Compiled);
 
     private static readonly Regex SetFont = new(
@@ -53,11 +53,11 @@ public static class TeXSourceInspector
         RegexOptions.Compiled);
 
     private static readonly Regex NestedInput = new(
-        @"\\(?:input|include)\s*(?:\[[^\]]*\])?\s*\{(?<path>[^{}]+)\}",
+        @"\\(?:input|include)(?![A-Za-z@])\s*(?:\{(?<path>[^{}]+)\}|(?<path>[^\s{}%\\]+))",
         RegexOptions.Compiled);
 
     private static readonly Regex ShellEscapeCommand = new(
-        @"\\write18|\\(?:immediate\s*)?\\ShellEscape|\\input\s*\|",
+        @"\\write\s*18\b|\\ShellEscape\b|\\input\s*\{?\s*[""']?\|",
         RegexOptions.Compiled);
 
     public static TeXSourceDeclaration Inspect(string? texSource)
@@ -105,6 +105,20 @@ public static class TeXSourceInspector
         var violations = new List<TeXIssue>();
         violations.AddRange(CheckExternalCommands(source, packages));
         violations.AddRange(CheckPaths(source, graphicsRoots, references));
+        foreach (var name in packages.Concat(DocumentClass.Matches(source).Select(match => match.Groups["name"].Value.Trim())))
+        {
+            if (!PackagePathRules.IsRelativeAndInside(name) || !PackagePathRules.HasValidWindowsSegments(name))
+            {
+                violations.Add(new TeXIssue(TeXIssueCode.MissingFile,
+                    $"宏包和文档类必须使用有效的包内相对路径或已安装的依赖名：{name}。", name));
+            }
+        }
+
+        foreach (Match match in Regex.Matches(source, @"\\(?:openin|openout)(?![A-Za-z@])"))
+        {
+            violations.Add(new TeXIssue(TeXIssueCode.SourceError,
+                "导入源文件不得直接打开文件读写流，请使用包内的声明式依赖引用。", null, LineOf(source, match.Index)));
+        }
 
         return new TeXSourceDeclaration(documentClass, packages, fonts, graphicsRoots, references, violations);
     }
@@ -118,18 +132,16 @@ public static class TeXSourceInspector
         var normalized = reference.Replace('\\', '/').Trim();
         var candidates = new List<string>();
 
-        if (normalized.Contains('/'))
+        // graphicx 先查当前工作目录，再把引用（包括子目录）附在 graphicspath 后。
+        var names = Path.HasExtension(normalized)
+            ? new[] { normalized }
+            : new[] { ".pdf", ".png", ".jpg", ".jpeg", ".eps" }.Select(extension => normalized + extension);
+        foreach (var root in new[] { string.Empty }.Concat(graphicsRoots))
         {
-            candidates.Add(normalized);
-        }
-        else
-        {
-            foreach (var root in graphicsRoots)
+            foreach (var name in names)
             {
-                candidates.Add($"{root.TrimEnd('/')}/{normalized}");
+                candidates.Add(root.Length == 0 ? name : $"{root.TrimEnd('/')}/{name}");
             }
-
-            candidates.Add(normalized);
         }
 
         return candidates.Distinct(StringComparer.Ordinal).ToList();
@@ -161,7 +173,9 @@ public static class TeXSourceInspector
 
         return references
             .Where(reference => reference.Length > 0 && !reference.StartsWith('#'))
-            .Select(PackagePathRules.Normalize)
+            // 校验前保留绝对路径的前导分隔符，不能把 /outside.png 洗成包内路径。
+            .Select(reference => PackagePathRules.IsRelativeAndInside(reference)
+                ? PackagePathRules.Normalize(reference) : reference.Replace('\\', '/'))
             .Distinct(StringComparer.Ordinal)
             .ToList();
     }
@@ -191,11 +205,10 @@ public static class TeXSourceInspector
         IReadOnlyList<string> graphicsRoots,
         IReadOnlyList<string> references)
     {
-        // 图片搜索路径只校验形状：kpathsea 允许 `**` 这类通配写法（例如 {\graphicspath{{figures/**/}}}），
-        // 逐段按 Windows 文件名校验会把合法写法误判为非法。
+        // graphicspath 是实际目录列表，不把操作系统通配符当作递归搜索语法。
         foreach (var root in graphicsRoots)
         {
-            if (!PackagePathRules.IsRelativeAndInside(root))
+            if (!PackagePathRules.IsRelativeAndInside(root) || !PackagePathRules.HasValidWindowsSegments(root))
             {
                 yield return new TeXIssue(
                     TeXIssueCode.MissingFile,
@@ -225,7 +238,7 @@ public static class TeXSourceInspector
 
         foreach (Match match in NestedInput.Matches(source))
         {
-            var path = PackagePathRules.Normalize(match.Groups["path"].Value);
+            var path = match.Groups["path"].Value.Trim().Trim('"').Replace('\\', '/');
             if (!PackagePathRules.IsRelativeAndInside(path))
             {
                 yield return new TeXIssue(
