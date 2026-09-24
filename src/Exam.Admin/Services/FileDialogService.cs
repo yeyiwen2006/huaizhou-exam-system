@@ -8,7 +8,12 @@ public interface IFileDialogService
     string? SaveExcelFile(string suggestedName);
 }
 
-public sealed class FileDialogService : IFileDialogService
+public interface IManifestFileDialogService
+{
+    string? OpenManifestFile();
+}
+
+public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService
 {
     private const string ExcelFilter = "Excel 工作簿 (*.xlsx)|*.xlsx";
 
@@ -17,6 +22,18 @@ public sealed class FileDialogService : IFileDialogService
         var dialog = new OpenFileDialog
         {
             Filter = ExcelFilter,
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? OpenManifestFile()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "逐题清单 (manifest.json)|manifest.json|JSON 文件 (*.json)|*.json",
+            FileName = "manifest.json",
             CheckFileExists = true,
             Multiselect = false
         };

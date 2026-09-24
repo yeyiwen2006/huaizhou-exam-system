@@ -79,6 +79,9 @@ public sealed class WpfBindingSmokeTests
                     if ((string)tab.Header == "C05 导入与修订")
                     {
                         Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "选择 manifest.json 并静态预检") &&
+                            ReferenceEquals(button.Command, viewModel.ImportRevision.SelectManifestCommand));
+                        Assert.Contains(Descendants<Button>(window), button =>
                             Equals(button.Content, "查询正式版本") &&
                             ReferenceEquals(button.Command, viewModel.ImportRevision.LoadVersionCommand));
                         Assert.Contains(Descendants<Button>(window), button =>

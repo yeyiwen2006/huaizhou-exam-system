@@ -321,6 +321,25 @@
                                 </DataGrid>
                             </StackPanel>
                         </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="本地清单静态预检（D01）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <Button Content="选择 manifest.json 并静态预检" Style="{StaticResource Btn.Secondary}"
+                                        Command="{Binding ImportRevision.SelectManifestCommand}" HorizontalAlignment="Left" Margin="0,0,0,10"/>
+                                <TextBlock Text="{Binding ImportRevision.PreflightStatus}" TextWrapping="Wrap"
+                                           Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
+                                <DataGrid ItemsSource="{Binding ImportRevision.PreflightIssues}" Height="180" IsReadOnly="True"
+                                          AutoGenerateColumns="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="规则标识" Binding="{Binding Rule}" Width="2*"/>
+                                        <DataGridTextColumn Header="JSON Pointer 位置" Binding="{Binding Location}" Width="2*"/>
+                                        <DataGridTextColumn Header="问题说明" Binding="{Binding Message}" Width="3*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock Text="仅检查所选清单的结构和规则；不读取独立答案，不检查 TeX 依赖，不生成可发布题包。"
+                                           Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="逐题导入与考试中修订" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
@@ -328,7 +347,7 @@
                                 <TextBox Text="{Binding ImportRevision.ChangeReason, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
                                 <WrapPanel>
                                     <Button Content="逐题导入：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
-                                    <Button Content="预览：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
+                                    <Button Content="编译预览：接口未提供" IsEnabled="False" Margin="0,0,8,0"/>
                                     <Button Content="发布修订：接口未提供" IsEnabled="False"/>
                                 </WrapPanel>
                             </StackPanel>

@@ -1,13 +1,21 @@
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Text;
+using System.Text.Json;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
+using Exam.Contracts.Importing;
 using Exam.Contracts.Versioning;
+using Exam.Domain.Importing;
 
 namespace Exam.Admin.ViewModels;
 
 public sealed class ImportRevisionViewModel : BindableBase
 {
+    private const long MaxManifestBytes = 10 * 1024 * 1024;
     private readonly AdminApiClient _api;
+    private readonly IManifestFileDialogService _manifestFiles;
+    private readonly ExamManifestValidator _manifestValidator = new();
     private string _examId = string.Empty;
     private string _changeReason = string.Empty;
     private string _status = "可查询正式 A06 版本状态；逐题导入、预览与内容发布接口未提供。";
@@ -16,14 +24,24 @@ public sealed class ImportRevisionViewModel : BindableBase
     private string _gradingVersion = "未查询";
     private string _publicationState = "未查询";
     private bool _isLoading;
+    private bool _isPreflighting;
+    private bool _staticPreflightPassed;
+    private string _preflightStatus = "尚未执行本地清单静态预检；不代表可以编译或发布。";
     private long _contextVersion;
     private long _loadSequence;
+    private long _preflightSequence;
 
-    public ImportRevisionViewModel(AdminApiClient api)
+    public ImportRevisionViewModel(AdminApiClient api, IManifestFileDialogService? manifestFiles = null)
     {
         _api = api;
-        _api.ConfigurationChanged += (_, _) => ResetSnapshot("连接已变更；请重新查询正式版本状态。");
+        _manifestFiles = manifestFiles ?? new FileDialogService();
+        _api.ConfigurationChanged += (_, _) =>
+        {
+            ResetSnapshot("连接已变更；请重新查询正式版本状态。");
+            ResetPreflight("连接已变更；请重新选择并校验清单。");
+        };
         LoadVersionCommand = new AsyncRelayCommand(LoadVersionAsync, onError: SetError);
+        SelectManifestCommand = new AsyncRelayCommand(SelectManifestAsync, onError: SetPreflightError);
     }
 
     public string ExamId
@@ -34,6 +52,7 @@ public sealed class ImportRevisionViewModel : BindableBase
             if (SetProperty(ref _examId, value))
             {
                 ResetSnapshot("考试 ID 已变更；请重新查询正式版本状态。");
+                ResetPreflight("考试 ID 已变更；请重新选择并校验清单。");
             }
         }
     }
@@ -44,8 +63,115 @@ public sealed class ImportRevisionViewModel : BindableBase
     public string GradingVersion { get => _gradingVersion; private set => SetProperty(ref _gradingVersion, value); }
     public string PublicationState { get => _publicationState; private set => SetProperty(ref _publicationState, value); }
     public bool IsLoading { get => _isLoading; private set => SetProperty(ref _isLoading, value); }
+    public bool IsPreflighting { get => _isPreflighting; private set => SetProperty(ref _isPreflighting, value); }
+    public bool StaticPreflightPassed { get => _staticPreflightPassed; private set => SetProperty(ref _staticPreflightPassed, value); }
+    public string PreflightStatus { get => _preflightStatus; private set => SetProperty(ref _preflightStatus, value); }
     public ObservableCollection<ParticipantVersionStatus> ParticipantUpdates { get; } = [];
+    public ObservableCollection<ImportIssue> PreflightIssues { get; } = [];
     public AsyncRelayCommand LoadVersionCommand { get; }
+    public AsyncRelayCommand SelectManifestCommand { get; }
+
+    public async Task SelectManifestAsync()
+    {
+        var path = _manifestFiles.OpenManifestFile();
+        if (path is null) return;
+
+        var context = _contextVersion;
+        var sequence = ++_preflightSequence;
+        ClearPreflight();
+        if (string.IsNullOrWhiteSpace(ExamId))
+        {
+            PreflightStatus = "请先填写当前考试 ID，再选择 manifest.json。";
+            return;
+        }
+        if (!string.Equals(Path.GetFileName(path), "manifest.json", StringComparison.OrdinalIgnoreCase))
+        {
+            PreflightStatus = "只接受名为 manifest.json 的清单；独立答案不在考务端本地预检。";
+            return;
+        }
+
+        IsPreflighting = true;
+        PreflightStatus = "正在读取并静态校验 manifest.json…";
+        try
+        {
+            if (new FileInfo(path).Length > MaxManifestBytes)
+                throw new InvalidDataException("清单超过 10 MB 上限。");
+            var json = await File.ReadAllTextAsync(path, new UTF8Encoding(false, true));
+            if (context != _contextVersion || sequence != _preflightSequence) return;
+            if (Encoding.UTF8.GetByteCount(json) > MaxManifestBytes)
+                throw new InvalidDataException("清单超过 10 MB 上限。");
+            ApplyManifestJson(json);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or DecoderFallbackException)
+        {
+            if (context == _contextVersion && sequence == _preflightSequence)
+                SetPreflightError(exception);
+        }
+        finally
+        {
+            if (context == _contextVersion && sequence == _preflightSequence)
+                IsPreflighting = false;
+        }
+    }
+
+    // 合成样包测试走同一入口；这里不接收答案文件，也不将清单内容写入日志或状态。
+    public void ValidateManifestJson(string json)
+    {
+        ++_preflightSequence;
+        ClearPreflight();
+        if (string.IsNullOrWhiteSpace(ExamId))
+        {
+            PreflightStatus = "请先填写当前考试 ID。";
+            return;
+        }
+        ApplyManifestJson(json);
+    }
+
+    private void ApplyManifestJson(string json)
+    {
+        var report = _manifestValidator.ValidateJson(json);
+        foreach (var issue in report.Issues)
+            PreflightIssues.Add(issue);
+        if (!report.IsValid)
+        {
+            PreflightStatus = $"清单静态校验未通过，共 {PreflightIssues.Count} 项问题；未编译、未发布。";
+            return;
+        }
+
+        // 身份绑定不是第二套清单规则：D01 校验通过后仅核对当前考务页面的考试 ID。
+        using var document = JsonDocument.Parse(json);
+        var manifestExamId = document.RootElement.GetProperty("examId").GetString();
+        if (!string.Equals(manifestExamId, ExamId.Trim(), StringComparison.Ordinal))
+        {
+            PreflightStatus = "清单考试 ID 与当前考试 ID 不一致；未接受此预检结果。";
+            return;
+        }
+
+        StaticPreflightPassed = true;
+        PreflightStatus = "清单静态校验通过；未在本地校验独立答案，答案关联和逐题满分核对未完成。依赖检查、XeLaTeX 编译、选项定位、发布前计分检查及正式发布仍未完成。";
+    }
+
+    private void ResetPreflight(string message)
+    {
+        ++_preflightSequence;
+        ClearPreflight();
+        IsPreflighting = false;
+        PreflightStatus = message;
+    }
+
+    private void ClearPreflight()
+    {
+        PreflightIssues.Clear();
+        StaticPreflightPassed = false;
+    }
+
+    private void SetPreflightError(Exception exception)
+    {
+        ClearPreflight();
+        PreflightStatus = exception is InvalidDataException
+            ? "清单超过 10 MB 上限；未执行静态预检。"
+            : "读取清单失败；请检查文件权限、UTF-8 编码及文件是否仍存在。未执行静态预检。";
+    }
 
     public async Task LoadVersionAsync()
     {

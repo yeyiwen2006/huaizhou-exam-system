@@ -1,10 +1,13 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Common;
+using Exam.Contracts.Importing;
 using Exam.Contracts.Versioning;
 
 namespace Exam.AdminUnitTests;
@@ -12,6 +15,119 @@ namespace Exam.AdminUnitTests;
 public sealed class AdvancedOperationsViewModelTests
 {
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
+
+    [Fact]
+    public void ImportRevision_ValidSyntheticManifestIsOnlyStaticPreflight()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api) { ExamId = "synthetic-minimal" };
+
+        viewModel.ValidateManifestJson(File.ReadAllText(SampleManifest("minimal")));
+
+        Assert.True(viewModel.StaticPreflightPassed);
+        Assert.Empty(viewModel.PreflightIssues);
+        Assert.Contains("答案关联和逐题满分核对未完成", viewModel.PreflightStatus, StringComparison.Ordinal);
+        Assert.Contains("编译", viewModel.PreflightStatus, StringComparison.Ordinal);
+        Assert.Contains("正式发布仍未完成", viewModel.PreflightStatus, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("type-invalid", ManifestRuleIds.GroupTypeInvalid, "/groups/0/type")]
+    [InlineData("expression-syntax", ManifestRuleIds.ScoreExpressionInvalid, "/groups/0/scoring")]
+    public void ImportRevision_UsesD01RulesAndPointersForSyntheticErrors(
+        string caseName, string expectedRule, string pointerPrefix)
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api) { ExamId = "synthetic-error-case" };
+
+        viewModel.ValidateManifestJson(File.ReadAllText(SampleManifest("errors", caseName)));
+
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Contains(viewModel.PreflightIssues, issue =>
+            issue.Rule == expectedRule && issue.Location.StartsWith(pointerPrefix, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ImportRevision_MalformedAndMissingFieldAreRejectedWithoutStaleIssues()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api) { ExamId = "synthetic-minimal" };
+        viewModel.ValidateManifestJson("{");
+        Assert.Contains(viewModel.PreflightIssues, issue => issue.Rule == ManifestRuleIds.InvalidJson);
+
+        var missing = JsonNode.Parse(File.ReadAllText(SampleManifest("minimal")))!;
+        missing.AsObject().Remove("examName");
+        viewModel.ValidateManifestJson(missing.ToJsonString());
+
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Contains(viewModel.PreflightIssues, issue =>
+            issue.Rule == ManifestRuleIds.RequiredMissing && issue.Location == "/examName");
+        Assert.DoesNotContain(viewModel.PreflightIssues, issue => issue.Rule == ManifestRuleIds.InvalidJson);
+    }
+
+    [Fact]
+    public void ImportRevision_ExamSwitchAndRepeatPreflightDoNotKeepOldResult()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api) { ExamId = "synthetic-minimal" };
+        var valid = File.ReadAllText(SampleManifest("minimal"));
+        viewModel.ValidateManifestJson(valid);
+        viewModel.ValidateManifestJson(valid);
+        Assert.True(viewModel.StaticPreflightPassed);
+        Assert.Empty(viewModel.PreflightIssues);
+
+        viewModel.ExamId = "other-exam";
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Empty(viewModel.PreflightIssues);
+        viewModel.ValidateManifestJson(valid);
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Contains("考试 ID 不一致", viewModel.PreflightStatus, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ImportRevision_FilePickerRejectsAnswerFileBeforeReading()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api,
+            new FixedManifestDialog(Path.Combine("server-only", "answer-key.json")))
+        { ExamId = "synthetic-minimal" };
+
+        await viewModel.SelectManifestAsync();
+
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Empty(viewModel.PreflightIssues);
+        Assert.Contains("独立答案不在考务端", viewModel.PreflightStatus, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ImportRevision_SelectedSyntheticManifestUsesTheSameD01Preflight()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ImportRevisionViewModel(api,
+            new FixedManifestDialog(SampleManifest("minimal"))) { ExamId = "synthetic-minimal" };
+
+        await viewModel.SelectManifestAsync();
+        await viewModel.SelectManifestAsync();
+
+        Assert.True(viewModel.StaticPreflightPassed);
+        Assert.Empty(viewModel.PreflightIssues);
+        Assert.False(viewModel.IsPreflighting);
+        Assert.Contains("未完成", viewModel.PreflightStatus, StringComparison.Ordinal);
+    }
+
+    private static string SampleManifest(params string[] segments)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "samples", "synthetic")))
+            root = root.Parent;
+        Assert.NotNull(root);
+        return Path.Combine([root.FullName, "samples", "synthetic", .. segments, "manifest.json"]);
+    }
+
+    private sealed class FixedManifestDialog(string path) : IManifestFileDialogService
+    {
+        public string? OpenManifestFile() => path;
+    }
 
     [Fact]
     public async Task ImportRevision_LoadsRealVersionSnapshotWithoutEquatingPublicationToClientUpdate()
