@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Exam.Contracts.Common;
 using Exam.Contracts.Versioning;
+using Exam.Domain.Scoring;
 
 namespace Exam.Domain.Versioning;
 
@@ -147,6 +148,19 @@ public sealed class ExamVersionAggregate
             RequireIdentifier(request.RuleSetId, nameof(request.RuleSetId));
             RequireIdentifier(request.Operator, nameof(request.Operator));
             RequireIdentifier(request.Reason, nameof(request.Reason));
+            // 旧命令流允许重放；新 HTTP 发布必须提供源清单与答案，不能只信任布尔标志。
+            if (request.ManifestJson is not null || request.AnswerKeyJson is not null)
+            {
+                ImportedGradingRules rules;
+                try { rules = ImportedGradingRules.Create(request.ManifestJson, request.AnswerKeyJson); }
+                catch (ArgumentException error)
+                {
+                    throw new VersioningRuleException(VersioningErrorCode.PublicationNotReady, error.Message);
+                }
+                if (rules.ExamId != _examId || _paper is null || !rules.Matches(_paper.Structure))
+                    throw new VersioningRuleException(VersioningErrorCode.StructuralChangeRejected,
+                        "计分清单必须与已发布试卷的考试、题目、题型和选项一致。");
+            }
             if (!request.Validation.IsReady)
             {
                 throw new VersioningRuleException(
@@ -477,7 +491,8 @@ public sealed class ExamVersionAggregate
                     $"Whole-paper question number '{question.QuestionNo}' is duplicated.");
             }
 
-            if (question.OptionIds.Count == 0 ||
+            if (question.QuestionType is not ("single" or "multiple" or "indeterminate") ||
+                question.OptionIds.Count is < 2 or > 26 ||
                 question.OptionIds.Any(string.IsNullOrWhiteSpace) ||
                 question.OptionIds.Distinct(StringComparer.Ordinal).Count() != question.OptionIds.Count)
             {
@@ -492,7 +507,7 @@ public sealed class ExamVersionAggregate
                 question.SubjectId,
                 question.GroupId,
                 question.QuestionType,
-                Array.AsReadOnly(question.OptionIds.ToArray()));
+                Array.AsReadOnly(question.OptionIds.ToArray()), question.AllowAbstain);
         }
 
         return new PaperStructure(Array.AsReadOnly(normalized));
@@ -514,6 +529,7 @@ public sealed class ExamVersionAggregate
                 !StringComparer.Ordinal.Equals(a.SubjectId, b.SubjectId) ||
                 !StringComparer.Ordinal.Equals(a.GroupId, b.GroupId) ||
                 !StringComparer.Ordinal.Equals(a.QuestionType, b.QuestionType) ||
+                a.AllowAbstain != b.AllowAbstain ||
                 !a.OptionIds.SequenceEqual(b.OptionIds, StringComparer.Ordinal))
             {
                 return false;

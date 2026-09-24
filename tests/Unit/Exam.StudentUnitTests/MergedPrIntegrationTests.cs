@@ -43,7 +43,8 @@ public sealed class MergedPrIntegrationTests
         var queue = new InMemoryGradingTaskQueue();
         await store.SetAuthorizationStateAsync(new("exam", "candidate", "participation", 1, "device", 1,
             ParticipationBusinessState.Answering, 1, 1));
-        using var service = new SubmissionService(store, queue);
+        var rules = fixture.ImportedRules();
+        using var service = new SubmissionService(store, queue, paperReader: id => id == rules.ExamId ? rules.Structure : null);
         var request = new SubmitFinalAnswersRequest(frozen.RequestId!, frozen.SubmissionId, "exam", "candidate",
             frozen.ParticipationId!, frozen.EntryVersion, frozen.DeviceId!, frozen.AuthorizationVersion,
             frozen.PaperVersion, frozen.FrozenAnswers);
@@ -56,8 +57,7 @@ public sealed class MergedPrIntegrationTests
         Assert.Equal(receipt.Value, serverReplay.Value);
         Assert.Equal(1, queue.Count);
         var persisted = Assert.IsType<FinalSubmission>(await store.FindSubmissionAsync("exam", "candidate"));
-        var grade = ScoreCalculator.Grade(fixture.Rules(), persisted.FrozenAnswers,
-            new(persisted.SubmissionId, persisted.ExamId, persisted.CandidateId, persisted.Receipt.GradingVersion));
+        var grade = rules.Grade(persisted, persisted.Receipt.GradingVersion);
         Assert.True(grade.Succeeded, grade.FailureReason);
         Assert.Equal("3", grade.Grade!.ExactTotalScore);
         Assert.Equal(2, grade.Grade.Questions.Count);
@@ -199,10 +199,21 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
         [new("q1", 1, "subject", "single", "questions/衔接合成考试_1.tex", ["A", "B", "C", "D"], null),
          new("q2", 2, "subject", "multiple", "questions/衔接合成考试_2.tex", ["A", "B", "C", "D"], null)], []);
 
-    public IReadOnlyList<QuestionRule> Rules() =>
-        [new("q1", 1, "subject", ["A", "B", "C", "D"], ["A"], Manifest.Groups[0].Scoring) { Type = QuestionTypeKind.Single },
-         new("q2", 2, "subject", ["A", "B", "C", "D"], ["A", "B"], Manifest.Groups[1].Scoring)
-             { Type = QuestionTypeKind.Multiple, AllowAbstain = true }];
+    public ImportedGradingRules ImportedRules() => ImportedGradingRules.Create(
+        JsonSerializer.Serialize(Manifest, ImportJson.Create()),
+        JsonSerializer.Serialize(new AnswerKeyFile(1, Manifest.ExamId,
+            [new("q1", 1, ["A"]), new("q2", 2, ["A", "B"])]), ImportJson.Create()));
+
+    public static StudentPaperManifest CreateStudentManifest()
+    {
+        var manifest = CreateManifest();
+        var structure = ImportedGradingRules.BuildStructure(manifest);
+        return new(1, manifest.ExamId, manifest.ExamName, 1,
+            manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name)).ToArray(),
+            manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order)).ToArray(),
+            manifest.Questions.Select((q, i) => new StudentPaperQuestion(structure.Questions[i],
+                StudentPackageLayout.QuestionPdfPath(q.Source), null)).ToArray(), []);
+    }
 
     public async Task<StudentExamRuntime> StartRuntimeAsync()
     {

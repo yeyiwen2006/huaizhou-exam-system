@@ -139,6 +139,9 @@ public sealed class StudentPackageBuilderTests : IDisposable
         Assert.True(File.Exists(_encryptedPath));
 
         var plaintext = await DecryptAsStudentWould(result.Envelope!, node);
+        var studentPaper = StudentPaperPackage.ReadManifest(plaintext, ExamId, PaperVersion);
+        Assert.Equal(1, studentPaper.Groups[0].Order);
+        Assert.Single(studentPaper.Questions);
         using var archive = new ZipArchive(new MemoryStream(plaintext), ZipArchiveMode.Read);
 
         var entries = archive.Entries
@@ -486,7 +489,11 @@ public sealed class StudentPackageBuilderTests : IDisposable
             Recipients = [new NodeKeyRecipient("node-a", node)], DisplayResourcePaths = []
         });
         Assert.True(packaged.Succeeded, Describe(packaged));
-        using var archive = new ZipArchive(new MemoryStream(await DecryptAsStudentWould(packaged.Envelope!, node)));
+        var plaintext = await DecryptAsStudentWould(packaged.Envelope!, node);
+        var displayed = StudentPaperPackage.ReadManifest(plaintext, ExamId, PaperVersion);
+        Assert.Equal(2, displayed.Questions.Count);
+        Assert.All(displayed.Questions, q => Assert.True(StudentPaperPackage.ReadQuestionPdf(plaintext, displayed, q.Structure.QuestionId).Length > 1000));
+        using var archive = new ZipArchive(new MemoryStream(plaintext));
         Assert.Equal(3, archive.Entries.Count);
         Assert.All(archive.Entries.Where(entry => entry.FullName.EndsWith(".pdf", StringComparison.Ordinal)), entry => Assert.True(entry.Length > 1000));
         Assert.False(Directory.Exists(_studentDirectory));

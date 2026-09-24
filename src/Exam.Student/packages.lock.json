@@ -167,12 +167,6 @@
       },
       "exam.desktop.shared": {
         "type": "Project"
-      },
-      "exam.domain": {
-        "type": "Project",
-        "dependencies": {
-          "Exam.Contracts": "[1.0.0, )"
-        }
       }
     }
   }

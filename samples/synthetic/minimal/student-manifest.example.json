@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "examId": "synthetic-display-example",
+  "examName": "学生显示合成考试",
+  "paperVersion": 1,
+  "subjects": [{ "subjectId": "subject", "name": "合成科目" }],
+  "groups": [{ "groupId": "group", "subjectId": "subject", "name": "单项选择题", "order": 1 }],
+  "questions": [{
+    "structure": {
+      "questionId": "q1", "questionNo": 1, "subjectId": "subject", "groupId": "group",
+      "questionType": "single", "optionIds": ["A", "B"], "allowAbstain": false
+    },
+    "pdfPath": "questions/学生显示合成考试_1.pdf",
+    "optionCaptions": ["A", "B"]
+  }],
+  "displayResources": []
+}
