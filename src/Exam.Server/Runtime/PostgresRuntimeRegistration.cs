@@ -105,7 +105,8 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(provider => new SubmissionService(
             provider.GetRequiredService<ISubmissionStore>(), provider.GetRequiredService<IGradingTaskQueue>(),
             maxConcurrentWrites, provider.GetRequiredService<TimeProvider>(),
-            accessReader: provider.GetRequiredService<IParticipationAccessReader>()));
+            accessReader: provider.GetRequiredService<IParticipationAccessReader>(),
+            paperReader: examId => provider.GetRequiredService<IExamVersioningService>().GetExam(examId).Value?.Paper?.Structure));
         services.AddSingleton<CollectionCompletionService>();
         services.AddHostedService<CollectionCompletionWorker>();
         services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();

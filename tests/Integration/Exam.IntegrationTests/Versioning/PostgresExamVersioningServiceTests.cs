@@ -7,6 +7,9 @@ using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
 using Exam.IntegrationTests.Postgres;
 using Exam.Server.Runtime;
+using System.Text.Json;
+using Exam.Contracts.Importing;
+using Exam.Domain.Scoring;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
@@ -16,6 +19,40 @@ namespace Exam.IntegrationTests.Versioning;
 [Trait("Category", "Postgres")]
 public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture fixture)
 {
+    [Fact]
+    public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots()
+    {
+        var examId = "imported-rules-" + Guid.NewGuid().ToString("N");
+        var manifest = new ExamManifest(1, examId, "合成规则考试",
+            [new("subject", "科目", "1")],
+            [new("group", "subject", "单选", "single", 1, 1, true, "1", new(new("1", "0", "0"), null))],
+            [new("q1", 1, "subject", "group", "questions/合成规则考试_1.tex", ["A", "B"], null)], []);
+        var key = new AnswerKeyFile(1, examId, [new("q1", 1, ["A"])]);
+        var manifestJson = JsonSerializer.Serialize(manifest, ImportJson.Create());
+        var keyJson = JsonSerializer.Serialize(key, ImportJson.Create());
+        var rules = ImportedGradingRules.Create(manifestJson, keyJson);
+        var service = new PostgresExamVersioningService(fixture.DataSource);
+        Assert.True(service.CreateExam(new(examId, new(InitialNow.AddHours(1), InitialNow.AddHours(2)), InitialNow, examId + "-create")).Succeeded);
+        var artifactId = examId + "-paper";
+        await StorePaperPackageAsync(examId, artifactId, 1);
+        Assert.True(service.PublishPaper(new(examId, 0, artifactId, rules.Structure, [], new(true, true, true, true),
+            "A", "合成接线测试", InitialNow, examId + "-paper")).Succeeded);
+        var request = new PublishGradingRulesRequest(examId, 0, "rules", new(true, true, true), "A", "合成接线测试",
+            InitialNow, examId + "-grading", manifestJson, keyJson);
+        var published = service.PublishGradingRules(request);
+        Assert.True(published.Succeeded, published.Error);
+        Assert.True(service.PublishGradingRules(request).Succeeded);
+        var restarted = new PostgresExamVersioningService(fixture.DataSource);
+        // A new write replays the durable command stream, including the imported rule validation.
+        var updated = restarted.UpdateSchedule(new(examId, 1, new(InitialNow.AddHours(2), InitialNow.AddHours(3)), InitialNow, examId + "-schedule"));
+        Assert.True(updated.Succeeded, updated.Error);
+        Assert.Equal(1, updated.Value!.Versions.GradingVersion);
+        Assert.True(updated.Value.Paper!.Structure.Questions[0].AllowAbstain);
+        var snapshot = JsonSerializer.Serialize(updated.Value, JsonDefaults.Create());
+        Assert.DoesNotContain("correctOptionIds", snapshot);
+        Assert.DoesNotContain("answerKeyJson", snapshot);
+    }
+
     private static readonly DateTimeOffset InitialNow =
         new(2026, 9, 22, 0, 0, 0, TimeSpan.Zero);
 

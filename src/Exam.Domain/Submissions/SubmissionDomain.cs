@@ -119,7 +119,7 @@ public static class SubmissionPolicy
 
         foreach (var (questionId, answer) in answers)
         {
-            if (string.IsNullOrWhiteSpace(questionId) || answer is null)
+            if (string.IsNullOrWhiteSpace(questionId) || answer is null || !Enum.IsDefined(answer.Kind))
             {
                 return "题目标识和答案不能为空。";
             }

@@ -7,6 +7,7 @@ using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
+using Exam.Contracts.Resources;
 
 namespace Exam.Student.Core;
 
@@ -33,9 +34,26 @@ public sealed class StudentExamRuntime(
     private FixedSubmissionRecord? _recoveredSubmission;
     private bool _localRecoveryChecked;
     private string? _localStateError;
+    private StudentPaperManifest? _paper;
 
     public ExamPackageManager Manager { get; } = manager;
     public AnswerSession? Answers { get; private set; }
+    public StudentPaperManifest? Paper => !_disposed && !Manager.ExamEnded &&
+        Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked ? _paper : null;
+
+    /// <summary>B03 显示层读取 PDF 的入口。调用方负责释放显示副本；终止后禁止再次读取。</summary>
+    public byte[] ReadQuestionPdf(string questionId)
+    {
+        var paper = Paper ?? throw new InvalidOperationException("试题尚未解锁或已经停止访问。");
+        var payload = Manager.UnlockedPayload ?? throw new InvalidOperationException("试题已停止访问。");
+        var bytes = StudentPaperPackage.ReadQuestionPdf(payload, paper, questionId);
+        if (Paper != paper || !ReferenceEquals(payload, Manager.UnlockedPayload))
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            throw new InvalidOperationException("读取期间试题已停止访问。");
+        }
+        return bytes;
+    }
     public bool LocalRecoveryChecked => _localRecoveryChecked;
     public bool HasFixedSubmission => _recoveredSubmission is not null || Answers?.Status == AnswerSessionStatus.Fixed ||
         Answers?.HasPendingSubmission == true;
@@ -107,11 +125,13 @@ public sealed class StudentExamRuntime(
             if (!await InitializeLocalRecoveryCoreAsync(ct) || _disposed) { return; }
             if (Manager.CurrentPhase == ExamPackageManager.Phase.Revoked)
             {
+                _paper = null;
                 if (Answers is { } revoked) { await revoked.InvalidateAuthorizationAsync(ct); }
                 return;
             }
             if (Manager.ExamEnded)
             {
+                _paper = null;
                 if (Answers is { } ended) { await ended.SuspendAsync("考试已结束，答案已停止修改，原记录等待后续核对和补传。", ct); }
                 return;
             }
@@ -127,6 +147,17 @@ public sealed class StudentExamRuntime(
                 return;
             }
 
+            if (_paper is null || _paper.PaperVersion != descriptor.PaperVersion)
+            {
+                try { _paper = StudentPaperPackage.ReadManifest(Manager.UnlockedPayload!, Manager.ExamId, descriptor.PaperVersion); }
+                catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
+                {
+                    _paper = null;
+                    _localStateError = "试题包清单、PDF 或版本核对失败，原答案保留，不能开始作答。";
+                    if (Answers is { } previous) await previous.SuspendAsync(_localStateError, ct);
+                    return;
+                }
+            }
             var context = new AnswerSessionContext(participation.ParticipationId, participation.EntryVersion,
                 participation.AuthorizationVersion, descriptor.PaperVersion, device.DeviceId, IsServerAuthorized: true);
             if (Answers is not null)
@@ -139,7 +170,7 @@ public sealed class StudentExamRuntime(
                 return;
             }
 
-            var answers = new AnswerSession(localState!);
+            var answers = new AnswerSession(localState!, paper: _paper.Structure);
             Answers = answers;
             _answerContext = context;
             answers.WriteBlocked += OnAnswerWriteBlocked;
@@ -329,6 +360,7 @@ public sealed class StudentExamRuntime(
         }
 
         _disposed = true;
+        _paper = null;
         var stopAnswers = Answers?.SuspendAsync("考试会话已关闭，原记录保留。", CancellationToken.None) ?? Task.CompletedTask;
         _lifetime.Cancel();
         try

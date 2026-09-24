@@ -59,7 +59,7 @@ QuestionRule.Type 必须从对应题组传入。其兼容默认值为 Indetermin
 
 Grade 要求题目记录与规则一一对应。未作答显式使用 AnswerValue.Empty()；缺失记录、额外题目、重复或未知选项、无效作答类型、单项题多选和未启用的 Abstain 均导致整体失败，不返回任何分数。DetermineOutcome 直接收到这些无效输入时抛出 ArgumentException。
 
-A05 的 SubmissionPolicy 目前只检查提交项的基础结构，未保证与题目清单完整对应。因此不能依赖它省略计分侧的检查。后续接线必须明确保证冻结记录完整，不能在计分时补造 Empty 掩盖漏传。
+A05 的 SubmissionPolicy 检查提交项的基础结构。后续接口修正已在生产 SubmissionService 注册已发布试卷读取器，以 AnswerSheetContract 核对全题记录、选项、题型和 AllowAbstain。学生端创建答卷时初始化每题 Empty，恢复残缺旧记录时保留原文件并停止作答。计分侧仍保留独立检查，不在计分时补造 Empty。详细约定见 [模块接口衔接](module-interface-integration.md)。
 
 所有分数由既有 ExactRational 和专用表达式解析器计算。0.1 + 0.2 得 0.3，整数 3 显示为 3；不使用浮点或四舍五入补偿。单科和总分由通过逐题有限小数检查的精确值相加得到。
 
@@ -67,4 +67,4 @@ A05 的 SubmissionPolicy 目前只检查提交项的基础结构，未保证与�
 
 本地 Windows、.NET SDK 10.0.401，基线包含已验收的 PR #50。实际记录见 [PR #51 审查记录](reviews/pr51-d04-exact-scoring.md)。
 
-计分结果持久化、A05 outbox 消费、规则版本及重算、发布入口、GUI/CLI 和报表接线尚未完成。#27 保持打开，D05 等后续工作仍按既有分工推进。本次不声明真实试卷计分、300 人耗时和 T01/T02 已验收。
+后续接口修正已将 ImportedGradingRules 接入计分发布入口，同时执行 D01 与 D04 校验并核对已发布试卷。计分结果持久化、A05 outbox 消费、完整规则版本及重算、GUI/CLI 和报表接线尚未完成。#27 保持打开，D05 等后续工作仍按既有分工推进。本次不声明真实试卷计分、300 人耗时和 T01/T02 已验收。

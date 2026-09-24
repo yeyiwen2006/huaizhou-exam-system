@@ -47,7 +47,9 @@ public sealed record PublishGradingRulesApiRequest(
     string RuleSetId,
     GradingPublicationValidation Validation,
     string Operator,
-    string Reason);
+    string Reason,
+    string? ManifestJson = null,
+    string? AnswerKeyJson = null);
 
 public sealed record RegisterVersionedParticipantApiRequest(
     string RequestId,
