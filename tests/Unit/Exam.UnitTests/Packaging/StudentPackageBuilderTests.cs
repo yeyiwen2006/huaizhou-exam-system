@@ -164,6 +164,26 @@ public sealed class StudentPackageBuilderTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("figures")]
+    [InlineData("FIGURES")]
+    [InlineData(".")]
+    public async Task Build_NormalizesResourceRootsIntoExplicitReadableDisplayPaths(string resourceRoot)
+    {
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(ManifestJson)!;
+        manifest["resourceRoots"] = new System.Text.Json.Nodes.JsonArray(resourceRoot);
+        WriteFile(Path.Combine(_packageRoot, "manifest.json"), manifest.ToJsonString());
+        using var node = CreateCertificate("node-a");
+        var packaged = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with
+        {
+            EncryptedPackagePath = _encryptedPath, Recipients = [new("node-a", node)]
+        });
+        Assert.True(packaged.Succeeded, Describe(packaged));
+        var displayed = StudentPaperPackage.ReadManifest(await DecryptAsStudentWould(packaged.Envelope!, node), ExamId, PaperVersion);
+        var path = Assert.Single(displayed.DisplayResources);
+        Assert.Equal("figures/chemistry/q-figure-01.png", path, ignoreCase: true);
+    }
+
     [Fact]
     public async Task Build_ExcludesAnswerNamedResourceButKeepsTheRest()
     {

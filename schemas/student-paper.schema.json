@@ -43,12 +43,12 @@
               "allowAbstain": { "type": "boolean", "default": false }
             }
           },
-          "pdfPath": { "type": "string", "pattern": "^questions/.+\\.pdf$" },
+          "pdfPath": { "type": "string", "maxLength": 512, "pattern": "^questions/.+\\.pdf$" },
           "optionCaptions": { "type": "array", "minItems": 2, "maxItems": 26, "items": { "$ref": "#/$defs/text" } }
         }
       }
     },
-    "displayResources": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/text" } }
+    "displayResources": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/text", "maxLength": 512 } }
   },
   "$defs": { "text": { "type": "string", "minLength": 1 } }
 }
