@@ -1,4 +1,7 @@
 using System.IO;
+using System.IO.Compression;
+using System.Text.Json;
+using Exam.Contracts.Importing;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -206,8 +209,20 @@ public sealed class StudentExamRuntimeTests
             var certificate = new CertificateRequest("CN=B04-runtime-test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             var api = new PackageApi { _node = certificate.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1)) };
             using var ciphertext = new MemoryStream();
+            using var payload = new MemoryStream();
+            using (var zip = new ZipArchive(payload, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                using (var metadata = zip.CreateEntry(StudentPackagePlan.MetadataFileName).Open())
+                    JsonSerializer.Serialize(metadata, StudentPaperFixture.CreateManifest(), ImportJson.Create());
+                foreach (var question in StudentPaperFixture.CreateManifest().Questions)
+                {
+                    using var pdf = zip.CreateEntry(StudentPackageLayout.QuestionPdfPath(question.Source)).Open();
+                    pdf.Write("%PDF-1.4\n% synthetic runtime fixture\n"u8);
+                }
+            }
+            payload.Position = 0;
             api._envelope = await new PackageEncryptionService(4096).EncryptAsync(
-                new MemoryStream(Encoding.UTF8.GetBytes("合成题包，仅用于运行时真实解锁与本地恢复测试。")),
+                payload,
                 ciphertext, "package", 1, [new("node", api._node)]);
             api._ciphertext = ciphertext.ToArray();
             return api;

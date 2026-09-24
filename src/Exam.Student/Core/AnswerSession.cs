@@ -48,6 +48,7 @@ public sealed class AnswerSession
 {
     private readonly ILocalStateStore _store;
     private readonly TimeProvider _time;
+    private readonly StudentPaperDefinition? _paper;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LocalStateKey? _key;
     private AnswerSessionContext? _context;
@@ -64,10 +65,11 @@ public sealed class AnswerSession
 
     private sealed record PendingWrite(AnswerStateRecord State, PendingSnapshot Snapshot);
 
-    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null)
+    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null, StudentPaperDefinition? paper = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _time = timeProvider ?? TimeProvider.System;
+        _paper = paper;
     }
 
     public AnswerSessionStatus Status =>
@@ -112,6 +114,9 @@ public sealed class AnswerSession
                 context.AuthorizationVersion < 1 || context.PaperVersion < 1)
                 return DenyRestore("尚未取得服务器当前有效授权，不能从本地缓存启动作答。");
 
+            if (_paper is not null && _paper.ExamId != key.ExamId)
+                return DenyRestore("题目目录与当前考试不一致，不能初始化答案。");
+
             AnswerStateRecord? saved;
             FixedSubmissionRecord? fixedRecord;
             try
@@ -128,6 +133,10 @@ public sealed class AnswerSession
             }
             if (saved is not null && !MatchesContext(saved))
                 return DenyRestore("本地记录的设备或参试授权与当前服务器不一致，已拒绝恢复。");
+            if (saved is not null && _paper is not null &&
+                (!_paper.HasCompleteAnswers(saved.Answers) || saved.Marks.Any(id => !_paper.ContainsQuestion(id)) ||
+                 saved.CurrentQuestionId is { } current && !_paper.ContainsQuestion(current)))
+                return DenyRestore("原本地记录与当前题目目录不完整对应，已保留原文件；不能补造空答案或重新开始。");
             if (fixedRecord is not null)
             {
                 if (saved is null || !ValidFixedRecord(fixedRecord, saved))
@@ -152,7 +161,7 @@ public sealed class AnswerSession
             }
             else
             {
-                _pendingWrite = BuildPending(1, EmptyAnswers(), new HashSet<string>(StringComparer.Ordinal), null);
+                _pendingWrite = BuildPending(1, _paper?.CreateEmptyAnswers() ?? EmptyAnswers(), new HashSet<string>(StringComparer.Ordinal), null);
             }
             await PersistPendingAsync(ct).ConfigureAwait(false);
             return new RestoreResult(Status, LastError ?? "本地状态已可靠保存。");
@@ -160,7 +169,8 @@ public sealed class AnswerSession
 
     public Task<AnswerChangeResult> SetAnswerAsync(string questionId, AnswerValue value, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(questionId) || !ValidAnswer(value))
+        if (string.IsNullOrWhiteSpace(questionId) || !ValidAnswer(value) ||
+            _paper is not null && !_paper.AllowsAnswer(questionId, value))
             return Task.FromResult(ChangeFailure("题目标识或答案格式无效。"));
         var frozenValue = new AnswerValue(value.Kind, Array.AsReadOnly(value.OptionIds.ToArray()));
         return ChangeAsync(state =>
@@ -173,14 +183,15 @@ public sealed class AnswerSession
 
     public Task<AnswerChangeResult> SetCurrentQuestionAsync(string? questionId, CancellationToken ct = default)
     {
-        if (questionId is not null && string.IsNullOrWhiteSpace(questionId))
+        if (questionId is not null && (string.IsNullOrWhiteSpace(questionId) ||
+            _paper is not null && !_paper.ContainsQuestion(questionId)))
             return Task.FromResult(ChangeFailure("题目标识无效。"));
         return ChangeAsync(state => BuildPending(checked(state.AnswerVersion + 1), state.Answers, state.Marks, questionId), ct);
     }
 
     public Task<AnswerChangeResult> ToggleMarkAsync(string questionId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(questionId))
+        if (string.IsNullOrWhiteSpace(questionId) || _paper is not null && !_paper.ContainsQuestion(questionId))
             return Task.FromResult(ChangeFailure("题目标识无效。"));
         return ChangeAsync(state =>
         {
@@ -281,6 +292,8 @@ public sealed class AnswerSession
         var effective = _pendingWrite?.State ?? _reliable;
         if (effective is null || _requestedSubmissionId is null)
             return new FixSubmissionResult(false, isReplay, null, "没有可固定的完整本地状态。");
+        if (_paper is not null && !_paper.HasCompleteAnswers(effective.Answers))
+            return new FixSubmissionResult(false, isReplay, null, "答案与题目目录不完整对应，不能固定或补造缺失记录。");
         _frozenIntent ??= new FixedSubmissionRecord(_requestedSubmissionId, effective.PaperVersion, effective.AnswerVersion,
             FreezeAnswers(effective.Answers), _time.GetUtcNow(), RequestIds.New(), _context.ParticipationId,
             _context.EntryVersion, _context.DeviceId, _context.AuthorizationVersion);

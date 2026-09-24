@@ -139,7 +139,15 @@ public sealed class StudentExamRuntime(
                 return;
             }
 
-            var answers = new AnswerSession(localState!);
+            // Cryptographic unlock alone does not prove this is the right exam or a usable D03 ZIP.
+            // Read the producer's real catalog before creating any new SQLite state. END/revocation
+            // may wipe the shared payload while parsing; never authorize a session from that stale read.
+            var payload = Manager.UnlockedPayload;
+            if (payload is null) return;
+            var paper = await Task.Run(() => StudentPaperDefinition.Read(payload, Manager.ExamId, ct), ct);
+            if (!ReferenceEquals(payload, Manager.UnlockedPayload) || Manager.ExamEnded ||
+                Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked) return;
+            var answers = new AnswerSession(localState!, paper: paper);
             Answers = answers;
             _answerContext = context;
             answers.WriteBlocked += OnAnswerWriteBlocked;
@@ -153,6 +161,10 @@ public sealed class StudentExamRuntime(
                 await answers.InvalidateAuthorizationAsync(ct);
             else if (_disposed || Manager.ExamEnded)
                 await answers.SuspendAsync("考试已结束，原答案保留，不能新增修改。", ct);
+        }
+        catch (InvalidDataException)
+        {
+            _localStateError = "解锁后的题包清单或显示资源无效，未创建或覆盖本地答案；请联系考务人员核对当前版本。";
         }
         catch (Exception error) when (IsLocalStorageError(error))
         {

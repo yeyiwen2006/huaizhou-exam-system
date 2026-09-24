@@ -39,12 +39,13 @@ public sealed record StudentPackageResult(
 /// <summary>
 /// 仅打包重新生成的清单、逐题 PDF 和逐文件确认的显示资源。
 /// 加密模式从内存快照生成 ZIP，不写出明文目录；未指定加密路径时显式生成服务器预览目录。
-/// ZIP 布局仍待 D03/B03 接线确认。本服务不承担 PDF 正文、图片语义或选项坐标验收。
+/// 文件布局由 StudentPackageLayout 与学生端共用；显示控件及坐标仍由 B03 接线。
+/// 本服务不承担 PDF 正文、图片语义或选项坐标验收。
 /// </summary>
 public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
 {
-    public const int MaxPackageBytes = 256 * 1024 * 1024;
-    private const int MaxMetadataBytes = 8 * 1024 * 1024;
+    public const int MaxPackageBytes = StudentPackageLayout.MaxContentBytes;
+    private const int MaxMetadataBytes = StudentPackageLayout.MaxMetadataBytes;
     private readonly PackageEncryptionService _encryption =
         encryption ?? throw new ArgumentNullException(nameof(encryption));
 
@@ -108,6 +109,11 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             examId = manifest.ExamId;
             // 从受控 DTO 重新生成，后续不再重读原始清单。
             var metadata = JsonSerializer.SerializeToUtf8Bytes(manifest, ImportJson.Create());
+            if (metadata.Length > MaxMetadataBytes)
+            {
+                issues.Add(new(StudentPackageIssueCode.MetadataInvalid, "重新生成的学生清单超过容量限制。"));
+                return Fail();
+            }
             files.Add(StudentPackagePlan.MetadataFileName, metadata);
             long totalBytes = metadata.Length;
             void AddFile(string relative, string source)
@@ -118,6 +124,8 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                     issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "包内路径重复。", relative));
                     return;
                 }
+                if (files.Count >= StudentPackageLayout.MaxEntryCount)
+                    throw new IOException("学生题包文件数量超过共同容量限制。");
                 var bytes = ReadBounded(source, checked((int)(MaxPackageBytes - totalBytes)));
                 // 完整内容的补充字段检查，不按后缀或前 64 KiB 取样放行。
                 if (!StudentPackageAllowlist.IsAllowed(relative, Encoding.UTF8.GetString(bytes), out var reason))
@@ -138,8 +146,8 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "编译结果必须与清单中的题目逐一对应。"));
             foreach (var question in manifest.Questions)
             {
-                var pdfName = Path.GetFileNameWithoutExtension(question.Source.Replace('\\', '/')) + ".pdf";
-                var destination = "questions/" + pdfName;
+                var destination = StudentPackageLayout.QuestionPdfPath(question.Source);
+                var pdfName = destination["questions/".Length..];
                 var source = Resolve(compilationRoot, pdfName);
                 if (request.CompiledQuestions is { } results)
                 {

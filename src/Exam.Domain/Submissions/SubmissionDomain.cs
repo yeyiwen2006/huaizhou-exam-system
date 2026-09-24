@@ -124,6 +124,11 @@ public static class SubmissionPolicy
                 return "题目标识和答案不能为空。";
             }
 
+            if (!Enum.IsDefined(answer.Kind))
+            {
+                return "作答类型必须是 empty、selected 或 abstain。";
+            }
+
             var options = answer.OptionIds;
             if (options is null)
             {

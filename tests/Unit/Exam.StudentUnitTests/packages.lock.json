@@ -566,6 +566,7 @@
         "dependencies": {
           "Exam.Contracts": "[1.0.0, )",
           "Exam.Desktop.Shared": "[1.0.0, )",
+          "Exam.Domain": "[1.0.0, )",
           "Microsoft.AspNetCore.SignalR.Client": "[10.0.12, )",
           "Microsoft.Data.Sqlite": "[10.0.12, )"
         }
