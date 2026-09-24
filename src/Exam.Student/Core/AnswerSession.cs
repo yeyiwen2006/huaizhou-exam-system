@@ -1,6 +1,7 @@
 using System.IO;
 using Exam.Contracts.Common;
 using Exam.Contracts.Submissions;
+using Exam.Contracts.Versioning;
 
 namespace Exam.Student.Core;
 
@@ -48,6 +49,7 @@ public sealed class AnswerSession
 {
     private readonly ILocalStateStore _store;
     private readonly TimeProvider _time;
+    private readonly PaperStructure? _paper;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LocalStateKey? _key;
     private AnswerSessionContext? _context;
@@ -64,10 +66,12 @@ public sealed class AnswerSession
 
     private sealed record PendingWrite(AnswerStateRecord State, PendingSnapshot Snapshot);
 
-    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null)
+    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null, PaperStructure? paper = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _time = timeProvider ?? TimeProvider.System;
+        _paper = paper is null ? null : new(Array.AsReadOnly(paper.Questions.Select(q =>
+            q with { OptionIds = Array.AsReadOnly(q.OptionIds.ToArray()) }).ToArray()));
     }
 
     public AnswerSessionStatus Status =>
@@ -128,6 +132,11 @@ public sealed class AnswerSession
             }
             if (saved is not null && !MatchesContext(saved))
                 return DenyRestore("本地记录的设备或参试授权与当前服务器不一致，已拒绝恢复。");
+            if (saved is not null && _paper is not null &&
+                (AnswerSheetContract.Validate(_paper, saved.Answers) is not null ||
+                 saved.Marks.Any(id => !KnownQuestion(id)) ||
+                 (saved.CurrentQuestionId is { } current && !KnownQuestion(current))))
+                return DenyRestore("本地答卷与试题清单不一致，原记录已保留；不能把缺失题目补成空答案。");
             if (fixedRecord is not null)
             {
                 if (saved is null || !ValidFixedRecord(fixedRecord, saved))
@@ -152,7 +161,9 @@ public sealed class AnswerSession
             }
             else
             {
-                _pendingWrite = BuildPending(1, EmptyAnswers(), new HashSet<string>(StringComparer.Ordinal), null);
+                var initial = _paper is null ? EmptyAnswers() : _paper.Questions.ToDictionary(
+                    q => q.QuestionId, _ => AnswerValue.Empty(), StringComparer.Ordinal);
+                _pendingWrite = BuildPending(1, initial, new HashSet<string>(StringComparer.Ordinal), null);
             }
             await PersistPendingAsync(ct).ConfigureAwait(false);
             return new RestoreResult(Status, LastError ?? "本地状态已可靠保存。");
@@ -162,6 +173,9 @@ public sealed class AnswerSession
     {
         if (string.IsNullOrWhiteSpace(questionId) || !ValidAnswer(value))
             return Task.FromResult(ChangeFailure("题目标识或答案格式无效。"));
+        if (_paper is not null && (_paper.Questions.SingleOrDefault(q => q.QuestionId == questionId) is not { } question ||
+            AnswerSheetContract.ValidateAnswer(question, value) is not null))
+            return Task.FromResult(ChangeFailure("题目或选项不符合本套试卷的作答约定。"));
         var frozenValue = new AnswerValue(value.Kind, Array.AsReadOnly(value.OptionIds.ToArray()));
         return ChangeAsync(state =>
         {
@@ -173,14 +187,14 @@ public sealed class AnswerSession
 
     public Task<AnswerChangeResult> SetCurrentQuestionAsync(string? questionId, CancellationToken ct = default)
     {
-        if (questionId is not null && string.IsNullOrWhiteSpace(questionId))
+        if (questionId is not null && (string.IsNullOrWhiteSpace(questionId) || !KnownQuestion(questionId)))
             return Task.FromResult(ChangeFailure("题目标识无效。"));
         return ChangeAsync(state => BuildPending(checked(state.AnswerVersion + 1), state.Answers, state.Marks, questionId), ct);
     }
 
     public Task<AnswerChangeResult> ToggleMarkAsync(string questionId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(questionId))
+        if (string.IsNullOrWhiteSpace(questionId) || !KnownQuestion(questionId))
             return Task.FromResult(ChangeFailure("题目标识无效。"));
         return ChangeAsync(state =>
         {
@@ -373,6 +387,7 @@ public sealed class AnswerSession
             pair.Value.Kind == value.Kind && pair.Value.OptionIds.SequenceEqual(value.OptionIds));
 
     private AnswerChangeResult ChangeFailure(string message) => new(false, AnswerVersion, message);
+    private bool KnownQuestion(string id) => _paper is null || _paper.Questions.Any(q => q.QuestionId == id);
     private static bool ValidKey(LocalStateKey key) => !string.IsNullOrWhiteSpace(key.ServerKey) &&
         !string.IsNullOrWhiteSpace(key.ExamId) && !string.IsNullOrWhiteSpace(key.CandidateId);
     private static bool ValidAnswer(AnswerValue value) => value is not null && Enum.IsDefined(value.Kind) &&

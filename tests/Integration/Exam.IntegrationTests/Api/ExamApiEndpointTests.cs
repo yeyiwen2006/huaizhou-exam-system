@@ -12,6 +12,7 @@ using Exam.Contracts.Participation;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Commands;
 using Exam.Domain.Submissions;
+using Exam.Domain.Scoring;
 using Exam.Server.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -24,6 +25,42 @@ namespace Exam.IntegrationTests.Api;
 
 public sealed class ExamApiEndpointTests
 {
+    [Fact]
+    public async Task GradingPublicationRequiresActualCompleteInputs_AndMatchesPublishedPaper()
+    {
+        const string manifest = """
+            {"schemaVersion":1,"examId":"exam-api","examName":"接口合成考试",
+             "subjects":[{"subjectId":"s","name":"科目","maxScore":"1"}],
+             "groups":[{"groupId":"g","subjectId":"s","name":"单选","type":"single","order":1,
+                "questionCount":1,"maxScore":"1","scoring":{"oneCorrect":{"correct":"1","blank":"0","wrong":"0"}}}],
+             "questions":[{"questionId":"q","questionNo":1,"subjectId":"s","groupId":"g",
+                 "source":"questions/接口合成考试_1.tex","options":["A","B"]}],"resourceRoots":[]}
+            """;
+        const string key = """
+            {"schemaVersion":1,"examId":"exam-api","answers":[{"questionId":"q","questionNo":1,"correctOptionIds":["A"]}]}
+            """;
+        await using var application = await CreateApplicationAsync();
+        using var client = application.GetTestClient();
+        var json = JsonDefaults.Create();
+        var service = application.Services.GetRequiredService<IExamVersioningService>();
+        Assert.True(service.CreateExam(new("exam-api", new(Now.AddHours(1), Now.AddHours(2)), Now)).Succeeded);
+        var structure = ImportedGradingRules.Create(manifest, key).Structure;
+        Assert.True(service.PublishPaper(new("exam-api", 0, "artifact", structure, [], new(true, true, true, true), "A", "合成测试", Now)).Succeeded);
+        var request = new PublishGradingRulesApiRequest("publish", 0, "rules", new(true, true, true), "A", "合成测试");
+        const string route = "/api/v1/versioning/exams/exam-api/grading-publications";
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(route, request, json)).StatusCode);
+        var incomplete = request with { ManifestJson = manifest, AnswerKeyJson = "{\"schemaVersion\":1,\"examId\":\"exam-api\",\"answers\":[]}" };
+        Assert.False((await client.PostAsJsonAsync(route, incomplete, json)).IsSuccessStatusCode);
+        Assert.Equal(0, service.GetExam("exam-api").Value!.Versions.GradingVersion);
+        var complete = request with { ManifestJson = manifest, AnswerKeyJson = key };
+        var response = await client.PostAsJsonAsync(route, complete, json);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("correctOptionIds", text);
+        Assert.DoesNotContain("answerKeyJson", text);
+        Assert.Equal(1, service.GetExam("exam-api").Value!.Versions.GradingVersion);
+    }
+
     private static readonly DateTimeOffset Now =
         new(2026, 9, 22, 0, 0, 0, TimeSpan.Zero);
 

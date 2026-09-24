@@ -54,7 +54,8 @@ public sealed record PaperQuestionStructure(
     string SubjectId,
     string GroupId,
     string QuestionType,
-    IReadOnlyList<string> OptionIds);
+    IReadOnlyList<string> OptionIds,
+    bool AllowAbstain = false);
 
 public sealed record PaperStructure(IReadOnlyList<PaperQuestionStructure> Questions);
 
@@ -150,7 +151,9 @@ public sealed record PublishGradingRulesRequest(
     string Operator,
     string Reason,
     DateTimeOffset Now,
-    string RequestId = "");
+    string RequestId = "",
+    string? ManifestJson = null,
+    string? AnswerKeyJson = null);
 
 public sealed record RegisterVersionedParticipantRequest(
     string ExamId,

@@ -3,7 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Importing;
+using Exam.Contracts.Resources;
 using Exam.Domain.Importing;
+using Exam.Domain.Scoring;
 using Exam.Infrastructure.Security;
 using Exam.Infrastructure.ServiceManagement;
 
@@ -39,7 +41,7 @@ public sealed record StudentPackageResult(
 /// <summary>
 /// 仅打包重新生成的清单、逐题 PDF 和逐文件确认的显示资源。
 /// 加密模式从内存快照生成 ZIP，不写出明文目录；未指定加密路径时显式生成服务器预览目录。
-/// ZIP 布局仍待 D03/B03 接线确认。本服务不承担 PDF 正文、图片语义或选项坐标验收。
+/// ZIP 布局由 StudentPaperPackage 读取。本服务不承担 PDF 正文、图片语义或选项坐标验收。
 /// </summary>
 public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
 {
@@ -106,8 +108,16 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             }
             var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestText, ImportJson.Create())!;
             examId = manifest.ExamId;
-            // 从受控 DTO 重新生成，后续不再重读原始清单。
-            var metadata = JsonSerializer.SerializeToUtf8Bytes(manifest, ImportJson.Create());
+            // 学生清单仅包含显示和作答所需字段，不携带导入源路径及计分规则。
+            var structure = ImportedGradingRules.BuildStructure(manifest);
+            var studentManifest = new StudentPaperManifest(1, examId, manifest.ExamName, request.PaperVersion,
+                manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name)).ToArray(),
+                manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order)).ToArray(),
+                manifest.Questions.Select((q, i) => new StudentPaperQuestion(structure.Questions[i],
+                    "questions/" + Path.GetFileNameWithoutExtension(q.Source.Replace('\\', '/')) + ".pdf",
+                    q.DisplayMetadata?.OptionCaptions)).ToArray(),
+                request.DisplayResourcePaths.Select(PackagePathRules.Normalize).ToArray());
+            var metadata = JsonSerializer.SerializeToUtf8Bytes(studentManifest, ImportJson.Create());
             files.Add(StudentPackagePlan.MetadataFileName, metadata);
             long totalBytes = metadata.Length;
             void AddFile(string relative, string source)
@@ -206,6 +216,14 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 }
             }
             if (issues.Count != 0) return Fail();
+            var finalMetadata = JsonSerializer.SerializeToUtf8Bytes(studentManifest with
+            {
+                DisplayResources = files.Keys.Where(path => path != StudentPackagePlan.MetadataFileName &&
+                    !path.StartsWith("questions/", StringComparison.Ordinal)).ToArray()
+            }, ImportJson.Create());
+            if (files.Count > 10000 || finalMetadata.Length > MaxMetadataBytes || totalBytes - metadata.Length + finalMetadata.Length > MaxPackageBytes)
+                throw new IOException("学生显示清单超出大小限制。");
+            files[StudentPackagePlan.MetadataFileName] = finalMetadata;
             var plan = new StudentPackagePlan(examId, request.PaperVersion, files.Keys.ToArray(), excluded);
             if (target is not null)
             {
@@ -252,6 +270,7 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                     stream.Write(bytes);
                 }
             }
+            if (plaintext.Length > MaxPackageBytes) throw new IOException("ZIP 总大小超出学生读取限制。");
             plaintext.Position = 0;
             EncryptedPackageEnvelope envelope;
             await using (var ciphertext = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))

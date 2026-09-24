@@ -1,5 +1,6 @@
 using Exam.Application.Commands;
 using Exam.Contracts.Submissions;
+using Exam.Contracts.Versioning;
 using Exam.Domain.Submissions;
 
 namespace Exam.Application.Submissions;
@@ -12,6 +13,7 @@ public sealed class SubmissionService : IDisposable
     private readonly Func<string> _receiptIdFactory;
     private readonly SubmissionWriteAdmission _writeSlots;
     private readonly IParticipationAccessReader? _accessReader;
+    private readonly Func<string, PaperStructure?>? _paperReader;
 
     public SubmissionService(
         ISubmissionStore store,
@@ -21,7 +23,8 @@ public sealed class SubmissionService : IDisposable
         Func<string>? receiptIdFactory = null,
         IParticipationAccessReader? accessReader = null,
         int maxQueuedWritesPerClass = 300,
-        TimeSpan? writeQueueTimeout = null)
+        TimeSpan? writeQueueTimeout = null,
+        Func<string, PaperStructure?>? paperReader = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(gradingQueue);
@@ -35,6 +38,7 @@ public sealed class SubmissionService : IDisposable
         _timeProvider = timeProvider ?? TimeProvider.System;
         _receiptIdFactory = receiptIdFactory ?? (() => Guid.NewGuid().ToString("N"));
         _accessReader = accessReader;
+        _paperReader = paperReader;
         _writeSlots = new SubmissionWriteAdmission(maxConcurrentWrites, maxQueuedWritesPerClass,
             writeQueueTimeout ?? TimeSpan.FromSeconds(5));
     }
@@ -61,6 +65,9 @@ public sealed class SubmissionService : IDisposable
 
         try
         {
+            var sheetError = ValidateSheet(request.ExamId, request.Answers, request.CurrentQuestionId);
+            if (sheetError is not null)
+                return SubmissionOperationResult<PersistedProgress>.Failure(SubmissionErrorCode.InvalidRequest, sheetError);
             var result = await _store.SaveProgressAsync(
                 request,
                 _timeProvider.GetUtcNow(),
@@ -123,6 +130,14 @@ public sealed class SubmissionService : IDisposable
 
         try
         {
+            // 已收卷的请求继续交给事务存储核对身份并返回原回执，不重新解释或改写原答卷。
+            var existing = await _store.FindSubmissionAsync(request.ExamId, request.CandidateId, cancellationToken);
+            if (existing is null)
+            {
+                var sheetError = ValidateSheet(request.ExamId, request.FrozenAnswers, null);
+                if (sheetError is not null)
+                    return SubmissionOperationResult<SubmissionReceipt>.Failure(SubmissionErrorCode.InvalidRequest, sheetError);
+            }
             var result = await _store.SaveSubmissionAsync(
                 request,
                 _timeProvider.GetUtcNow(),
@@ -188,6 +203,17 @@ public sealed class SubmissionService : IDisposable
         {
             _writeSlots.Release();
         }
+    }
+
+    private string? ValidateSheet(string examId, IReadOnlyDictionary<string, AnswerValue> answers, string? current)
+    {
+        if (_paperReader is null) return null; // 兼容独立的存储层测试；生产注册必须提供发布清单。
+        var paper = _paperReader(examId);
+        if (paper is null) return "服务器尚无可核对的已发布试卷。";
+        var problem = AnswerSheetContract.Validate(paper, answers);
+        if (problem is not null) return problem;
+        return current is not null && !paper.Questions.Any(q => q.QuestionId == current)
+            ? "当前题目不属于已发布试卷。" : null;
     }
 
     public async ValueTask<SubmissionOperationResult<SubmissionReceipt>> FindReceiptAsync(

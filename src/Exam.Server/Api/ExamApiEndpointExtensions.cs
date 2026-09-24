@@ -634,6 +634,10 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
+            if (string.IsNullOrWhiteSpace(request.ManifestJson) || string.IsNullOrWhiteSpace(request.AnswerKeyJson))
+                return ApiEndpointResults.Error(context, configuration, request.RequestId, "PUBLICATION_NOT_READY",
+                    "发布计分规则必须提供清单和完整参考答案，服务器将重新校验。", StatusCodes.Status400BadRequest);
+
             return ApiEndpointResults.FromVersioning(
                 context,
                 configuration,
@@ -646,7 +650,9 @@ public static class ExamApiEndpointExtensions
                     request.Operator,
                     request.Reason,
                     timeProvider.GetUtcNow(),
-                    request.RequestId)));
+                    request.RequestId,
+                    request.ManifestJson,
+                    request.AnswerKeyJson)));
         });
 
         group.MapPost("/exams/{examId}/participants", (
