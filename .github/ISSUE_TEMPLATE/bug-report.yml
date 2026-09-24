@@ -1,34 +1,90 @@
 name: 缺陷报告
-description: 记录最小复现、预期、实际和脱敏日志
-title: "[缺陷] "
-labels: ["bug"]
+description: 登记开发期或T01/T02缺陷、修复责任与复测证据
+title: '[缺陷] '
+labels:
+- bug
 body:
-  - type: textarea
-    id: reproduction
-    attributes:
-      label: 最小复现
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: 预期结果
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: 实际结果
-    validations:
-      required: true
-  - type: textarea
-    id: environment
-    attributes:
-      label: 环境与版本
-    validations:
-      required: true
-  - type: textarea
-    id: evidence
-    attributes:
-      label: 脱敏后的证据
-      description: 不得粘贴真实试卷、个人数据、凭据、密钥或原始数据库。
+- type: markdown
+  attributes:
+    value: 修复PR均由A审查合并；合并后先待复测，复测通过再关闭本Issue。T01/T02各自包含本轮修复回归。不得提交真实试题、个人数据、凭据、密钥或原始数据库。
+- type: dropdown
+  id: phase
+  attributes:
+    label: 发现轮次
+    options:
+    - 开发期模块测试
+    - T01 全项目单机测试
+    - T02 多机联调联试
+  validations:
+    required: true
+- type: input
+  id: module
+  attributes:
+    label: 模块任务与场景
+    description: 填写当前任务码、关联测试Issue及Sxx；同一问题复用已有bug单。
+  validations:
+    required: true
+- type: dropdown
+  id: severity
+  attributes:
+    label: 严重度
+    description: 不得通过降低严重度绕过必需功能或性能门槛。
+    options:
+    - P0 数据安全或核心流程阻断
+    - P1 主要功能或验收门槛问题
+    - P2 不影响门槛的其他问题
+  validations:
+    required: true
+- type: input
+  id: repair_owner
+  attributes:
+    label: 修复主责
+    description: 明确一名开发负责人；代码审查和合并仍统一由A完成。
+  validations:
+    required: true
+- type: input
+  id: retester
+  attributes:
+    label: 复测负责人
+    description: 指定非修复作者执行运行结果复测；这不是新增代码审查岗位。
+  validations:
+    required: true
+- type: textarea
+  id: reproduction
+  attributes:
+    label: 最小复现
+  validations:
+    required: true
+- type: textarea
+  id: expected
+  attributes:
+    label: 预期结果
+  validations:
+    required: true
+- type: textarea
+  id: actual
+  attributes:
+    label: 实际结果
+  validations:
+    required: true
+- type: textarea
+  id: environment
+  attributes:
+    label: 环境与版本
+    description: 提交哈希、运行包、配置、数据库/网络/主备模式及实际设备规模。
+  validations:
+    required: true
+- type: textarea
+  id: evidence
+  attributes:
+    label: 脱敏证据
+    description: 附用例记录、错误类别和脱敏日志，不上传真实数据。
+  validations:
+    required: false
+- type: textarea
+  id: fix
+  attributes:
+    label: 修复与复测
+    description: 关联PR、修复提交、复测步骤和实际结果；跨机问题需相应真实环境证据，未复测不得关闭。
+  validations:
+    required: false
