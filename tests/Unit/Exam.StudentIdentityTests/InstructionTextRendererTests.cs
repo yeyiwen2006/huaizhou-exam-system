@@ -1,4 +1,4 @@
-using System.Runtime.ExceptionServices;
+using System.Windows.Threading;
 using System.Windows.Documents;
 using Exam.Student.Core;
 
@@ -7,11 +7,13 @@ namespace Exam.StudentIdentityTests;
 public sealed class InstructionTextRendererTests
 {
     [Fact]
-    public void Chinese_instructions_are_not_omitted_and_numeric_runs_use_the_required_font()
+    [Trait("Category", "Wpf")]
+    public async Task Chinese_instructions_are_not_omitted_and_numeric_runs_use_the_required_font()
     {
-        Exception? failure = null;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
+            Exception? failure = null;
             try
             {
                 const string line = "合成科目（满分12.5分）：共5小题，选对得2.5分。";
@@ -27,13 +29,17 @@ public sealed class InstructionTextRendererTests
             {
                 failure = error;
             }
-        });
+            finally
+            {
+                try { Dispatcher.CurrentDispatcher.InvokeShutdown(); }
+                catch (Exception error) { failure ??= error; }
+            }
+            if (failure is null) completion.TrySetResult();
+            else completion.TrySetException(failure);
+        }) { IsBackground = true, Name = "InstructionRenderingTest" };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "说明渲染未在规定时间内完成。");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)), "说明渲染线程没有退出。");
     }
 }

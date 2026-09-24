@@ -110,6 +110,39 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
     private readonly string _databasePath;
     private readonly string _identityPath;
     private bool _disposed;
+    private bool _queueDisposed;
+    private static readonly object InitializationRegistryLock = new();
+    private static readonly Dictionary<string, InitializationGate> InitializationGates =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private sealed class InitializationGate
+    {
+        public readonly object Sync = new();
+        public int Users;
+    }
+    private sealed class InitializationLease(string path, InitializationGate gate) : IDisposable
+    {
+        public void Dispose()
+        {
+            Monitor.Exit(gate.Sync);
+            lock (InitializationRegistryLock)
+                if (--gate.Users == 0) InitializationGates.Remove(path);
+        }
+    }
+
+    private IDisposable EnterLocalInitialization()
+    {
+        InitializationGate gate;
+        lock (InitializationRegistryLock)
+        {
+            if (!InitializationGates.TryGetValue(_databasePath, out gate!))
+                InitializationGates.Add(_databasePath, gate = new());
+            gate.Users++;
+        }
+        // A live initializer in this process is not a stale cross-process lock. Wait on its
+        // actual lifetime before starting the bounded file-lock wait; no UI thread blocks.
+        Monitor.Enter(gate.Sync);
+        return new InitializationLease(_databasePath, gate);
+    }
     private Exception? _workerFailure;
 
     private sealed record StoreIdentity(int SchemaVersion, string DatabaseId);
@@ -137,22 +170,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
     {
         try
         {
-            using var initializationLock = AcquireInitializationLock();
-            var (identity, isNew) = ResolveIdentity();
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = _databasePath,
-                Mode = SqliteOpenMode.ReadWrite,
-                DefaultTimeout = 5,
-                Pooling = false,
-                ForeignKeys = true,
-            }.ToString());
-            connection.Open();
-            // 原库先验证，之后才允许改变日志设置，不修复或覆盖损坏文件。
-            if (!isNew) ValidateDatabase(connection, identity);
-            ConfigureDurability(connection);
-            if (isNew) CreateSchema(connection, identity);
-            initializationLock.Dispose();
+            using var connection = OpenInitializedConnection();
             _ready.TrySetResult(true);
 
             foreach (var item in _queue.GetConsumingEnumerable())
@@ -187,6 +205,27 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
         }
     }
 
+    private SqliteConnection OpenInitializedConnection()
+    {
+        using var local = EnterLocalInitialization();
+        using var initializationLock = AcquireInitializationLock();
+        var (identity, isNew) = ResolveIdentity();
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWrite,
+            DefaultTimeout = 5, Pooling = false, ForeignKeys = true,
+        }.ToString());
+        try
+        {
+            connection.Open();
+            if (!isNew) ValidateDatabase(connection, identity);
+            ConfigureDurability(connection);
+            if (isNew) CreateSchema(connection, identity);
+            return connection;
+        }
+        catch { connection.Dispose(); throw; }
+    }
+
     private FileStream AcquireInitializationLock()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
@@ -195,8 +234,10 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
         {
             try
             {
+                // Keep the empty lock file: deleting it on close introduces a delete-pending
+                // race with another opener. Exclusivity comes from the handle, not file presence.
                 return new FileStream(_databasePath + ".initializing", FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+                    FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
             }
             catch (IOException ex) when (((ex.HResult & 0xffff) is 32 or 33) && elapsed.Elapsed < TimeSpan.FromSeconds(5))
             {
@@ -476,13 +517,20 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
     {
         lock (_lifecycleLock)
         {
-            if (_disposed) return;
-            _disposed = true;
-            _queue.CompleteAdding();
+            if (!_disposed)
+            {
+                _disposed = true;
+                _queue.CompleteAdding();
+            }
         }
         // 接收的工作须完成且连接已关闭，之后才释放队列，不能留下悬挂任务。
         _worker.Join();
-        _queue.Dispose();
+        // Every concurrent disposer waits for the connection, including a caller cleaning up
+        // after another caller's timeout. Dispose the queue once, after the worker has exited.
+        lock (_lifecycleLock)
+        {
+            if (!_queueDisposed) { _queueDisposed = true; _queue.Dispose(); }
+        }
     }
 
     private async Task<T> Post<T>(Func<SqliteConnection, T> work, CancellationToken ct)

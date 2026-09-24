@@ -323,7 +323,7 @@ public sealed class SqliteLocalStateStoreTests : IDisposable
     [Fact]
     public async Task Dispose_DrainsAcceptedWrites_AndCancellationBeforeQueueDoesNotWrite()
     {
-        var store = new SqliteLocalStateStore(DatabasePath);
+        using var store = new SqliteLocalStateStore(DatabasePath);
         using var cancel = new CancellationTokenSource();
         cancel.Cancel();
         var state = State();

@@ -33,8 +33,15 @@ jobs:
 
       # Category=Latex 的测试需要本机安装 XeLaTeX（项目要求 XeLaTeX 发行版），
       # 运行机上没有 TeX，因此在这里排除；它们由 D 组在装有 TeX 的主机上单独执行并记录结果。
-      - name: Test
-        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build --filter "Category!=Postgres&Category!=Latex" --logger "trx;LogFileName=tests.trx"
+      # Keep GUI cold startup separate from SQLite fsync/crypto tests. Concurrency tests
+      # still create their own concurrent connections; no test or assertion is skipped.
+      - name: Test non-GUI modules
+        id: core_tests
+        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build -m:1 --filter "Category!=Postgres&Category!=Latex&Category!=Wpf" --logger "trx;LogFileName=tests.trx" --blame-hang-timeout 90s --blame-hang-dump-type none
+
+      - name: Test WPF on isolated test hosts
+        if: success() || steps.core_tests.outcome == 'failure'
+        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build -m:1 --filter "Category=Wpf" --logger "trx;LogFileName=wpf-tests.trx" --blame-hang-timeout 90s --blame-hang-dump-type none
 
       - name: Upload test logs on failure
         if: failure()
