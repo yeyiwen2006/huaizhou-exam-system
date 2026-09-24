@@ -295,6 +295,8 @@ public sealed class AnswerSession
         var effective = _pendingWrite?.State ?? _reliable;
         if (effective is null || _requestedSubmissionId is null)
             return new FixSubmissionResult(false, isReplay, null, "没有可固定的完整本地状态。");
+        if (_paper is not null && AnswerSheetContract.Validate(_paper, effective.Answers) is not null)
+            return new FixSubmissionResult(false, isReplay, null, "答卷与题目清单不完整对应，不能固定或补造缺失记录。");
         _frozenIntent ??= new FixedSubmissionRecord(_requestedSubmissionId, effective.PaperVersion, effective.AnswerVersion,
             FreezeAnswers(effective.Answers), _time.GetUtcNow(), RequestIds.New(), _context.ParticipationId,
             _context.EntryVersion, _context.DeviceId, _context.AuthorizationVersion);

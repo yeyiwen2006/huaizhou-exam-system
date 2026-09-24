@@ -149,7 +149,17 @@ public sealed class StudentExamRuntime(
 
             if (_paper is null || _paper.PaperVersion != descriptor.PaperVersion)
             {
-                try { _paper = StudentPaperPackage.ReadManifest(Manager.UnlockedPayload!, Manager.ExamId, descriptor.PaperVersion); }
+                var payload = Manager.UnlockedPayload;
+                if (payload is null) return;
+                try
+                {
+                    var parsed = await Task.Run(() => StudentPaperPackage.ReadManifest(payload, Manager.ExamId, descriptor.PaperVersion, ct), ct);
+                    // END/撤权/版本切换可能在工作线程读取时发生，旧解析结果不能授权新会话。
+                    if (_disposed || Manager.ExamEnded || Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked ||
+                        !ReferenceEquals(payload, Manager.UnlockedPayload) || Manager.Descriptor != descriptor ||
+                        Manager.Participation != participation || Manager.Server != server) return;
+                    _paper = parsed;
+                }
                 catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
                 {
                     _paper = null;

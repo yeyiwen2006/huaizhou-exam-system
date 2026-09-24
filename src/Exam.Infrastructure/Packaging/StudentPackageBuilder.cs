@@ -45,8 +45,8 @@ public sealed record StudentPackageResult(
 /// </summary>
 public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
 {
-    public const int MaxPackageBytes = 256 * 1024 * 1024;
-    private const int MaxMetadataBytes = 8 * 1024 * 1024;
+    public const int MaxPackageBytes = StudentPackageLayout.MaxContentBytes;
+    private const int MaxMetadataBytes = StudentPackageLayout.MaxMetadataBytes;
     private readonly PackageEncryptionService _encryption =
         encryption ?? throw new ArgumentNullException(nameof(encryption));
 
@@ -114,15 +114,26 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name)).ToArray(),
                 manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order)).ToArray(),
                 manifest.Questions.Select((q, i) => new StudentPaperQuestion(structure.Questions[i],
-                    "questions/" + Path.GetFileNameWithoutExtension(q.Source.Replace('\\', '/')) + ".pdf",
+                    StudentPackageLayout.QuestionPdfPath(q.Source),
                     q.DisplayMetadata?.OptionCaptions)).ToArray(),
                 request.DisplayResourcePaths.Select(PackagePathRules.Normalize).ToArray());
             var metadata = JsonSerializer.SerializeToUtf8Bytes(studentManifest, ImportJson.Create());
+            if (metadata.Length > MaxMetadataBytes)
+            {
+                issues.Add(new(StudentPackageIssueCode.MetadataInvalid, "重新生成的学生清单超过容量限制。"));
+                return Fail();
+            }
             files.Add(StudentPackagePlan.MetadataFileName, metadata);
             long totalBytes = metadata.Length;
             void AddFile(string relative, string source)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (files.Count >= StudentPackageLayout.MaxEntryCount) throw new IOException("学生题包文件数量超限。");
+                if (!StudentPackageLayout.IsDisplayPath(relative))
+                {
+                    issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "显示文件路径不符合读写约定。", relative));
+                    return;
+                }
                 if (files.Keys.Any(existing => string.Equals(existing, relative, StringComparison.OrdinalIgnoreCase)))
                 {
                     issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "包内路径重复。", relative));
@@ -135,7 +146,7 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                     issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, reason!, relative));
                     return;
                 }
-                if (!HasDisplaySignature(relative, bytes))
+                if (!StudentPackageLayout.HasDisplaySignature(relative, bytes))
                 {
                     issues.Add(new(StudentPackageIssueCode.RequiredResourceRejected, "显示文件类型或文件头不符合约定。", relative));
                     return;
@@ -148,8 +159,8 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "编译结果必须与清单中的题目逐一对应。"));
             foreach (var question in manifest.Questions)
             {
-                var pdfName = Path.GetFileNameWithoutExtension(question.Source.Replace('\\', '/')) + ".pdf";
-                var destination = "questions/" + pdfName;
+                var destination = StudentPackageLayout.QuestionPdfPath(question.Source);
+                var pdfName = destination["questions/".Length..];
                 var source = Resolve(compilationRoot, pdfName);
                 if (request.CompiledQuestions is { } results)
                 {
@@ -221,7 +232,7 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 DisplayResources = files.Keys.Where(path => path != StudentPackagePlan.MetadataFileName &&
                     !path.StartsWith("questions/", StringComparison.Ordinal)).ToArray()
             }, ImportJson.Create());
-            if (files.Count > 10000 || finalMetadata.Length > MaxMetadataBytes || totalBytes - metadata.Length + finalMetadata.Length > MaxPackageBytes)
+            if (files.Count > StudentPackageLayout.MaxEntryCount || finalMetadata.Length > MaxMetadataBytes || totalBytes - metadata.Length + finalMetadata.Length > MaxPackageBytes)
                 throw new IOException("学生显示清单超出大小限制。");
             files[StudentPackagePlan.MetadataFileName] = finalMetadata;
             var plan = new StudentPackagePlan(examId, request.PaperVersion, files.Keys.ToArray(), excluded);
@@ -350,14 +361,6 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
 
     private static string ReadUtf8(byte[] bytes) => new UTF8Encoding(false, true).GetString(
         bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble) ? bytes.AsSpan(3) : bytes);
-
-    private static bool HasDisplaySignature(string path, byte[] bytes) => Path.GetExtension(path).ToLowerInvariant() switch
-    {
-        ".pdf" => bytes.AsSpan().StartsWith("%PDF-"u8),
-        ".png" => bytes.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
-        ".jpg" or ".jpeg" => bytes.AsSpan().StartsWith(new byte[] { 255, 216, 255 }),
-        _ => false
-    };
 
     private static string Resolve(string root, string relative) => PathBoundary.ResolveWithinRoot(root,
         Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)), "包内文件路径越界。");
