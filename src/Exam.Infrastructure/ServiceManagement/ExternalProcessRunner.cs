@@ -5,14 +5,24 @@ namespace Exam.Infrastructure.ServiceManagement;
 
 public sealed record ExternalProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
+public sealed record ExternalProcessLimits(long MaxMemoryBytes, long MaxOutputBytes, string OutputDirectory);
+
+public sealed class ProcessResourceLimitException(string message) : Exception(message);
+
 public interface IExternalProcessRunner
 {
+    /// <summary>
+    /// 运行外部工具。workingDirectory 为空时使用可执行文件所在目录；逐题编译需要以导入包根目录
+    /// 为工作目录，包内的相对路径（含 \graphicspath）才会按包结构解析。
+    /// </summary>
     Task<ExternalProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null,
+        ExternalProcessLimits? limits = null);
 }
 
 public sealed class ExternalProcessRunner : IExternalProcessRunner
@@ -24,7 +34,9 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null,
+        ExternalProcessLimits? limits = null)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable))
         {
@@ -36,6 +48,17 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
+        if (workingDirectory is not null
+            && (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory)))
+        {
+            throw new DirectoryNotFoundException($"外部工具的工作目录不存在或不是绝对路径：{workingDirectory}");
+        }
+        if (limits is not null && (limits.MaxMemoryBytes <= 0 || limits.MaxOutputBytes <= 0
+            || !Path.IsPathFullyQualified(limits.OutputDirectory) || !Directory.Exists(limits.OutputDirectory)))
+        {
+            throw new ArgumentException("资源上限必须为正数，产物目录必须是已存在的绝对路径。", nameof(limits));
+        }
+
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -43,7 +66,7 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(executable)!
+            WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(executable)!
         };
         foreach (var argument in arguments)
         {
@@ -69,7 +92,26 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
         var stderrTask = ReadBoundedAsync(process.StandardError, linked.Token);
         try
         {
-            await process.WaitForExitAsync(linked.Token);
+            var exitTask = process.WaitForExitAsync(linked.Token);
+            if (limits is not null)
+            {
+                while (!exitTask.IsCompleted)
+                {
+                    CheckResourceLimits(process, limits);
+                    await Task.WhenAny(exitTask, Task.Delay(100, linked.Token));
+                    linked.Token.ThrowIfCancellationRequested();
+                }
+
+                CheckResourceLimits(process, limits);
+            }
+
+            await exitTask;
+        }
+        catch (ProcessResourceLimitException)
+        {
+            linked.Cancel();
+            await TerminateAndWaitAsync(process, stdoutTask, stderrTask);
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -81,11 +123,54 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
 
             throw;
         }
+        catch
+        {
+            linked.Cancel();
+            await TerminateAndWaitAsync(process, stdoutTask, stderrTask);
+            throw;
+        }
 
         return new ExternalProcessResult(
             process.ExitCode,
             await stdoutTask,
             await stderrTask);
+    }
+
+    private static void CheckResourceLimits(Process process, ExternalProcessLimits limits)
+    {
+        process.Refresh();
+        try
+        {
+            if (!process.HasExited && process.WorkingSet64 > limits.MaxMemoryBytes)
+            {
+                throw new ProcessResourceLimitException("编译进程内存超过上限，已终止。");
+            }
+        }
+        catch (InvalidOperationException) when (process.HasExited)
+        {
+            // 进程可能在 HasExited 检查后自然退出；仍须检查已经写出的产物。
+        }
+
+        long size = 0;
+        foreach (var path in Directory.EnumerateFiles(limits.OutputDirectory, "*", SearchOption.AllDirectories))
+        {
+            try
+            {
+                size += new FileInfo(path).Length;
+            }
+            catch (FileNotFoundException)
+            {
+                continue; // xdvipdfmx 可能已删掉刚枚举到的临时文件。
+            }
+            catch (DirectoryNotFoundException)
+            {
+                continue;
+            }
+            if (size > limits.MaxOutputBytes)
+            {
+                throw new ProcessResourceLimitException("编译产物超过空间上限，已终止。");
+            }
+        }
     }
 
     private static async Task<string> ReadBoundedAsync(
