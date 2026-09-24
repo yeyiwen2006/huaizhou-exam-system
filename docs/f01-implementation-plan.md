@@ -100,3 +100,7 @@ dotnet test Huaizhou.ExamSystem.sln --no-build --configuration Release
 Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 PowerShell 完成，Release 构建 0 警告、0 错误；F01 专项 `FullyQualifiedName~ServiceManagement` 40/40 通过。正常用户 PowerShell 把 `TEMP` 指向隔离工作目录后，报告标准 Windows 分类测试 `Category!=Postgres&Category!=Latex` 全部通过；该次仅有用户结果反馈，未保存原始测试报告。另用隔离程序检查受控启停及 Windows SCM 不存在服务的错误路径。外部依赖验证按仓库测试计划继续；本批没有安装和操作真实考试业务服务。
 
 真实 Windows 服务启停、管理宿主停机可用性及隔离恢复后的继续收卷仍未验收。仓库不包含本机日志、配置秘密或运行数据。
+
+## PR #54 审查修正记录
+
+本 PR 已接续 main 合并 #53 后的共享接口。A 的本轮审查补充实际宿主状态门禁、持久配置启动核对、取消与探针校验、备份/恢复请求内容绑定、配置文件完整性及 SQLite/WPF CI 回归修正。实跑命令、结果、复现过程和原生 SCM 未验收范围见 [PR #54 审查记录](reviews/pr54-f01-ci-review.md)。这是阶段代码交付，#7 的独立管理宿主、业务就绪和恢复运行闭环仍保持未完成，不以本 PR 合并代替验收。

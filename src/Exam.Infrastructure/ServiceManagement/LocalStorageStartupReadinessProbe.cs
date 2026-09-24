@@ -18,6 +18,7 @@ public sealed class LocalStorageStartupReadinessProbe(long minimumAvailableBytes
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
         if (minimumAvailableBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(minimumAvailableBytes));
@@ -67,6 +68,8 @@ public sealed class LocalStorageStartupReadinessProbe(long minimumAvailableBytes
         var writePassed = false;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            PathBoundary.RejectExistingReparsePoints(directory, probePath);
             await using var output = new FileStream(
                 probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 bufferSize: 4096, options: FileOptions.WriteThrough);
@@ -97,7 +100,8 @@ public sealed class LocalStorageStartupReadinessProbe(long minimumAvailableBytes
             ? new(WriteCheck, true, "数据目录可写且刷新成功。", true)
             : new(WriteCheck, false, "数据目录写入、刷新或清理失败。", true));
 
-        return results;
+        cancellationToken.ThrowIfCancellationRequested();
+        return results.AsReadOnly();
     }
 
     private static IReadOnlyList<StartupCheckResult> BlockAll(string reason) =>

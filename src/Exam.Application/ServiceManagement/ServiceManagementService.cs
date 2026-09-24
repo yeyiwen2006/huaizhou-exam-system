@@ -45,8 +45,8 @@ public sealed class ServiceManagementService
     private readonly IClock _clock;
     private readonly IServiceConfigurationStore _configurationStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, BackupResult> _completedBackups = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, RestoreResult> _completedRestores = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (BackupRequest Request, BackupResult Result)> _completedBackups = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (RestoreRequest Request, RestoreResult Result)> _completedRestores = new(StringComparer.Ordinal);
     private ServiceConfiguration _configuration;
     private IReadOnlyList<StartupCheckResult> _checks = [];
     private string? _lastError;
@@ -98,7 +98,7 @@ public sealed class ServiceManagementService
             _lastError = "业务宿主已停止或退出，须检查实际进程状态。";
         }
         else if ((_status is BusinessServiceStatus.Stopped or BusinessServiceStatus.Recovering) &&
-                 actual == BusinessServiceStatus.Running)
+                 actual != BusinessServiceStatus.Stopped)
         {
             _status = BusinessServiceStatus.Faulted;
             _lastError = "业务宿主意外运行，须先隔离并核对实际进程状态。";
@@ -116,7 +116,7 @@ public sealed class ServiceManagementService
         try
         {
             if ((_status is BusinessServiceStatus.Running or BusinessServiceStatus.Starting or BusinessServiceStatus.Stopping) ||
-                (_host.Status is not BusinessServiceStatus.Stopped and not BusinessServiceStatus.Faulted))
+                _host.Status != BusinessServiceStatus.Stopped)
             {
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "业务服务运行时不能修改本机服务配置。");
             }
@@ -160,7 +160,19 @@ public sealed class ServiceManagementService
             _status = BusinessServiceStatus.Recovering;
             try
             {
-                _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
+                var persisted = await _configurationStore.LoadAsync(cancellationToken);
+                Validate(persisted);
+                if (persisted.ServerId != _configuration.ServerId || persisted.NodeId != _configuration.NodeId ||
+                    persisted.Version < _configuration.Version)
+                    throw new InvalidOperationException("持久配置的身份或版本发生不允许的变化。");
+                _configuration = persisted;
+                _checks = await ReadChecksAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "启动检查已取消，未发出启动命令。";
+                throw;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -184,8 +196,12 @@ public sealed class ServiceManagementService
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_host.Status != BusinessServiceStatus.Stopped)
+                    throw new InvalidOperationException("启动检查期间宿主状态已变化，不能发出启动命令。");
                 _status = BusinessServiceStatus.Starting;
                 await _host.StartAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (_host.Status != BusinessServiceStatus.Running)
                 {
                     throw new InvalidOperationException("业务宿主未达到运行状态。");
@@ -234,6 +250,7 @@ public sealed class ServiceManagementService
             {
                 _status = BusinessServiceStatus.Stopping;
                 await _host.StopAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (_host.Status != BusinessServiceStatus.Stopped)
                 {
                     throw new InvalidOperationException("业务宿主未达到停止状态。");
@@ -282,16 +299,19 @@ public sealed class ServiceManagementService
 
             if (_completedBackups.TryGetValue(request.RequestId, out var previous))
             {
-                return previous;
+                if (previous.Request != request)
+                    throw new DomainRuleException(ErrorCodes.InvalidInput, "requestId 已绑定不同的操作内容或操作者。");
+                return previous.Result;
             }
 
             var result = await _backups.CreateAsync(request, cancellationToken);
-            if (!result.IncludesDatabase || !result.IncludesProtectedConfiguration || !result.IncludesVersionedResources)
+            if (string.IsNullOrWhiteSpace(result.BackupId) || string.IsNullOrWhiteSpace(result.DestinationDirectory) ||
+                !result.IncludesDatabase || !result.IncludesProtectedConfiguration || !result.IncludesVersionedResources)
             {
                 throw new DomainRuleException(ErrorCodes.PersistenceFailed, "备份不完整，不能标记为可恢复备份。");
             }
 
-            _completedBackups.Add(request.RequestId, result);
+            _completedBackups.Add(request.RequestId, (request, result));
             return result;
         }
         finally
@@ -315,24 +335,53 @@ public sealed class ServiceManagementService
 
             if (_completedRestores.TryGetValue(request.RequestId, out var previous))
             {
-                return previous;
+                if (previous.Request != request)
+                    throw new DomainRuleException(ErrorCodes.InvalidInput, "requestId 已绑定不同的操作内容或操作者。");
+                return previous.Result;
             }
 
-            if (_status != BusinessServiceStatus.Stopped)
+            if (GetStatus().Status != BusinessServiceStatus.Stopped || _host.Status != BusinessServiceStatus.Stopped)
             {
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "恢复前必须停止业务服务。");
             }
 
-            await _backups.RestoreAsync(request, cancellationToken);
-            _checks = Array.AsReadOnly((await _readiness.RunAsync(_configuration, cancellationToken)).ToArray());
-            if (_checks.Count == 0 || _checks.Any(check => !check.Passed && check.BlocksWrites))
+            _status = BusinessServiceStatus.Recovering;
+            _checks = [];
+            try
             {
-                throw new DomainRuleException(ErrorCodes.ServiceRecovering, "恢复数据未通过启动检查，业务写入保持关闭。", retryable: true);
+                cancellationToken.ThrowIfCancellationRequested();
+                await _backups.RestoreAsync(request, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                RequireStoppedAfterRestore();
+                _checks = await ReadChecksAsync(cancellationToken);
+                RequireStoppedAfterRestore();
+                if (_checks.Count == 0 || _checks.Any(check => !check.Passed && check.BlocksWrites))
+                    throw new DomainRuleException(ErrorCodes.ServiceRecovering,
+                        "恢复数据未通过启动检查，业务写入保持关闭。", retryable: true);
+                var result = new RestoreResult(request.BackupId, _clock.UtcNow, _checks);
+                _completedRestores.Add(request.RequestId, (request, result));
+                _status = BusinessServiceStatus.Stopped;
+                _lastError = null;
+                return result;
             }
-
-            var result = new RestoreResult(request.BackupId, _clock.UtcNow, _checks);
-            _completedRestores.Add(request.RequestId, result);
-            return result;
+            catch (OperationCanceledException)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "恢复已取消，须核对暂存数据和实际宿主状态，不得自动启动。";
+                throw;
+            }
+            catch (DomainRuleException error)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = error.Message;
+                throw;
+            }
+            catch (Exception)
+            {
+                _status = BusinessServiceStatus.Faulted;
+                _lastError = "恢复未完成，须核对暂存数据和实际宿主状态，不得自动启动。";
+                throw new DomainRuleException(ErrorCodes.PersistenceFailed, _lastError, retryable: true);
+            }
         }
         finally
         {
@@ -340,11 +389,30 @@ public sealed class ServiceManagementService
         }
     }
 
+    private void RequireStoppedAfterRestore()
+    {
+        if (_host.Status != BusinessServiceStatus.Stopped)
+            throw new DomainRuleException(ErrorCodes.ServiceRecovering,
+                "恢复期间宿主状态发生变化，不能确认恢复成功。", retryable: true);
+    }
+
+    private async Task<IReadOnlyList<StartupCheckResult>> ReadChecksAsync(CancellationToken token)
+    {
+        var checks = await _readiness.RunAsync(_configuration, token);
+        token.ThrowIfCancellationRequested();
+        if (checks is null || checks.Any(c => c is null || string.IsNullOrWhiteSpace(c.Name) || c.Message is null) ||
+            checks.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != checks.Count)
+            throw new InvalidOperationException("启动探针返回了无效或重复的检查项目。");
+        return Array.AsReadOnly(checks.ToArray());
+    }
+
     private static void Validate(ServiceConfiguration configuration)
     {
-        if (string.IsNullOrWhiteSpace(configuration.ServerId) || string.IsNullOrWhiteSpace(configuration.NodeId))
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration.Version < 1 || string.IsNullOrWhiteSpace(configuration.BindAddress) ||
+            string.IsNullOrWhiteSpace(configuration.ServerId) || string.IsNullOrWhiteSpace(configuration.NodeId))
         {
-            throw new ArgumentException("serverId 和 nodeId 不能为空。", nameof(configuration));
+            throw new ArgumentException("服务器、节点、绑定地址和配置版本必须有效。", nameof(configuration));
         }
 
         if (configuration.HttpsPort is < 1 or > 65535)

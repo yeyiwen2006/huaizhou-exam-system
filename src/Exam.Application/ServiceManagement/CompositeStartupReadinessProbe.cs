@@ -25,7 +25,8 @@ public sealed class CompositeStartupReadinessProbe : IStartupReadinessProbe
         {
             cancellationToken.ThrowIfCancellationRequested();
             var checks = await probe.RunAsync(configuration, cancellationToken);
-            if (checks.Count == 0)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (checks is null || checks.Count == 0 || checks.Any(c => c is null || string.IsNullOrWhiteSpace(c.Name)))
             {
                 throw new InvalidOperationException("启动探针未返回结果，不能视为检查通过。");
             }
@@ -33,6 +34,8 @@ public sealed class CompositeStartupReadinessProbe : IStartupReadinessProbe
             results.AddRange(checks);
         }
 
-        return results;
+        if (results.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != results.Count)
+            throw new InvalidOperationException("启动检查名称重复，不能合并为有效就绪结果。");
+        return results.AsReadOnly();
     }
 }

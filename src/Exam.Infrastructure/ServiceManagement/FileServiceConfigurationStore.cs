@@ -1,4 +1,6 @@
 using System.Data;
+using System.Diagnostics;
+using System.Text.Json.Serialization;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
@@ -13,6 +15,7 @@ namespace Exam.Infrastructure.ServiceManagement;
 /// </summary>
 public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
 {
+    private const int MaxConfigurationBytes = 64 * 1024;
     private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(5);
     private readonly string _path;
     private readonly string _directory;
@@ -74,6 +77,9 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
         }
 
         var next = requested with { Version = checked(expectedVersion + 1) };
+        var payload = JsonSerializer.SerializeToUtf8Bytes(next, JsonDefaults.Create());
+        if (payload.Length > MaxConfigurationBytes)
+            throw new ArgumentException("服务配置超过文件容量限制。", nameof(requested));
         var temporary = Path.Combine(_directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
         try
         {
@@ -81,11 +87,12 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
                 temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 bufferSize: 4096, options: FileOptions.WriteThrough))
             {
-                await JsonSerializer.SerializeAsync(output, next, JsonDefaults.Create(), cancellationToken);
+                await output.WriteAsync(payload, cancellationToken);
                 await output.FlushAsync(cancellationToken);
                 output.Flush(flushToDisk: true);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             CheckPath();
             File.Move(temporary, _path, overwrite: true);
             return next;
@@ -101,21 +108,38 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
 
     private async Task<ServiceConfiguration?> ReadAsync(CancellationToken cancellationToken)
     {
-        if (!File.Exists(_path))
-        {
-            return null;
-        }
-
-        await using var input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        cancellationToken.ThrowIfCancellationRequested();
+        CheckPath();
+        FileStream input;
         try
         {
-            var configuration = await JsonSerializer.DeserializeAsync<ServiceConfiguration>(
-                input, JsonDefaults.Create(), cancellationToken);
+            // An atomic replacement may proceed while readers finish the old complete snapshot.
+            // Deny in-place writes; missing and unreadable/corrupt files are not interchangeable.
+            input = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        }
+        catch (FileNotFoundException) { return null; }
+        await using (input)
+        try
+        {
+            if (input.Length is <= 0 or > MaxConfigurationBytes)
+                throw new InvalidDataException("服务配置文件大小无效，已保留原文件。");
+            var bytes = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(bytes, cancellationToken);
+            using var document = JsonDocument.Parse(bytes);
+            var expected = new HashSet<string>(StringComparer.Ordinal)
+                { "serverId", "nodeId", "bindAddress", "httpsPort", "dataDirectory", "highAvailabilityEnabled", "version" };
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("服务配置必须是完整对象。");
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!expected.Remove(property.Name))
+                    throw new InvalidDataException("服务配置含重复或未知字段，不能选择性解释。");
+            if (expected.Count != 0) throw new InvalidDataException("服务配置缺少必需字段。");
+            var options = JsonDefaults.Create();
+            options.NumberHandling = JsonNumberHandling.Strict;
+            options.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+            var configuration = document.RootElement.Deserialize<ServiceConfiguration>(options);
             if (configuration is null || configuration.Version < 1)
-            {
                 throw new InvalidDataException("服务配置内容不完整或版本无效。");
-            }
-
             Validate(configuration);
             return configuration;
         }
@@ -132,7 +156,7 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
     private async Task<FileStream> AcquireLockAsync(CancellationToken cancellationToken)
     {
         var lockPath = _path + ".lock";
-        var deadline = DateTime.UtcNow + LockTimeout;
+        var elapsed = Stopwatch.StartNew();
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -141,7 +165,7 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
             {
                 return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
-            catch (IOException) when (DateTime.UtcNow < deadline)
+            catch (IOException) when (elapsed.Elapsed < LockTimeout)
             {
                 await Task.Delay(50, cancellationToken);
             }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
@@ -122,7 +123,7 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
 
     private async Task WaitForAsync(ManagedWindowsServiceState target, CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow + _timeout;
+        var elapsed = Stopwatch.StartNew();
         var sawTransition = false;
         while (true)
         {
@@ -141,7 +142,7 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
                 throw new InvalidOperationException("业务服务在等待期间退出或进入意外状态。");
             }
 
-            var remaining = deadline - DateTimeOffset.UtcNow;
+            var remaining = _timeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
             {
                 throw new TimeoutException("等待业务服务状态超时，须核对实际服务状态。");
