@@ -14,6 +14,43 @@ public sealed record StoredGradingResult(SubmissionGrade Grade, DateTimeOffset G
     public string ExamId => Grade.ExamId;
 
     public long GradingVersion => Grade.GradingVersion;
+
+    /// <summary>复制不可变成绩快照，防止内存适配器保存调用方仍能修改的集合。</summary>
+    public StoredGradingResult Snapshot()
+    {
+        ArgumentNullException.ThrowIfNull(Grade);
+        ArgumentException.ThrowIfNullOrWhiteSpace(SubmissionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ExamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Grade.CandidateId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(GradingVersion, 1);
+        ArgumentNullException.ThrowIfNull(Grade.Questions);
+        ArgumentNullException.ThrowIfNull(Grade.Subjects);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Grade.ExactTotalScore);
+        if (Grade.Questions.Count == 0 || Grade.Subjects.Count == 0 ||
+            Grade.Questions.Any(item => item is null) || Grade.Subjects.Any(item => item is null))
+            throw new ArgumentException("计分结果必须包含完整的逐题与科目成绩。");
+        return this with
+        {
+            Grade = Grade with
+            {
+                Questions = Array.AsReadOnly(Grade.Questions.ToArray()),
+                Subjects = Array.AsReadOnly(Grade.Subjects.ToArray())
+            },
+            GradedAt = GradedAt.ToUniversalTime()
+        };
+    }
+
+    /// <summary>规则版本只递增；同版本仅接受相同结果的幂等重试。</summary>
+    public void EnsureCanReplace(StoredGradingResult previous)
+    {
+        if (SubmissionId != previous.SubmissionId || ExamId != previous.ExamId ||
+            Grade.CandidateId != previous.Grade.CandidateId || GradingVersion < previous.GradingVersion ||
+            (GradingVersion == previous.GradingVersion &&
+             (Grade.ExactTotalScore != previous.Grade.ExactTotalScore ||
+              !Grade.Questions.SequenceEqual(previous.Grade.Questions) ||
+              !Grade.Subjects.SequenceEqual(previous.Grade.Subjects))))
+            throw new InvalidOperationException("计分结果归属、版本或同版本内容冲突；原结果未被覆盖。");
+    }
 }
 
 /// <summary>计分结果的持久化与读取。写入按答卷去重，不产生第二行。</summary>
@@ -33,13 +70,32 @@ public interface IGradingResultStore
 }
 
 /// <summary>待计分任务。来自 A05 的计分 outbox；同一（答卷，规则版本）只会有一行。</summary>
-public sealed record PendingGradingTask(string SubmissionId, long GradingVersion, int AttemptCount);
+public sealed record PendingGradingTask(string SubmissionId, long GradingVersion, int AttemptCount)
+{
+    public const int MaxErrorLength = 2000;
+
+    public void ValidateClaim()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(SubmissionId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(GradingVersion, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(AttemptCount, 1);
+    }
+
+    // 调用方只传脱敏的业务错误，不传答案、密钥或完整异常文本。
+    public static string LimitError(string? error)
+    {
+        var text = error ?? string.Empty;
+        if (text.Length <= MaxErrorLength) return text;
+        var length = char.IsHighSurrogate(text[MaxErrorLength - 1]) ? MaxErrorLength - 1 : MaxErrorLength;
+        return text[..length];
+    }
+}
 
 /// <summary>
 /// 计分任务的领取与结项。实现必须满足三点：
 /// 1. 重复领取不会让成绩重复累计（结果表按答卷去重，消费者也须幂等）；
 /// 2. 失败只累加尝试次数与最近错误，**绝不删除待发任务**（需求：持久待发任务不得因重试次数被删除）；
-/// 3. 领取用租约表达，避免同一任务被并发消费。
+/// 3. 领取用租约表达，AttemptCount 作为单调递增的领取代次，阻止旧消费者结项新租约。
 /// </summary>
 public interface IGradingTaskSource
 {
@@ -49,14 +105,14 @@ public interface IGradingTaskSource
         TimeSpan lease,
         CancellationToken cancellationToken = default);
 
-    ValueTask CompleteAsync(
-        string submissionId,
-        long gradingVersion,
+    /// <summary>仅当前领取代次可结项；false 表示租约已释放、被重领或任务已完成。</summary>
+    ValueTask<bool> CompleteAsync(
+        PendingGradingTask task,
         CancellationToken cancellationToken = default);
 
-    ValueTask FailAsync(
-        string submissionId,
-        long gradingVersion,
+    /// <summary>仅当前领取代次可记录失败；不会改动已完成任务或其他消费者的租约。</summary>
+    ValueTask<bool> FailAsync(
+        PendingGradingTask task,
         string error,
         CancellationToken cancellationToken = default);
 }

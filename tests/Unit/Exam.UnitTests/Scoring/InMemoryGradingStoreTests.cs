@@ -89,7 +89,7 @@ public sealed class InMemoryGradingStoreTests
         source.Enqueue("submission-1", 1);
         await source.ClaimAsync(10, Now, TimeSpan.FromMinutes(1));
 
-        await source.CompleteAsync("submission-1", 1);
+        await source.CompleteAsync(new("submission-1", 1, source.Snapshot().Single().AttemptCount));
 
         Assert.Empty(await source.ClaimAsync(10, Now.AddMinutes(5), TimeSpan.FromMinutes(1)));
     }
@@ -102,7 +102,7 @@ public sealed class InMemoryGradingStoreTests
         source.Enqueue("submission-1", 1);
         await source.ClaimAsync(10, Now, TimeSpan.FromMinutes(1));
 
-        await source.FailAsync("submission-1", 1, "规则尚未发布");
+        await source.FailAsync(new("submission-1", 1, source.Snapshot().Single().AttemptCount), "规则尚未发布");
 
         Assert.Single(source.Snapshot());
         Assert.Equal("规则尚未发布", source.LastErrorOf("submission-1"));
@@ -118,10 +118,10 @@ public sealed class InMemoryGradingStoreTests
         var source = new InMemoryGradingTaskSource();
         source.Enqueue("submission-1", 1);
         await source.ClaimAsync(10, Now, TimeSpan.FromMinutes(1));
-        await source.FailAsync("submission-1", 1, "临时失败");
+        await source.FailAsync(new("submission-1", 1, source.Snapshot().Single().AttemptCount), "临时失败");
 
         await source.ClaimAsync(10, Now.AddSeconds(1), TimeSpan.FromMinutes(1));
-        await source.CompleteAsync("submission-1", 1);
+        await source.CompleteAsync(new("submission-1", 1, source.Snapshot().Single().AttemptCount));
 
         Assert.Null(source.LastErrorOf("submission-1"));
     }

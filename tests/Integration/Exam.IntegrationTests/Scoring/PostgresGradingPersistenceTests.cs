@@ -12,7 +12,7 @@ namespace Exam.IntegrationTests.Scoring;
 /// </summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresGradingPersistenceTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresGradingPersistenceTests(PostgresDatabaseFixture fixture)
 {
     private const string ExamId = "pg-grading-exam";
     private const string CandidateId = "pg-grading-candidate";
@@ -99,17 +99,17 @@ public sealed class PostgresGradingPersistenceTests(PostgresDatabaseFixture fixt
         Assert.Empty(await source.ClaimAsync(10, now.AddSeconds(30), lease));
 
         // 失败只记录错误、保留任务；租约释放后可立即重试。
-        await source.FailAsync(SubmissionId, task.GradingVersion, "规则尚未发布");
+        Assert.True(await source.FailAsync(task, "规则尚未发布"));
         var retried = Assert.Single(await source.ClaimAsync(10, now.AddSeconds(1), lease));
         Assert.Equal(2, retried.AttemptCount);
         Assert.Equal("规则尚未发布", await ReadLastErrorAsync());
 
         // 租约过期后可再次领取（消费者崩溃场景）。
         Assert.Empty(await source.ClaimAsync(10, now.AddSeconds(2), lease));
-        Assert.Single(await source.ClaimAsync(10, now.AddMinutes(5), lease));
+        var reclaimed = Assert.Single(await source.ClaimAsync(10, now.AddMinutes(5), lease));
 
         // 完成之后不再出现，且完成时间只记一次。
-        await source.CompleteAsync(SubmissionId, task.GradingVersion);
+        Assert.True(await source.CompleteAsync(reclaimed));
         Assert.Empty(await source.ClaimAsync(10, now.AddMinutes(30), lease));
         Assert.NotNull(await ReadCompletedAtAsync());
         Assert.Null(await ReadLastErrorAsync());
@@ -127,7 +127,7 @@ public sealed class PostgresGradingPersistenceTests(PostgresDatabaseFixture fixt
         Assert.Equal(CandidateId, submission.CandidateId);
         Assert.Equal("submission-receipt-1", submission.Receipt.ReceiptId);
         var answer = submission.FrozenAnswers["q-001"];
-        Assert.Equal(1, answer.OptionIds.Count);
+        Assert.Single(answer.OptionIds);
         Assert.Equal("A", answer.OptionIds[0]);
 
         // 较早的兼容事件没有源数据，必须跳过，取最近一次带源数据的发布。
@@ -242,7 +242,7 @@ public sealed class PostgresGradingPersistenceTests(PostgresDatabaseFixture fixt
             INSERT INTO exam.version_events
                 (exam_id, stream_revision, operation_type, payload, recorded_at)
             VALUES (@exam_id, 2, 'grading.publish',
-                    jsonb_build_object('expectedVersion', 1,
+                    jsonb_build_object('examId', @exam_id, 'expectedVersion', 2,
                                        'ruleSetId', 'pg-rules',
                                        'manifestJson', @manifest_json,
                                        'answerKeyJson', @answer_key_json),

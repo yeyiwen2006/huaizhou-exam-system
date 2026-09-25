@@ -15,10 +15,16 @@ public sealed class InMemoryGradingResultStore : IGradingResultStore
     public ValueTask SaveAsync(StoredGradingResult result, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(result);
-
+        cancellationToken.ThrowIfCancellationRequested();
+        result = result.Snapshot();
         lock (_gate)
         {
-            // 按答卷去重：重算时覆盖同一份结果，不产生第二行。
+            if (_results.TryGetValue(result.SubmissionId, out var previous))
+            {
+                result.EnsureCanReplace(previous);
+                if (result.GradingVersion == previous.GradingVersion)
+                    return ValueTask.CompletedTask;
+            }
             _results[result.SubmissionId] = result;
         }
 
@@ -29,6 +35,8 @@ public sealed class InMemoryGradingResultStore : IGradingResultStore
         string submissionId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(submissionId);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             return ValueTask.FromResult(_results.TryGetValue(submissionId, out var result) ? result : null);
@@ -40,6 +48,9 @@ public sealed class InMemoryGradingResultStore : IGradingResultStore
         long gradingVersion,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(gradingVersion, 1);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             IReadOnlyList<StoredGradingResult> results = _results.Values
@@ -60,141 +71,85 @@ public sealed class InMemoryGradingResultStore : IGradingResultStore
 /// </summary>
 public sealed class InMemoryGradingTaskSource : IGradingTaskSource
 {
-    private sealed record TaskState(
-        string SubmissionId,
-        long GradingVersion,
-        int Sequence,
-        int AttemptCount,
-        DateTimeOffset? ClaimedAt,
-        bool Completed,
-        string? LastError);
-
+    private sealed record TaskState(string SubmissionId, long GradingVersion, int Sequence,
+        int AttemptCount, DateTimeOffset? ClaimedAt, bool Completed, string? LastError);
     private readonly List<TaskState> _tasks = [];
     private readonly object _gate = new();
     private int _sequence;
 
-    /// <summary>测试与状态重放用：登记一项待计分任务，与 A05 的 outbox 语义一致。</summary>
     public void Enqueue(string submissionId, long gradingVersion)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(submissionId);
         ArgumentOutOfRangeException.ThrowIfLessThan(gradingVersion, 1);
-
         lock (_gate)
         {
-            if (_tasks.Any(task => task.SubmissionId == submissionId && task.GradingVersion == gradingVersion))
-            {
-                return;
-            }
-
-            _tasks.Add(new TaskState(submissionId, gradingVersion, _sequence++, 0, null, Completed: false, null));
+            if (_tasks.Any(task => task.SubmissionId == submissionId && task.GradingVersion == gradingVersion)) return;
+            _tasks.Add(new(submissionId, gradingVersion, _sequence++, 0, null, false, null));
         }
     }
 
-    /// <summary>测试用：查看仍未被删除的任务（含失败待重试的）。</summary>
     public IReadOnlyList<PendingGradingTask> Snapshot()
     {
         lock (_gate)
-        {
-            return _tasks
-                .OrderBy(task => task.Sequence)
-                .Select(task => new PendingGradingTask(task.SubmissionId, task.GradingVersion, task.AttemptCount))
-                .ToList();
-        }
+            return _tasks.OrderBy(task => task.Sequence)
+                .Select(task => new PendingGradingTask(task.SubmissionId, task.GradingVersion, task.AttemptCount)).ToArray();
     }
 
-    /// <summary>测试用：读取某任务的最近错误。</summary>
     public string? LastErrorOf(string submissionId)
     {
-        lock (_gate)
-        {
-            return _tasks.FirstOrDefault(task => task.SubmissionId == submissionId)?.LastError;
-        }
+        lock (_gate) return _tasks.FirstOrDefault(task => task.SubmissionId == submissionId)?.LastError;
     }
 
-    public ValueTask<IReadOnlyList<PendingGradingTask>> ClaimAsync(
-        int maxCount,
-        DateTimeOffset now,
-        TimeSpan lease,
-        CancellationToken cancellationToken = default)
+    public ValueTask<IReadOnlyList<PendingGradingTask>> ClaimAsync(int maxCount, DateTimeOffset now,
+        TimeSpan lease, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
-        if (lease <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(lease));
-        }
-
+        if (lease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(lease));
+        cancellationToken.ThrowIfCancellationRequested();
+        var cutoff = now - lease;
         lock (_gate)
         {
-            var cutoff = now - lease;
+            // 优先未尝试/少尝试任务，避免持续失败的队首任务饿死后续答卷。
+            var candidates = _tasks.Select((task, index) => (task, index))
+                .Where(item => !item.task.Completed &&
+                    (item.task.ClaimedAt is null || item.task.ClaimedAt <= cutoff))
+                .OrderBy(item => item.task.AttemptCount).ThenBy(item => item.task.Sequence)
+                .Take(maxCount).ToArray();
             var claimed = new List<PendingGradingTask>();
-
-            for (var index = 0; index < _tasks.Count && claimed.Count < maxCount; index++)
+            foreach (var (task, index) in candidates)
             {
-                var task = _tasks[index];
-                if (task.Completed)
-                {
-                    continue;
-                }
-
-                if (task.ClaimedAt is { } claimedAt && claimedAt >= cutoff)
-                {
-                    continue;
-                }
-
-                _tasks[index] = task with { ClaimedAt = now, AttemptCount = task.AttemptCount + 1 };
-                claimed.Add(new PendingGradingTask(task.SubmissionId, task.GradingVersion, task.AttemptCount + 1));
+                var attempt = checked(task.AttemptCount + 1);
+                _tasks[index] = task with { ClaimedAt = now, AttemptCount = attempt };
+                claimed.Add(new(task.SubmissionId, task.GradingVersion, attempt));
             }
-
             return ValueTask.FromResult<IReadOnlyList<PendingGradingTask>>(claimed);
         }
     }
 
-    public ValueTask CompleteAsync(
-        string submissionId,
-        long gradingVersion,
-        CancellationToken cancellationToken = default)
+    public ValueTask<bool> CompleteAsync(PendingGradingTask task, CancellationToken cancellationToken = default) =>
+        Update(task, state => state with { Completed = true, ClaimedAt = null, LastError = null }, cancellationToken);
+
+    public ValueTask<bool> FailAsync(PendingGradingTask task, string error, CancellationToken cancellationToken = default) =>
+        Update(task, state => state with { ClaimedAt = null, LastError = PendingGradingTask.LimitError(error) }, cancellationToken);
+
+    private ValueTask<bool> Update(PendingGradingTask claim, Func<TaskState, TaskState> change, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(claim);
+        claim.ValidateClaim();
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            Update(submissionId, gradingVersion, task => task with
+            for (var index = 0; index < _tasks.Count; index++)
             {
-                Completed = true,
-                ClaimedAt = null,
-                LastError = null
-            });
-        }
-
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask FailAsync(
-        string submissionId,
-        long gradingVersion,
-        string error,
-        CancellationToken cancellationToken = default)
-    {
-        lock (_gate)
-        {
-            // 失败不删除任务：释放租约并记录错误，等待下次重试。
-            Update(submissionId, gradingVersion, task => task with
-            {
-                ClaimedAt = null,
-                LastError = error
-            });
-        }
-
-        return ValueTask.CompletedTask;
-    }
-
-    private void Update(string submissionId, long gradingVersion, Func<TaskState, TaskState> change)
-    {
-        for (var index = 0; index < _tasks.Count; index++)
-        {
-            if (_tasks[index].SubmissionId == submissionId && _tasks[index].GradingVersion == gradingVersion)
-            {
-                _tasks[index] = change(_tasks[index]);
-                return;
+                var task = _tasks[index];
+                if (task.SubmissionId == claim.SubmissionId && task.GradingVersion == claim.GradingVersion &&
+                    task.AttemptCount == claim.AttemptCount && task.ClaimedAt is not null && !task.Completed)
+                {
+                    _tasks[index] = change(task);
+                    return ValueTask.FromResult(true);
+                }
             }
+            return ValueTask.FromResult(false);
         }
     }
 }
@@ -220,6 +175,8 @@ public sealed class InMemoryGradingInputs : IGradingInputs
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         ArgumentNullException.ThrowIfNull(rules);
+        ArgumentOutOfRangeException.ThrowIfLessThan(rules.GradingVersion, 1);
+        if (rules.Rules.ExamId != examId) throw new ArgumentException("规则与考试不匹配。", nameof(rules));
 
         lock (_gate)
         {
@@ -231,6 +188,8 @@ public sealed class InMemoryGradingInputs : IGradingInputs
         string submissionId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(submissionId);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             return ValueTask.FromResult(_submissions.TryGetValue(submissionId, out var submission) ? submission : null);
@@ -241,6 +200,8 @@ public sealed class InMemoryGradingInputs : IGradingInputs
         string examId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             return ValueTask.FromResult(_rules.TryGetValue(examId, out var rules) ? rules : null);

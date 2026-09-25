@@ -53,67 +53,43 @@ public sealed class PostgresGradingInputs : IGradingInputs
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
 
-        // 只认最近一次**带源数据**的计分规则发布：内部兼容路径允许省略源数据，遇到则继续向前找，
-        // 否则会拿一份无法重放的规则去计分。
-        const string rulesSql = """
-            SELECT payload::text
-              FROM exam.version_events
-             WHERE exam_id = @exam_id
-               AND operation_type = @operation
-               AND payload ->> 'manifestJson' IS NOT NULL
-               AND payload ->> 'answerKeyJson' IS NOT NULL
-             ORDER BY stream_revision DESC
-             LIMIT 1;
+        // 一个 SQL 快照读取版本和对应的最后发布事件。不能跳过当前坏事件后把旧规则标成新版本。
+        const string sql = """
+            SELECT state.grading_version, published.payload::text
+              FROM exam.version_state AS state
+              LEFT JOIN LATERAL (
+                  SELECT payload FROM exam.version_events
+                   WHERE exam_id = state.exam_id AND operation_type = @operation
+                     AND stream_revision <= state.stream_revision
+                   ORDER BY stream_revision DESC LIMIT 1
+              ) AS published ON true
+             WHERE state.exam_id = @exam_id;
             """;
-
-        const string versionSql = """
-            SELECT grading_version FROM exam.version_state WHERE exam_id = @exam_id;
-            """;
-
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        await using var versionCommand = new NpgsqlCommand(versionSql, connection);
-        versionCommand.Parameters.AddWithValue("exam_id", NpgsqlDbType.Text, examId);
-        var versionResult = await versionCommand.ExecuteScalarAsync(cancellationToken);
-        if (versionResult is null or DBNull)
-        {
-            return null;
-        }
-
-        var gradingVersion = Convert.ToInt64(versionResult);
-        if (gradingVersion < 1)
-        {
-            return null;
-        }
-
-        await using var rulesCommand = new NpgsqlCommand(rulesSql, connection);
-        rulesCommand.Parameters.AddWithValue("exam_id", NpgsqlDbType.Text, examId);
-        rulesCommand.Parameters.AddWithValue("operation", NpgsqlDbType.Text, GradingOperation);
-        var payload = await rulesCommand.ExecuteScalarAsync(cancellationToken) as string;
-        if (string.IsNullOrWhiteSpace(payload))
-        {
-            return null;
-        }
-
-        var request = JsonSerializer.Deserialize<PublishGradingRulesRequest>(payload, JsonOptions);
-        if (request is null
-            || string.IsNullOrWhiteSpace(request.ManifestJson)
-            || string.IsNullOrWhiteSpace(request.AnswerKeyJson))
-        {
-            return null;
-        }
-
-        // 规则源数据不合法时由 Create 抛出，交给调用方按失败重试处理，不静默降级成别的规则。
-        return new PublishedGradingRules(
-            ImportedGradingRules.Create(request.ManifestJson, request.AnswerKeyJson),
-            gradingVersion);
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("exam_id", NpgsqlDbType.Text, examId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Text, GradingOperation);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var gradingVersion = reader.GetInt64(0);
+        if (gradingVersion == 0) return null;
+        if (gradingVersion < 0 || reader.IsDBNull(1))
+            throw new InvalidDataException("当前计分版本缺少可重放的发布事件。");
+        var request = JsonSerializer.Deserialize<PublishGradingRulesRequest>(reader.GetString(1), JsonOptions);
+        if (request is null || request.ExamId != examId || request.ExpectedVersion != gradingVersion - 1 ||
+            string.IsNullOrWhiteSpace(request.ManifestJson) || string.IsNullOrWhiteSpace(request.AnswerKeyJson))
+            throw new InvalidDataException("当前计分规则源数据缺失或版本、考试不一致；禁止使用旧规则替代。");
+        var rules = ImportedGradingRules.Create(request.ManifestJson, request.AnswerKeyJson);
+        if (rules.ExamId != examId)
+            throw new InvalidDataException("计分规则源数据属于另一场考试。");
+        return new PublishedGradingRules(rules, gradingVersion);
     }
 
     private static FinalSubmission ReadSubmission(NpgsqlDataReader reader)
     {
         var answers = JsonSerializer.Deserialize<Dictionary<string, AnswerValue>>(
                           reader.GetString(7),
-                          JsonOptions) ?? [];
+                          JsonOptions) ?? throw new InvalidDataException("最终答卷源数据损坏。");
         var receivedAt = reader.GetFieldValue<DateTimeOffset>(8);
         var receipt = new SubmissionReceipt(
             reader.GetString(9),

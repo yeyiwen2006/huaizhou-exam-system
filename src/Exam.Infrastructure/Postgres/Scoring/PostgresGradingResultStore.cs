@@ -27,14 +27,17 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
     public async ValueTask SaveAsync(StoredGradingResult result, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(result);
+        result = result.Snapshot();
 
         const string sql = """
             INSERT INTO exam.grading_results
                 (submission_id, exam_id, candidate_id, grading_version,
                  question_scores, subject_scores, total_score, graded_at)
-            VALUES
-                (@submission_id, @exam_id, @candidate_id, @grading_version,
-                 @question_scores, @subject_scores, @total_score, @graded_at)
+            SELECT @submission_id, @exam_id, @candidate_id, @grading_version,
+                   @question_scores, @subject_scores, @total_score, @graded_at
+              FROM exam.final_submissions AS submission
+             WHERE submission.submission_id = @submission_id
+               AND submission.exam_id = @exam_id AND submission.candidate_id = @candidate_id
             ON CONFLICT (submission_id) DO UPDATE SET
                 exam_id         = EXCLUDED.exam_id,
                 candidate_id    = EXCLUDED.candidate_id,
@@ -42,7 +45,15 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
                 question_scores = EXCLUDED.question_scores,
                 subject_scores  = EXCLUDED.subject_scores,
                 total_score     = EXCLUDED.total_score,
-                graded_at       = EXCLUDED.graded_at;
+                graded_at       = CASE WHEN grading_results.grading_version = EXCLUDED.grading_version
+                                       THEN grading_results.graded_at ELSE EXCLUDED.graded_at END
+            WHERE grading_results.exam_id = EXCLUDED.exam_id
+              AND grading_results.candidate_id = EXCLUDED.candidate_id
+              AND (grading_results.grading_version < EXCLUDED.grading_version OR
+                   (grading_results.grading_version = EXCLUDED.grading_version
+                    AND grading_results.question_scores = EXCLUDED.question_scores
+                    AND grading_results.subject_scores = EXCLUDED.subject_scores
+                    AND grading_results.total_score = EXCLUDED.total_score));
             """;
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -61,7 +72,8 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
             JsonSerializer.Serialize(result.Grade.Subjects, JsonOptions));
         command.Parameters.AddWithValue("total_score", NpgsqlDbType.Text, result.Grade.ExactTotalScore);
         command.Parameters.AddWithValue("graded_at", NpgsqlDbType.TimestampTz, result.GradedAt);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            throw new InvalidOperationException("计分结果归属、版本或同版本内容冲突；原结果未被覆盖。");
     }
 
     public async ValueTask<StoredGradingResult?> FindAsync(
@@ -121,13 +133,15 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
         var examId = reader.GetString(1);
         var candidateId = reader.GetString(2);
         var gradingVersion = reader.GetInt64(3);
-        var questions = JsonSerializer.Deserialize<List<QuestionGrade>>(reader.GetString(4), JsonOptions) ?? [];
-        var subjects = JsonSerializer.Deserialize<List<SubjectGrade>>(reader.GetString(5), JsonOptions) ?? [];
+        var questions = JsonSerializer.Deserialize<List<QuestionGrade>>(reader.GetString(4), JsonOptions)
+            ?? throw new InvalidDataException("持久化逐题成绩损坏。");
+        var subjects = JsonSerializer.Deserialize<List<SubjectGrade>>(reader.GetString(5), JsonOptions)
+            ?? throw new InvalidDataException("持久化科目成绩损坏。");
         var total = reader.GetString(6);
         var gradedAt = reader.GetFieldValue<DateTimeOffset>(7);
 
         return new StoredGradingResult(
             new SubmissionGrade(submissionId, examId, candidateId, gradingVersion, questions, subjects, total),
-            gradedAt);
+            gradedAt).Snapshot();
     }
 }
