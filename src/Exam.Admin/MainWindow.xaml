@@ -292,16 +292,39 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="C05–C07 依赖状态">
-                <Border Style="{StaticResource Card}" Margin="14">
-                    <StackPanel>
-                        <TextBlock Text="后续模块依赖审计" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
-                        <TextBlock Text="状态来自当前 Contracts 与 Server 的实际能力盘点；没有使用 Mock/Fake 数据。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
-                        <DataGrid ItemsSource="{Binding Dependencies.Items}" Height="320">
-                            <DataGrid.Columns><DataGridTextColumn Header="模块" Binding="{Binding Module}" Width="180"/><DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="130"/><DataGridTextColumn Header="原因与边界" Binding="{Binding Reason}" Width="*"/></DataGrid.Columns>
-                        </DataGrid>
+            <TabItem Header="C05 清单静态预检">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="D01 manifest.json 静态预检" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="当前考试 ID" Style="{StaticResource FormLabel}"/>
+                                <TextBox Text="{Binding ManifestPreflight.ExamId, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="必须与清单 examId 完全一致" Margin="0,0,0,10"/>
+                                <Button Content="选择 manifest.json 并静态预检" Style="{StaticResource Btn.Secondary}"
+                                        Command="{Binding ManifestPreflight.SelectManifestCommand}"
+                                        HorizontalAlignment="Left" Margin="0,0,0,10"/>
+                                <TextBlock Text="{Binding ManifestPreflight.Status}" TextWrapping="Wrap"
+                                           Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
+                                <DataGrid ItemsSource="{Binding ManifestPreflight.Issues}" Height="260"
+                                          IsReadOnly="True" AutoGenerateColumns="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="规则标识" Binding="{Binding Rule}" Width="2*"/>
+                                        <DataGridTextColumn Header="JSON Pointer 位置" Binding="{Binding Location}" Width="2*"/>
+                                        <DataGridTextColumn Header="问题说明" Binding="{Binding Message}" Width="3*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="能力边界" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                                <TextBlock Text="只读取不超过 10 MB、严格 UTF-8 的 manifest.json，并复用 D01 正式校验器。不会读取独立答案，不执行依赖检查、XeLaTeX 编译、正式计分、发布或客户端更新。"
+                                           Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
             </TabItem>
         </TabControl>
     </DockPanel>
