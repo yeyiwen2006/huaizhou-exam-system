@@ -104,3 +104,9 @@ Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 P
 ## PR #54 审查修正记录
 
 本 PR 已接续 main 合并 #53 后的共享接口。A 的本轮审查补充实际宿主状态门禁、持久配置启动核对、取消与探针校验、备份/恢复请求内容绑定、配置文件完整性及 SQLite/WPF CI 回归修正。实跑命令、结果、复现过程和原生 SCM 未验收范围见 [PR #54 审查记录](reviews/pr54-f01-ci-review.md)。这是阶段代码交付，#7 的独立管理宿主、业务就绪和恢复运行闭环仍保持未完成，不以本 PR 合并代替验收。
+
+## 业务就绪门禁（2026-09-25，独立分支）
+
+从 `origin/main@d79df4e` 建立 `codex/f01-business-ready-gate`。`ReadyCheckedBusinessHost` 包装受控业务宿主，在进程达到 Running 后轮询部署时固定的 HTTPS `/health/ready`，并核对响应的 `serverId`、`nodeId`、`serverEpoch`。503 表示继续等待；身份或格式错误、进程退出、超时和取消均不报告启动成功。单次 HTTP 请求受总超时约束，不因接口挂起无限等待。包装器只保证本次启动返回前的业务就绪；后续持续健康监测仍需独立管理宿主接线。
+
+macOS Arm64、.NET 10.0.401：单元项目 `dotnet restore --locked-mode` 成功；`TMPDIR=/private/tmp/ dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --configuration Release --filter 'FullyQualifiedName~ReadyCheckedBusinessHost' --no-restore -m:1 -nr:false`，8/8 通过；同项目 F01 服务管理筛选 `FullyQualifiedName~ServiceManagement`，72/72 通过，构建 0 警告、0 错误。合成 HTTP 响应覆盖 503 后就绪、错误节点、旧代次、持续 503、挂起请求、进程退出、非 HTTPS 地址以及上层服务不得将未就绪进程报告为启动成功。全解决方案锁定还原在 macOS 因 WPF/Windows 目标返回 `NETSDK1100`，因此未运行全解决方案 build/test；仓库已有的 Windows 结果属于先前提交，不作为本批验证。尚未接入独立管理宿主，也未在真实 Windows 服务及数据库故障下验证；停机管理鉴权仍以本文件前述待 A 确认的边界为准。不得把此适配器单独计为 F01 完成。
