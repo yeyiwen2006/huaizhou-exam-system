@@ -1,5 +1,6 @@
 using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.ServiceManagement;
+using System.Text.Json.Nodes;
 
 namespace Exam.UnitTests.ServiceManagement;
 
@@ -101,6 +102,67 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.CreateAsync(
             new BackupRequest("request-link", Path.Combine(link, "escaped"), "operator"),
             default));
+    }
+
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("unknown")]
+    [InlineData("missing")]
+    public async Task Restore_RejectsAmbiguousOrIncompleteManifest(string mutation)
+    {
+        var backupRoot = Path.Combine(_root, mutation, "backups");
+        var resources = Path.Combine(_root, mutation, "resources");
+        var protectedConfig = Path.Combine(_root, mutation, "protected");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic protected material");
+        var runner = new FakePostgresTools();
+        var service = CreateService(backupRoot, resources, protectedConfig,
+            Path.Combine(_root, mutation, "staging"), runner);
+        var destination = Path.Combine(backupRoot, "backup-1");
+        var result = await service.CreateAsync(new BackupRequest("backup-request", destination, "operator"), default);
+        var manifestPath = Path.Combine(destination, "exam-backup.json");
+        var json = await File.ReadAllTextAsync(manifestPath);
+        var changed = mutation switch
+        {
+            "duplicate" => json.Insert(json.LastIndexOf('}'), $",\"backupId\":\"{result.BackupId}\""),
+            "unknown" => json.Insert(json.LastIndexOf('}'), ",\"ignored\":true"),
+            _ => RemoveProperty(json, "backupId")
+        };
+        await File.WriteAllTextAsync(manifestPath, changed);
+        var callsBeforeRestore = runner.Calls.Count;
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.RestoreAsync(
+            new RestoreRequest("restore-request", result.BackupId, destination, "operator"), default));
+
+        Assert.Equal(callsBeforeRestore, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task RestoreReplay_RejectsAmbiguousCompletionMarker()
+    {
+        var backupRoot = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        var staging = Path.Combine(_root, "staging");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic protected material");
+        var service = CreateService(backupRoot, resources, protectedConfig, staging, new FakePostgresTools());
+        var destination = Path.Combine(backupRoot, "backup-1");
+        var result = await service.CreateAsync(new BackupRequest("backup-request", destination, "operator"), default);
+        var restore = new RestoreRequest("restore-request", result.BackupId, destination, "operator");
+        await service.RestoreAsync(restore, default);
+        var markerPath = Path.Combine(staging, result.BackupId, "restore-verified.json");
+        var json = await File.ReadAllTextAsync(markerPath);
+        await File.WriteAllTextAsync(markerPath, json.Insert(json.LastIndexOf('}'), ",\"actorId\":\"operator\""));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.RestoreAsync(restore, default));
+    }
+
+    private static string RemoveProperty(string json, string name)
+    {
+        var node = JsonNode.Parse(json)!.AsObject();
+        node.Remove(name);
+        return node.ToJsonString();
     }
 
     public void Dispose()

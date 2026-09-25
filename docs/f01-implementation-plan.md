@@ -104,3 +104,9 @@ Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 P
 ## PR #54 审查修正记录
 
 本 PR 已接续 main 合并 #53 后的共享接口。A 的本轮审查补充实际宿主状态门禁、持久配置启动核对、取消与探针校验、备份/恢复请求内容绑定、配置文件完整性及 SQLite/WPF CI 回归修正。实跑命令、结果、复现过程和原生 SCM 未验收范围见 [PR #54 审查记录](reviews/pr54-f01-ci-review.md)。这是阶段代码交付，#7 的独立管理宿主、业务就绪和恢复运行闭环仍保持未完成，不以本 PR 合并代替验收。
+
+## 备份元数据读取边界（2026-09-25，独立分支）
+
+从 `origin/main@d79df4e` 建立 `codex/f01-backup-manifest-validation`。恢复前读取 `exam-backup.json` 和已完成暂存目录的 `restore-verified.json` 时，要求已知字段齐全、唯一；文件清单条目也拒绝重复、未知或缺失字段，并限制元数据大小。写出格式与现有有效清单不变。此校验只处理元数据歧义，不代替 PostgreSQL 基础备份验证、受保护目录权限或隔离恢复后继续收卷。
+
+合成文件测试修复前 4 项中 3 项失败：重复或陌生清单字段及重复恢复标记字段被接受；缺失备份标识原已拒绝。修复后 macOS Arm64、.NET 10.0.401，单元项目 `dotnet restore --locked-mode` 成功；`TMPDIR=/private/tmp/ dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --configuration Release --filter 'FullyQualifiedName~ServiceManagement' --no-restore -m:1 -nr:false`，68/68 通过、0 警告、0 错误。全解决方案锁定还原因现有 WPF/Windows 目标在 macOS 返回 `NETSDK1100`，未继续执行全解决方案 build/test；历史 Windows 结果不作为本批重跑。尚未在真实 PostgreSQL 备份、Windows 服务账户或完整隔离恢复中验证。

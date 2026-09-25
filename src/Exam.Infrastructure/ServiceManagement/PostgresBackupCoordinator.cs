@@ -296,9 +296,8 @@ public sealed class PostgresBackupCoordinator(
             throw new InvalidDataException("备份缺少 exam-backup.json 清单。");
         }
 
-        var manifest = JsonSerializer.Deserialize<BackupManifest>(
-            await File.ReadAllTextAsync(path, cancellationToken),
-            JsonDefaults.Create()) ?? throw new InvalidDataException("备份清单无法解析。");
+        var manifest = await ReadStrictJsonAsync<BackupManifest>(
+            path, 32 * 1024 * 1024, ValidateManifestShape, cancellationToken);
         if (manifest.FormatVersion != ManifestFormatVersion ||
             string.IsNullOrWhiteSpace(manifest.BackupId) ||
             string.IsNullOrWhiteSpace(manifest.RequestId) ||
@@ -428,9 +427,8 @@ public sealed class PostgresBackupCoordinator(
             throw new IOException("恢复暂存目录已经存在但尚未完成校验，不会覆盖或当作成功恢复。");
         }
 
-        var marker = JsonSerializer.Deserialize<RestoreMarker>(
-            await File.ReadAllTextAsync(markerPath, cancellationToken),
-            JsonDefaults.Create()) ?? throw new InvalidDataException("恢复校验标记无法解析。");
+        var marker = await ReadStrictJsonAsync<RestoreMarker>(
+            markerPath, 16 * 1024, ValidateRestoreMarkerShape, cancellationToken);
         var pathComparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
@@ -712,6 +710,68 @@ public sealed class PostgresBackupCoordinator(
 
     private static string NormalizeRelative(string relative) =>
         relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+
+    private static async Task<T> ReadStrictJsonAsync<T>(
+        string path,
+        int maximumBytes,
+        Action<JsonElement> validateShape,
+        CancellationToken cancellationToken)
+    {
+        if (new FileInfo(path).Length > maximumBytes)
+            throw new InvalidDataException("备份元数据超过允许大小。");
+
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        if (bytes.Length > maximumBytes)
+            throw new InvalidDataException("备份元数据超过允许大小。");
+
+        try
+        {
+            using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 16 });
+            validateShape(document.RootElement);
+            return document.RootElement.Deserialize<T>(JsonDefaults.Create())
+                ?? throw new InvalidDataException("备份元数据无法解析。");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("备份元数据不是有效的 JSON。", exception);
+        }
+    }
+
+    private static void ValidateManifestShape(JsonElement root)
+    {
+        RequireExactProperties(root,
+            ["formatVersion", "backupId", "requestId", "completedAt", "actorId",
+             "databaseDirectory", "resourcesDirectory", "protectedConfigurationDirectory",
+             "resourceFiles", "protectedConfigurationFiles"]);
+        foreach (var name in new[] { "resourceFiles", "protectedConfigurationFiles" })
+        {
+            var entries = root.GetProperty(name);
+            if (entries.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("备份清单文件列表格式无效。");
+            foreach (var entry in entries.EnumerateArray())
+                RequireExactProperties(entry, ["relativePath", "length", "sha256"]);
+        }
+    }
+
+    private static void ValidateRestoreMarkerShape(JsonElement root) =>
+        RequireExactProperties(root,
+            ["requestId", "actorId", "backupId", "sourceDirectory", "verifiedAt"]);
+
+    private static void RequireExactProperties(JsonElement value, IReadOnlyCollection<string> expected)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("备份元数据对象格式无效。");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!expected.Contains(property.Name) || !seen.Add(property.Name))
+                throw new InvalidDataException("备份元数据包含重复或未知字段。");
+        }
+
+        if (seen.Count != expected.Count)
+            throw new InvalidDataException("备份元数据缺少必需字段。");
+    }
 
     private static void RequireNonEmptyDirectory(string path, string description)
     {
