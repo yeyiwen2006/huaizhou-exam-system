@@ -62,6 +62,16 @@ public sealed partial class PostgresGradingPersistenceTests
     }
 
     [Fact]
+    public async Task TaskSource_LaterConsumerCannotShortenExistingLease()
+    {
+        await SeedAsync();
+        var source = new PostgresGradingTaskSource(fixture.DataSource);
+        Assert.Single(await source.ClaimAsync(1, BoundaryNow, TimeSpan.FromMinutes(5)));
+        Assert.Empty(await source.ClaimAsync(1, BoundaryNow.AddMinutes(1), TimeSpan.FromSeconds(1)));
+        Assert.Single(await source.ClaimAsync(1, BoundaryNow.AddMinutes(5), TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
     public async Task TaskSource_ConcurrentClaimsHaveExactlyOneOwner()
     {
         await SeedAsync();

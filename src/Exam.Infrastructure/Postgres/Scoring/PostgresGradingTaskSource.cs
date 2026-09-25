@@ -20,13 +20,14 @@ public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGr
                 SELECT submission_id, grading_version
                   FROM exam.grading_outbox
                  WHERE completed_at IS NULL
-                   AND (claimed_at IS NULL OR claimed_at <= @lease_cutoff)
+                   AND (claimed_at IS NULL OR lease_expires_at <= @now OR
+                        (lease_expires_at IS NULL AND claimed_at <= @lease_cutoff))
                  ORDER BY attempt_count, created_at, submission_id, grading_version
                  LIMIT @max_count
                    FOR UPDATE SKIP LOCKED
             )
             UPDATE exam.grading_outbox AS target
-               SET claimed_at = @now, attempt_count = target.attempt_count + 1
+               SET claimed_at = @now, lease_expires_at = @expires_at, attempt_count = target.attempt_count + 1
               FROM candidates
              WHERE target.submission_id = candidates.submission_id
                AND target.grading_version = candidates.grading_version
@@ -37,6 +38,7 @@ public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGr
         command.Parameters.AddWithValue("lease_cutoff", NpgsqlDbType.TimestampTz, (now - lease).ToUniversalTime());
         command.Parameters.AddWithValue("now", NpgsqlDbType.TimestampTz, now.ToUniversalTime());
         command.Parameters.AddWithValue("max_count", NpgsqlDbType.Integer, maxCount);
+        command.Parameters.AddWithValue("expires_at", NpgsqlDbType.TimestampTz, (now + lease).ToUniversalTime());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var tasks = new List<PendingGradingTask>();
         while (await reader.ReadAsync(cancellationToken))
@@ -58,7 +60,7 @@ public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGr
         const string sql = """
             UPDATE exam.grading_outbox
                SET completed_at = CASE WHEN @complete THEN clock_timestamp() ELSE NULL END,
-                   claimed_at = NULL, last_error = @error
+                   claimed_at = NULL, lease_expires_at = NULL, last_error = @error
              WHERE submission_id = @submission_id AND grading_version = @grading_version
                AND attempt_count = @attempt_count AND claimed_at IS NOT NULL AND completed_at IS NULL;
             """;

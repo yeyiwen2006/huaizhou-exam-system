@@ -10,7 +10,7 @@ namespace Exam.UnitTests.Scoring;
 /// 覆盖：正常计分落库结项、规则未发布与答卷缺失的保留重试、单条失败隔离、
 /// 旧版本任务按最新规则计分并按最新版本标记、重复运行的按答卷去重。
 /// </summary>
-public sealed class GradingCoordinatorTests
+public sealed partial class GradingCoordinatorTests
 {
     private const string ExamId = "coordinator-exam";
     private const string CandidateId = "coordinator-candidate";
@@ -223,7 +223,9 @@ public sealed class GradingCoordinatorTests
         var (coordinator, tasks, results, inputs) = Create();
         inputs.SetSubmission(Submission());
         // 键是答卷的考试，但取回的规则属于另一个考试：必须报错，不得按错误规则计分。
-        inputs.SetRules(ExamId, Rules(AlternateManifestJson, AlternateAnswerKeyJson));
+        coordinator = new GradingCoordinator(tasks, results,
+            new TestInputs(inputs, rules: (_, _) => ValueTask.FromResult<PublishedGradingRules?>(
+                Rules(AlternateManifestJson, AlternateAnswerKeyJson))), timeProvider: new FixedTimeProvider(Now));
         tasks.Enqueue(SubmissionId, 1);
 
         var report = await coordinator.RunOnceAsync();

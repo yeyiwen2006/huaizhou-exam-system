@@ -72,7 +72,7 @@ public sealed class InMemoryGradingResultStore : IGradingResultStore
 public sealed class InMemoryGradingTaskSource : IGradingTaskSource
 {
     private sealed record TaskState(string SubmissionId, long GradingVersion, int Sequence,
-        int AttemptCount, DateTimeOffset? ClaimedAt, bool Completed, string? LastError);
+        int AttemptCount, DateTimeOffset? ClaimedAt, DateTimeOffset? LeaseExpiresAt, bool Completed, string? LastError);
     private readonly List<TaskState> _tasks = [];
     private readonly object _gate = new();
     private int _sequence;
@@ -84,7 +84,7 @@ public sealed class InMemoryGradingTaskSource : IGradingTaskSource
         lock (_gate)
         {
             if (_tasks.Any(task => task.SubmissionId == submissionId && task.GradingVersion == gradingVersion)) return;
-            _tasks.Add(new(submissionId, gradingVersion, _sequence++, 0, null, false, null));
+            _tasks.Add(new(submissionId, gradingVersion, _sequence++, 0, null, null, false, null));
         }
     }
 
@@ -106,20 +106,20 @@ public sealed class InMemoryGradingTaskSource : IGradingTaskSource
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         if (lease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(lease));
         cancellationToken.ThrowIfCancellationRequested();
-        var cutoff = now - lease;
+        var expiresAt = now + lease;
         lock (_gate)
         {
             // 优先未尝试/少尝试任务，避免持续失败的队首任务饿死后续答卷。
             var candidates = _tasks.Select((task, index) => (task, index))
                 .Where(item => !item.task.Completed &&
-                    (item.task.ClaimedAt is null || item.task.ClaimedAt <= cutoff))
+                    (item.task.ClaimedAt is null || item.task.LeaseExpiresAt <= now))
                 .OrderBy(item => item.task.AttemptCount).ThenBy(item => item.task.Sequence)
                 .Take(maxCount).ToArray();
             var claimed = new List<PendingGradingTask>();
             foreach (var (task, index) in candidates)
             {
                 var attempt = checked(task.AttemptCount + 1);
-                _tasks[index] = task with { ClaimedAt = now, AttemptCount = attempt };
+                _tasks[index] = task with { ClaimedAt = now, LeaseExpiresAt = expiresAt, AttemptCount = attempt };
                 claimed.Add(new(task.SubmissionId, task.GradingVersion, attempt));
             }
             return ValueTask.FromResult<IReadOnlyList<PendingGradingTask>>(claimed);
@@ -127,10 +127,10 @@ public sealed class InMemoryGradingTaskSource : IGradingTaskSource
     }
 
     public ValueTask<bool> CompleteAsync(PendingGradingTask task, CancellationToken cancellationToken = default) =>
-        Update(task, state => state with { Completed = true, ClaimedAt = null, LastError = null }, cancellationToken);
+        Update(task, state => state with { Completed = true, ClaimedAt = null, LeaseExpiresAt = null, LastError = null }, cancellationToken);
 
     public ValueTask<bool> FailAsync(PendingGradingTask task, string error, CancellationToken cancellationToken = default) =>
-        Update(task, state => state with { ClaimedAt = null, LastError = PendingGradingTask.LimitError(error) }, cancellationToken);
+        Update(task, state => state with { ClaimedAt = null, LeaseExpiresAt = null, LastError = PendingGradingTask.LimitError(error) }, cancellationToken);
 
     private ValueTask<bool> Update(PendingGradingTask claim, Func<TaskState, TaskState> change, CancellationToken cancellationToken)
     {
@@ -167,7 +167,10 @@ public sealed class InMemoryGradingInputs : IGradingInputs
 
         lock (_gate)
         {
-            _submissions[submission.SubmissionId] = submission;
+            _submissions[submission.SubmissionId] = submission with
+            {
+                FrozenAnswers = PersistedProgress.FreezeAnswers(submission.FrozenAnswers)
+            };
         }
     }
 

@@ -27,6 +27,16 @@ public sealed class GradingLeaseBoundaryTests
     }
 
     [Fact]
+    public async Task LaterConsumerCannotShortenExistingLease()
+    {
+        var source = new InMemoryGradingTaskSource();
+        source.Enqueue("s", 1);
+        Assert.Single(await source.ClaimAsync(1, Now, TimeSpan.FromMinutes(5)));
+        Assert.Empty(await source.ClaimAsync(1, Now.AddMinutes(1), TimeSpan.FromSeconds(1)));
+        Assert.Single(await source.ClaimAsync(1, Now.AddMinutes(5), TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
     public async Task ReleasedLeaseCannotCompleteWithoutReclaiming()
     {
         var source = new InMemoryGradingTaskSource();

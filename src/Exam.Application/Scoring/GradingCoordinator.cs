@@ -2,33 +2,19 @@ using Exam.Domain.Scoring;
 
 namespace Exam.Application.Scoring;
 
-/// <summary>一轮计分批次的执行结果，供监测、CLI 与日志使用。</summary>
-public sealed record GradingBatchReport(
-    int Claimed,
-    int Graded,
-    int Failed,
-    IReadOnlyList<string> FailureMessages)
+/// <summary>一轮计分批次结果；只有结果持久化且当前领取代次结项成功才计入 Graded。</summary>
+public sealed record GradingBatchReport(int Claimed, int Graded, int Failed, IReadOnlyList<string> FailureMessages)
 {
     public static GradingBatchReport Empty { get; } = new(0, 0, 0, []);
 }
 
 /// <summary>
-/// 后台计分协调器：领取计分任务 → 读取冻结答卷与已发布规则 → 精确计分 → 落库 → 结项。
-///
-/// 依据 requirements.md 与执行指南：
-/// 1. **判分采用最新有效参考答案及规则**（「提交记录实际使用版本…判分仍采用最新有效参考答案及规则」），
-///    因此结果按当前已发布的计分版本标记，而不是提交时记录的版本；旧版本的任务在产出最新版本结果后即可结项。
-/// 2. **单条失败不阻塞其他任务**：每条任务独立处理，失败只记入结果并保留待办，绝不删除任务。
-/// 3. **先落库再结项**：如果先结项后落库，落库失败就会永久丢失这份成绩；反过来做，
-///    重复领取时按答卷去重的结果表保证不会重复累计。
-/// 4. 无状态、有界：每次只领取一批（batchSize 上限），不无限循环，由调用方按调度节奏反复调用。
+/// 有界批次协调器：A05 outbox → 冻结答卷和最新有效规则 → D04 精确计分 → 结果持久化 → 结项。
+/// 不注册生产后台线程；生产调度仍须接入主备写门、重算范围与报表版本门。
 /// </summary>
 public sealed class GradingCoordinator
 {
     public const int MaxBatchSize = 512;
-
-    private static readonly TimeSpan DefaultLease = TimeSpan.FromMinutes(5);
-
     private readonly IGradingTaskSource _tasks;
     private readonly IGradingResultStore _results;
     private readonly IGradingInputs _inputs;
@@ -36,100 +22,85 @@ public sealed class GradingCoordinator
     private readonly TimeSpan _lease;
     private readonly TimeProvider _timeProvider;
 
-    public GradingCoordinator(
-        IGradingTaskSource tasks,
-        IGradingResultStore results,
-        IGradingInputs inputs,
-        int batchSize = 32,
-        TimeSpan? lease = null,
-        TimeProvider? timeProvider = null)
+    public GradingCoordinator(IGradingTaskSource tasks, IGradingResultStore results, IGradingInputs inputs,
+        int batchSize = 32, TimeSpan? lease = null, TimeProvider? timeProvider = null)
     {
         _tasks = tasks ?? throw new ArgumentNullException(nameof(tasks));
         _results = results ?? throw new ArgumentNullException(nameof(results));
         _inputs = inputs ?? throw new ArgumentNullException(nameof(inputs));
-
-        if (batchSize < 1 || batchSize > MaxBatchSize)
-        {
-            throw new ArgumentOutOfRangeException(nameof(batchSize));
-        }
-
-        var effectiveLease = lease ?? DefaultLease;
-        if (effectiveLease <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(lease));
-        }
-
+        if (batchSize is < 1 or > MaxBatchSize) throw new ArgumentOutOfRangeException(nameof(batchSize));
+        _lease = lease ?? TimeSpan.FromMinutes(5);
+        if (_lease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(lease));
         _batchSize = batchSize;
-        _lease = effectiveLease;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>执行一轮：领取至多一批任务并逐条处理。返回本批统计。</summary>
     public async ValueTask<GradingBatchReport> RunOnceAsync(CancellationToken cancellationToken = default)
     {
-        var now = _timeProvider.GetUtcNow();
-        var claimed = await _tasks.ClaimAsync(_batchSize, now, _lease, cancellationToken);
-        if (claimed.Count == 0)
-        {
-            return GradingBatchReport.Empty;
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
+        var claimed = await _tasks.ClaimAsync(_batchSize, _timeProvider.GetUtcNow(), _lease, cancellationToken);
+        if (claimed.Count == 0) return GradingBatchReport.Empty;
         var graded = 0;
         var failures = new List<string>();
-
         foreach (var task in claimed)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            string? failure;
+            try
+            {
+                failure = await ProcessAsync(task, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 不把取消伪装成业务失败；已经领取的任务保留，租约到期可恢复。
+                throw;
+            }
+            catch (Exception)
+            {
+                // 异常可能携带源答案、数据库参数、连接串；仅对外提供稳定脱敏的业务错误。
+                failure = "计分依赖或持久化失败，任务保留待重试。";
+            }
 
-            // 每条任务单独隔离：一条失败不得影响本批其他任务。
-            var failure = await ProcessAsync(task, cancellationToken);
             if (failure is null)
             {
                 graded++;
                 continue;
             }
-
-            await _tasks.FailAsync(task.SubmissionId, task.GradingVersion, failure, cancellationToken);
-            failures.Add($"{task.SubmissionId}: {failure}");
+            try
+            {
+                if (!await _tasks.FailAsync(task, failure, cancellationToken))
+                    failure += " 原领取代次已失效或任务已结束。";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                failure += " 失败状态未能持久化，原租约保留待超时恢复。";
+            }
+            failures.Add(failure);
         }
-
-        return new GradingBatchReport(claimed.Count, graded, failures.Count, failures);
+        return new(claimed.Count, graded, failures.Count, Array.AsReadOnly(failures.ToArray()));
     }
 
-    /// <summary>处理单条任务；成功返回 null，失败返回可直接记录的原因。</summary>
     private async ValueTask<string?> ProcessAsync(PendingGradingTask task, CancellationToken cancellationToken)
     {
+        task.ValidateClaim();
         var submission = await _inputs.LoadSubmissionAsync(task.SubmissionId, cancellationToken);
-        if (submission is null)
-        {
-            // 不删除任务：保留可见并记录原因，由考务确认是数据缺失还是需要人工处理。
-            return "找不到对应的最终答卷。";
-        }
-
+        if (submission is null) return "找不到对应的最终答卷。";
+        if (submission.SubmissionId != task.SubmissionId) return "计分任务与最终答卷标识不一致。";
         var published = await _inputs.LoadRulesAsync(submission.ExamId, cancellationToken);
-        if (published is null)
-        {
-            // 规则尚未发布属可恢复情况：保留任务，等规则发布后按最新版本计分。
-            return "该考试尚未发布计分规则，等待发布后重试。";
-        }
-
-        if (!string.Equals(published.Rules.ExamId, submission.ExamId, StringComparison.Ordinal))
-        {
-            return $"已发布规则属于考试 {published.Rules.ExamId}，与答卷的考试 {submission.ExamId} 不一致。";
-        }
-
+        if (published is null) return "该考试尚未发布计分规则，等待发布后重试。";
+        if (published.Rules.ExamId != submission.ExamId) return "已发布规则与答卷的考试不一致。";
+        if (published.GradingVersion < task.GradingVersion)
+            return "已发布计分版本落后于任务目标版本，禁止降版本计分。";
         var outcome = published.Rules.Grade(submission, published.GradingVersion);
         if (!outcome.Succeeded || outcome.Grade is null)
-        {
-            return outcome.FailureReason ?? "计分失败。";
-        }
-
-        await _results.SaveAsync(
-            new StoredGradingResult(outcome.Grade, _timeProvider.GetUtcNow()),
-            cancellationToken);
-
-        // 先落库再结项；重复领取会重新落库，但结果表按答卷去重，不会重复累计。
-        await _tasks.CompleteAsync(task.SubmissionId, task.GradingVersion, cancellationToken);
-        return null;
+            return "冻结答卷与已发布规则不匹配或计分校验失败。";
+        await _results.SaveAsync(new(outcome.Grade, _timeProvider.GetUtcNow()), cancellationToken);
+        // 先落库再结项。重试时同版本同结果幂等，旧消费者不能结项新租约。
+        return await _tasks.CompleteAsync(task, cancellationToken)
+            ? null : "计分任务领取代次已失效，不能声明本任务完成。";
     }
 }
