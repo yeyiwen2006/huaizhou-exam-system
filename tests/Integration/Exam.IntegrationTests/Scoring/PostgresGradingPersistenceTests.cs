@@ -141,6 +141,46 @@ public sealed partial class PostgresGradingPersistenceTests(PostgresDatabaseFixt
         Assert.Null(await inputs.LoadRulesAsync("pg-grading-other-exam"));
     }
 
+    [Fact]
+    public async Task Coordinator_ConsumesOutbox_GradesPersistsAndCompletesEndToEnd()
+    {
+        // 端到端：A05 的 outbox → 协调器领取 → 读答卷与已发布规则 → 计分 → 落库 → 结项。
+        await SeedAsync();
+        var coordinator = new Exam.Application.Scoring.GradingCoordinator(
+            new PostgresGradingTaskSource(fixture.DataSource),
+            new PostgresGradingResultStore(fixture.DataSource),
+            new PostgresGradingInputs(fixture.DataSource),
+            batchSize: 8,
+            lease: TimeSpan.FromMinutes(1),
+            timeProvider: new FixedTimeProvider(new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero)));
+
+        var report = await coordinator.RunOnceAsync();
+
+        Assert.True(report.Graded == 1, $"应计分 1 份，实际 {report.Graded}；{string.Join(" | ", report.FailureMessages)}");
+
+        var results = new PostgresGradingResultStore(fixture.DataSource);
+        var stored = await results.FindAsync(SubmissionId);
+        Assert.NotNull(stored);
+        Assert.Equal("3", stored!.Grade.ExactTotalScore);
+        // 判分采用最新有效规则：任务记录的是版本 1，已发布版本是 3，结果按 3 标记。
+        Assert.Equal(3, stored.GradingVersion);
+
+        // 结项后 outbox 不再有待办；重复运行不产生第二行结果。
+        await using var pending = fixture.DataSource.CreateCommand(
+            "SELECT count(*) FROM exam.grading_outbox WHERE completed_at IS NULL;");
+        Assert.Equal(0L, (long)(await pending.ExecuteScalarAsync())!);
+
+        await coordinator.RunOnceAsync();
+        Assert.Single(await results.ListAsync(ExamId, 3));
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     private StoredGradingResult Result(long gradingVersion, string total, DateTimeOffset gradedAt) =>
         new(
             new Exam.Contracts.Grading.SubmissionGrade(
