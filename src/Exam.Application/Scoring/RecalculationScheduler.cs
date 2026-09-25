@@ -1,66 +1,42 @@
 using Exam.Contracts.Grading;
 using Exam.Domain.Scoring;
-using Exam.Domain.Submissions;
 
 namespace Exam.Application.Scoring;
 
-/// <summary>
-/// 一轮重算调度的结果。供考务端显示进度（还有多少答卷未对齐）与阻断原因，
-/// 并作为发布门里 RecalculationReady 的依据。
-/// </summary>
-public sealed record RecalculationRun(
-    string ExamId,
-    long TargetVersion,
-    int SubmissionCount,
-    int Enqueued,
-    RegradePlan Plan,
-    GradingReadiness Readiness);
+/// <summary>单次范围快照和入队统计，不是可跨请求缓存使用的报表发布授权。</summary>
+public sealed record RecalculationRun(string ExamId, long TargetVersion, int SubmissionCount, int Enqueued,
+    RegradePlan Plan, GradingReadiness Readiness);
 
 /// <summary>
-/// 规则更新后的重算调度：读取范围 → 按答卷与规则版本判定需要重算的答卷 → 按**目标版本**入队，
-/// 由后台计分协调器实际执行；本类型只排队与判定，不做计分、不写结果。
-///
-/// 依据 requirements.md：「修改参考答案或计分标准须校验并建立新版本，对全部已收卷答卷重算，
-/// 后续补收也使用该版本」、「重算期间旧表格失效并暂停查看、导出，完成后统一更新」。
-///
-/// 幂等：入队走既有 outbox 的「按（答卷，规则版本）去重」，因此反复调度不会产生重复任务，
-/// 也不会重复计分；已对齐目标版本的答卷根本不会被入队。
+/// A06 发布新规则后，用当前已发布版本规划全部最终答卷并交给重算专用队列。
+/// 实际计分由 D04 协调器执行。重复范围、过期目标不执行任何调度写入。
+/// 生产调用方仍须经过主备写门；报表查看/导出必须重新核对当前版本和收卷集合，
+/// 不能把本快照当成 A06 规则发布前置门，否则首次发布/重算会形成循环依赖。
 /// </summary>
-public sealed class RecalculationScheduler
+public sealed class RecalculationScheduler(IGradingScope scope, IRecalculationQueue queue)
 {
-    private readonly IGradingScope _scope;
-    private readonly IGradingTaskQueue _queue;
+    private readonly IGradingScope _scope = scope ?? throw new ArgumentNullException(nameof(scope));
+    private readonly IRecalculationQueue _queue = queue ?? throw new ArgumentNullException(nameof(queue));
 
-    public RecalculationScheduler(IGradingScope scope, IGradingTaskQueue queue)
-    {
-        _scope = scope ?? throw new ArgumentNullException(nameof(scope));
-        _queue = queue ?? throw new ArgumentNullException(nameof(queue));
-    }
-
-    public async ValueTask<RecalculationRun> RunOnceAsync(
-        string examId,
-        long targetVersion,
+    public async ValueTask<RecalculationRun> RunOnceAsync(string examId, long targetVersion,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         ArgumentOutOfRangeException.ThrowIfLessThan(targetVersion, 1);
-
+        cancellationToken.ThrowIfCancellationRequested();
         var states = await _scope.ListStatesAsync(examId, cancellationToken);
         var plan = RegradePlanner.Plan(targetVersion, states);
+        var readiness = RegradePlanner.EvaluateReadiness(plan);
+        if (plan.DuplicateSubmissionIds.Count > 0 || plan.Pending.Any(item => item.Reason == RegradeReason.VersionAhead))
+            return new(examId, targetVersion, plan.TotalCount, 0, plan, readiness);
 
         var enqueued = 0;
         foreach (var item in plan.Pending)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            // 入队使用**目标版本**：补交与旧版本答卷都按最新规则计分（需求：补收也使用该版本）。
-            if (await _queue.EnqueueOnceAsync(item.SubmissionId, targetVersion, cancellationToken))
-            {
-                enqueued++;
-            }
+            if (await _queue.EnsureQueuedAsync(examId, item.SubmissionId, targetVersion, cancellationToken)) enqueued++;
         }
-
-        var readiness = RegradePlanner.EvaluateReadiness(targetVersion, states);
-        return new RecalculationRun(examId, targetVersion, states.Count, enqueued, plan, readiness);
+        // 入队完成不代表计分完成；就绪结果仍表示本次读取的同一范围快照。
+        return new(examId, targetVersion, plan.TotalCount, enqueued, plan, readiness);
     }
 }

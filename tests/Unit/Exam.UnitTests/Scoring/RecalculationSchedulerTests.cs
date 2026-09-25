@@ -1,6 +1,6 @@
 using Exam.Application.Scoring;
 using Exam.Contracts.Grading;
-using Exam.Domain.Submissions;
+using Exam.Domain.Scoring;
 
 namespace Exam.UnitTests.Scoring;
 
@@ -8,7 +8,7 @@ namespace Exam.UnitTests.Scoring;
 /// 重算调度的用例。依据 requirements.md：规则更新后对全部已收卷答卷重算、补收也使用该版本、
 /// 同表不得混用版本。用内存范围 + 记录型队列驱动，不需要 PostgreSQL。
 /// </summary>
-public sealed class RecalculationSchedulerTests
+public sealed partial class RecalculationSchedulerTests
 {
     private const string ExamId = "recalc-exam";
 
@@ -109,7 +109,7 @@ public sealed class RecalculationSchedulerTests
 
         Assert.False(run.Readiness.RecalculationReady);
         Assert.Contains(run.Readiness.Blockers, text => text.Contains("重复的答卷记录", StringComparison.Ordinal));
-        Assert.Single(queue.Enqueued);
+        Assert.Empty(queue.Enqueued);
     }
 
     [Fact]
@@ -146,13 +146,14 @@ public sealed class RecalculationSchedulerTests
     }
 
     /// <summary>记录入队的假队列：与生产 outbox 一样按（答卷，规则版本）去重。</summary>
-    private sealed class RecordingGradingQueue : IGradingTaskQueue
+    private sealed class RecordingGradingQueue : IRecalculationQueue
     {
         private readonly List<(string SubmissionId, long GradingVersion)> _enqueued = [];
 
         public IReadOnlyList<(string SubmissionId, long GradingVersion)> Enqueued => _enqueued;
 
-        public ValueTask<bool> EnqueueOnceAsync(
+        public ValueTask<bool> EnsureQueuedAsync(
+            string examId,
             string submissionId,
             long gradingVersion,
             CancellationToken cancellationToken = default)

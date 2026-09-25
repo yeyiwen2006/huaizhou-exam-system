@@ -54,15 +54,15 @@ public sealed class RegradePlannerTests
     }
 
     [Fact]
-    public void Plan_GradedVersionNewerThanTarget_IsRegradedAsWell()
+    public void Plan_GradedVersionNewerThanTarget_IsBlockedWithoutDowngrade()
     {
-        // 规则回退时，表里可能留着更新版本的分数：这也属于混用版本，必须按目标版本重算。
+        // A06 版本只递增；旧内容也必须发布为新版本，已有更高版本成绩时禁止降版。
         var plan = RegradePlanner.Plan(
             targetVersion: 2,
             [new SubmissionGradingState("submission-newer", 4)]);
 
         var item = Assert.Single(plan.Pending);
-        Assert.Equal(RegradeReason.StaleVersion, item.Reason);
+        Assert.Equal(RegradeReason.VersionAhead, item.Reason);
         Assert.Empty(plan.UpToDate);
     }
 

@@ -13,7 +13,7 @@ public interface IGradingScope
 {
     /// <summary>
     /// 列出该考试全部最终答卷的计分状态：从未计分的 GradedVersion 为 null，
-    /// 计分失败过的标记 GradingFailed。
+    /// 仅未被实际结果版本取代的失败标记 GradingFailed；outbox 目标版本不等于成绩版本。
     /// </summary>
     ValueTask<IReadOnlyList<SubmissionGradingState>> ListStatesAsync(
         string examId,

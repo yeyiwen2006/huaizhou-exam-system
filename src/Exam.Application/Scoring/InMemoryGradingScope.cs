@@ -26,11 +26,12 @@ public sealed class InMemoryGradingScope : IGradingScope
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        cancellationToken.ThrowIfCancellationRequested();
 
         lock (_gate)
         {
             IReadOnlyList<SubmissionGradingState> states =
-                _scopes.TryGetValue(examId, out var stored) ? stored.ToList() : [];
+                _scopes.TryGetValue(examId, out var stored) ? Array.AsReadOnly(stored.ToArray()) : [];
             return ValueTask.FromResult(states);
         }
     }

@@ -12,7 +12,7 @@ namespace Exam.IntegrationTests.Scoring;
 /// </summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresGradingScopeTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresGradingScopeTests(PostgresDatabaseFixture fixture)
 {
     private const string ExamId = "pg-scope-exam";
     private const string OtherExamId = "pg-scope-other-exam";
@@ -47,7 +47,7 @@ public sealed class PostgresGradingScopeTests(PostgresDatabaseFixture fixture)
         var scope = new PostgresGradingScope(fixture.DataSource);
         var scheduler = new RecalculationScheduler(
             scope,
-            new PostgresGradingTaskQueue(fixture.DataSource));
+            new PostgresRecalculationQueue(fixture.DataSource));
 
         var run = await scheduler.RunOnceAsync(ExamId, 3);
 
@@ -72,7 +72,7 @@ public sealed class PostgresGradingScopeTests(PostgresDatabaseFixture fixture)
         Assert.Equal(0, second.Enqueued);
     }
 
-    /// <summary>合成数据：三份本场答卷（已按版本 2 计分 / 从未计分 / 计分失败）与一份他场答卷。</summary>
+    /// <summary>合成数据：四份本场答卷（已按版本 2 计分 / 从未计分 / 计分失败）与一份他场答卷。</summary>
     private async Task SeedAsync()
     {
         await using var command = fixture.DataSource.CreateCommand(
@@ -148,5 +148,8 @@ public sealed class PostgresGradingScopeTests(PostgresDatabaseFixture fixture)
                     TIMESTAMPTZ '2026-09-25 02:33:05+00');
             """);
         await command.ExecuteNonQueryAsync();
+        // 完成标记不是成绩：范围判定必须有 D04 的真实持久化结果。
+        await SaveScopeGradeAsync("pg-scope-current", "pg-candidate-current", 2);
+        await SaveScopeGradeAsync("pg-scope-superseded", "pg-candidate-superseded", 3);
     }
 }
