@@ -326,6 +326,23 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <TabItem Header="C06 报表与导出">
+                <Border Style="{StaticResource Card}" Margin="14">
+                    <StackPanel>
+                        <TextBlock Text="报表与导出依赖状态" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                        <TextBlock Text="仅显示真实未就绪状态；服务管理与主备入口不属于 C06。"
+                                   Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                        <DataGrid ItemsSource="{Binding Dependencies.Items}" Height="180" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="模块" Binding="{Binding Module}" Width="190"/>
+                                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="140"/>
+                                <DataGridTextColumn Header="原因与边界" Binding="{Binding Reason}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </Border>
+            </TabItem>
         </TabControl>
     </DockPanel>
 </Window>
