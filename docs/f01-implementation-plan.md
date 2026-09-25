@@ -104,3 +104,9 @@ Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 P
 ## PR #54 审查修正记录
 
 本 PR 已接续 main 合并 #53 后的共享接口。A 的本轮审查补充实际宿主状态门禁、持久配置启动核对、取消与探针校验、备份/恢复请求内容绑定、配置文件完整性及 SQLite/WPF CI 回归修正。实跑命令、结果、复现过程和原生 SCM 未验收范围见 [PR #54 审查记录](reviews/pr54-f01-ci-review.md)。这是阶段代码交付，#7 的独立管理宿主、业务就绪和恢复运行闭环仍保持未完成，不以本 PR 合并代替验收。
+
+## 节点证书启动检查（2026-09-25）
+
+从 `origin/main@d79df4e` 继续 F01。新增 `NodeCertificateStartupReadinessProbe`：按部署时固定的指纹从指定证书存储读取节点证书，核对唯一性、有效期、RSA 私钥访问权限，并用与题包解锁相同的 OAEP-SHA256 加解密操作验证。缺失、无效或不可用时返回阻断写入的检查项；检查消息不包含私钥、指纹或底层异常。此探针是可供独立管理宿主组合的基础设施能力，目前还未注册到生产宿主，不能将其测试通过视为完整启动自检通过。
+
+macOS Arm64、.NET 10.0.401：单元项目 `dotnet restore --locked-mode` 成功；`TMPDIR=/private/tmp/ dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --configuration Release --filter 'FullyQualifiedName~ServiceManagement' --no-restore -m:1 -nr:false` 在沙箱外运行，68/68 通过，0 警告、0 错误。首次沙箱内尝试因 MSBuild 创建本机管道遭拒而未执行测试。全解决方案 `dotnet restore Huaizhou.ExamSystem.sln --locked-mode -m:1 -nr:false` 在沙箱外因 macOS 不支持现有 Windows/WPF 目标（`NETSDK1100`）失败，故没有继续执行全解决方案的 build/test；仓库已有的昨日 Windows 结果见上文及 PR #54 审查记录，不把它记作本批重跑。使用合成自签名证书覆盖可解密、缺私钥、过期、缺失及存储访问错误；尚未在 Windows 服务账户的 LocalMachine 证书存储实测，也未验证独立宿主停机可用、隔离恢复和继续收卷。
