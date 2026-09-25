@@ -101,6 +101,12 @@ Windows 10.0.26200、x64，SDK 10.0.401：锁定模式还原已在正常用户 P
 
 真实 Windows 服务启停、管理宿主停机可用性及隔离恢复后的继续收卷仍未验收。仓库不包含本机日志、配置秘密或运行数据。
 
+## 备份工具错误输出保护（2026-09-25，独立分支）
+
+从最新 `origin/main@d79df4e` 建立 `codex/f01-backup-error-redaction`。`pg_basebackup` 和 `pg_verifybackup` 失败时，异常仅返回操作名称和退出码，不再传递外部工具的标准错误输出；备份失败仍不写完成清单，校验失败仍不写隔离恢复完成标记。外部工具输出可能含部署路径或连接材料，本分支不新增日志存储或公共契约。
+
+合成错误输出测试修正前 2/2 失败，异常含模拟敏感字符串；修正后 macOS Arm64、.NET 10.0.401，单元项目锁定模式还原成功，F01 模块测试 `TMPDIR=/private/tmp/ dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --configuration Release --filter 'FullyQualifiedName~ServiceManagement' --no-restore -m:1 -nr:false` 为 66/66 通过、0 警告、0 错误。完整解决方案锁定还原在 macOS 因 WPF/Windows 目标返回 `NETSDK1100`，因此未执行完整解决方案 build/test；本分支的 Windows 构建、服务账户和真实 PostgreSQL 错误路径仍待验证。历史 Windows 测试结果不作本分支实测。
+
 ## PR #54 审查修正记录
 
 本 PR 已接续 main 合并 #53 后的共享接口。A 的本轮审查补充实际宿主状态门禁、持久配置启动核对、取消与探针校验、备份/恢复请求内容绑定、配置文件完整性及 SQLite/WPF CI 回归修正。实跑命令、结果、复现过程和原生 SCM 未验收范围见 [PR #54 审查记录](reviews/pr54-f01-ci-review.md)。这是阶段代码交付，#7 的独立管理宿主、业务就绪和恢复运行闭环仍保持未完成，不以本 PR 合并代替验收。

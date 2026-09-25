@@ -44,6 +44,47 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
             default));
     }
 
+    [Theory]
+    [InlineData("pg_basebackup.exe")]
+    [InlineData("pg_verifybackup.exe")]
+    public async Task FailedPostgresTool_DoesNotExposeCapturedOutput(string failedTool)
+    {
+        const string secret = "synthetic-secret-do-not-report";
+        var backupRoot = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic protected material");
+        var runner = new FakePostgresTools
+        {
+            FailedTool = failedTool,
+            FailureOutput = secret
+        };
+        var service = CreateService(backupRoot, resources, protectedConfig,
+            Path.Combine(_root, "staging"), runner);
+        var destination = Path.Combine(backupRoot, "backup-1");
+
+        var exception = await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            var backup = await service.CreateAsync(
+                new BackupRequest("backup-request", destination, "operator"), default);
+            await service.RestoreAsync(
+                new RestoreRequest("restore-request", backup.BackupId, destination, "operator"), default);
+        });
+
+        Assert.DoesNotContain(secret, exception.ToString(), StringComparison.Ordinal);
+        Assert.Contains("退出码 17", exception.Message, StringComparison.Ordinal);
+        if (failedTool == "pg_basebackup.exe")
+        {
+            Assert.False(File.Exists(Path.Combine(destination, "exam-backup.json")));
+        }
+        else
+        {
+            Assert.Empty(Directory.EnumerateFiles(Path.Combine(_root, "staging"),
+                "restore-verified.json", SearchOption.AllDirectories));
+        }
+    }
+
     [Fact]
     public async Task Backup_RejectsDestinationOutsideConfiguredRoot()
     {
@@ -141,6 +182,8 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
     private sealed class FakePostgresTools : IExternalProcessRunner
     {
         public List<string> Calls { get; } = [];
+        public string? FailedTool { get; init; }
+        public string FailureOutput { get; init; } = string.Empty;
 
         public Task<ExternalProcessResult> RunAsync(
             string executable,
@@ -152,6 +195,10 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
             ExternalProcessLimits? limits = null)
         {
             Calls.Add(Path.GetFileName(executable));
+            if (Path.GetFileName(executable).Equals(FailedTool, StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new ExternalProcessResult(17, FailureOutput, FailureOutput));
+            }
             if (Path.GetFileName(executable).Equals("pg_basebackup.exe", StringComparison.OrdinalIgnoreCase))
             {
                 var target = arguments[1];

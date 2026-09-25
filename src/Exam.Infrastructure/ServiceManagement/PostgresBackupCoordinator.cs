@@ -671,10 +671,8 @@ public sealed class PostgresBackupCoordinator(
             return;
         }
 
-        var error = string.IsNullOrWhiteSpace(result.StandardError)
-            ? "外部工具未提供错误信息。"
-            : result.StandardError.Trim();
-        throw new IOException($"{operation}失败：{error}");
+        // 工具输出可能包含连接信息或受保护路径，不进入异常和上层日志。
+        throw new IOException($"{operation}失败（退出码 {result.ExitCode}）。请检查 PostgreSQL 工具和部署环境。");
     }
 
     private static BackupResult ToResult(string destination, BackupManifest manifest) =>
