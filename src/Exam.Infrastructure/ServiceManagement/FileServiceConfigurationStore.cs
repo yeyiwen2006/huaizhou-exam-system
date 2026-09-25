@@ -62,7 +62,8 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
 
         Validate(requested);
         CheckPath();
-        await using var guard = await AcquireLockAsync(cancellationToken);
+        var elapsed = Stopwatch.StartNew();
+        await using var guard = await AcquireLockAsync(elapsed, cancellationToken);
         var current = await ReadAsync(cancellationToken);
         if ((current?.Version ?? 0) != expectedVersion)
         {
@@ -94,7 +95,22 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
 
             cancellationToken.ThrowIfCancellationRequested();
             CheckPath();
-            File.Move(temporary, _path, overwrite: true);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                CheckPath();
+                try
+                {
+                    File.Move(temporary, _path, overwrite: true);
+                    break;
+                }
+                catch (Exception error) when (
+                    (error is IOException or UnauthorizedAccessException) && elapsed.Elapsed < LockTimeout)
+                {
+                    // Windows 读者/扫描器可能短暂阻止原子替换；只重试完整替换，不删除或原地改写目标。
+                    await Task.Delay(20, cancellationToken);
+                }
+            }
             return next;
         }
         finally
@@ -153,10 +169,9 @@ public sealed class FileServiceConfigurationStore : IServiceConfigurationStore
         }
     }
 
-    private async Task<FileStream> AcquireLockAsync(CancellationToken cancellationToken)
+    private async Task<FileStream> AcquireLockAsync(Stopwatch elapsed, CancellationToken cancellationToken)
     {
         var lockPath = _path + ".lock";
-        var elapsed = Stopwatch.StartNew();
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
