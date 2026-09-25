@@ -78,6 +78,10 @@ public sealed class WpfBindingSmokeTests
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名草稿") && button.Command is not null);
                     if ((string)tab.Header == "C04 监控与处置")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
+                    if ((string)tab.Header == "C05 清单静态预检")
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "选择 manifest.json 并静态预检") &&
+                            ReferenceEquals(button.Command, viewModel.ManifestPreflight.SelectManifestCommand));
                 }
                 listener.Flush();
                 Assert.Equal(string.Empty, output.ToString());
