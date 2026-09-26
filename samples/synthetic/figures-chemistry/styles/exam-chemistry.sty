@@ -7,9 +7,16 @@
 \RequirePackage{graphicx}
 \RequirePackage{mhchem}
 \RequirePackage{hyperref}
+\hypersetup{hidelinks}
 
-% \optmark{题目标识}{选项标识}：在选项字母处建立零尺寸命名目标，不改变外观与占位。
-\DeclareRobustCommand{\optmark}[2]{\hypertarget{opt:#1:#2}{}}
+% \optmark{题目标识}{选项标识}{选项显示文本}
+% 在选项显示文本外建立隐藏外观链接（hidelinks，/Border [0 0 0]）；不改变外观与占位。
+% 目标名固定为 opt:<题目标识>:<选项标识>，只含题目与选项标识，不含答案或分值等计分信息。
+% D03 用 PdfPig 读取该链接标注的 /Rect，转成页面左上角归一化坐标
+% （anchorScheme=pageTopLeftNormalizedV1），随 paperVersion 作为版本产物发布；
+% B03 据此在选项字母处叠加圆形选择控件，圆钮第 i 个对应 options[i]。
+% 契约见 docs/d03-option-region-contract.md。
+\DeclareRobustCommand{\optmark}[3]{\hypertarget{opt:#1:#2}{}\hyperlink{opt:#1:#2}{#3}}
 
 % 合成自定义命令，模拟真实试卷中的专用宏与单位宏。
 % \syntheticamount 在文本与数学模式下都可用，故用 \ensuremath。
