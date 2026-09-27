@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Exam.Admin;
 using Exam.Admin.ViewModels;
@@ -78,6 +79,34 @@ public sealed class WpfBindingSmokeTests
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名草稿") && button.Command is not null);
                     if ((string)tab.Header == "C04 监控与处置")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
+                    if ((string)tab.Header == "C05 清单静态预检")
+                    {
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "选择 manifest.json 并静态预检") &&
+                            ReferenceEquals(button.Command, viewModel.ManifestPreflight.SelectManifestCommand));
+                        var screenshotPath = Environment.GetEnvironmentVariable("EXAM_C05_SCREENSHOT_PATH");
+                        if (!string.IsNullOrWhiteSpace(screenshotPath))
+                        {
+                            var root = new DirectoryInfo(AppContext.BaseDirectory);
+                            while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "samples", "synthetic")))
+                                root = root.Parent;
+                            Assert.NotNull(root);
+                            viewModel.ManifestPreflight.ExamId = "synthetic-minimal";
+                            viewModel.ManifestPreflight.ValidateManifestJson(File.ReadAllText(
+                                Path.Combine(root.FullName, "samples", "synthetic", "minimal", "manifest.json")));
+                            window.Width = 1200;
+                            window.Height = 900;
+                            window.UpdateLayout();
+                            var bitmap = new RenderTargetBitmap(
+                                (int)Math.Ceiling(window.ActualWidth), (int)Math.Ceiling(window.ActualHeight),
+                                96, 96, PixelFormats.Pbgra32);
+                            bitmap.Render(window);
+                            var encoder = new PngBitmapEncoder();
+                            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                            using var file = File.Create(screenshotPath);
+                            encoder.Save(file);
+                        }
+                    }
                 }
                 listener.Flush();
                 Assert.Equal(string.Empty, output.ToString());
