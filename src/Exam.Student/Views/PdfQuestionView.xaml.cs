@@ -80,13 +80,18 @@ public partial class PdfQuestionView : UserControl
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (generation == _loadGeneration) ClearCore();
             throw;
         }
         catch (Exception)
         {
             rendered = [];
         }
-        cancellationToken.ThrowIfCancellationRequested();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if (generation == _loadGeneration) ClearCore();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (generation != _loadGeneration) { return; }
         if (rendered.Length == 0)
         {

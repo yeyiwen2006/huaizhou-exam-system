@@ -34,6 +34,9 @@ public partial class ExamInProgressPage : UserControl
     private string? _regionError;
     private string? _currentQuestionId;
     private int _renderGeneration;
+    private int _workbenchGeneration;
+    private bool _rendering;
+    private bool _started;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
@@ -79,7 +82,7 @@ public partial class ExamInProgressPage : UserControl
         InitializeComponent();
         DataContext = App.Services.Session;
 
-        _sync = new SubmissionSyncService(App.Services.Api, runtime, device);
+        _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock);
         _sync.StatusChanged += OnSyncStatusChanged;
 
         QuestionView.OptionClicked += OnOptionClicked;
@@ -92,8 +95,13 @@ public partial class ExamInProgressPage : UserControl
         UpdateClock();
         RefreshStatus();
         _runtime.StateChanged += OnRuntimeStateChanged;
-        _ = RunSyncAsync();
-        _ = InitializeWorkbenchAsync();
+        Loaded += (_, _) =>
+        {
+            if (_started || _lifetime.IsCancellationRequested) return;
+            _started = true;
+            _ = RunSyncAsync();
+            _ = InitializeWorkbenchAsync();
+        };
         Unloaded += async (_, _) =>
         {
             _clock?.Stop();
@@ -103,7 +111,7 @@ public partial class ExamInProgressPage : UserControl
             QuestionView.OptionClicked -= OnOptionClicked;
             QuestionView.AbstainClicked -= OnAbstainClicked;
             QuestionView.RegionsInvalid -= OnRegionsInvalid;
-            QuestionView.ClearContent();
+            InvalidateWorkbench();
             try { await _sync.DisposeAsync(); }
             catch (Exception) { /* 页面卸载时的清理失败不影响已保存状态 */ }
         };
@@ -116,9 +124,18 @@ public partial class ExamInProgressPage : UserControl
             await _sync.RunAsync(_lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is InvalidOperationException or System.IO.IOException or
+            System.Text.Json.JsonException or ArgumentException)
+        {
+            SyncStatusText.Text = "同步服务已停止，原答卷保留，请联系考务人员恢复后重试。";
+        }
     }
 
     private bool CanAnswer =>
+        !_lifetime.IsCancellationRequested && !_submitting && !_rendering &&
+        _sync.Phase is not (SubmissionSyncPhase.Blocked or SubmissionSyncPhase.Confirmed) &&
+        _runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked &&
+        ReferenceEquals(_loadedPaper, _runtime.Paper) && QuestionView.HasQuestion &&
         _navigator is not null &&
         _regionMap is not null &&
         _regionError is null &&
@@ -146,80 +163,96 @@ public partial class ExamInProgressPage : UserControl
     /// <summary>试题解锁或版本切换后（重）建导航与坐标；同一份清单只初始化一次。</summary>
     private async Task EnsureWorkbenchAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var paper = _runtime.Paper;
         if (paper is null)
         {
-            QuestionView.ClearContent();
+            InvalidateWorkbench();
             RefreshNav();
             RefreshStatus();
             return;
         }
-        if (ReferenceEquals(paper, _loadedPaper) && _navigator is not null) { return; }
-
-        var payload = _runtime.Manager.UnlockedPayload;
-        if (payload is null)
-        {
-            RefreshStatus();
-            return;
-        }
-
+        if (ReferenceEquals(paper, _loadedPaper) && _navigator is not null) return;
+        InvalidateWorkbench();
+        var generation = _workbenchGeneration;
         _loadedPaper = paper;
         _navigator = new PaperNavigator(paper);
-        _regionMap = null;
-        _regionError = null;
+        var payload = _runtime.Manager.UnlockedPayload;
+        if (payload is null) { InvalidateWorkbench(); RefreshStatus(); return; }
+        OptionRegionMap? regions = null;
+        string? error = null;
         try
         {
-            // 严格按 D03 契约校验；文件缺失返回 null（v1 包无坐标），内容无效抛异常 → 整包失败。
-            _regionMap = await Task.Run(() => OptionRegionMap.TryReadFromPackage(payload, paper), ct);
+            regions = await Task.Run(() => OptionRegionMap.TryReadFromPackage(payload, paper), ct);
         }
-        catch (InvalidDataException error)
+        catch (Exception failure) when (IsWorkbenchError(failure))
         {
-            _regionError = $"选项坐标校验失败：{error.Message} 已停止坐标作答，请联系考务人员。";
+            error = "选项坐标未通过完整校验，已停止坐标作答，请联系考务人员。";
         }
-
+        if (ct.IsCancellationRequested || generation != _workbenchGeneration || !ReferenceEquals(paper, _runtime.Paper) ||
+            !ReferenceEquals(payload, _runtime.Manager.UnlockedPayload)) return;
+        _regionMap = regions;
+        _regionError = error;
         var restored = _runtime.Answers?.CurrentQuestionId;
         _currentQuestionId = _navigator.Find(restored ?? string.Empty) is not null
-            ? restored
-            : _navigator.FirstQuestion().QuestionId;
+            ? restored : _navigator.FirstQuestion().QuestionId;
         await RenderCurrentQuestionAsync(ct);
-        RefreshNav();
-        RefreshStatus();
+    }
+
+    private void InvalidateWorkbench()
+    {
+        _workbenchGeneration++;
+        _renderGeneration++;
+        _loadedPaper = null;
+        _navigator = null;
+        _regionMap = null;
+        _regionError = null;
+        _currentQuestionId = null;
+        _rendering = false;
+        QuestionView.ClearContent();
     }
 
     private async Task RenderCurrentQuestionAsync(CancellationToken ct)
     {
-        if (_navigator is null || _currentQuestionId is null) { return; }
+        if (_navigator is null || _currentQuestionId is null || _lifetime.IsCancellationRequested) return;
         var generation = ++_renderGeneration;
-        var question = _navigator.Find(_currentQuestionId) ??
-            throw new InvalidOperationException("当前题不在学生清单内。");
-
-        var pdf = _runtime.ReadQuestionPdf(question.QuestionId);
+        var paper = _loadedPaper;
+        var question = _navigator.Find(_currentQuestionId) ?? throw new InvalidOperationException("当前题不在学生清单内。");
+        _rendering = true;
+        RefreshStatus();
+        byte[]? pdf = null;
         try
         {
-            var regions = _regionMap?.ForQuestion(question.QuestionId);
-            await QuestionView.LoadAsync(question.QuestionId, pdf, regions,
-                interactionEnabled: CanAnswer, allowAbstain: question.AllowAbstain, ct);
+            pdf = _runtime.ReadQuestionPdf(question.QuestionId);
+            await QuestionView.LoadAsync(question.QuestionId, pdf, _regionMap?.ForQuestion(question.QuestionId),
+                interactionEnabled: false, allowAbstain: question.AllowAbstain, ct);
+            if (ct.IsCancellationRequested || generation != _renderGeneration || !ReferenceEquals(paper, _runtime.Paper) ||
+                question.QuestionId != _currentQuestionId) return;
+            if (_runtime.Answers is { } answers)
+            {
+                QuestionView.UpdateAnswer(answers.Answers.TryGetValue(question.QuestionId, out var value)
+                    ? value : AnswerValue.Empty());
+                if (_regionMap is not null && _regionError is null && answers.Status == AnswerSessionStatus.Active &&
+                    !_runtime.HasFixedSubmission && answers.CurrentQuestionId != question.QuestionId)
+                    await answers.SetCurrentQuestionAsync(question.QuestionId, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception error) when (IsWorkbenchError(error))
+        {
+            if (generation == _renderGeneration && ReferenceEquals(paper, _runtime.Paper))
+                _regionError = "题目加载或导航保存失败，原答卷已保留，请恢复后重试。";
         }
         finally
         {
-            // 明文 PDF 副本用完即清零，不留在托管内存。
-            Array.Clear(pdf);
-        }
-        if (generation != _renderGeneration) { return; }
-
-        if (_runtime.Answers is { } answers)
-        {
-            var answer = answers.Answers.TryGetValue(question.QuestionId, out var value)
-                ? value
-                : AnswerValue.Empty();
-            QuestionView.UpdateAnswer(answer);
-            if (CanAnswer && answers.CurrentQuestionId != question.QuestionId)
+            if (pdf is not null) Array.Clear(pdf);
+            if (generation == _renderGeneration)
             {
-                await answers.SetCurrentQuestionAsync(question.QuestionId, ct);
+                _rendering = false;
+                RefreshNav();
+                RefreshStatus();
             }
         }
-        RefreshNav();
-        RefreshStatus();
     }
 
     private async void OnOptionClicked(string optionId) => await ApplyAnswerAsync(
@@ -238,6 +271,8 @@ public partial class ExamInProgressPage : UserControl
             return;
         }
         _answerBusy = true;
+        var generation = _renderGeneration;
+        RefreshStatus();
         try
         {
             var current = answers.Answers.TryGetValue(question.QuestionId, out var value)
@@ -245,6 +280,8 @@ public partial class ExamInProgressPage : UserControl
                 : AnswerValue.Empty();
             var updated = next(question, current);
             var result = await answers.SetAnswerAsync(question.QuestionId, updated, _lifetime.Token);
+            if (_lifetime.IsCancellationRequested || generation != _renderGeneration ||
+                question.QuestionId != _currentQuestionId || !ReferenceEquals(answers, _runtime.Answers)) return;
             if (!result.Succeeded)
             {
                 // 写入失败时保持会话原状态展示；AnswerSession 已阻止内存快照覆盖可靠状态。
@@ -267,6 +304,8 @@ public partial class ExamInProgressPage : UserControl
         finally
         {
             _answerBusy = false;
+            RefreshNav();
+            RefreshStatus();
         }
     }
 
@@ -280,7 +319,8 @@ public partial class ExamInProgressPage : UserControl
 
     private async void OnNavBoxClick(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { Tag: string questionId } &&
+        if (!_answerBusy && !_rendering && !_submitting && !_lifetime.IsCancellationRequested &&
+            sender is FrameworkElement { Tag: string questionId } &&
             !string.Equals(questionId, _currentQuestionId, StringComparison.Ordinal) &&
             _navigator?.Find(questionId) is not null)
         {
@@ -305,6 +345,7 @@ public partial class ExamInProgressPage : UserControl
             return;
         }
         _answerBusy = true;
+        RefreshStatus();
         try
         {
             await answers.ToggleMarkAsync(_currentQuestionId, _lifetime.Token);
@@ -322,6 +363,8 @@ public partial class ExamInProgressPage : UserControl
     private void OnRuntimeStateChanged(object? sender, EventArgs e)
     {
         if (_lifetime.IsCancellationRequested) { return; }
+        RefreshStatus();
+        RefreshNav();
         _ = InitializeWorkbenchAsync();
     }
 
@@ -344,11 +387,11 @@ public partial class ExamInProgressPage : UserControl
 
     private async void OnSubmit(object sender, RoutedEventArgs e)
     {
-        if (_submitting || _runtime.HasFixedSubmission)
+        if (_submitting || _answerBusy || _rendering || _lifetime.IsCancellationRequested || _runtime.HasFixedSubmission)
         {
             return;
         }
-        if (_runtime.Answers is not { Status: AnswerSessionStatus.Active })
+        if (_runtime.Answers is not { Status: AnswerSessionStatus.Active } answers)
         {
             PaperBanner.Level = StatusLevel.Warning;
             PaperBanner.Message = "当前答卷尚未就绪或已被冻结，不能发起新的交卷。";
@@ -358,22 +401,26 @@ public partial class ExamInProgressPage : UserControl
 
         var window = Window.GetWindow(this);
         if (window is null) { return; }
-        var confirmed = await ConfirmDialog.ShowAsync(
-            window,
-            "提前交卷",
-            "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
-            "提前交卷",
-            "继续答题",
-            isDanger: true);
-        if (!confirmed) { return; }
-
         _submitting = true;
-        Busy.IsBusy = true;
         RefreshStatus();
         try
         {
+            var confirmed = await ConfirmDialog.ShowAsync(
+                window,
+                "提前交卷",
+                "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
+                "提前交卷",
+                "继续答题",
+                isDanger: true);
+            if (!confirmed) { return; }
+
+            _lifetime.Token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(answers, _runtime.Answers) || _runtime.HasFixedSubmission ||
+                _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked) return;
+            Busy.IsBusy = true;
+            RefreshStatus();
             // 提前交卷与 END 共用同一固定提交入口；失败时原标识与快照保留，由同步服务自动重试。
-            var fix = await _runtime.Answers.FixSubmissionAsync($"subm-{Guid.NewGuid():N}", _lifetime.Token);
+            var fix = await answers.FixSubmissionAsync($"subm-{Guid.NewGuid():N}", _lifetime.Token);
             if (!fix.Succeeded)
             {
                 PaperBanner.Level = StatusLevel.Danger;
@@ -471,8 +518,13 @@ public partial class ExamInProgressPage : UserControl
             ? "取消标记"
             : "标记本题";
         MarkButton.IsEnabled = CanAnswer && !_answerBusy;
-        Submit.IsEnabled = CanAnswer && !_submitting;
+        Submit.IsEnabled = CanAnswer && !_answerBusy;
+        NavList.IsEnabled = !_answerBusy && !_rendering && !_submitting && !_lifetime.IsCancellationRequested &&
+            _runtime.Paper is not null;
         QuestionView.SetInteractionEnabled(CanAnswer && !_answerBusy);
+        if (!_rendering && question is not null && _runtime.Answers is { } currentAnswers)
+            QuestionView.UpdateAnswer(currentAnswers.Answers.TryGetValue(question.QuestionId, out var saved)
+                ? saved : AnswerValue.Empty());
 
         if (_regionError is not null)
         {
@@ -489,7 +541,7 @@ public partial class ExamInProgressPage : UserControl
             PaperBanner.Level = StatusLevel.Warning;
             PaperBanner.Message = _runtime.Manager.CurrentPhase switch
             {
-                ExamPackageManager.Phase.Ended => "服务器已结束考试。原参试记录继续保留，当前版本尚未提供完整答卷补传功能，请联系考务人员。",
+                ExamPackageManager.Phase.Ended => "服务器已结束考试。原答卷固定后自动补传；尚未取得并保存服务器回执前不视为交卷成功。",
                 ExamPackageManager.Phase.Revoked => "当前设备的答题授权已撤销，已停止访问试题。请联系考务人员。",
                 ExamPackageManager.Phase.Unlocked when _navigator is null => "试题清单尚未就绪，正在按服务器授权准备原版题目显示。",
                 ExamPackageManager.Phase.Unlocked when _regionMap is null => "当前试题包未提供选项坐标，仅原版显示题目内容，不能作答。",

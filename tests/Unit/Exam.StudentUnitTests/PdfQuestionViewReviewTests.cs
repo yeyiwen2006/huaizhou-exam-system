@@ -1,3 +1,4 @@
+using Exam.Contracts.Submissions;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -45,6 +46,27 @@ public sealed class PdfQuestionViewReviewTests
         var color = new byte[4];
         pixels.CopyPixels(new Int32Rect((int)(x * pixels.PixelWidth), (int)(y * pixels.PixelHeight), 1, 1), color, 4, 0);
         Assert.True(color[0] + color[1] + color[2] < 60, "圆心必须命中合成原 PDF 中的黑色标签，不是留白或错误页面坐标。");
+        // InputHitTest 需要真实 PresentationSource；使用屏幕外合成窗口，不创建全局 Application。
+        var window = new Window
+        {
+            Content = view, Width = 900, Height = 700, Left = -10000, Top = -10000,
+            ShowActivated = false, ShowInTaskbar = false, Title = "B03 synthetic review"
+        };
+        try
+        {
+            window.Show();
+            await Dispatcher.Yield(DispatcherPriority.ContextIdle);
+            ((Button)view.FindName("ZoomInButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            view.UpdateLayout();
+            var zoom = Assert.IsType<ScaleTransform>(pages.LayoutTransform);
+            Assert.Equal(zoom.ScaleX, zoom.ScaleY);
+            Assert.InRange(zoom.ScaleX, .4, 3);
+            var point = button.TransformToAncestor(view).Transform(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
+            var hit = view.InputHitTest(point) as DependencyObject;
+            while (hit is not null && hit is not ToggleButton) hit = VisualTreeHelper.GetParent(hit);
+            Assert.Same(button, hit);
+        }
+        finally { window.Content = null; window.Close(); }
         view.ClearContent();
     });
 
@@ -92,6 +114,102 @@ public sealed class PdfQuestionViewReviewTests
         Assert.Empty(((StackPanel)view.FindName("PagesHost")).Children);
     });
 
+    [Fact]
+    [Trait("Category", "Wpf")]
+    public Task B03Review_MissingCoordinatesCannotEnableAbstainEvenAfterAStateRefresh() => OnStaAsync(async () =>
+    {
+        var view = new PdfQuestionView();
+        await view.LoadAsync("synthetic-q", Pdf(0, false), null, true, true);
+        view.SetInteractionEnabled(true);
+        var pages = (StackPanel)view.FindName("PagesHost");
+        Assert.False(Assert.IsType<ToggleButton>(pages.Children[1]).IsEnabled);
+        view.ClearContent();
+    });
+
+    [Fact]
+    [Trait("Category", "Wpf")]
+    public Task B03Review_CancelledRenderLeavesNoQuestionOrPartialControls() => OnStaAsync(async () =>
+    {
+        var view = new PdfQuestionView();
+        using var cancellation = new CancellationTokenSource();
+        var task = view.LoadAsync("synthetic-q", Pdf(0, false), null, false, false, cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        Assert.False(view.HasQuestion);
+        Assert.Empty(((StackPanel)view.FindName("PagesHost")).Children);
+    });
+
+    [Fact]
+    [Trait("Category", "Wpf")]
+    public Task B03Review_CallerMutationDuringRenderCannotChangeTheValidatedAnchorOrClickIdentity() => OnStaAsync(async () =>
+    {
+        var view = new PdfQuestionView();
+        var regions = new Dictionary<string, OptionRegion> { ["A"] = new(0, .2, .2, .1, .1) };
+        var task = view.LoadAsync("synthetic-q", Pdf(0, false), regions, true, false);
+        regions.Clear();
+        regions["untrusted"] = new(99, 0, 0, 1, 1);
+        await task;
+        var host = (Grid)((StackPanel)view.FindName("PagesHost")).Children[0];
+        var overlay = (Canvas)host.Children[1];
+        var button = Assert.IsType<ToggleButton>(Assert.Single(overlay.Children.Cast<UIElement>()));
+        Assert.Equal("A", button.Tag);
+        string? clicked = null;
+        view.OptionClicked += value => clicked = value;
+        button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        Assert.Equal("A", clicked);
+        view.ClearContent();
+    });
+
+    [Theory]
+    [Trait("Category", "Wpf")]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public Task B03Review_MultiPageScrollingAndZoomRetainTheSecondPagesOptionIdentity(int zoomSteps) => OnStaAsync(async () =>
+    {
+        var view = new PdfQuestionView();
+        var (x, y) = Anchor(0, true);
+        await view.LoadAsync("synthetic-multipage", Pdf(0, true, 2), new Dictionary<string, OptionRegion>
+        {
+            ["A"] = new(0, x - .01, y - .01, .02, .02),
+            ["B"] = new(1, x - .01, y - .01, .02, .02)
+        }, true, false);
+        var pages = (StackPanel)view.FindName("PagesHost");
+        Assert.Equal(2, pages.Children.Count);
+        var second = (Grid)pages.Children[1];
+        var button = Assert.IsType<ToggleButton>(Assert.Single(((Canvas)second.Children[1]).Children.Cast<UIElement>()));
+        var window = new Window
+        {
+            Content = view, Width = 600, Height = 300, Left = -10000, Top = -10000,
+            ShowActivated = false, ShowInTaskbar = false, Title = "B03 synthetic multipage review"
+        };
+        try
+        {
+            window.Show();
+            await Dispatcher.Yield(DispatcherPriority.ContextIdle);
+            for (var i = 0; i < zoomSteps; i++)
+                ((Button)view.FindName("ZoomInButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            view.UpdateLayout();
+            button.BringIntoView();
+            await Dispatcher.Yield(DispatcherPriority.ContextIdle);
+            view.UpdateLayout();
+            Assert.True(((ScrollViewer)view.FindName("PdfScroll")).VerticalOffset > 0);
+            var point = button.TransformToAncestor(view).Transform(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
+            var hit = view.InputHitTest(point) as DependencyObject;
+            while (hit is not null && hit is not ToggleButton) hit = VisualTreeHelper.GetParent(hit);
+            Assert.Same(button, hit);
+            string? clicked = null;
+            view.OptionClicked += value => clicked = value;
+            button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Assert.Equal("B", clicked);
+            view.UpdateAnswer(AnswerValue.Selected("B"));
+            Assert.True(button.IsChecked);
+            var firstButton = (ToggleButton)((Canvas)((Grid)pages.Children[0]).Children[1]).Children[0];
+            Assert.False(firstButton.IsChecked);
+        }
+        finally { window.Content = null; window.Close(); view.ClearContent(); }
+    });
+
     private static async Task OnStaAsync(Func<Task> test)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -119,28 +237,31 @@ public sealed class PdfQuestionViewReviewTests
         return rotation switch { 90 => (v, u), 180 => (1 - u, v), 270 => (1 - v, 1 - u), _ => (u, 1 - v) };
     }
 
-    private static byte[] Pdf(int rotation, bool crop)
+    private static byte[] Pdf(int rotation, bool crop, int pageCount = 1)
     {
         const string content = "0 0 0 rg 44 116 12 18 re f\n";
-        var objects = new[]
+        var objects = new List<string>
         {
             "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 300] /Rotate {rotation} " +
-                (crop ? "/CropBox [20 40 140 260] " : "") + "/Resources << >> /Contents 4 0 R >>",
-            $"<< /Length {content.Length} >>\nstream\n{content}endstream"
+            $"<< /Type /Pages /Kids [{string.Join(" ", Enumerable.Range(0, pageCount).Select(i => $"{3 + 2 * i} 0 R"))}] /Count {pageCount} >>"
         };
+        for (var i = 0; i < pageCount; i++)
+        {
+            objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 300] /Rotate {rotation} " +
+                (crop ? "/CropBox [20 40 140 260] " : "") + $"/Resources << >> /Contents {4 + 2 * i} 0 R >>");
+            objects.Add($"<< /Length {content.Length} >>\nstream\n{content}endstream");
+        }
         var builder = new StringBuilder("%PDF-1.4\n");
         var offsets = new List<int> { 0 };
-        for (var i = 0; i < objects.Length; i++)
+        for (var i = 0; i < objects.Count; i++)
         {
             offsets.Add(builder.Length);
             builder.Append($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
         }
         var xref = builder.Length;
-        builder.Append($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
+        builder.Append($"xref\n0 {objects.Count + 1}\n0000000000 65535 f \n");
         foreach (var offset in offsets.Skip(1)) builder.Append($"{offset:D10} 00000 n \n");
-        builder.Append($"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
+        builder.Append($"trailer\n<< /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
         return Encoding.ASCII.GetBytes(builder.ToString());
     }
 }

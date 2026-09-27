@@ -21,7 +21,7 @@ namespace Exam.StudentUnitTests;
 /// 回执丢失后恢复原结果、服务器冲突记录不被覆盖、结束通知后停止上报且本地修改保留、
 /// 只有取得可信回执才进入 Confirmed。
 /// </summary>
-public sealed class SubmissionSyncServiceTests
+public sealed partial class SubmissionSyncServiceTests
 {
     [Fact]
     public async Task ProgressUploadUsesStableRequestIdPerVersion_AndSkipsAlreadySyncedVersion()
@@ -145,7 +145,7 @@ public sealed class SubmissionSyncServiceTests
         var frozen = Assert.IsType<FixedSubmissionRecord>((await answers.FixSubmissionAsync("subm-1")).Record);
 
         fixture.SubmissionApi.SubmitHandler = _ =>
-            new ApiEnvelope<FinalSubmission>("server", "node", 1, "correlation", null,
+            new ApiEnvelope<SubmissionReceipt>("server", "node", 1, "correlation", null,
                 new ApiError(ErrorCodes.AlreadySubmitted, "该参试已有提交。", Retryable: false));
         fixture.SubmissionApi.QueryHandler = () => fixture.SubmissionApi.BuildFinal(frozen);
 
@@ -167,7 +167,7 @@ public sealed class SubmissionSyncServiceTests
         var frozen = Assert.IsType<FixedSubmissionRecord>((await answers.FixSubmissionAsync("subm-1")).Record);
 
         fixture.SubmissionApi.SubmitHandler = _ =>
-            new ApiEnvelope<FinalSubmission>("server", "node", 1, "correlation", null,
+            new ApiEnvelope<SubmissionReceipt>("server", "node", 1, "correlation", null,
                 new ApiError(ErrorCodes.AlreadySubmitted, "该参试已有提交。", Retryable: false));
         var other = frozen with { SubmissionId = "someone-else" };
         fixture.SubmissionApi.QueryHandler = () => fixture.SubmissionApi.BuildFinal(other);
@@ -254,18 +254,36 @@ public sealed class SubmissionSyncServiceTests
 
         public async Task BootstrapRuntimeAsync()
         {
-            Runtime = new StudentExamRuntime(
+            Runtime = NewRuntime();
+            Assert.True(await Runtime.Manager.PrepareAndDownloadAsync());
+            Assert.True((await Runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+            Assert.True(await Runtime.Manager.HandleCommandAsync(Api.Start()));
+            await Runtime.SynchronizeLocalAnswersAsync();
+            Assert.Equal(AnswerSessionStatus.Active, Runtime.Answers?.Status);
+        }
+
+        private StudentExamRuntime NewRuntime()
+        {
+            return new StudentExamRuntime(
                 new ExamPackageManager(Api, Path.Combine(_root, "packages"), Device,
                     new("session", "device",
                         new("login-candidate", "合成考生", "01", "001"), ["exam"], DateTimeOffset.UtcNow,
                         new Dictionary<string, string> { ["exam"] = "exam-candidate" }),
                     "exam"),
                 Device, Store, Key.CandidateId);
-            Assert.True(await Runtime.Manager.PrepareAndDownloadAsync());
-            Assert.True((await Runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
-            Assert.True(await Runtime.Manager.HandleCommandAsync(Api.Start()));
-            await Runtime.SynchronizeLocalAnswersAsync();
-            Assert.Equal(AnswerSessionStatus.Active, Runtime.Answers?.Status);
+        }
+
+        public string DatabasePath => Path.Combine(_root, "state.db");
+
+        public async Task RestartForRecoveryAsync(bool resumeAnswering = false)
+        {
+            await Runtime.DisposeAsync();
+            if (resumeAnswering) await BootstrapRuntimeAsync();
+            else
+            {
+                Runtime = NewRuntime();
+                Assert.True(await Runtime.InitializeLocalRecoveryAsync());
+            }
         }
 
         public SubmissionSyncService CreateSync() => new(SubmissionApi, Runtime, Device);
@@ -289,9 +307,11 @@ public sealed class SubmissionSyncServiceTests
         public List<SubmitFinalAnswersRequest> FinalRequests { get; } = new();
         public List<string> QueryCalls { get; } = new();
 
+        public Func<CancellationToken, Task<ApiEnvelope<ServerTimeSnapshot>>>? TimeHandler { get; set; }
         public Func<SyncProgressRequest, ApiEnvelope<PersistedProgress>?>? ProgressHandler { get; set; }
-        public Func<SubmitFinalAnswersRequest, ApiEnvelope<FinalSubmission>?>? SubmitHandler { get; set; }
+        public Func<SubmitFinalAnswersRequest, ApiEnvelope<SubmissionReceipt>?>? SubmitHandler { get; set; }
         public Func<FinalSubmission?>? QueryHandler { get; set; }
+        public Func<ApiEnvelope<SubmissionReceipt>>? QueryResponseHandler { get; set; }
 
         private readonly Dictionary<string, FinalSubmission> _persisted = new();
 
@@ -311,40 +331,41 @@ public sealed class SubmissionSyncServiceTests
             return Task.FromResult(Ok(persisted));
         }
 
-        public Task<ApiEnvelope<FinalSubmission>> SubmitFinalAnswersAsync(
+        public Task<ApiEnvelope<SubmissionReceipt>> SubmitFinalAnswersAsync(
             SubmitFinalAnswersRequest request, CancellationToken ct = default)
         {
             FinalRequests.Add(request);
             if (_persisted.TryGetValue(request.RequestId, out var existing))
             {
-                return Task.FromResult(Ok(existing));
+                return Task.FromResult(Ok(existing.Receipt));
             }
 
             var handler = SubmitHandler;
             if (handler is not null)
             {
                 var result = handler(request);
-                return Task.FromResult(result ?? Fail<FinalSubmission>("提交失败。"));
+                return Task.FromResult(result ?? Fail<SubmissionReceipt>("提交失败。"));
             }
 
-            return Task.FromResult(Ok(Persist(request)));
+            return Task.FromResult(Ok(Persist(request).Receipt));
         }
 
-        public Task<ApiEnvelope<FinalSubmission>> GetFinalSubmissionAsync(
+        public Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
             string participationId, long entryVersion, string deviceId, long authorizationVersion,
             CancellationToken ct = default)
         {
             QueryCalls.Add(participationId);
+            if (QueryResponseHandler is not null) return Task.FromResult(QueryResponseHandler());
             var handler = QueryHandler;
             if (handler is not null)
             {
                 var found = handler();
                 return Task.FromResult(found is null
-                    ? Fail<FinalSubmission>("没有已持有的提交。")
-                    : Ok(found));
+                    ? Fail<SubmissionReceipt>("没有已持有的提交。")
+                    : Ok(found.Receipt));
             }
 
-            return Task.FromResult(Fail<FinalSubmission>("没有已持有的提交。"));
+            return Task.FromResult(Fail<SubmissionReceipt>("没有已持有的提交。"));
         }
 
         public FinalSubmission Persist(SubmitFinalAnswersRequest request)
@@ -378,7 +399,8 @@ public sealed class SubmissionSyncServiceTests
         public Task<ApiEnvelope<StudentSessionResult>> LoginAsync(LoginStudentRequest request, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) =>
+            TimeHandler?.Invoke(ct) ?? throw new NotSupportedException();
     }
 
     private sealed class PackageApi : IExamPackageApi, IDisposable
