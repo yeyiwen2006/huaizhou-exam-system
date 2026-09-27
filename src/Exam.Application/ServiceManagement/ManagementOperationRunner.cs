@@ -1,0 +1,92 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Exam.Contracts.Common;
+using Exam.Contracts.ServiceManagement;
+using Exam.Domain.Common;
+
+namespace Exam.Application.ServiceManagement;
+
+public sealed class ManagementOperationRunner(
+    string serverId, string nodeId, IManagementOperationStore store, IClock clock)
+{
+    private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
+
+    public async Task<ManagementOperation> ExecuteAsync<T>(
+        string requestId, string actorId, ManagementOperationKind kind, T content,
+        Func<ManagementOperation, CancellationToken, Task<ManagementOperation>> execute,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200 || string.IsNullOrWhiteSpace(actorId))
+            throw new DomainRuleException(ErrorCodes.InvalidInput, "请求标识或已认证操作者无效。");
+        var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, JsonDefaults.Create())));
+        await using var guard = await store.AcquireAsync(cancellationToken);
+        var previous = await store.FindAsync(requestId, cancellationToken);
+        if (previous is not null)
+        {
+            if (previous.ServerId != serverId || previous.NodeId != nodeId || previous.ActorId != actorId ||
+                previous.Kind != kind || previous.ContentHash != hash)
+                throw new DomainRuleException(ErrorCodes.VersionConflict, "requestId 已绑定不同的节点、操作者或操作内容。");
+            return ForQuery(previous);
+        }
+
+        // Staged recovery and an interrupted mutation must never be bypassed by a different start id.
+        if (kind is ManagementOperationKind.Start or ManagementOperationKind.Configure or ManagementOperationKind.Restore &&
+            await store.HasUnverifiedOperationsAsync(cancellationToken))
+            throw new DomainRuleException(ErrorCodes.ServiceRecovering, "存在待核对的本机操作或暂存恢复，禁止自动启动、修改配置或再次恢复。");
+
+        var accepted = new ManagementOperation(requestId, serverId, nodeId, actorId, kind, hash,
+            ManagementOperationPhase.Accepted, clock.UtcNow, clock.UtcNow);
+        await store.SaveAsync(accepted, cancellationToken); // No side effect before this durable write.
+        _executing.TryAdd(requestId, 0);
+        try
+        {
+            ManagementOperation result;
+            try
+            {
+                result = await execute(accepted, cancellationToken);
+                if (result.RequestId != accepted.RequestId || result.ContentHash != hash ||
+                    result.ServerId != serverId || result.NodeId != nodeId || result.ActorId != actorId || result.Kind != kind ||
+                    result.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Staged))
+                    throw new InvalidOperationException("管理执行结果不完整。");
+            }
+            catch (DomainRuleException error)
+            {
+                result = accepted with { Phase = error.Code == ErrorCodes.PersistenceFailed
+                        ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
+                    Error = new ApiError(error.Code, error.Message, Retryable: error.Retryable) };
+            }
+            catch (ArgumentException)
+            {
+                result = accepted with { Phase = ManagementOperationPhase.Failed,
+                    Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
+            }
+            catch (Exception)
+            {
+                // Includes cancellation after acceptance. SCM/tools may have taken effect; never repeat automatically.
+                result = accepted with { Phase = ManagementOperationPhase.NeedsVerification,
+                    Error = new ApiError(ErrorCodes.ServiceRecovering, "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
+            }
+            result = result with { UpdatedAt = clock.UtcNow };
+            // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.
+            await store.SaveAsync(result, CancellationToken.None);
+            return result;
+        }
+        finally { _executing.TryRemove(requestId, out _); }
+    }
+
+    public async Task<ManagementOperation> FindAsync(string requestId, string actorId, CancellationToken cancellationToken)
+    {
+        var operation = await store.FindAsync(requestId, cancellationToken)
+            ?? throw new DomainRuleException(ErrorCodes.NotFound, "未找到本机管理操作。");
+        if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
+            throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
+        return ForQuery(operation);
+    }
+
+    private ManagementOperation ForQuery(ManagementOperation operation) =>
+        operation.Phase == ManagementOperationPhase.Accepted && !_executing.ContainsKey(operation.RequestId)
+            ? operation with { Phase = ManagementOperationPhase.NeedsVerification,
+                Error = new ApiError(ErrorCodes.ServiceRecovering, "原操作尚未确认完成，先核对实际状态；不会重复执行。") }
+            : operation;
+}

@@ -1,0 +1,23 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": {
+    "processStatus": "stopped",
+    "readiness": "unknown",
+    "configuration": {
+      "serverId": "synthetic-server",
+      "nodeId": "synthetic-node",
+      "bindAddress": "127.0.0.1",
+      "httpsPort": 8443,
+      "dataDirectory": "C:\\SyntheticExam\\data",
+      "highAvailabilityEnabled": false,
+      "version": 1
+    },
+    "checks": []
+  },
+  "error": null
+}

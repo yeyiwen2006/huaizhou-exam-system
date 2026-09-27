@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Exam.Server\Exam.Server.csproj" />
+    <ProjectReference Include="..\..\..\src\Exam.Management\Exam.Management.csproj" />
     <ProjectReference Include="..\..\..\src\Exam.Infrastructure\Exam.Infrastructure.csproj" />
   </ItemGroup>
 

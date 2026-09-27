@@ -47,6 +47,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.LoadSetup", "tests\Loa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.LoadTests.Tests", "tests\Load\Exam.LoadTests.Tests\Exam.LoadTests.Tests.csproj", "{CDA60CC8-3969-4155-8657-771F8CB1D979}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.Management", "src\Exam.Management\Exam.Management.csproj", "{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -261,6 +263,18 @@ Global
 		{CDA60CC8-3969-4155-8657-771F8CB1D979}.Release|x64.Build.0 = Release|Any CPU
 		{CDA60CC8-3969-4155-8657-771F8CB1D979}.Release|x86.ActiveCfg = Release|Any CPU
 		{CDA60CC8-3969-4155-8657-771F8CB1D979}.Release|x86.Build.0 = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|x64.Build.0 = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Debug|x86.Build.0 = Debug|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x64.ActiveCfg = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x64.Build.0 = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x86.ActiveCfg = Release|Any CPU
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -286,5 +300,6 @@ Global
 		{A35D90C4-369D-48B7-AF3C-B5DFF98D6312} = {9D556B49-86D1-93A7-9596-FFAAB74EC556}
 		{26E908EC-0C4C-4807-9EAE-7F758793D1BA} = {C758EBF9-8BAE-00CC-2D4F-8BB514476281}
 		{CDA60CC8-3969-4155-8657-771F8CB1D979} = {C758EBF9-8BAE-00CC-2D4F-8BB514476281}
+		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

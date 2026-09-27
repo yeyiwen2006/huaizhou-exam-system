@@ -1,5 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
+using Exam.Application.Security;
 using System.Text.Json;
 using Exam.Application.Activation;
 using Exam.Contracts.Commands;
@@ -66,12 +65,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             return;
         }
 
-        var authorization = context.Request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        var supplied = authorization.StartsWith(prefix, StringComparison.Ordinal)
-            ? authorization[prefix.Length..]
-            : string.Empty;
-        if (!FixedTimeEquals(supplied, security.OperatorToken))
+        if (!OperatorIdentityValidator.Authenticate(context.Request.Headers.Authorization.ToString(),
+                security.OperatorToken, security.OperatorId))
         {
             await RejectAsync(context, server, StatusCodes.Status401Unauthorized,
                 "UNAUTHORIZED", "缺少有效的考务操作令牌。");
@@ -151,17 +146,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
                 return false;
             }
 
-            foreach (var propertyName in new[] { "operator", "operatorId", "actorId" })
-            {
-                if (document.RootElement.TryGetProperty(propertyName, out var actor) &&
-                    (actor.ValueKind != JsonValueKind.String ||
-                     !string.Equals(actor.GetString(), operatorId, StringComparison.Ordinal)))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return OperatorIdentityValidator.HasMatchingActor(document.RootElement, operatorId);
         }
         catch (JsonException)
         {
@@ -219,13 +204,6 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         }
 
         return deviceId;
-    }
-
-    private static bool FixedTimeEquals(string supplied, string expected)
-    {
-        var left = Encoding.UTF8.GetBytes(supplied);
-        var right = Encoding.UTF8.GetBytes(expected);
-        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
     }
 
     private static Task RejectAsync(

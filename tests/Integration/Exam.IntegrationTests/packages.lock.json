@@ -437,6 +437,12 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "exam.management": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Infrastructure": "[1.0.0, )"
+        }
+      },
       "exam.server": {
         "type": "Project",
         "dependencies": {
