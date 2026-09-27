@@ -1,5 +1,10 @@
 # D03 选项定位契约
 
+> 实施进度：PR #64 已交付抽取器、几何归一化与公共结果 DTO，详见
+> [实施状态](d03-implementation-status.md)及[审查记录](reviews/pr64-d03-option-region-extractor.md)。
+> 以下保留 PR #61 决策时的背景与边界；其中“尚未实现”描述的是当时状态。
+> 坐标 JSON、学生包 v2 读写与 B03 显示/点击仍未交付，#26 保持打开。
+
 2026-09-27，A 确定采用**路线 A，隐藏外观链接与 PdfPig 注解抽取**，保留 PR #61 的样包提交。
 下文作为 D03/B03 的实现约定。抽取器、坐标文件读写和界面接入仍待实现，B 的显示复测尚未完成。
 关联 [#26](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/26)。

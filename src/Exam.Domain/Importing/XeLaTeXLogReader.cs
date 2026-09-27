@@ -27,8 +27,9 @@ public static class XeLaTeXLogReader
         new(@"^\([A-Za-z@._-]+\)\s*", RegexOptions.Compiled);
 
     private static readonly Regex OutputWritten =
-        new(@"Output written on \S*?(?<name>[^\\/:]+\.pdf)\s*\(\s*(?<pages>\d+)\s*pages?\s*\)",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"Output written on (?<path>.+?\.pdf)""?\s*\(\s*(?<pages>[0-9]+)\s*pages?\s*\)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.NonBacktracking,
+            TimeSpan.FromSeconds(1));
 
     private static readonly Regex FileNotFoundWarning =
         new(@"LaTeX Warning: File `(?<file>[^']+)' not found on input line (?<line>\d+)\.",
@@ -88,12 +89,7 @@ public static class XeLaTeXLogReader
         string? outputFileName = null;
 
         // 1. 输出与页数：找到即说明写出了 PDF，但不代表编译无误。
-        foreach (Match match in OutputWritten.Matches(log))
-        {
-            hasOutput = true;
-            pageCount = int.Parse(match.Groups["pages"].Value, CultureInfo.InvariantCulture);
-            outputFileName = match.Groups["name"].Value;
-        }
+        ReadOutput(logText, out hasOutput, out pageCount, out outputFileName);
 
         // 2. 缺依赖。
         issues.AddRange(CollectMissingImages(log));
@@ -157,6 +153,29 @@ public static class XeLaTeXLogReader
             outputFileName,
             Deduplicate(issues).ToList(),
             Overfull.Matches(log).Count);
+    }
+
+    /// <summary>
+    /// 识别 `Output written on &lt;路径&gt; (N pages).`。
+    /// 从原始日志仅移除硬折行，不经过会删除括号前缀的 Fold；不截断合法长路径。
+    /// 解析成功不代替编译器对实际 PDF、退出码与阻断问题的独立核对。
+    /// </summary>
+    private static void ReadOutput(string log, out bool hasOutput, out int pageCount, out string? outputFileName)
+    {
+        hasOutput = false;
+        pageCount = 0;
+        outputFileName = null;
+        var unfolded = log.Replace("\r", string.Empty).Replace("\n", string.Empty);
+        foreach (Match match in OutputWritten.Matches(unfolded))
+        {
+            if (!int.TryParse(match.Groups["pages"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var pages) || pages <= 0)
+                continue;
+            var path = match.Groups["path"].Value.TrimStart('"');
+            var lastSeparator = Math.Max(path.LastIndexOf('/'), path.LastIndexOf('\\'));
+            hasOutput = true;
+            pageCount = pages;
+            outputFileName = path[(lastSeparator + 1)..];
+        }
     }
 
     /// <summary>
