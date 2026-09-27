@@ -5,6 +5,7 @@ using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
+using Exam.Contracts.Submissions;
 using Exam.Student.Core;
 
 namespace Exam.StudentIdentityTests;
@@ -172,6 +173,9 @@ public sealed class DeviceIdentityTests : IDisposable
         public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ApiEnvelope<PersistedProgress>> SyncProgressAsync(SyncProgressRequest request, CancellationToken ct = default) => throw new NotSupportedException("身份测试不涉及进度上报。");
+        public Task<ApiEnvelope<SubmissionReceipt>> SubmitFinalAnswersAsync(SubmitFinalAnswersRequest request, CancellationToken ct = default) => throw new NotSupportedException("身份测试不涉及交卷。");
+        public Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(string participationId, long entryVersion, string deviceId, long authorizationVersion, CancellationToken ct = default) => throw new NotSupportedException("身份测试不涉及回执查询。");
         private static ApiEnvelope<T> Ok<T>(T result) => new("server-1", "node-1", 1, Guid.NewGuid().ToString("N"), result, null);
     }
 }

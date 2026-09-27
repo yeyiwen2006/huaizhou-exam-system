@@ -96,6 +96,7 @@ public sealed class AnswerSession
     public string? PendingCurrentQuestionId => _pendingWrite?.State.CurrentQuestionId;
     public FixedSubmissionRecord? FixedSubmission => _fixed is { } saved ? FreezeSubmission(saved) : null;
     public event Action<string>? WriteBlocked;
+    public event Action? StateSaved;
     public event Action<FixedSubmissionRecord>? SubmissionFixed;
 
     public Task<RestoreResult> StartAsync(LocalStateKey key, AnswerSessionContext context, CancellationToken ct = default) =>
@@ -282,6 +283,7 @@ public sealed class AnswerSession
         _pendingWrite = null;
         _status = AnswerSessionStatus.Active;
         LastError = null;
+        StateSaved?.Invoke();
         return AnswerChangeResult.Ok(AnswerVersion);
     }
 
