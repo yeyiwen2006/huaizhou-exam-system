@@ -35,3 +35,9 @@ dotnet test Huaizhou.ExamSystem.sln --no-build --configuration Release -m:1 --fi
 当前生产组包/读取仍为 v1，不能携带 option-regions.json；因此已有合法 v1 包仍只能原版显示，不能坐标作答。本 PR 不放宽 v1 安全白名单，也不声称部署后可正式答题。D03 v2 交付后仍需真实组包→传输→授权解锁→坐标读取→点击→持久化→交卷的全链路联调，不能仅凭机会式读取代码声称会自动通过。
 
 不同实体 DPI/显示缩放、真实复杂公式表格与图片、完整页面版本切换与通知、XeLaTeX、真实两端考试、300 客户端及 T01/T02 均未在本次完成。当前合成控件测试不能替代这些验收。Windows.Data.Pdf 接口要求学生端及其测试目标为 net10.0-windows10.0.19041.0，锁文件不引入浮动版本。
+
+## 一次未复现的既有组包测试失败
+
+首次完整非 GUI 回归中，未被 #69 修改的 `Build_ResourceDirectoryIsNotAFileAllowlist` 一次返回 `EncryptionFailed`。该用例实际不启用加密；这是组包文件操作/参数/密码操作的共同失败码，不能仅凭错误码断言密码算法故障。原失败保留为 `tests/Unit/Exam.UnitTests/TestResults/pr69-initial-failed.trx`。
+
+临时独立诊断测试使用原有夹具和用例，监听相关 first-chance 异常，执行 100 次串行及 10 批 × 10 次并行，共 200 次，全部通过，未复现该失败。日志为 `pr69-packaging-probe.trx`；临时诊断源码已移除，未提交，也未改变组包生产实现或放宽断言。根因尚未确定，不将其声称为已修复。随后重新构建并要求两轮完整非 GUI、完整 WPF 和最新头提交 CI 全部通过，结果记录在 PR 评论。
