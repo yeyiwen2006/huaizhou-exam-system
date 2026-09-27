@@ -1,0 +1,337 @@
+using System.IO;
+using System.Net.Http;
+using Exam.Contracts.Common;
+using Exam.Contracts.Submissions;
+
+namespace Exam.Student.Core;
+
+public enum SubmissionSyncPhase
+{
+    Idle, Progressing, Uploading, WaitingRetry, Confirmed, Blocked,
+}
+
+public sealed record SubmissionSyncStatusChangedEventArgs(SubmissionSyncPhase Phase);
+
+/// <summary>
+/// 上传 B04 已落盘的完整快照，重试及进程恢复始终使用其原请求标识。
+/// 网络写入串行；Confirmed/Blocked 为终态。只有匹配且已在本机保留的服务器回执才能确认成功。
+/// </summary>
+public sealed class SubmissionSyncService(
+    IStudentApi api, StudentExamRuntime runtime, DeviceRecord device, TimeProvider? timeProvider = null, ServerClock? clock = null) : IAsyncDisposable
+{
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(20);
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly SemaphoreSlim _roundGate = new(1, 1);
+    private readonly SemaphoreSlim _wake = new(0, 1);
+    private readonly object _sync = new();
+    private TaskCompletionSource _idle = CompletedSource();
+    private Task? _disposeTask;
+    private int _operations;
+    private bool _runStarted;
+    private bool _disposed;
+    private SubmissionSyncPhase _phase;
+    private string _statusText = "同步服务尚未启动。";
+    private SubmissionReceipt? _confirmedReceipt;
+    private SubmissionReceipt? _receiptToSave;
+    private string? _syncedRequestId;
+    private long _syncedAt;
+    private int _uploadRetryCount;
+    private (long Version, AnswerSessionStatus Status, bool Fixed, bool Ended, bool Revoked) _observedState;
+
+    public event EventHandler<SubmissionSyncStatusChangedEventArgs>? StatusChanged;
+    public SubmissionSyncPhase Phase => _phase;
+    public string StatusText => _statusText;
+    public SubmissionReceipt? ConfirmedReceipt => _confirmedReceipt;
+
+    public Task RunAsync(CancellationToken ct)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_runStarted) throw new InvalidOperationException("同步循环不能重复启动。");
+            _runStarted = true;
+            EnterOperation();
+            return RunCoreAsync(ct);
+        }
+    }
+
+    private async Task RunCoreAsync(CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+        var clockTask = SynchronizeClockAsync(linked.Token);
+        runtime.StateChanged += OnRuntimeStateChanged;
+        try
+        {
+            while (!linked.IsCancellationRequested)
+            {
+                var delay = await RoundAsync(linked.Token).ConfigureAwait(false);
+                await _wake.WaitAsync(delay, linked.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+        finally
+        {
+            runtime.StateChanged -= OnRuntimeStateChanged;
+            linked.Cancel();
+            try { await clockTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+            finally { ExitOperation(); }
+        }
+    }
+
+    private async Task SynchronizeClockAsync(CancellationToken ct)
+    {
+        if (clock is null) return;
+        using var timer = new PeriodicTimer(ProgressInterval);
+        do
+        {
+            try { await clock.SynchronizeAsync(api, ct).ConfigureAwait(false); }
+            catch (Exception error) when (!ct.IsCancellationRequested && error is
+                HttpRequestException or InvalidOperationException or TimeoutException or OperationCanceledException)
+            {
+                // 校时失败不产生开考/结束指令，也不能阻塞独立的交卷写入回合。
+            }
+        } while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false));
+    }
+
+    /// <summary>显式请求一个立即回合；自动循环仍按返回间隔退避。</summary>
+    public Task KickAsync(CancellationToken ct = default)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            EnterOperation();
+            return KickCoreAsync(ct);
+        }
+    }
+
+    private async Task KickCoreAsync(CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+        try { await RoundAsync(linked.Token).ConfigureAwait(false); }
+        finally { ExitOperation(); }
+    }
+
+    private async Task<TimeSpan> RoundAsync(CancellationToken ct)
+    {
+        await _roundGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (_phase is SubmissionSyncPhase.Confirmed or SubmissionSyncPhase.Blocked)
+                return Timeout.InfiniteTimeSpan;
+            if (runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked ||
+                runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
+                return await BlockAsync("当前设备或本地记录没有有效授权，已停止自动上传，请联系考务人员核对。");
+
+            if (runtime.Answers?.HasPendingSubmission == true)
+            {
+                await runtime.RetryLocalSaveAsync(ct).ConfigureAwait(false);
+                if (runtime.Answers.HasPendingSubmission)
+                {
+                    SetPhase(SubmissionSyncPhase.WaitingRetry, "答卷已经冻结，固定内容尚未落盘；保留原标识并重试本地保存。");
+                    return TimeSpan.FromSeconds(5);
+                }
+            }
+            if (runtime.FixedSubmission is { } record)
+                return await SyncFixedAsync(record, ct).ConfigureAwait(false);
+            return await SyncProgressAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or
+            TimeoutException or OperationCanceledException or UnauthorizedAccessException or System.Data.Common.DbException or
+            System.Text.Json.JsonException)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ScheduleRetry("网络或本地存储尚未恢复，原记录已保留");
+        }
+        finally { _roundGate.Release(); }
+    }
+
+    private async Task<TimeSpan> SyncProgressAsync(CancellationToken ct)
+    {
+        var answers = runtime.Answers;
+        if (answers?.Status != AnswerSessionStatus.Active || runtime.Manager.ExamEnded ||
+            runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked)
+        {
+            SetPhase(SubmissionSyncPhase.Idle, "当前没有可上报的答题进度。");
+            return RetryInterval;
+        }
+        // 同一 SQLite 事务验证身份、版本、答案和导航；不用多个可能跨版本的属性读拼装载荷。
+        var snapshot = await runtime.LoadPendingSnapshotAsync(ct).ConfigureAwait(false);
+        if (answers.Status != AnswerSessionStatus.Active || runtime.HasFixedSubmission || runtime.Manager.ExamEnded)
+            return TimeSpan.Zero;
+        var participation = runtime.Manager.Participation;
+        if (snapshot is null || participation is null || string.IsNullOrWhiteSpace(snapshot.RequestId) ||
+            snapshot.ExamId != runtime.Manager.ExamId || snapshot.CandidateId != runtime.Manager.CandidateId ||
+            snapshot.ParticipationId != participation.ParticipationId || snapshot.EntryVersion != participation.EntryVersion ||
+            snapshot.DeviceId != device.DeviceId || snapshot.AuthorizationVersion != participation.AuthorizationVersion ||
+            snapshot.PaperVersion != runtime.Manager.Descriptor?.PaperVersion)
+            return await BlockAsync("可靠快照与当前参试、设备或版本不一致，原记录已保留，请核对后恢复。");
+
+        if (_syncedRequestId == snapshot.RequestId)
+        {
+            var remaining = ProgressInterval - _time.GetElapsedTime(_syncedAt);
+            if (remaining > TimeSpan.Zero) return remaining;
+        }
+        var request = new SyncProgressRequest(snapshot.RequestId, snapshot.ExamId, snapshot.CandidateId,
+            snapshot.ParticipationId!, snapshot.EntryVersion, snapshot.DeviceId!, snapshot.AuthorizationVersion,
+            snapshot.AnswerVersion, snapshot.PaperVersion, snapshot.Answers, snapshot.CurrentQuestionId);
+        var response = await api.SyncProgressAsync(request, ct).ConfigureAwait(false);
+        if (response is { IsSuccess: true, Result: { } saved })
+        {
+            if (saved.ExamId != request.ExamId || saved.CandidateId != request.CandidateId ||
+                saved.ParticipationId != request.ParticipationId || saved.EntryVersion != request.EntryVersion ||
+                saved.DeviceId != request.DeviceId || saved.AuthorizationVersion != request.AuthorizationVersion ||
+                saved.PaperVersion != request.PaperVersion || saved.AnswerVersion != request.AnswerVersion ||
+                saved.CurrentQuestionId != request.CurrentQuestionId || saved.LastSyncedAt == default ||
+                saved.Answers is null || !SameAnswers(request.Answers, saved.Answers))
+                return await BlockAsync("服务器返回的进度与本次可靠快照不一致，已停止自动写入并保留原记录。");
+            _syncedRequestId = snapshot.RequestId;
+            _syncedAt = _time.GetTimestamp();
+            SetPhase(SubmissionSyncPhase.Progressing,
+                $"答题进度已由服务器确认（版本 {saved.AnswerVersion}）；每 60 秒重报原快照，新修改及时上报。");
+            return ProgressInterval;
+        }
+        return await HandleErrorAsync(response?.Error, "进度尚未同步").ConfigureAwait(false);
+    }
+
+    private async Task<TimeSpan> SyncFixedAsync(FixedSubmissionRecord record, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(record.RequestId) || string.IsNullOrWhiteSpace(record.SubmissionId) ||
+            string.IsNullOrWhiteSpace(record.ParticipationId) || record.EntryVersion < 1 || record.AuthorizationVersion < 1 ||
+            record.PaperVersion < 1 || record.DeviceId != device.DeviceId)
+            return await BlockAsync("原固定答卷的身份或请求标识不完整，不能生成替代身份上传，请联系考务人员。");
+        if (_receiptToSave is { } pendingReceipt)
+            return await AcceptReceiptAsync(pendingReceipt, record, ct).ConfigureAwait(false);
+
+        SetPhase(SubmissionSyncPhase.Uploading, "正在上传原固定答卷并等待服务器持久化回执……");
+        var request = new SubmitFinalAnswersRequest(record.RequestId, record.SubmissionId,
+            runtime.Manager.ExamId, runtime.Manager.CandidateId, record.ParticipationId, record.EntryVersion,
+            record.DeviceId, record.AuthorizationVersion, record.PaperVersion, record.FrozenAnswers);
+        var response = await api.SubmitFinalAnswersAsync(request, ct).ConfigureAwait(false);
+        if (response is { IsSuccess: true, Result: { } receipt })
+            return await AcceptReceiptAsync(receipt, record, ct).ConfigureAwait(false);
+        if (response?.Error?.Code is ErrorCodes.AlreadySubmitted or ErrorCodes.VersionConflict or ErrorCodes.NotFound)
+        {
+            SetPhase(SubmissionSyncPhase.Uploading, "正在查询并核对服务器原回执……");
+            var found = await api.GetSubmissionReceiptAsync(record.ParticipationId, record.EntryVersion,
+                record.DeviceId, record.AuthorizationVersion, ct).ConfigureAwait(false);
+            if (found is { IsSuccess: true, Result: { } original })
+                return await AcceptReceiptAsync(original, record, ct).ConfigureAwait(false);
+            // 临时查询失败不等于发现不同答卷，必须保留原请求继续退避。
+            return await HandleErrorAsync(found?.Error, "尚未取得可核对的原回执").ConfigureAwait(false);
+        }
+        return await HandleErrorAsync(response?.Error, "尚未取得交卷回执").ConfigureAwait(false);
+    }
+
+    private async Task<TimeSpan> AcceptReceiptAsync(SubmissionReceipt receipt, FixedSubmissionRecord record, CancellationToken ct)
+    {
+        if (!SubmissionReceiptValidation.Matches(receipt, record, runtime.Manager.ExamId, runtime.Manager.CandidateId))
+            return await BlockAsync("服务器回执与原考试、考生、参试、提交或试卷版本不一致，已停止自动重试；原答卷保留，请人工核对。");
+        _receiptToSave = receipt;
+        var saved = await runtime.SaveSubmissionReceiptAsync(receipt, ct).ConfigureAwait(false);
+        if (!saved.Succeeded) return ScheduleRetry("服务器已收卷，但原回执尚未可靠保存在本机；正在重试保存");
+        _confirmedReceipt = receipt;
+        _receiptToSave = null;
+        SetPhase(SubmissionSyncPhase.Confirmed, $"交卷成功：服务器回执 {receipt.ReceiptId} 已确认并保留。");
+        return Timeout.InfiniteTimeSpan;
+    }
+
+    private async Task<TimeSpan> HandleErrorAsync(ApiError? error, string context)
+    {
+        if (error?.Code == ErrorCodes.AuthorizationRevoked)
+        {
+            await runtime.RevokeSubmissionAuthorizationAsync().ConfigureAwait(false);
+            return await BlockAsync("服务器已撤销当前设备授权，已停止作答和自动上传；原答卷保留，请联系考务人员。");
+        }
+        if (error is not null && !error.Retryable && error.Code != ErrorCodes.ServiceRecovering)
+            return await BlockAsync($"{context}（{error.Message}）；自动写入已停止，原记录保留，请联系考务人员。");
+        return ScheduleRetry($"{context}（{error?.Message ?? "服务器暂不可用"}）");
+    }
+
+    private async Task<TimeSpan> BlockAsync(string message)
+    {
+        if (runtime.Answers is { } answers) await answers.SuspendAsync(message).ConfigureAwait(false);
+        SetPhase(SubmissionSyncPhase.Blocked, message);
+        return Timeout.InfiniteTimeSpan;
+    }
+
+    private TimeSpan ScheduleRetry(string message)
+    {
+        var delay = runtime.HasFixedSubmission
+            ? TimeSpan.FromSeconds(Math.Min(3 * Math.Pow(2, _uploadRetryCount), 60)) : RetryInterval;
+        if (runtime.HasFixedSubmission) _uploadRetryCount = Math.Min(_uploadRetryCount + 1, 5);
+        SetPhase(SubmissionSyncPhase.WaitingRetry, $"{message}；约 {Math.Ceiling(delay.TotalSeconds)} 秒后重试。");
+        return delay;
+    }
+
+    private void OnRuntimeStateChanged(object? sender, EventArgs e)
+    {
+        lock (_sync)
+        {
+            var state = (runtime.Answers?.AnswerVersion ?? 0, runtime.Answers?.Status ?? AnswerSessionStatus.NotStarted,
+                runtime.HasFixedSubmission, runtime.Manager.ExamEnded,
+                runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked);
+            if (_disposed || state == _observedState) return;
+            _observedState = state;
+            if (_wake.CurrentCount == 0) _wake.Release();
+        }
+    }
+
+    private void SetPhase(SubmissionSyncPhase phase, string text)
+    {
+        _phase = phase;
+        _statusText = text;
+        void Raise() { if (!_disposed) StatusChanged?.Invoke(this, new(phase)); }
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess()) Raise();
+        else if (!dispatcher.HasShutdownStarted) dispatcher.BeginInvoke((Action)Raise);
+    }
+
+    private static bool SameAnswers(IReadOnlyDictionary<string, AnswerValue> expected, IReadOnlyDictionary<string, AnswerValue> actual) =>
+        expected.Count == actual.Count && expected.All(pair => actual.TryGetValue(pair.Key, out var value) &&
+            value is not null && value.Kind == pair.Value.Kind && value.OptionIds is not null &&
+            pair.Value.OptionIds.SequenceEqual(value.OptionIds, StringComparer.Ordinal));
+
+    private static TaskCompletionSource CompletedSource()
+    {
+        var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.SetResult();
+        return source;
+    }
+
+    private void EnterOperation()
+    {
+        if (_operations++ == 0) _idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private void ExitOperation()
+    {
+        lock (_sync) { if (--_operations == 0) _idle.TrySetResult(); }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_sync)
+        {
+            if (_disposeTask is null)
+            {
+                _disposed = true;
+                _lifetime.Cancel();
+                _disposeTask = DisposeCoreAsync(_idle.Task);
+            }
+            return new(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task idle)
+    {
+        // 等所有循环和已接纳的 Kick（包括正在排队者）退出后才释放同步原语。
+        await idle.ConfigureAwait(false);
+        _roundGate.Dispose();
+        _wake.Dispose();
+        _lifetime.Dispose();
+    }
+}

@@ -1,20 +1,27 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using Exam.Contracts.Submissions;
 using Exam.Desktop.Shared.Controls;
 using Exam.Student.Core;
 
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 答题页框保留真实本地保存状态；真实题目交互和服务器交卷尚未接入时禁用相关操作。
+/// 答题页框保留真实本地保存状态；真实题目交互尚未接入时禁用相关操作，
+/// 交卷走 B05 同步服务：本地固定后由服务上传并换取服务器持久化回执。
 /// </summary>
 public partial class ExamInProgressPage : UserControl
 {
     private readonly ExamOverview _exam;
     private readonly StudentExamRuntime _runtime;
+    private readonly MainWindow.Navigation _navigation;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly SubmissionSyncService _sync;
     private bool _retryingLocalSave;
+    private bool _submitting;
+    private Button? _submitButton;
+    private bool _syncStarted;
     private string? _localRetryError;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
@@ -27,15 +34,21 @@ public partial class ExamInProgressPage : UserControl
 
     public ExamInProgressPage(MainWindow.Navigation navigation, ExamOverview exam, StudentExamRuntime runtime)
     {
+        _navigation = navigation;
         _exam = exam;
         _runtime = runtime;
         if (runtime.Manager.ExamId != exam.ExamId || !ReferenceEquals(App.Services.Session.ActiveExam, runtime))
         {
             throw new InvalidOperationException("试题会话与当前考试不匹配。");
         }
+        var device = App.Services.Device ??
+            throw new InvalidOperationException("设备身份尚未配置，不能进入考试。");
 
         InitializeComponent();
         DataContext = App.Services.Session;
+
+        _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock);
+        _sync.StatusChanged += OnSyncStatusChanged;
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) => UpdateClock();
@@ -43,12 +56,41 @@ public partial class ExamInProgressPage : UserControl
         UpdateClock();
         RefreshStatus();
         _runtime.StateChanged += OnRuntimeStateChanged;
-        Unloaded += (_, _) =>
+        Loaded += async (_, _) =>
+        {
+            if (_syncStarted) return;
+            _syncStarted = true;
+            await RunSyncAsync();
+        };
+        Unloaded += async (_, _) =>
         {
             _clock?.Stop();
             _lifetime.Cancel();
             _runtime.StateChanged -= OnRuntimeStateChanged;
+            _sync.StatusChanged -= OnSyncStatusChanged;
+            try { await _sync.DisposeAsync(); }
+            catch (Exception) { /* 页面卸载时的清理失败不影响已保存状态 */ }
         };
+    }
+
+    private async Task RunSyncAsync()
+    {
+        try
+        {
+            await _sync.RunAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is InvalidOperationException or System.IO.IOException or
+            System.Text.Json.JsonException or ArgumentException)
+        {
+            SyncStatusText.Text = "同步服务已停止，原答卷保留，请联系考务人员恢复后重试。";
+        }
+    }
+
+    private void OnSubmitButtonLoaded(object sender, RoutedEventArgs e)
+    {
+        _submitButton = (Button)sender;
+        RefreshStatus();
     }
 
     private void OnToggleMark(object sender, RoutedEventArgs e)
@@ -74,9 +116,94 @@ public partial class ExamInProgressPage : UserControl
             : $"{ClockPillContent.Text} · 计划结束时间已到";
     }
 
-    private void OnSubmit(object sender, RoutedEventArgs e)
+    private async void OnSubmit(object sender, RoutedEventArgs e)
     {
-        // B05 接入固定快照和服务器持久化回执之前不发起提交或显示成功。
+        if (_submitting || _runtime.HasFixedSubmission)
+        {
+            return;
+        }
+        if (_runtime.Answers is not { Status: AnswerSessionStatus.Active })
+        {
+            PaperBanner.Level = StatusLevel.Warning;
+            PaperBanner.Message = "当前答卷尚未就绪或已被冻结，不能发起新的交卷。";
+            PaperBanner.IsOpen = true;
+            return;
+        }
+
+        var window = Window.GetWindow(this);
+        if (window is null) { return; }
+        _submitting = true;
+        RefreshStatus();
+        try
+        {
+            var confirmed = await ConfirmDialog.ShowAsync(
+                window,
+                "提前交卷",
+                "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
+                "提前交卷",
+                "继续答题",
+                isDanger: true);
+            if (!confirmed) { return; }
+
+            _lifetime.Token.ThrowIfCancellationRequested();
+            Busy.IsBusy = true;
+            RefreshStatus();
+            // 提前交卷与 END 共用同一固定提交入口；失败时原标识与快照保留，由同步服务自动重试。
+            var fix = await _runtime.Answers.FixSubmissionAsync($"subm-{Guid.NewGuid():N}", _lifetime.Token);
+            if (!fix.Succeeded)
+            {
+                PaperBanner.Level = StatusLevel.Danger;
+                PaperBanner.Message = $"本地固定提交未完成：{fix.Error} 原答案已保留，恢复写入后重试。";
+                PaperBanner.IsOpen = true;
+                return;
+            }
+            await _sync.KickAsync(_lifetime.Token);
+            if (_sync.ConfirmedReceipt is { } receipt)
+            {
+                NavigateToSubmitted(receipt);
+            }
+            else
+            {
+                PaperBanner.Level = StatusLevel.Info;
+                PaperBanner.Message = "答卷已冻结，正在向服务器提交并等待持久化回执；期间请保持客户端运行，失败会自动沿用原提交重试。";
+                PaperBanner.IsOpen = true;
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or
+            System.Data.Common.DbException or InvalidOperationException)
+        {
+            PaperBanner.Level = StatusLevel.Danger;
+            PaperBanner.Message = $"交卷流程出现异常：{error.Message} 原答卷已保留，将自动重试。";
+            PaperBanner.IsOpen = true;
+        }
+        finally
+        {
+            Busy.IsBusy = false;
+            _submitting = false;
+            RefreshStatus();
+        }
+    }
+
+    private void OnSyncStatusChanged(object? sender, SubmissionSyncStatusChangedEventArgs e)
+    {
+        if (_lifetime.IsCancellationRequested) { return; }
+        if (e.Phase == SubmissionSyncPhase.Confirmed && _sync.ConfirmedReceipt is { } receipt)
+        {
+            NavigateToSubmitted(receipt);
+            return;
+        }
+        RefreshStatus();
+    }
+
+    private void NavigateToSubmitted(SubmissionReceipt receipt)
+    {
+        if (!_lifetime.IsCancellationRequested)
+        {
+            // SubmittedPage 构造时核对并登记回执（含再次进入拦截）；此处只负责停止本页循环并跳转。
+            _lifetime.Cancel();
+            _navigation.GoToSubmitted(receipt);
+        }
     }
 
     private void OnRuntimeStateChanged(object? sender, EventArgs e) => RefreshStatus();
@@ -105,9 +232,9 @@ public partial class ExamInProgressPage : UserControl
         PaperBanner.Level = StatusLevel.Warning;
         PaperBanner.Message = _runtime.Manager.CurrentPhase switch
         {
-            ExamPackageManager.Phase.Ended => "服务器已结束考试。原参试记录继续保留，当前版本尚未提供完整答卷补传功能，请联系考务人员。",
+            ExamPackageManager.Phase.Ended => "服务器已结束考试。原答卷固定后自动补传；尚未取得并保存服务器回执前不视为交卷成功。",
             ExamPackageManager.Phase.Revoked => "当前设备的答题授权已撤销，已停止访问试题。请联系考务人员。",
-            ExamPackageManager.Phase.Unlocked => "加密试题包已按服务器授权解锁，并已接入本地答案恢复。当前版本尚未提供真实题目展示与完整交卷功能，不能用于正式考试。",
+            ExamPackageManager.Phase.Unlocked => "加密试题包已按服务器授权解锁，并已接入本地答案恢复和服务器交卷。真实题目展示（B03）尚未接入，不能用于正式考试。",
             _ => "试题尚未完成安全解锁，不能开始答题。请联系考务人员。",
         };
         RuntimeErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime.ConnectionError) || !string.IsNullOrWhiteSpace(_runtime.Manager.LastError);
@@ -118,5 +245,10 @@ public partial class ExamInProgressPage : UserControl
         LocalStateErrorBanner.Message = localError ?? string.Empty;
         RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave ? Visibility.Visible : Visibility.Collapsed;
         RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
+        SyncStatusText.Text = _sync.StatusText;
+        if (_submitButton is not null)
+            _submitButton.IsEnabled = !_submitting && !_runtime.HasFixedSubmission &&
+                _runtime.Answers?.Status == AnswerSessionStatus.Active &&
+                _sync.Phase is not (SubmissionSyncPhase.Blocked or SubmissionSyncPhase.Confirmed);
     }
 }
