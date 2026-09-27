@@ -4,11 +4,15 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Exam.Application.Activation;
+using Exam.Application.Scoring;
+using Exam.Contracts.Importing;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Submissions;
 using Exam.Domain.Submissions;
+using Exam.Domain.Scoring;
 using Exam.Infrastructure.Postgres.Resources;
+using Exam.Infrastructure.Postgres.Scoring;
 using Exam.Infrastructure.Postgres.Submissions;
 using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
@@ -63,6 +67,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
     public async Task RealPhysicalBackupRestoresOriginalReceiptAndRemainingCollection_WithoutChangingSource()
     {
         var original = await SeedAsync();
+        var gradeBeforeBackup = (await new PostgresGradingResultStore(_source.DataSource).FindAsync(original.SubmissionId))!;
         var configuration = new ServiceConfiguration("server", "node", "127.0.0.1", 8443, _root, false, 1);
         Assert.All(await InspectAsync(_source.DataSource, configuration), c => Assert.True(c.Passed, c.Name));
         var resources = Path.Combine(_root, "resources");
@@ -108,8 +113,22 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         using var restoredPublic = X509CertificateLoader.LoadCertificate(await File.ReadAllBytesAsync(Path.Combine(staged, "protected-configuration", "synthetic-node.cer")));
         using var restoredKey = restoredPublic.CopyWithPrivateKey(restoredRsa);
 
-        // Copy verified staging into a separate test-only PostgreSQL volume. No production switch or promotion is performed.
-        await tools.StartRestoredAsync(Path.Combine(workingCopy.WorkingDirectory, "database"));
+        // Real isolated PostgreSQL startup through the production orchestration; SCM is a test adapter on macOS.
+        var protectedRecoveryConfiguration = Path.Combine(_root, "recovery.conf");
+        await File.WriteAllTextAsync(protectedRecoveryConfiguration, "# synthetic protected recovery configuration\n");
+        var recoveryConnection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Host = "127.0.0.1", Port = tools.RestoredPort };
+        var controlledService = new DockerRecoveryService(tools, Path.Combine(workingCopy.WorkingDirectory, "database"),
+            ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecoveryPG", options.PostgresBinDirectory, workingRoot,
+                protectedRecoveryConfiguration, tools.RestoredPort));
+        var controlledDatabase = new ControlledRecoveryDatabase("SyntheticRecoveryPG", "SyntheticOriginalPG", "SyntheticBusiness", "SyntheticManagement",
+            options.PostgresBinDirectory, workingRoot, protectedRecoveryConfiguration, _source.ConnectionString,
+            recoveryConnection.ConnectionString, controlledService, controlledService);
+        await controlledDatabase.PrepareAndStartAsync(restore,
+            ct => offlineEvidence.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, ct),
+            ct => offlineEvidence.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
+        await controlledDatabase.PrepareAndStartAsync(restore, _ => throw new IOException("不能在运行实例下重新复制"),
+            ct => offlineEvidence.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
+        Assert.Equal(1, controlledService.Starts);
         var connection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Host = "127.0.0.1", Port = tools.RestoredPort };
         await using var recovered = NpgsqlDataSource.Create(connection.ConnectionString);
         await WaitForDatabaseAsync(recovered);
@@ -135,6 +154,16 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             .RunAsync(configuration, wrongTarget, default)).Passed);
         var recoveredStore = new PostgresSubmissionStore(recovered);
         Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
+        var grading = new GradingCoordinator(new PostgresGradingTaskSource(recovered), new PostgresGradingResultStore(recovered),
+            new PostgresGradingInputs(recovered));
+        var firstGrading = await grading.RunOnceAsync();
+        Assert.Equal(1, firstGrading.Graded);
+        Assert.Equal(0, firstGrading.Failed);
+        var originalGrade = (await new PostgresGradingResultStore(recovered).FindAsync(original.SubmissionId))!;
+        Assert.Equal(1, originalGrade.Grade.GradingVersion);
+        Assert.Equal("3", originalGrade.Grade.ExactTotalScore);
+        Assert.Equal(JsonSerializer.Serialize(gradeBeforeBackup, Json), JsonSerializer.Serialize(originalGrade, Json));
+        Assert.Equal(0, (await grading.RunOnceAsync()).Claimed);
 
         var selectionPath = Path.Combine(_root, "deployment-selection.json");
         await new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(selectionPath), 1).SelectAsync(
@@ -168,6 +197,20 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         var sourceStore = new PostgresSubmissionStore(_source.DataSource);
         Assert.Equal(original, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
         Assert.Null(await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
+        // Recreate the coordinator after the recovered API exits; remaining tasks and exact results are durable.
+        var afterRestart = new GradingCoordinator(new PostgresGradingTaskSource(recovered), new PostgresGradingResultStore(recovered),
+            new PostgresGradingInputs(recovered));
+        var remainingGrading = await afterRestart.RunOnceAsync();
+        Assert.Equal(1, remainingGrading.Graded);
+        Assert.Equal(0, remainingGrading.Failed);
+        var grades = await new PostgresGradingResultStore(recovered).ListAsync("synthetic-exam", 1);
+        Assert.Equal(2, grades.Count);
+        Assert.All(grades, grade => Assert.Equal("3", grade.Grade.ExactTotalScore));
+        Assert.Equal(JsonSerializer.Serialize(originalGrade, Json),
+            JsonSerializer.Serialize(await new PostgresGradingResultStore(recovered).FindAsync(original.SubmissionId), Json));
+        Assert.Equal(0, (await afterRestart.RunOnceAsync()).Claimed);
+        Assert.Equal(JsonSerializer.Serialize(gradeBeforeBackup, Json),
+            JsonSerializer.Serialize(Assert.Single(await new PostgresGradingResultStore(_source.DataSource).ListAsync("synthetic-exam", 1)), Json));
         Assert.False((await comparison.RunAsync(configuration, default)).Passed);
         Assert.Equal(marker, await File.ReadAllBytesAsync(Path.Combine(staged, "restore-verified.json")));
         Assert.Equal(backup, await coordinator.CreateAsync(backupRequest, default));
@@ -195,6 +238,15 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         }
         Assert.True(versioning.PublishPaper(new("synthetic-exam", 0, "synthetic-resource", SyntheticRecoveryPaper.Structure(), [],
             new(true, true, true, true), "operator", "合成物理恢复", now, "publish")).Succeeded);
+        var gradingManifest = new ExamManifest(1, "synthetic-exam", "合成恢复计分",
+            [new("subject", "合成科目", "3")],
+            [new("group", "subject", "合成题组", "single", 1, 1, false, "3", new(new("3", "0", "-0.75"), null))],
+            [new("q1", 1, "subject", "group", "questions/合成恢复计分_1.tex", ["A", "B"], null)], []);
+        var answerKey = new AnswerKeyFile(1, "synthetic-exam", [new("q1", 1, ["A"])]);
+        var publishedRules = versioning.PublishGradingRules(new("synthetic-exam", 0, "synthetic-rules", new(true, true, true),
+            "operator", "合成恢复计分", now, "publish-rules", JsonSerializer.Serialize(gradingManifest, ImportJson.Create()),
+            JsonSerializer.Serialize(answerKey, ImportJson.Create())));
+        Assert.True(publishedRules.Succeeded, publishedRules.Error);
         await using (var entry = _source.DataSource.CreateCommand("UPDATE exam.exam_entry_access SET instructions_ready = true WHERE exam_id = 'synthetic-exam'"))
             await entry.ExecuteNonQueryAsync();
         var started = versioning.UpdateSchedule(new("synthetic-exam", 1, new(now.AddHours(-1), now.AddHours(2)), now, "start-schedule"));
@@ -214,6 +266,11 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
                 $"device-{number}", 1, ParticipationBusinessState.Answering, 1, 1));
         var submitted = await store.SaveSubmissionAsync(Submission(1), now, "original-receipt");
         Assert.Equal(SubmissionPersistenceStatus.Saved, submitted.Status);
+        // Simulate a crash after the exact result was persisted but before the outbox task was completed.
+        var grade = ImportedGradingRules.Create(JsonSerializer.Serialize(gradingManifest, ImportJson.Create()),
+            JsonSerializer.Serialize(answerKey, ImportJson.Create())).Grade(submitted.Submission!, 1);
+        Assert.True(grade.Succeeded, grade.FailureReason);
+        await new PostgresGradingResultStore(_source.DataSource).SaveAsync(new(grade.Grade!, now));
         return submitted.Submission!.Receipt;
     }
 
@@ -274,6 +331,22 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public ValueTask<bool> IsActiveDeviceAsync(string deviceId, CancellationToken cancellationToken = default) => ValueTask.FromResult(deviceId is "device-1" or "device-2");
     }
 
+    private sealed class DockerRecoveryService(DockerPostgresTools tools, string directory, string command)
+        : IWindowsServiceControl, IWindowsServiceDeployment
+    {
+        public int Starts { get; private set; }
+        private ManagedWindowsServiceState _state = ManagedWindowsServiceState.Stopped;
+        public string GetBinaryPath(string name) => command;
+        public ManagedWindowsServiceState GetState(string name) => _state;
+        public void Start(string name)
+        {
+            Starts++;
+            Task.Run(() => tools.StartRestoredAsync(directory)).GetAwaiter().GetResult();
+            _state = ManagedWindowsServiceState.Running;
+        }
+        public void Stop(string name) => throw new InvalidOperationException("本演练只在最终清理隔离容器。");
+    }
+
     private sealed class DockerPostgresTools : IExternalProcessRunner, IAsyncDisposable
     {
         private readonly string _docker = Environment.GetEnvironmentVariable("EXAM_TEST_DOCKER_EXECUTABLE")!;
@@ -283,7 +356,15 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         private bool _restoredCreated;
         public int BaseBackupCalls { get; private set; }
         public int VerifyCalls { get; private set; }
-        public int RestoredPort { get; private set; }
+        public int RestoredPort { get; } = AllocatePort();
+        private static int AllocatePort()
+        {
+            var allocation = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            allocation.Start();
+            var port = ((IPEndPoint)allocation.LocalEndpoint).Port;
+            allocation.Stop();
+            return port;
+        }
         private async Task<ExternalProcessResult> DockerAsync(IReadOnlyList<string> arguments, CancellationToken token = default)
         {
             var result = await new ExternalProcessRunner().RunAsync(_docker, arguments, new Dictionary<string, string>(), TimeSpan.FromMinutes(2), token);
@@ -318,10 +399,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public async Task StartRestoredAsync(string verifiedDatabaseDirectory)
         {
             var image = Environment.GetEnvironmentVariable("EXAM_TEST_POSTGRES_IMAGE") ?? "postgres:18";
-            var allocation = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            allocation.Start();
-            var selectedPort = ((IPEndPoint)allocation.LocalEndpoint).Port;
-            allocation.Stop();
+            var selectedPort = RestoredPort;
             await DockerAsync(["create", "--name", _restoredContainer, "--label", "codex.f01.synthetic=true", "--publish", $"127.0.0.1:{selectedPort}:{selectedPort}",
                 "--volume", "/var/lib/postgresql", "--entrypoint", "sleep", image, "infinity"]);
             _restoredCreated = true;
@@ -335,7 +413,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             var port = (await DockerAsync(["port", _restoredContainer, selectedPort + "/tcp"])).StandardOutput.Trim();
             if (!port.StartsWith("127.0.0.1:", StringComparison.Ordinal) || !int.TryParse(port.Split(':')[1], out var number))
                 throw new InvalidDataException("隔离副本必须只监听本机回环随机端口。");
-            RestoredPort = number;
+            if (number != RestoredPort) throw new InvalidDataException("实际恢复端口与受控部署不一致。");
         }
         public async ValueTask DisposeAsync()
         {

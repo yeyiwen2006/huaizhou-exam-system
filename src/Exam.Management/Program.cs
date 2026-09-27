@@ -82,7 +82,17 @@ public static class ManagementEntryPoint
                 prepareRecoveryWorkingCopy: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
                     async (request, token) =>
                     {
-                        await CreateBackups().PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
+                        var coordinator = CreateBackups();
+                        if (string.IsNullOrWhiteSpace(configuration["Recovery:PostgresServiceName"]))
+                            await coordinator.PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
+                        else
+                            await new ControlledRecoveryDatabase(Required("Recovery:PostgresServiceName"),
+                                Required("Recovery:OriginalPostgresServiceName"), Required("Management:BusinessServiceName"),
+                                Required("Management:ServiceName"), Required("Backup:PostgresBinDirectory"), Required("Recovery:WorkingRoot"),
+                                Required("Recovery:PostgresConfigurationPath"), Required("ConnectionStrings:Exam"), Required("ConnectionStrings:ExamRecovery"))
+                                .PrepareAndStartAsync(request,
+                                    ct => coordinator.PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), ct),
+                                    ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), ct), token);
                     },
                 verifyRecoveryTarget: string.IsNullOrWhiteSpace(configuration.GetConnectionString("ExamRecovery")) ? null :
                     async (request, serviceConfiguration, token) =>

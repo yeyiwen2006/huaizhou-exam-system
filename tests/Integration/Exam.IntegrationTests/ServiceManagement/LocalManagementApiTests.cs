@@ -546,6 +546,8 @@ public sealed class LocalManagementApiTests : IDisposable
             ["Management:BusinessReadyEndpoint"] = "http://invalid-ready-endpoint",
             ["ConnectionStrings:Exam"] = "synthetic-invalid-connection-secret",
             ["Recovery:SelectionPath"] = selection,
+            ["Recovery:PostgresServiceName"] = "invalid/recovery-service",
+            ["Recovery:PostgresConfigurationPath"] = "relative-invalid-recovery-config",
             ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
             ["ExamSecurity:OperatorToken"] = credentials ? Token : null,
             ["ExamSecurity:OperatorId"] = credentials ? "operator" : null

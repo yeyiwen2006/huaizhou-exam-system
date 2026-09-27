@@ -30,7 +30,13 @@
 
 `Recovery:WorkingRoot` 须为预建受保护目录，固定工作槽为 `slot/database`，不得与备份、暂存或原材料目录交叠。缺失原材料源目录不阻断从完整备份暂存，但新建备份仍要求原材料完整。残缺槽保留并拒绝覆盖；完整槽绑定原 requestId，不用于另一项恢复。不配置工作根时仍只返回隔离暂存。
 
-`ConnectionStrings:ExamRecovery` 由独立受保护配置提供，不出现在模板或请求中。要求回环地址、与本机原库不同的端口及相同数据库名；SQL 核对实际端口和数据目录必须对应工作槽，拒绝备库角色，再运行该目标的迁移、节点/代次及领域恢复检查。目标未启动、配置不符或检查失败时不报告恢复核对通过。当前宿主不会启动 PostgreSQL 或导入密钥；部署人员须先以独立受限实例启动已经绑定的工作副本，核对其配置仅访问隔离目录并使用独立回环端口，部署匹配的证书和解锁材料。不能启动暂存原件或手工修改操作记录解除保护。
+`ConnectionStrings:ExamRecovery` 由独立受保护配置提供，不出现在模板或请求中。要求回环地址、与本机原库不同的端口及相同数据库名；SQL 核对实际端口和数据目录必须对应工作槽，拒绝备库角色，再运行该目标的迁移、节点/代次及领域恢复检查。目标未启动、配置不符或检查失败时不报告恢复核对通过。宿主不会导入密钥；部署人员须部署匹配的证书和解锁材料。不能启动暂存原件或手工修改操作记录解除保护。
+
+可选 `Recovery:PostgresServiceName` 启用 Windows 恢复实例受控启动，另须配置 `Recovery:OriginalPostgresServiceName` 和 `Recovery:PostgresConfigurationPath`。恢复、原库、业务、管理服务名须四者不同。恢复服务及独立受保护 PostgreSQL 配置在部署时预建；管理操作不注册服务、不更改服务账户或授予权限。未配置该服务名时仍可由部署人员启动绑定工作副本后续行原恢复请求。原生 SCM、服务账户及文件 ACL 必须在 Windows 部署环境验证，macOS 的替身测试不能替代。
+
+恢复服务应为手动启动的独立进程服务，SCM BinaryPath 必须精确等于 `ControlledRecoveryDatabase.BuildServiceCommand(serviceName, postgresBinDirectory, workingRoot, configurationPath, recoveryPort)` 返回的固定命令；由部署工具设置，不能把原库服务改成恢复服务。命令固定 `pg_ctl.exe runservice`、工作槽、服务名、等待参数、外部配置、数据目录、IPv4 回环地址和恢复连接端口，并关闭归档及预加载库；不接受请求提供的程序或启动参数。独立配置须匹配认证规则及恢复账户，位于工作槽外受保护目录，不能引用原库目录或含会修改原文件的外部命令。相关工具语义见 [PostgreSQL pg_ctl](https://www.postgresql.org/docs/18/app-pg-ctl.html)，只读部署核对使用 [QueryServiceConfigW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-queryserviceconfigw)。
+
+复制前须观察恢复服务已停止；运行中只读取原请求的完整工作标记，不重复制。启动前拒绝 `postmaster.pid`、`standby.signal`、`recovery.signal`，并拒绝包含有效设置的 `postgresql.auto.conf`（仅空行/注释可接受）；保留这些文件，不自动删信号、清配置或覆盖目标。SCM 命令不符、未知服务状态、取消或启动失败保留待核对状态。恢复进程 Running 后仍需实际 SQL 目标及全部恢复检查，不能直接标为 BusinessReady。复制和启动中断后查询不启动实例；显式重放原请求时，已经运行且标记匹配的目标只核对、不再次启动。
 
 可选 `Recovery:SelectionPath` 启用恢复后的业务连接切换，须为仓库外、预建受保护目录中的绝对文件路径。管理和业务两套受保护配置必须设置同一路径、Exam/ExamRecovery 连接及服务器/节点/预期代次，并使用包含本接线的业务版本；文件缺失表示原连接，损坏、身份不符或已选恢复连接缺失时拒绝回退。选择文件只保存原请求身份、工作槽及连接引用，不保存秘密；不要放在操作 JSON 目录或备份材料源中。业务运行时不要手工改选库文件或自动启动原库。
 

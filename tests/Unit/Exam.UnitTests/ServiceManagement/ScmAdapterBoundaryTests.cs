@@ -14,9 +14,11 @@ public sealed class ScmAdapterBoundaryTests
         if (!OperatingSystem.IsWindows())
         {
             Assert.Throws<PlatformNotSupportedException>(() => control.GetState(name));
+            Assert.Throws<PlatformNotSupportedException>(() => control.GetBinaryPath(name));
             return;
         }
         Assert.Equal(1060, Assert.Throws<Win32Exception>(() => control.GetState(name)).NativeErrorCode);
+        Assert.Equal(1060, Assert.Throws<Win32Exception>(() => control.GetBinaryPath(name)).NativeErrorCode);
         Assert.Equal(1060, Assert.Throws<Win32Exception>(() => control.Start(name)).NativeErrorCode);
         Assert.Equal(1060, Assert.Throws<Win32Exception>(() => control.Stop(name)).NativeErrorCode);
         Assert.Equal(BusinessServiceStatus.Faulted, new WindowsServiceBusinessHost(name).Status);

@@ -154,13 +154,50 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
 }
 
 /// <summary>Windows Service Control Manager adapter. The service name is fixed at deployment.</summary>
-public sealed class ScmWindowsServiceControl : IWindowsServiceControl
+public sealed class ScmWindowsServiceControl : IWindowsServiceControl, IWindowsServiceDeployment
 {
     private const uint ScManagerConnect = 0x0001;
     private const uint ServiceQueryStatus = 0x0004;
     private const uint ServiceStart = 0x0010;
     private const uint ServiceStop = 0x0020;
     private const uint ServiceControlStop = 0x00000001;
+
+    public string GetBinaryPath(string serviceName)
+    {
+        using var service = Open(serviceName, 0x0001); // SERVICE_QUERY_CONFIG, read-only.
+        if (QueryServiceConfig(service, IntPtr.Zero, 0, out var required) ||
+            Marshal.GetLastWin32Error() != 122 || required is 0 or > 8192)
+            throw new Win32Exception("无法读取受控服务部署配置。");
+        var buffer = Marshal.AllocHGlobal(checked((int)required));
+        try
+        {
+            if (!QueryServiceConfig(service, buffer, required, out _))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            var config = Marshal.PtrToStructure<ServiceConfigurationNative>(buffer);
+            if (config.StartType != 3 || config.ServiceType != 0x10)
+                throw new Win32Exception("恢复服务必须为手动启动的独立进程服务。");
+            return Marshal.PtrToStringUni(config.BinaryPath) ?? throw new Win32Exception("服务启动命令缺失。");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceConfigurationNative
+    {
+        public uint ServiceType;
+        public uint StartType;
+        public uint ErrorControl;
+        public IntPtr BinaryPath;
+        public IntPtr LoadOrderGroup;
+        public uint TagId;
+        public IntPtr Dependencies;
+        public IntPtr ServiceStartName;
+        public IntPtr DisplayName;
+    }
+
+    [DllImport("advapi32.dll", EntryPoint = "QueryServiceConfigW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryServiceConfig(SafeServiceHandle service, IntPtr buffer, uint size, out uint needed);
 
     public ManagedWindowsServiceState GetState(string serviceName)
     {
