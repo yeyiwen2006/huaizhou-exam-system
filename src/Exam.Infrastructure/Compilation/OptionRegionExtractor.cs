@@ -70,24 +70,40 @@ public sealed class OptionRegionExtractor
             issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "考试标识不能为空"));
         if (request.PaperVersion <= 0)
             issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "试卷版本必须为正"));
-        if (request.Questions.Count == 0)
+        if (request.Questions is null || request.Questions.Count == 0)
+        {
             issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "没有需要抽取的题目"));
+            return issues;
+        }
 
         var questionIds = new HashSet<string>(StringComparer.Ordinal);
-        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var paths = new HashSet<string>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (var question in request.Questions)
         {
+            if (question is null)
+            {
+                issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目不能为空"));
+                continue;
+            }
             if (string.IsNullOrWhiteSpace(question.QuestionId))
                 issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目标识不能为空"));
             else if (!questionIds.Add(question.QuestionId))
                 issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目标识重复", question.QuestionId));
 
-            if (string.IsNullOrWhiteSpace(question.PdfPath))
-                issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目 PDF 路径不能为空", question.QuestionId));
-            else if (!paths.Add(Path.GetFullPath(question.PdfPath)))
-                issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "同一 PDF 被两道题引用，无法区分标记归属", question.QuestionId));
+            try
+            {
+                if (string.IsNullOrWhiteSpace(question.PdfPath) || !Path.IsPathFullyQualified(question.PdfPath))
+                    issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目 PDF 必须使用绝对路径", question.QuestionId));
+                else if (!paths.Add(Path.GetFullPath(question.PdfPath)))
+                    issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "同一 PDF 被两道题引用，无法区分标记归属", question.QuestionId));
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目 PDF 路径无效", question.QuestionId));
+            }
 
-            if (question.OptionIds.Count == 0)
+            if (question.OptionIds is null || question.OptionIds.Count == 0)
             {
                 issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RequestInvalid, "题目没有选项", question.QuestionId));
                 continue;
@@ -148,34 +164,24 @@ public sealed class OptionRegionExtractor
     {
         var regions = new Dictionary<string, OptionRegion>(StringComparer.Ordinal);
 
-        PdfDocument document;
+        int? currentPageIndex = null;
         try
         {
-            document = PdfDocument.Open(question.PdfPath);
-        }
-        catch (Exception)
-        {
-            // 第三方库在损坏或不可读文件上抛出的异常一律归为稳定的 PdfUnreadable，
-            // 不把异常原文带进问题消息。
-            issues.Add(new OptionRegionIssue(OptionRegionIssueCode.PdfUnreadable, "题目 PDF 无法打开", question.QuestionId));
-            return [];
-        }
-
-        using (document)
-        {
+            using var document = PdfDocument.Open(question.PdfPath);
             if (document.NumberOfPages < 1)
             {
                 issues.Add(new OptionRegionIssue(OptionRegionIssueCode.PdfUnreadable, "题目 PDF 没有页面", question.QuestionId));
                 return [];
             }
 
-            var expectedNames = expected.Select(item => item.Name).ToHashSet(StringComparer.Ordinal);
+            var expectedNames = expected.ToDictionary(item => item.Name, StringComparer.Ordinal);
             var fragments = new Dictionary<string, List<Fragment>>(StringComparer.Ordinal);
 
             for (var pageNumber = 1; pageNumber <= document.NumberOfPages; pageNumber++)
             {
-                var page = document.GetPage(pageNumber);
                 var pageIndex = pageNumber - 1;
+                currentPageIndex = pageIndex;
+                var page = document.GetPage(pageNumber);
                 var rotation = page.Rotation.Value;
 
                 if (!OptionRegionGeometry.IsSupportedRotation(rotation))
@@ -186,7 +192,7 @@ public sealed class OptionRegionExtractor
                     continue;
                 }
 
-                if (!TryEffectiveDisplayBox(page, out var displayBox))
+                if (!TryEffectiveDisplayBox(page, document, out var displayBox))
                 {
                     issues.Add(new OptionRegionIssue(
                         OptionRegionIssueCode.PdfUnreadable,
@@ -199,11 +205,19 @@ public sealed class OptionRegionExtractor
                 {
                     if (annotation.Type != AnnotationType.Link) continue;
 
-                    var name = TryReadDestinationName(annotation);
-                    if (name is null || !name.StartsWith(OptionRegionArtifact.MarkerPrefix, StringComparison.Ordinal))
-                        continue;   // 普通链接不计入选项数
+                    var (name, ambiguous) = ReadMarkerDestination(annotation, document);
+                    if (name is null) continue; // 普通链接不计入选项数。
 
-                    if (!expectedNames.Contains(name))
+                    expectedNames.TryGetValue(name, out var expectedOption);
+                    if (ambiguous || (annotation.Flags & (AnnotationFlags.Hidden | AnnotationFlags.NoView)) != 0)
+                    {
+                        issues.Add(new OptionRegionIssue(OptionRegionIssueCode.MarkerMalformed,
+                            "选项标记不得同时指定 /A 与 /Dest，也不得隐藏注解或禁用屏幕显示",
+                            question.QuestionId, expectedOption?.OptionId, pageIndex));
+                        continue;
+                    }
+
+                    if (expectedOption is null)
                     {
                         issues.Add(new OptionRegionIssue(
                             OptionRegionIssueCode.MarkerUnexpected,
@@ -213,7 +227,7 @@ public sealed class OptionRegionExtractor
 
                     if (annotation.Action is not GoToAction { Destination: { } destination })
                     {
-                        issues.Add(Unresolved(name, question.QuestionId, pageIndex, "标记不是同一文档内的 GoTo 目标"));
+                        issues.Add(Unresolved(name, question.QuestionId, expectedOption.OptionId, pageIndex, "标记不是同一文档内的 GoTo 目标"));
                         continue;
                     }
 
@@ -222,7 +236,7 @@ public sealed class OptionRegionExtractor
                         issues.Add(new OptionRegionIssue(
                             OptionRegionIssueCode.PageIndexInvalid,
                             $"标记 {name} 的目标页 {destination.PageNumber} 超出该题 PDF 的 {document.NumberOfPages} 页",
-                            question.QuestionId, null, pageIndex));
+                            question.QuestionId, expectedOption.OptionId, pageIndex));
                         continue;
                     }
 
@@ -231,13 +245,23 @@ public sealed class OptionRegionExtractor
                         issues.Add(new OptionRegionIssue(
                             OptionRegionIssueCode.DestinationPageMismatch,
                             $"标记 {name} 的目标在第 {destination.PageNumber} 页，注解在第 {pageNumber} 页",
-                            question.QuestionId, null, pageIndex));
+                            question.QuestionId, expectedOption.OptionId, pageIndex));
                         continue;
                     }
 
-                    if (!TryReadRawRect(annotation, out var rawRect))
+                    if (!TryReadRawRect(annotation, document, out var rawRect))
                     {
-                        issues.Add(Unresolved(name, question.QuestionId, pageIndex, "注解缺少合法的 /Rect（四个有限数）"));
+                        issues.Add(new OptionRegionIssue(OptionRegionIssueCode.RegionOutOfBounds,
+                            "注解缺少合法的 /Rect（四个有限数）", question.QuestionId, expectedOption.OptionId, pageIndex));
+                        continue;
+                    }
+
+                    // 每条碎片先独立校验，防止零面积或无效碎片被与合法矩形取并集后掩盖。
+                    var fragmentResult = OptionRegionGeometry.Normalize(rawRect, displayBox, rotation);
+                    if (!fragmentResult.Succeeded)
+                    {
+                        issues.Add(new OptionRegionIssue(fragmentResult.Issue, fragmentResult.Message,
+                            question.QuestionId, expectedOption.OptionId, pageIndex));
                         continue;
                     }
 
@@ -289,6 +313,15 @@ public sealed class OptionRegionExtractor
             }
         }
 
+        catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+        {
+            // PDF 的页面、动作和注解是延迟读取的，不能只保护 Open。
+            // 不泄露第三方异常原文；任一页损坏时整题、整次产物均不可用。
+            issues.Add(new OptionRegionIssue(OptionRegionIssueCode.PdfUnreadable,
+                "题目 PDF 无法读取，或页面、注解结构无效", question.QuestionId, null, currentPageIndex));
+            return [];
+        }
+
         // 结果按清单选项顺序输出；有问题的选项此前已记入 issues，调用方据此整次失败。
         return expected
             .Select(item => regions.TryGetValue(item.OptionId, out var region) ? region : null)
@@ -296,62 +329,96 @@ public sealed class OptionRegionExtractor
             .ToList();
     }
 
-    private static OptionRegionIssue Unresolved(string name, string questionId, int pageIndex, string reason) =>
-        new(OptionRegionIssueCode.MarkerUnresolved, $"标记 {name} 无法解析：{reason}", questionId, null, pageIndex);
+    private static OptionRegionIssue Unresolved(string name, string questionId, string optionId, int pageIndex, string reason) =>
+        new(OptionRegionIssueCode.MarkerUnresolved, $"标记 {name} 无法解析：{reason}", questionId, optionId, pageIndex);
 
-    /// <summary>目标名取自原始动作字典的 <c>/A /D</c> 或直接 <c>/Dest</c>；不使用 <c>Annotation.Name</c>（即 <c>/NM</c>）。</summary>
-    private static string? TryReadDestinationName(Annotation annotation)
+    /// <summary>解析原始命名目标；与 PdfPig 一样接受字符串、十六进制字符串、名称及间接对象。</summary>
+    private static (string? Name, bool Ambiguous) ReadMarkerDestination(Annotation annotation, PdfDocument document)
     {
         var dictionary = annotation.AnnotationDictionary;
-
-        if (dictionary.TryGet(NameToken.Create("A"), out var action) && action is DictionaryToken actionDictionary &&
-            actionDictionary.TryGet(NameToken.Create("D"), out var actionDestination) &&
-            TokenText(actionDestination) is { } fromAction)
-            return fromAction;
-
-        if (dictionary.TryGet(NameToken.Create("Dest"), out var directDestination))
-            return TokenText(directDestination);
-
-        return null;
+        var hasAction = dictionary.TryGet(NameToken.Create("A"), out var action);
+        var hasDestination = dictionary.TryGet(NameToken.Create("Dest"), out var directDestination);
+        string? fromAction = null;
+        if (Resolve(action, document) is DictionaryToken actionDictionary &&
+            actionDictionary.TryGet(NameToken.Create("D"), out var actionDestination))
+            fromAction = TokenText(Resolve(actionDestination, document));
+        var fromDestination = TokenText(Resolve(directDestination, document));
+        var name = IsMarker(fromAction) ? fromAction : IsMarker(fromDestination) ? fromDestination : null;
+        return (name, hasAction && hasDestination);
     }
 
-    private static string? TokenText(IToken token) => token switch
+    private static bool IsMarker(string? name) =>
+        name?.StartsWith(OptionRegionArtifact.MarkerPrefix, StringComparison.Ordinal) == true;
+
+    private static string? TokenText(IToken? token) => token switch
     {
         StringToken text => text.Data,
+        HexToken hex => hex.Data,
         NameToken name => name.Data,
         _ => null
     };
 
-    private static bool TryReadRawRect(Annotation annotation, out RawRect rect)
+    /// <summary>有界地解引用原始对象；不使用已经变换过的 Annotation.Rectangle。</summary>
+    private static IToken? Resolve(IToken? token, PdfDocument document)
+    {
+        for (var depth = 0; token is IndirectReferenceToken reference; depth++)
+        {
+            if (depth >= 64) throw new InvalidDataException("PDF 间接引用过深或成环");
+            token = document.Structure.GetObject(reference.Data).Data;
+        }
+        return token;
+    }
+
+    private static bool TryReadRawRect(Annotation annotation, PdfDocument document, out RawRect rect)
+    {
+        annotation.AnnotationDictionary.TryGet(NameToken.Create("Rect"), out var token);
+        return TryReadRect(token, document, out rect);
+    }
+
+    private static bool TryReadRect(IToken? token, PdfDocument document, out RawRect rect)
     {
         rect = default;
-        if (!annotation.AnnotationDictionary.TryGet(NameToken.Create("Rect"), out var token) ||
-            token is not ArrayToken { Length: 4 } array)
-            return false;
-
+        if (Resolve(token, document) is not ArrayToken { Length: 4 } array) return false;
         Span<double> values = stackalloc double[4];
         for (var index = 0; index < 4; index++)
         {
-            if (array[index] is not NumericToken number) return false;
+            if (Resolve(array[index], document) is not NumericToken number || !double.IsFinite(number.Double))
+                return false;
             values[index] = number.Double;
         }
-
         rect = RawRect.FromNumbers(values);
         return true;
     }
 
-    /// <summary>有效显示框取 CropBox 与 MediaBox 的交集，缺少 CropBox 时使用 MediaBox。</summary>
-    private static bool TryEffectiveDisplayBox(Page page, out PageDisplayBox displayBox)
+    /// <summary>按最近页树节点继承页框；PdfPig 0.1.16 的 Page.CropBox 不能代替此查询。</summary>
+    private static IToken? ReadInherited(DictionaryToken dictionary, NameToken key, PdfDocument document)
+    {
+        for (var depth = 0; depth < 128; depth++)
+        {
+            if (dictionary.TryGet(key, out var value) && Resolve(value, document) is { } resolved && resolved is not NullToken)
+                return resolved;
+            if (!dictionary.TryGet(NameToken.Create("Parent"), out var parent)) return null;
+            dictionary = Resolve(parent, document) as DictionaryToken
+                ?? throw new InvalidDataException("PDF 页树父节点无效");
+        }
+        throw new InvalidDataException("PDF 页树过深或成环");
+    }
+
+    /// <summary>显式读取继承的原始页框，再取 CropBox 与 MediaBox 的交集。</summary>
+    private static bool TryEffectiveDisplayBox(Page page, PdfDocument document, out PageDisplayBox displayBox)
     {
         displayBox = default;
-        if (page.MediaBox?.Bounds is not { } media) return false;
-        var crop = page.CropBox?.Bounds is { } cropBox ? cropBox : media;
+        if (!TryReadRect(ReadInherited(page.Dictionary, NameToken.Create("MediaBox"), document), document, out var media) ||
+            !(media.Width > 0) || !(media.Height > 0)) return false;
+        var cropToken = ReadInherited(page.Dictionary, NameToken.Create("CropBox"), document);
+        var crop = media;
+        if (cropToken is not null && (!TryReadRect(cropToken, document, out crop) || !(crop.Width > 0) || !(crop.Height > 0)))
+            return false;
 
-        var left = Math.Max(crop.Left, media.Left);
-        var bottom = Math.Max(crop.Bottom, media.Bottom);
-        var right = Math.Min(crop.Right, media.Right);
-        var top = Math.Min(crop.Top, media.Top);
-
+        var left = Math.Max(crop.MinX, media.MinX);
+        var bottom = Math.Max(crop.MinY, media.MinY);
+        var right = Math.Min(crop.MaxX, media.MaxX);
+        var top = Math.Min(crop.MaxY, media.MaxY);
         displayBox = new PageDisplayBox(left, bottom, right - left, top - bottom);
         return double.IsFinite(displayBox.Width) && double.IsFinite(displayBox.Height) &&
                displayBox.Width > 0 && displayBox.Height > 0;

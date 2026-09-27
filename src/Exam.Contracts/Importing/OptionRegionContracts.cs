@@ -17,7 +17,7 @@ public enum OptionRegionIssueCode
     /// <summary>两个不同的 (题目, 选项) 组合生成了相同的目标名，无法唯一绑定，必须拒绝。</summary>
     ExpectedNameCollision,
 
-    /// <summary>目标名不属于 <c>opt:</c> 命名空间但出现在预期集合中，或 <c>opt:</c> 名称格式不合法。</summary>
+    /// <summary>选项标记结构不合法，包括同时指定动作与直接目标，或设置 Hidden/NoView 标志。</summary>
     MarkerMalformed,
 
     /// <summary>清单声明的选项没有对应的标签区域。</summary>

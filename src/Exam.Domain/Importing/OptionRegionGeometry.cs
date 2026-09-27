@@ -59,8 +59,8 @@ public sealed record OptionRegionNormalizationResult(
 public static class OptionRegionGeometry
 {
     /// <summary>
-    /// 边界与相接判定的浮点容差。仅用于吸收除法、旋转换位与相邻判定中的表示误差，
-    /// 不用于放宽契约的有效区域校验；超出该容差的区域一律失败，不做裁掉或钳位。
+    /// 仅用于原始碎片相接判定的浮点容差。区域边界另在原始坐标中严格校验，
+    /// 不以该容差接受显示框外的标签，也不裁掉或钳位原始矩形。
     /// </summary>
     public const double BoundaryTolerance = 1e-9;
 
@@ -88,6 +88,18 @@ public static class OptionRegionGeometry
             !(displayBox.Width > 0) || !(displayBox.Height > 0))
             return Fail(OptionRegionIssueCode.PdfUnreadable, "页面有效显示框的宽高必须为正的有限数");
 
+        var boxRight = displayBox.Left + displayBox.Width;
+        var boxTop = displayBox.Bottom + displayBox.Height;
+        if (!double.IsFinite(boxRight) || !double.IsFinite(boxTop))
+            return Fail(OptionRegionIssueCode.PdfUnreadable, "页面有效显示框的边界必须为有限数");
+
+        // 在除法和旋转前检查实际边界；小于旧容差的真实越界同样拒绝。
+        if (Math.Min(rawRect.MinX, rawRect.MaxX) < displayBox.Left ||
+            Math.Max(rawRect.MinX, rawRect.MaxX) > boxRight ||
+            Math.Min(rawRect.MinY, rawRect.MaxY) < displayBox.Bottom ||
+            Math.Max(rawRect.MinY, rawRect.MaxY) > boxTop)
+            return Fail(OptionRegionIssueCode.RegionOutOfBounds, "注解 /Rect 越出页面有效显示框");
+
         Span<double> xs = stackalloc double[4];
         Span<double> ys = stackalloc double[4];
         var index = 0;
@@ -111,19 +123,27 @@ public static class OptionRegionGeometry
 
         var left = xs.ToArray().Min();
         var top = ys.ToArray().Min();
-        var width = xs.ToArray().Max() - left;
-        var height = ys.ToArray().Max() - top;
-
+        var right = xs.ToArray().Max();
+        var bottom = ys.ToArray().Max();
         if (!double.IsFinite(left) || !double.IsFinite(top) ||
-            !double.IsFinite(width) || !double.IsFinite(height) ||
-            !(width > 0) || !(height > 0) ||
-            left < -BoundaryTolerance || top < -BoundaryTolerance ||
-            left + width > 1 + BoundaryTolerance || top + height > 1 + BoundaryTolerance)
-            return Fail(OptionRegionIssueCode.RegionOutOfBounds, "归一化区域越出 [0,1] 或宽高非正");
+            !double.IsFinite(right) || !double.IsFinite(bottom))
+            return Fail(OptionRegionIssueCode.RegionOutOfBounds, "归一化区域必须为有限数");
 
-        // 容差内把表示误差归到边界，使产物不出现 >1 或 <0 的数值；真正的越界已由上一判定拒绝。
+        // 原始范围已经严格通过，这里只吸收运算表示误差；先处理端点再求宽高，
+        // 不能分别钳位 x 与 width，否则仍可能产生 x + width > 1 的非法产物。
+        left = Bound(left);
+        top = Bound(top);
+        right = Bound(right);
+        bottom = Bound(bottom);
+        var width = right - left;
+        var height = bottom - top;
+        if (left + width > 1) width = Math.BitDecrement(width);
+        if (top + height > 1) height = Math.BitDecrement(height);
+        if (!(width > 0) || !(height > 0))
+            return Fail(OptionRegionIssueCode.RegionOutOfBounds, "归一化区域宽高必须为正");
+
         return new OptionRegionNormalizationResult(
-            new NormalizedRegion(Bound(left), Bound(top), Bound(width), Bound(height)),
+            new NormalizedRegion(left, top, width, height),
             OptionRegionIssueCode.None,
             string.Empty);
     }
@@ -137,32 +157,34 @@ public static class OptionRegionGeometry
         ArgumentNullException.ThrowIfNull(fragments);
         if (fragments.Count == 0) { union = default; return false; }
 
-        var groups = new List<RawRect>(fragments);
-        var merged = true;
-        while (merged)
+        // 连通性只能由原始碎片之间的边证明。外接框会填平 L 形等空洞，
+        // 若用正在扩大的外接框继续合并，就会把不相接的第三处重复标记误纳入。
+        var visited = new bool[fragments.Count];
+        var pending = new Queue<int>();
+        visited[0] = true;
+        pending.Enqueue(0);
+        var count = 1;
+        while (pending.TryDequeue(out var current))
         {
-            merged = false;
-            for (var i = 0; i < groups.Count && !merged; i++)
+            for (var next = 0; next < fragments.Count; next++)
             {
-                for (var j = i + 1; j < groups.Count; j++)
-                {
-                    if (!groups[i].TouchesOrOverlaps(groups[j], BoundaryTolerance)) continue;
-                    groups[i] = groups[i].Union(groups[j]);
-                    groups.RemoveAt(j);
-                    merged = true;
-                    break;
-                }
+                if (visited[next] || !fragments[current].TouchesOrOverlaps(fragments[next], BoundaryTolerance))
+                    continue;
+                visited[next] = true;
+                count++;
+                pending.Enqueue(next);
             }
         }
 
-        // 未连通时不给出可用的并集：调用方必须按重复标记处理，不能用整体外接矩形掩盖分离。
-        if (groups.Count != 1)
+        if (count != fragments.Count)
         {
             union = default;
             return false;
         }
 
-        union = groups[0];
+        union = fragments[0];
+        for (var index = 1; index < fragments.Count; index++)
+            union = union.Union(fragments[index]);
         return true;
     }
 
