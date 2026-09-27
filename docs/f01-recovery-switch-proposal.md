@@ -1,6 +1,6 @@
 # F01 生产恢复闭环实施差异（待 A 确认）
 
-这是 [范围清单](f01-scope-checklist.md)中恢复缺口的具体接线方案，尚未实施，不替代 [ADR 0002](decisions/0002-local-management-access.md)。类型命名已获授权；需确认的是秘密配置切换、旧备份数据边界和恢复续行权限。
+这是 F01 生产恢复缺口的具体接线方案，尚未实施，不替代 [ADR 0002](decisions/0002-local-management-access.md)。类型命名已获授权；需确认的是秘密配置切换、旧备份数据边界和恢复续行权限。
 
 ## 当前调用
 

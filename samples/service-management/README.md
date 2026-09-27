@@ -25,4 +25,4 @@
 
 `Backup:StartupVerificationDirectory` 与 `Backup:StartupVerificationBackupId` 指定启动自检的备份及其固定标识，必须在允许备份根目录内；不能保留占位值或自动选“最新”。先通过管理备份接口创建完整备份，再由部署人员更新受保护配置中的选择并重启管理宿主（当前无动态重载）。缺少选择、摘要损坏、工具失败或标识不符均产生阻止启动的 `backup-integrity` 检查；初始化时仍可认证、查询状态和创建备份。检查不依赖业务数据库、不写恢复目标，但不证明备份新鲜度、所属服务器、WAL 连续覆盖或密钥可实际解锁，完整恢复演练仍需执行。
 
-完整责任与缺口见 [F01 工作边界清单](../../docs/f01-scope-checklist.md)；恢复切换差异见 [待确认方案](../../docs/f01-recovery-switch-proposal.md)；实际检查和 Windows 接续见 [集中交接](../../docs/f01-local-management-handoff.md)。
+接口边界以 [ADR 0002](../../docs/decisions/0002-local-management-access.md) 为准；恢复切换差异见 [待确认方案](../../docs/f01-recovery-switch-proposal.md)。实际模块验证与未完成项在实现 PR 中记录。
