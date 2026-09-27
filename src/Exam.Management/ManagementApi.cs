@@ -30,7 +30,7 @@ public static class ManagementApi
                     runtime.RequireTarget(context.Request.Headers[ManagementHeaders.ServerId].ToString(),
                         context.Request.Headers[ManagementHeaders.NodeId].ToString());
                     if (!context.Request.HasJsonContentType()) throw new ArgumentException("管理写请求必须是 JSON。");
-                    context.Request.EnableBuffering(bufferThreshold: 65536, bufferLimit: 65536);
+                    await BufferRequestAsync(context);
                     using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
                     if (!OperatorIdentityValidator.HasMatchingActor(document.RootElement, actor!))
                     {
@@ -74,6 +74,24 @@ public static class ManagementApi
     private static async Task<T> ReadAsync<T>(HttpContext context, JsonSerializerOptions json) =>
         await JsonSerializer.DeserializeAsync<T>(context.Request.Body, json, context.RequestAborted)
         ?? throw new ArgumentException("管理请求不能为空。");
+    private static async Task BufferRequestAsync(HttpContext context)
+    {
+        const int maximumBytes = 65536;
+        if (context.Request.ContentLength > maximumBytes)
+            throw new ArgumentException("管理请求超过大小限制。");
+        // Check streamed bodies too; a buffering-limit IOException is not a dependency failure.
+        context.Request.EnableBuffering(bufferThreshold: maximumBytes + 1, bufferLimit: maximumBytes + 1);
+        var buffer = new byte[4096];
+        var total = 0;
+        int read;
+        while ((read = await context.Request.Body.ReadAsync(buffer.AsMemory(0,
+            Math.Min(buffer.Length, maximumBytes + 1 - total)), context.RequestAborted)) > 0)
+        {
+            total += read;
+            if (total > maximumBytes) throw new ArgumentException("管理请求超过大小限制。");
+        }
+        context.Request.Body.Position = 0;
+    }
     private static string Actor(HttpContext context) => (string)context.Items["Management.Actor"]!;
     private static Task WriteOperationAsync(HttpContext context, ManagementRuntime runtime, ManagementOperation operation) =>
         WriteAsync(context, runtime, operation, operation.Error, operation.Error is null ? 200 : Status(operation.Error.Code));

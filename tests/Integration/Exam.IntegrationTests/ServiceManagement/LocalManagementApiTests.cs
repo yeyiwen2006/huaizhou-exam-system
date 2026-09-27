@@ -116,6 +116,24 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(2, envelope!.Result!.Configuration!.Version);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OversizedRequestIsInputError_WithoutServiceOrJournalEffects(bool streamed)
+    {
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var body = System.Text.Encoding.UTF8.GetBytes("{\"requestId\":\"oversized\",\"serverId\":\"server\",\"nodeId\":\"node\",\"padding\":\"" + new string('x', 65536) + "\"}");
+        using HttpContent content = streamed ? new UnknownLengthContent(body) : new ByteArrayContent(body);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        var response = await client.PostAsync("/management/v1/service/stop", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var envelope = await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options);
+        Assert.Equal(ErrorCodes.InvalidInput, envelope!.Error!.Code);
+        Assert.Equal(0, _host.StopCalls);
+        Assert.Empty(Directory.GetFiles(Path.Combine(_directory, "operations"), "*.json"));
+    }
+
     [Fact]
     public async Task BlockingPreflightDoesNotStartProcess_AndSelfCheckDoesNotStartIt()
     {
@@ -282,6 +300,11 @@ public sealed class LocalManagementApiTests : IDisposable
     {
         public Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration, CancellationToken token) =>
             Task.FromResult<IReadOnlyList<StartupCheckResult>>([new("synthetic-recovery", !block, "合成检查", true)]);
+    }
+    private sealed class UnknownLengthContent(byte[] body) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(body).AsTask();
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
     }
     private sealed class ControlledHost : IManagedBusinessHost
     {
