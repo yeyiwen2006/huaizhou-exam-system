@@ -35,6 +35,8 @@ public partial class PdfQuestionView : UserControl
     private double _zoom = 1;
     private bool _fitOnResize;
     private int _loadGeneration;
+    private bool _interactionEnabled;
+    private bool _regionsValidated;
 
     /// <summary>点击普通选项；参数为选项标识（圆钮按清单选项标识绑定，不按坐标顺序）。</summary>
     public event Action<string>? OptionClicked;
@@ -67,6 +69,9 @@ public partial class PdfQuestionView : UserControl
         var generation = ++_loadGeneration;
         ClearCore();
         _questionId = questionId;
+        _interactionEnabled = interactionEnabled;
+        // 隔离调用方随后修改字典；坐标记录本身为不可变值。
+        regions = regions?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
 
         RenderedPage[] rendered;
         try
@@ -81,9 +86,11 @@ public partial class PdfQuestionView : UserControl
         {
             rendered = [];
         }
+        cancellationToken.ThrowIfCancellationRequested();
         if (generation != _loadGeneration) { return; }
         if (rendered.Length == 0)
         {
+            ClearCore();
             RegionsInvalid?.Invoke("题目 PDF 无法渲染，原版显示不可用。");
             return;
         }
@@ -94,10 +101,13 @@ public partial class PdfQuestionView : UserControl
             var invalid = OptionRegionMap.ValidatePageCount(regions, rendered.Length, questionId);
             if (invalid is not null)
             {
+                ClearCore();
                 RegionsInvalid?.Invoke(invalid);
+                return;
             }
         }
 
+        _regionsValidated = regions is { Count: > 0 };
         foreach (var page in rendered)
         {
             var image = new Image
@@ -105,7 +115,7 @@ public partial class PdfQuestionView : UserControl
                 Source = page.Bitmap,
                 Width = page.Width,
                 Height = page.Height,
-                Stretch = Stretch.None,
+                Stretch = Stretch.Fill,
                 SnapsToDevicePixels = true,
             };
             var overlay = new Canvas { Width = page.Width, Height = page.Height };
@@ -126,7 +136,7 @@ public partial class PdfQuestionView : UserControl
                 var button = new ToggleButton
                 {
                     Style = (Style)Resources["OptionCircleStyle"],
-                    IsEnabled = interactionEnabled,
+                    IsEnabled = _interactionEnabled && _regionsValidated,
                     Tag = optionId,
                 };
                 button.Click += (_, _) => OptionClicked?.Invoke(optionId);
@@ -143,7 +153,7 @@ public partial class PdfQuestionView : UserControl
             _abstainButton = new ToggleButton
             {
                 Style = (Style)Resources["AbstainButtonStyle"],
-                IsEnabled = interactionEnabled,
+                IsEnabled = _interactionEnabled && _regionsValidated,
                 Margin = new Thickness(0, 4, 0, 4),
                 HorizontalAlignment = HorizontalAlignment.Left,
             };
@@ -173,8 +183,10 @@ public partial class PdfQuestionView : UserControl
 
     public void SetInteractionEnabled(bool enabled)
     {
-        foreach (var button in _optionButtons.Values) { button.IsEnabled = enabled; }
-        if (_abstainButton is not null) { _abstainButton.IsEnabled = enabled; }
+        _interactionEnabled = enabled;
+        var effective = enabled && _regionsValidated;
+        foreach (var button in _optionButtons.Values) { button.IsEnabled = effective; }
+        if (_abstainButton is not null) { _abstainButton.IsEnabled = effective; }
     }
 
     public void ClearContent()
@@ -190,6 +202,8 @@ public partial class PdfQuestionView : UserControl
         _optionButtons.Clear();
         _abstainButton = null;
         _questionId = null;
+        _interactionEnabled = false;
+        _regionsValidated = false;
         _naturalWidth = 1;
     }
 
@@ -242,9 +256,12 @@ public partial class PdfQuestionView : UserControl
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var page = document.GetPage((uint)index);
-            var media = page.Dimensions.MediaBox;
-            var width = Math.Clamp(media.Width * RenderPointsScale, 200, 2200);
-            var height = width * (media.Height / Math.Max(1, media.Width));
+            // WinRT 的实际显示尺寸已经包含 CropBox 和 Rotate；MediaBox 不能作为叠加层尺寸。
+            var size = page.Size;
+            if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0)
+                throw new InvalidDataException("PDF 页面尺寸无效。");
+            var scale = Math.Min(RenderPointsScale, 2200 / Math.Max(size.Width, size.Height));
+            var width = Math.Max(1, Math.Round(size.Width * scale));
             using var output = new InMemoryRandomAccessStream();
             await page.RenderToStreamAsync(output, new PdfPageRenderOptions
             {
@@ -256,7 +273,13 @@ public partial class PdfQuestionView : UserControl
                 await reader.LoadAsync((uint)bytes.Length);
                 reader.ReadBytes(bytes);
             }
-            pages[index] = new RenderedPage(CreateImage(bytes), width, height);
+            try
+            {
+                var bitmap = CreateImage(bytes);
+                // 整数像素舍入与 PNG DPI 不再造成图像/Canvas 比例差；两者统一使用实际渲染位图尺寸。
+                pages[index] = new RenderedPage(bitmap, bitmap.PixelWidth, bitmap.PixelHeight);
+            }
+            finally { Array.Clear(bytes); }
         }
         return pages;
     }

@@ -10,7 +10,7 @@ namespace Exam.StudentUnitTests;
 /// B03 选项坐标（D03 契约 4.4 option-regions.json）学生侧读取与严格校验。
 /// 任何缺失、多余、越界或版本不符均整包失败；文件缺失（v1 包）返回 null 不猜测。
 /// </summary>
-public sealed class OptionRegionMapTests
+public sealed partial class OptionRegionMapTests
 {
     private static StudentPaperManifest CreateManifest() => new(
         1, "exam", "合成考试", 3,

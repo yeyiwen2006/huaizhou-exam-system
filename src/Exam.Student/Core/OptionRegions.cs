@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.Compression;
 using System.Text.Json;
@@ -26,7 +27,6 @@ public sealed class OptionRegionMap
     public const string EntryPath = "option-regions.json";
     public const int RequiredArtifactVersion = 1;
     public const string RequiredAnchorScheme = "pageTopLeftNormalizedV1";
-    private const double Epsilon = 1e-9;
 
     private readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, OptionRegion>> _regions;
 
@@ -58,8 +58,10 @@ public sealed class OptionRegionMap
         {
             using var stream = new MemoryStream(payload, writable: false);
             using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
-            var entry = zip.GetEntry(EntryPath);
-            if (entry is null) { return null; }
+            var entries = zip.Entries.Where(item => item.FullName == EntryPath).ToArray();
+            if (entries.Length == 0) { return null; }
+            if (entries.Length != 1) throw new InvalidDataException("选项坐标文件在包中重复出现。");
+            var entry = entries[0];
             if (entry.Length <= 0 || entry.Length > StudentPackageLayout.MaxMetadataBytes)
                 throw new InvalidDataException("选项坐标文件缺失或超出大小限制。");
             json = new byte[checked((int)entry.Length)];
@@ -97,7 +99,9 @@ public sealed class OptionRegionMap
         {
             using var document = JsonDocument.Parse(json);
             RejectDuplicateProperties(document.RootElement);
-            file = JsonSerializer.Deserialize<RegionFileDocument>(json, ImportJson.Create())
+            var options = ImportJson.Create();
+            options.RespectRequiredConstructorParameters = true;
+            file = JsonSerializer.Deserialize<RegionFileDocument>(json, options)
                 ?? throw new InvalidDataException("缺少选项坐标内容。");
         }
         catch (JsonException error)
@@ -151,7 +155,7 @@ public sealed class OptionRegionMap
 
         var frozen = byQuestion.ToDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyDictionary<string, OptionRegion>)pair.Value,
+            pair => (IReadOnlyDictionary<string, OptionRegion>)new ReadOnlyDictionary<string, OptionRegion>(pair.Value),
             StringComparer.Ordinal);
         return new OptionRegionMap(file.ExamId!, file.PaperVersion, frozen);
     }
@@ -163,8 +167,12 @@ public sealed class OptionRegionMap
         if (questionRegions is null) { return null; }
         foreach (var (optionId, region) in questionRegions)
         {
-            if (region.PageIndex >= pageCount)
-                return $"题目 {questionId} 选项 {optionId} 的页码 {region.PageIndex} 超出该题 PDF 实际页数 {pageCount}。";
+            if (region is null || pageCount <= 0 || region.PageIndex < 0 || region.PageIndex >= pageCount ||
+                !double.IsFinite(region.X) || !double.IsFinite(region.Y) ||
+                !double.IsFinite(region.Width) || !double.IsFinite(region.Height) ||
+                region.X < 0 || region.Y < 0 || region.Width <= 0 || region.Height <= 0 ||
+                region.X + region.Width > 1 || region.Y + region.Height > 1)
+                return $"题目 {questionId} 选项 {optionId} 的页码或区域无效（该题 PDF 实际页数 {pageCount}）。";
         }
         return null;
     }
@@ -176,8 +184,8 @@ public sealed class OptionRegionMap
         var values = new[] { option.X, option.Y, option.Width, option.Height };
         if (values.Any(double.IsNaN) || values.Any(double.IsInfinity))
             throw new InvalidDataException($"题目 {questionId} 选项 {option.OptionId} 的坐标包含非有限数值。");
-        if (option.X < -Epsilon || option.Y < -Epsilon || option.Width <= 0 || option.Height <= 0 ||
-            option.X + option.Width > 1 + Epsilon || option.Y + option.Height > 1 + Epsilon)
+        if (option.X < 0 || option.Y < 0 || option.Width <= 0 || option.Height <= 0 ||
+            option.X + option.Width > 1 || option.Y + option.Height > 1)
             throw new InvalidDataException($"题目 {questionId} 选项 {option.OptionId} 的坐标越出页面范围。");
         return new OptionRegion(option.PageIndex, option.X, option.Y, option.Width, option.Height);
     }
