@@ -6,9 +6,19 @@
 
 仓库已经具备 A02 至 A06 的 PostgreSQL 18 持久化、正式 HTTP API、设备授权的 SignalR 持久指令补发、通用 HTTP CLI、版本化加密题包存储、基础备份/隔离恢复以及现归F02的主备控制基础设施。内存实现仅供单元测试；生产环境缺少 PostgreSQL 连接或考务令牌时会拒绝启用业务入口。逐项完成度、实测范围和仍需两台真实主机完成的限制见 [A 组实施状态](docs/a-implementation-status.md)。
 
-当前任务与Issue对应见[任务映射](docs/task-map.md)。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（董文祺，@kgwdonkey）。
+当前任务与Issue对应见[任务映射](docs/task-map.md)。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（@kgwdonkey）。
 
-G（董文祺，@kgwdonkey）接手G01排名统计与报表结果、G02 Excel导出、G03考务报表入口，沿用原E02、E03、C06的Issue。D负责计分与重算，C负责考务核心和导入修改，E负责公共CLI、CI、测试设施与候选包，F负责服务管理、主备与恢复；D03保持由D开发。全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
+| 成员 | 负责范围 |
+| --- | --- |
+| A | 公共架构与契约、考试核心服务、全部PR审查与合并、整体验收和最终交付 |
+| B | 共享GUI、学生端身份与等待、题目交互、本地保存恢复、正常同步交卷、异常更新及学生端发布 |
+| C | 考试配置、名册、试场、监测与人工裁决、试题导入及考试中修改 |
+| D | 逐题规范、依赖编译、选项定位与学生包、精确计分、规则版本与重算、材料准备及对应CLI |
+| E | 公共CLI框架、CI、测试基础设施、候选运行包准备及测试期间重建支持 |
+| F | 服务管理、备份恢复、主备同步与接管、学生端主备重连、考务服务管理入口及部署运维工具 |
+| G | 排名统计与报表结果、Excel导出、考务报表入口及对应业务CLI |
+
+全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
 
 ## 开发环境
 

@@ -1,6 +1,6 @@
 # 当前任务编号、负责人及Issue映射
 
-2026-09-27新增G后按当前主责使用A/B/C/D/E/F/G/T前缀，GitHub的#编号、评论、PR关联和已完成记录保留。旧任务码仅用于历史追溯；正在开发的分支不因改编号强制重建。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（董文祺，@kgwdonkey）。所有PR代码审查与合并归A。T01/T02由A统筹、全员测试，T03由A负责最终交付；七人成员为A至G。
+2026-09-27新增G后按当前主责使用A/B/C/D/E/F/G/T前缀，GitHub的#编号、评论、PR关联和已完成记录保留。旧任务码仅用于历史追溯；正在开发的分支不因改编号强制重建。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（@kgwdonkey）。所有PR代码审查与合并归A。T01/T02由A统筹、全员测试，T03由A负责最终交付；七人成员为A至G。
 
 开发期模块测试持续执行，整体单机测试及修复归T01，多机联调联试及修复归T02，测试后的最终版本固定与交付归T03。测试基础设施归E01，产品运维工具归F05。旧阶段安排不再作为当前任务前置；历史M0记录不纳入新的推进流程。
 
@@ -8,7 +8,7 @@
 
 | 原任务 | 当前任务 | 保留Issue | 说明 |
 | --- | --- | --- | --- |
-| E02 | G01 排名、统计与报表结果 | [#31](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/31) | 2026-09-27交接给G董文祺（@kgwdonkey），保留历史记录 |
+| E02 | G01 排名、统计与报表结果 | [#31](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/31) | 2026-09-27交接给G，保留历史记录 |
 | E03 | G02 Excel导出 | [#32](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/32) | 2026-09-27交接给G，读取G01统一结果 |
 | C06 | G03 考务端报表与导出入口 | [#22](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/22) | 2026-09-27交接给G，保留C已有页面成果；原服务管理部分仍归F04 |
 | E06 | E04 候选运行包准备 | [#35](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/35) | E；保留候选包准备及重建支持，测试后最终交付拆至#48；原E04集成故障测试现为T01 |
@@ -67,7 +67,7 @@
 
 ## 交接边界
 
-G01/G02/G03由G董文祺（@kgwdonkey）负责，D提供精确计分、重算及持久化结果，G读取实际名单和成绩完成统计、报表整体发布、导出和页面。G01先确认契约，再交付G02、G03，GUI/CLI/Excel共用同一结果和开放条件。E保留E01和E04，C保留考务核心及C05；已有实现和分支交接保留，详见[G模块交接说明](g-reporting-handoff.md)。
+G01/G02/G03由G负责，D提供精确计分、重算及持久化结果，G读取实际名单和成绩完成统计、报表整体发布、导出和页面。G01先确认契约，再交付G02、G03，GUI/CLI/Excel共用同一结果和开放条件。E保留E01和E04，C保留考务核心及C05；已有实现和分支交接保留，详见[G模块交接说明](g-reporting-handoff.md)。
 
 F01/F02提供业务和管理API/CLI处理器，F04把它们接入现有考务端，不另写一套规则或程序。F03复用B的本地状态、会话和交卷逻辑，只负责主备切换适配。原C06报表及导出交接G03，原服务管理部分仍以F04为准；C/G/F在同一考务端开发，公共导航由A协调。
 

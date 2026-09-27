@@ -1,6 +1,6 @@
 # G 成绩统计、导出与考务报表交接
 
-2026-09-27，A确认由董文祺（[@kgwdonkey](https://github.com/kgwdonkey)）担任G，接手成绩统计、Excel导出及考务报表入口。业务以[需求文档](../requirements.md)为准，成员和任务目录见[总计划](../development-plan.md)与[任务映射](task-map.md)。本次只调整分工，不表示业务已实现或测试已通过。
+2026-09-27，A确认由G接手成绩统计、Excel导出及考务报表入口。业务以[需求文档](../requirements.md)为准，成员和任务目录见[总计划](../development-plan.md)与[任务映射](task-map.md)。本次只调整分工，不表示业务已实现或测试已通过。
 
 ## 任务与交付顺序
 
