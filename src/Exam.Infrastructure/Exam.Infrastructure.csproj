@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.3" />
+    <!-- D03 选项定位抽取：读隐藏外观链接注解的 /Rect 与目标名，见 docs/d03-option-region-contract.md -->
+    <PackageReference Include="PdfPig" Version="0.1.16" />
   </ItemGroup>
 
   <ItemGroup>
