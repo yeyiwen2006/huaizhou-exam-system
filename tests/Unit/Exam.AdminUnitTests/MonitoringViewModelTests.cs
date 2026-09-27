@@ -15,9 +15,10 @@ public sealed class MonitoringViewModelTests
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
 
     [Fact]
-    public async Task Load_MapsFourBusinessStatesWithoutInventingConnectionState()
+    public async Task Load_MapsActualParticipationStatesWithoutInventingConnectionState()
     {
-        var states = Enum.GetValues<ParticipationBusinessState>();
+        var states = Enum.GetValues<ParticipationBusinessState>()
+            .Where(state => state != ParticipationBusinessState.NotParticipating);
         var participations = states.Select((state, index) =>
             new ParticipationResult($"part-{index}", "exam-1", $"candidate-{index}", state,
                 $"device-{index}", 1, 1, 1, null)).ToArray();
@@ -28,7 +29,7 @@ public sealed class MonitoringViewModelTests
 
         await viewModel.LoadAsync();
 
-        Assert.Equal(new[] { "未参加", "候考", "作答中", "已交卷" },
+        Assert.Equal(new[] { "候考", "作答中", "已交卷" },
             viewModel.Rows.Select(row => row.BusinessState));
         Assert.All(viewModel.Rows, row => Assert.Equal("接口未提供", row.ConnectionState));
         Assert.Equal("已提交", viewModel.Rows[^1].CollectionState);
