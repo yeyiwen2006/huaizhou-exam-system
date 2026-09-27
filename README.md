@@ -1,14 +1,14 @@
 # 怀籀传承在线考试系统
 
-本仓库用于开发 Windows 局域网在线考试系统。首版技术栈为 .NET 10、WPF、ASP.NET Core、SignalR 与 PostgreSQL 18；学生端本地状态使用 SQLite。完整业务行为以 [需求文档](requirements.md) 为准，六人分工和测试顺序见 [开发总计划](development-plan.md)，接口约定、任务卡和验收场景见 [Agent 执行指南](agent-implementation-guide.md)。
+本仓库用于开发 Windows 局域网在线考试系统。首版技术栈为 .NET 10、WPF、ASP.NET Core、SignalR 与 PostgreSQL 18；学生端本地状态使用 SQLite。完整业务行为以 [需求文档](requirements.md) 为准，七人分工和测试顺序见 [开发总计划](development-plan.md)，接口约定、任务卡和验收场景见 [Agent 执行指南](agent-implementation-guide.md)。
 
 ## 当前状态
 
 仓库已经具备 A02 至 A06 的 PostgreSQL 18 持久化、正式 HTTP API、设备授权的 SignalR 持久指令补发、通用 HTTP CLI、版本化加密题包存储、基础备份/隔离恢复以及现归F02的主备控制基础设施。内存实现仅供单元测试；生产环境缺少 PostgreSQL 连接或考务令牌时会拒绝启用业务入口。逐项完成度、实测范围和仍需两台真实主机完成的限制见 [A 组实施状态](docs/a-implementation-status.md)。
 
-当前任务与Issue对应见[任务映射](docs/task-map.md)。六人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjaiqi）、E（@WorldChangerczx）、F（@Nostalgia-cy）。
+当前任务与Issue对应见[任务映射](docs/task-map.md)。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（董文祺，@kgwdonkey）。
 
-F负责服务管理、主备与恢复；D03保持由D开发；E负责测试基础设施。全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
+G（董文祺，@kgwdonkey）接手G01排名统计与报表结果、G02 Excel导出、G03考务报表入口，沿用原E02、E03、C06的Issue。D负责计分与重算，C负责考务核心和导入修改，E负责公共CLI、CI、测试设施与候选包，F负责服务管理、主备与恢复；D03保持由D开发。全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
 
 ## 开发环境
 
