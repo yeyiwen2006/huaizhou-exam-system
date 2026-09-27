@@ -175,6 +175,9 @@ public static class ReportCalculator
                     throw new ArgumentException("题目标识、顺序或满分无效。");
                 return question;
             }).OrderBy(question => question.QuestionNo).ToArray();
+            if (Compare(questions.Aggregate(ExactRational.Zero, (sum, question) => sum + question.MaximumScore),
+                subject.MaximumScore) != 0)
+                throw new ArgumentException("科目满分与逐题满分之和不一致。");
             return subject with { Questions = Array.AsReadOnly(questions) };
         }).OrderBy(subject => subject.Order).ToArray();
 
@@ -230,6 +233,11 @@ public static class ReportCalculator
                         throw new ArgumentException("逐题成绩缺失、重复或含未知题目与判定。");
                     return question;
                 }).ToArray();
+                // 只核验已发布成绩的算术一致性，不按答案重新判分；小题负分先参与单科求和，再统一归零。
+                var rawScore = questionGrades.Aggregate(ExactRational.Zero, (sum, question) => sum + question.Score);
+                var expectedFinal = rawScore.Numerator.Sign < 0 ? ExactRational.Zero : rawScore;
+                if (Compare(expectedFinal, grade.FinalScore) != 0)
+                    throw new ArgumentException("单科最终成绩与逐题原始分之和的归零结果不一致。");
                 grades.Add(grade.SubjectId, grade with { Questions = Array.AsReadOnly(questionGrades) });
             }
             if (grades.Count != subjects.Length ||

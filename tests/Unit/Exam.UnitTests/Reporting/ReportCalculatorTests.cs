@@ -6,7 +6,7 @@ using Exam.Domain.Scoring;
 namespace Exam.UnitTests.Reporting;
 
 /// <summary>All identifiers and scores in this file are independent synthetic examples.</summary>
-public sealed class ReportCalculatorTests
+public sealed partial class ReportCalculatorTests
 {
     [Fact]
     public void FourParticipantExample_UsesOneCommonSampleAndCompetitionRanks()
@@ -104,9 +104,15 @@ public sealed class ReportCalculatorTests
         var original = Assert.Single(input.Submissions);
         var subject = original.Subjects[0] with
         {
-            Questions = [new ReportQuestionGrade("q-a", "A", AnswerOutcome.Wrong, R(-1))]
+            Questions = [new ReportQuestionGrade("q-a", "A", AnswerOutcome.Wrong, R(-1)),
+                new ReportQuestionGrade("q-a-positive", "B", AnswerOutcome.PartialCorrect, R(3))]
         };
-        input = input with { Submissions = [original with { Subjects = [subject, original.Subjects[1]] }] };
+        input = input with
+        {
+            Subjects = [input.Subjects[0] with
+                { Questions = [new("q-a", 1, R(1)), new("q-a-positive", 2, R(29))] }, input.Subjects[1]],
+            Submissions = [original with { Subjects = [subject, original.Subjects[1]] }]
+        };
 
         var result = ReportCalculator.Calculate(input);
         Assert.Equal(1, result.CommonSampleCount);
