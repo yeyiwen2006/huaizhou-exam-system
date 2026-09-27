@@ -51,7 +51,8 @@ public sealed record FixedSubmissionRecord(
     string? ParticipationId = null,
     long EntryVersion = 0,
     string? DeviceId = null,
-    long AuthorizationVersion = 0);
+    long AuthorizationVersion = 0,
+    SubmissionReceipt? Receipt = null);
 
 /// <summary>兼容的资源准备记录；B02 受保护控制日志仍由 ExamPackageManager 管理。</summary>
 public sealed record PreparationRecord(
@@ -99,7 +100,7 @@ public interface ILocalStateStore : IDisposable
 /// .identity 是数据库初始化凭据，不是备份或内容摘要；原库/凭据缺失时不能重建替代空库。
 /// 本地记录不会赋予作答权限，恢复后仍须核对服务端当前授权。
 /// </summary>
-public sealed class SqliteLocalStateStore : ILocalStateStore
+public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceiptStore
 {
     private const int SchemaVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = JsonDefaults.Create();
@@ -481,6 +482,19 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
             return record;
         }, ct);
 
+    /// <summary>只给既有不可变答卷追加原回执；不允许重写答卷或替换另一份回执。</summary>
+    public Task<StoreWriteResult> SaveSubmissionReceiptAsync(
+        LocalStateKey key, SubmissionReceipt receipt, CancellationToken ct = default) =>
+        WriteAsync(key, (conn, tx) =>
+        {
+            var record = LoadFixedRaw(conn, tx, key) ?? throw new InvalidDataException("没有对应的固定答卷，不能登记回执。");
+            ValidateFixedState(LoadState(conn, tx, key) ?? throw new InvalidDataException("原答卷状态缺失。"), record);
+            Require(SubmissionReceiptValidation.Matches(receipt, record, key.ExamId, key.CandidateId),
+                "服务器回执与本地固定答卷不一致。");
+            Require(record.Receipt is null || record.Receipt == receipt, "不能替换已登记的原回执。");
+            if (record.Receipt is null) Put(conn, tx, key, "fixed_submission", record with { Receipt = receipt });
+        }, ct);
+
     public Task<StoreWriteResult> SavePreparationAsync(LocalStateKey key, PreparationRecord record, CancellationToken ct = default) =>
         WriteAsync(key, (conn, tx) =>
         {
@@ -614,7 +628,12 @@ public sealed class SqliteLocalStateStore : ILocalStateStore
     private static FixedSubmissionRecord? LoadFixedRaw(SqliteConnection conn, SqliteTransaction tx, LocalStateKey key)
     {
         var record = ReadRecord<FixedSubmissionRecord>(conn, tx, key, "fixed_submission");
-        if (record is not null) ValidateFixed(record);
+        if (record is not null)
+        {
+            ValidateFixed(record);
+            Require(record.Receipt is null || SubmissionReceiptValidation.Matches(record.Receipt, record, key.ExamId, key.CandidateId),
+                "本地回执与原答卷不一致，不能作为交卷成功依据。");
+        }
         return record;
     }
 

@@ -15,6 +15,7 @@ public sealed class MainViewModel : IDisposable
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
         Dependencies = new DependencyStatusViewModel();
+        ManifestPreflight = new ManifestPreflightViewModel(_api);
     }
 
     public ConnectionViewModel Connection { get; }
@@ -23,6 +24,7 @@ public sealed class MainViewModel : IDisposable
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
     public DependencyStatusViewModel Dependencies { get; }
+    public ManifestPreflightViewModel ManifestPreflight { get; }
 
     public void Dispose() => _api.Dispose();
 }
