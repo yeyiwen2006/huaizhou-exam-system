@@ -7,6 +7,11 @@
         "resolved": "10.0.3",
         "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
       },
+      "PdfPig": {
+        "type": "Transitive",
+        "resolved": "0.1.16",
+        "contentHash": "qQcbsNMYVY+K5ELptax2S8thNMk0+rSQq3H/KdYj3LLcko8yTCz8y5KIvsKxIyAuTN0ZYNnfsZkM+0EvxTwHVA=="
+      },
       "exam.application": {
         "type": "Project",
         "dependencies": {
@@ -29,7 +34,8 @@
           "Exam.Application": "[1.0.0, )",
           "Exam.Contracts": "[1.0.0, )",
           "Exam.Domain": "[1.0.0, )",
-          "Npgsql": "[10.0.3, )"
+          "Npgsql": "[10.0.3, )",
+          "PdfPig": "[0.1.16, )"
         }
       }
     }
