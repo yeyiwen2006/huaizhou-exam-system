@@ -12,9 +12,7 @@ public static class ManagementEntryPoint
 {
     public static async Task Main(string[] args)
     {
-        var builder = WebApplication.CreateBuilder(args);
-        // No framework request/exception logging of credentials, local paths or tool output.
-        builder.Logging.ClearProviders();
+        var builder = CreateHostBuilder(args);
         var configuration = builder.Configuration;
         var serverId = Required("Management:ServerId");
         var nodeId = Required("Management:NodeId");
@@ -56,6 +54,25 @@ public static class ManagementEntryPoint
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
             ? throw new InvalidOperationException($"缺少受保护部署配置项 {key}。") : configuration[key]!;
+    }
+
+    public static WebApplicationBuilder CreateHostBuilder(string[] args)
+    {
+        // SCM starts in system32; deployment configuration belongs beside the executable.
+        var serviceMode = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        { Args = args, ApplicationName = typeof(ManagementEntryPoint).Assembly.GetName().Name,
+            ContentRootPath = serviceMode ? AppContext.BaseDirectory : null });
+        if (serviceMode)
+        {
+            var name = builder.Configuration["Management:ServiceName"];
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 256 || name.IndexOfAny(['/', '\\']) >= 0)
+                throw new InvalidOperationException("缺少有效的独立管理 Windows 服务名称。");
+            builder.Services.AddWindowsService(options => options.ServiceName = name);
+        }
+        // Windows lifetime can add an event-log provider; management requests never log credentials or tool output.
+        builder.Logging.ClearProviders();
+        return builder;
     }
 }
 

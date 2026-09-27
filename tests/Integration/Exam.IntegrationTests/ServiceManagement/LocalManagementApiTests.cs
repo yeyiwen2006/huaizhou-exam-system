@@ -9,9 +9,11 @@ using Exam.Infrastructure.ServiceManagement;
 using Exam.Management;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Exam.IntegrationTests.ServiceManagement;
 
@@ -267,11 +269,12 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(1, _backups.BackupCalls);
     }
 
-    private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false)
+    private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false,
+        bool deploymentBuilder = false)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
-        var builder = WebApplication.CreateBuilder();
+        var builder = deploymentBuilder ? ManagementEntryPoint.CreateHostBuilder([]) : WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         { ["ExamSecurity:OperatorToken"] = credentials ? Token : null, ["ExamSecurity:OperatorId"] = credentials ? "operator" : null });
@@ -283,6 +286,117 @@ public sealed class LocalManagementApiTests : IDisposable
         app.MapManagementApi();
         await app.StartAsync();
         return app;
+    }
+
+    [Fact]
+    public async Task ProductionHostBuilderRetainsConsoleLifecycleAndIndependentManagementRoutes()
+    {
+        await using (var consoleHost = ManagementEntryPoint.CreateHostBuilder([]).Build())
+        {
+            Assert.Equal("ConsoleLifetime", consoleHost.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostLifetime>().GetType().Name);
+            Assert.Empty(consoleHost.Services.GetServices<Microsoft.Extensions.Logging.ILoggerProvider>());
+        }
+        await using var app = await AppAsync(deploymentBuilder: true);
+        Assert.Equal("Exam.Management", app.Environment.ApplicationName);
+        // TestServer deliberately replaces the console lifetime; only transport is substituted here.
+        Assert.Empty(app.Services.GetServices<Microsoft.Extensions.Logging.ILoggerProvider>());
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => Token,
+            app.GetTestServer().CreateHandler());
+        Assert.Equal(BusinessServiceStatus.Stopped, (await client.GetStatusAsync()).Envelope.Result!.ProcessStatus);
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task SharedClientAndCliOperateWithoutBusinessConnection_AndReplayStop()
+    {
+        await using var app = await AppAsync();
+        await File.WriteAllTextAsync(Path.Combine(_directory, "configuration.json"), "{}");
+        _host.Status = BusinessServiceStatus.Running;
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => Token,
+            app.GetTestServer().CreateHandler());
+        var handler = new LocalManagementCliHandler(client);
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(0, await handler.RunAsync("status", null, null, output, errors));
+        Assert.Contains("service-configuration", output.ToString());
+        var request = System.Text.Json.JsonSerializer.Serialize(new ManagementServiceRequest("cli-stop", "server", "node"), _json.Options);
+        Assert.Equal(0, await handler.RunAsync("stop", request, null, output, errors));
+        Assert.Equal(0, await handler.RunAsync("stop", request, null, output, errors));
+        Assert.Equal(0, await handler.RunAsync("operation", null, "cli-stop", output, errors));
+        Assert.Equal(1, _host.StopCalls);
+        Assert.Equal("", errors.ToString());
+    }
+
+    [Theory]
+    [InlineData("restore", false, 4)]
+    [InlineData("checks", true, 6)]
+    [InlineData("start", true, 6)]
+    [InlineData("stop", false, 3)]
+    public async Task CliPreservesRecoveryAndFailureSemantics(string command, bool blocked, int expectedExit)
+    {
+        await using var app = await AppAsync(blockStartup: blocked);
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => Token,
+            app.GetTestServer().CreateHandler());
+        var input = command == "restore" ? System.Text.Json.JsonSerializer.Serialize(new RestoreRequest("cli-restore", "backup", "synthetic-path", "operator"), _json.Options) :
+            "{\"requestId\":\"cli-request\",\"serverId\":\"server\",\"nodeId\":\"node\"" + (command == "stop" ? ",\"actorId\":\"forged\"}" : "}");
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(expectedExit, await new LocalManagementCliHandler(client).RunAsync(command, input, null, output, errors));
+        Assert.Equal("", output.ToString());
+        Assert.NotEmpty(errors.ToString());
+        if (command == "restore")
+        {
+            Assert.Contains("\"recoveryVerified\":false", errors.ToString());
+            Assert.Contains("\"businessReady\":false", errors.ToString());
+        }
+        Assert.Equal(0, _host.StartCalls);
+        Assert.Equal(0, _host.StopCalls);
+    }
+
+    [Fact]
+    public async Task CliConfigurationUsesPersistedVersion_AndReportsConflict()
+    {
+        await using var app = await AppAsync();
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => Token,
+            app.GetTestServer().CreateHandler());
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        var handler = new LocalManagementCliHandler(client);
+        var request = new ManagementConfigurationRequest("cli-config", "server", "node", 1, Configuration with { HttpsPort = 9444 });
+        Assert.Equal(0, await handler.RunAsync("configure", System.Text.Json.JsonSerializer.Serialize(request, _json.Options), null, output, errors));
+        Assert.Equal(4, await handler.RunAsync("configure", System.Text.Json.JsonSerializer.Serialize(request with { RequestId = "cli-conflict" }, _json.Options), null, output, errors));
+        Assert.Equal(2, (await client.GetConfigurationAsync()).Envelope.Result!.Version);
+    }
+
+    [Fact]
+    public async Task ProductionTransportRejectsUntrustedCertificate_BeforeSendingManagementMutation()
+    {
+        using var key = System.Security.Cryptography.RSA.Create(2048);
+        var request = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=localhost", key,
+            System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        var names = new System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder();
+        names.AddDnsName("localhost");
+        names.AddIpAddress(IPAddress.Loopback);
+        request.CertificateExtensions.Add(names.Build());
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(10));
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(certificate)));
+        await using var app = builder.Build();
+        var mutations = 0;
+        app.MapPost("/management/v1/service/stop", () => { mutations++; return Results.Ok(); });
+        await app.StartAsync();
+        var address = Assert.Single(app.Services.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>().Features
+            .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()!.Addresses);
+        using var client = new LocalManagementClient(new Uri(address), "server", "node", () => Token);
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(5, await new LocalManagementCliHandler(client).RunAsync("stop",
+            "{\"requestId\":\"tls-stop\",\"serverId\":\"server\",\"nodeId\":\"node\"}", null, output, errors));
+        Assert.Equal(0, mutations);
+        Assert.Equal("", output.ToString());
+        Assert.DoesNotContain(Token, errors.ToString());
+        await app.StopAsync();
     }
 
     private static HttpClient Client(WebApplication app, string? token = Token)

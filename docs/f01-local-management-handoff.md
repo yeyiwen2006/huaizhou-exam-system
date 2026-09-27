@@ -24,7 +24,7 @@
 
 ## 部署配置与运行
 
-两个宿主分开运行，业务服务停止不停止管理进程。管理进程当前按独立 console/进程宿主提供，尚未实现 SCM Windows Service 生命周期托管；不得仅用 `sc create` 把普通 console 程序冒充可运行的管理 Windows 服务。业务 SCM 适配器只操作部署时固定的业务服务名称，不能由请求传入命令或任意服务名。
+两个宿主分开运行，业务服务停止不停止管理进程。管理进程现已接入 Microsoft 官方 WindowsServiceLifetime，在 SCM 启动时使用服务托管，普通启动仍使用 console 生命周期；真实 Windows SCM 安装及正向启停尚未实测。业务 SCM 适配器只操作部署时固定的业务服务名称，不能由请求传入命令或任意服务名。
 
 通过受保护的本机部署配置或进程环境提供以下项。模板只描述键，不保存令牌、连接口令、证书或本机运行数据。
 
@@ -35,6 +35,7 @@
 | `Management:BindAddress` | 可省略；如设置仅允许 localhost/127.0.0.1/::1；当前实际监听 IPv4 回环 |
 | `Management:CertificateThumbprint` | LocalMachine/My 中唯一、有效且私钥可用的管理 TLS 证书，客户端信任并校验回环地址 SAN |
 | `Management:BusinessServiceName` | 已部署的受控 Windows 业务服务名称，部署账户有查询/启停权限 |
+| `Management:ServiceName` | 管理宿主自身在 SCM 注册的服务名称；与业务服务独立，在服务模式下必填 |
 | `Management:ServiceConfigurationPath` | 仓库外初始非秘密 ServiceConfiguration JSON 的绝对路径，父目录已受保护；不能默认创建 |
 | `Management:OperationDirectory` | 仓库外专用受保护记录目录，已创建且不经过联接点 |
 | `Management:MinimumAvailableBytes` | 正数，未设置时为 1 GiB；现场按实际容量配置 |
@@ -154,7 +155,7 @@ docker rm codex-f01-physical-source-test
 
 生产恢复缺少受控隔离 PostgreSQL 宿主、固定恢复连接的目标核对、恢复阶段持久推进和业务连接切换。普通配置保存目前被 Staged 门禁阻止，不能删除记录绕过。需要由 A 确认恢复目标与旧库的隔离证据、允许切换的条件、秘密连接配置的版本及失败回退方式，再把现有探针和收卷接口接到该目标；不能仅凭隔离库可连或旧备份完整就开放业务写入。这是接口/恢复语义缺口，不是必须等 Windows 才能写的普通代码。
 
-管理进程的真实 Windows Service 生命周期托管也尚未实现；原生 SCM、TLS/私钥/ACL 与完整 WPF 解决方案需要 Windows 实测。CLI 注册及考务管理界面仍分别与 E/C 按任务边界协调。
+管理进程的 Windows Service 生命周期代码已补齐，原生 SCM、TLS/私钥/ACL 与完整 WPF 解决方案仍需要 Windows 实测。F01 共享客户端及 CLI 处理器已提供，CLI 注册及考务管理界面仍分别与 E/C 按任务边界协调。
 
 ## 2026-09-27 接口复核补充
 
@@ -165,6 +166,38 @@ docker rm codex-f01-physical-source-test
 发现并修正超大 JSON 请求的错误分类：超过 64 KiB（含不提供 Content-Length 的流式请求）在副作用和操作记录之前返回 400/INVALID_INPUT，不再把缓冲上限异常报告为 503 依赖故障。新增两个接口场景证明不发停止命令且不产生记录。实际运行管理接口专项 **21/21**，非 PostgreSQL/非 TeX 集成回归 **48/48**；本轮未重跑先前的 1021 单元及 148 数据库/物理恢复回归，不将新专项结果与历史结果相加。生产恢复、原生 Windows、CLI 接线及 T01/T02 的缺口仍按本文件记录保留。约 75% 为 F01 开发工作量估算，不是 A 审查结论或验收比例。
 
 本轮显式集成项目 Release 构建在正常本机权限下通过，0 警告、0 错误（1.76 秒）；沙箱构建停滞并取消，不记为通过。再次获取远端 main，仍为 `1545840`，集中分支已包含该基线。本次没有新增依赖、迁移或修改仓库 AGENTS.md。
+
+## 共享管理客户端、CLI 处理器及服务托管接续（2026-09-27）
+
+新增 `Exam.Infrastructure.ServiceManagement.LocalManagementClient`，GUI/CLI 可共用。它仅接受回环 HTTPS 根地址及显式预期服务器/节点，不访问业务健康检查，不接受 URL 凭据、非根路径或查询串。生产默认传输禁用代理、重定向及 Cookie，使用系统 TLS 校验；注入传输仅供可信组合及测试，不应给生产传入绕过证书校验的 handler。凭据在每次请求时从调用者的受保护配置提供，不接受命令行明文。客户端验证响应身份、未知代次语义及操作请求/类型绑定；完成阶段须有对应实际状态/配置/检查/备份/恢复证据，不能把 Staged 或空结果显示为完整恢复。
+
+新增 `LocalManagementCliHandler.RunAsync(command, inputJson, requestId, output, errors, cancellationToken)`，提供给 E 注册，不改 `Exam.Cli/Program.cs`。`status`、`configuration` 无输入；`operation` 使用原 requestId；`start`、`stop`、`checks`、`configure`、`backup`、`restore` 使用原始 JSON 输入，其 requestId 保留在请求体，不能再在外层生成另一标识。直接复用服务端九条路径和 JSON/身份/幂等规则，不维护另一套业务校验。JSON 原文保留伪造 actor 等字段，由管理宿主拒绝；配置修改继续由服务端核对 expectedVersion。
+
+E 接线示意（参数解析、文件/标准输入读取与命令注册由现有 CLI 框架负责）：
+
+```csharp
+using var client = new LocalManagementClient(managementUri, expectedServerId, expectedNodeId,
+    () => protectedConfiguration["ExamSecurity:OperatorToken"]);
+return await new LocalManagementCliHandler(client).RunAsync(command, inputJson, queryRequestId,
+    Console.Out, Console.Error, cancellationToken);
+```
+
+管理地址和预期身份须使用独立部署配置，不能用 EXAM_SERVER_URL 或业务健康检查结果决定是否允许连接。所有结果保留管理封套及阶段；成功查询/完成返回 0，输入 2、身份 3、状态/版本冲突 4、网络或响应不可核实 5、服务或持久化失败 6。Accepted/Staged 返回 4 并输出原请求状态，表示未完成的状态，而非恢复成功；关键自检失败和 NeedsVerification 返回 6。取消返回现有 CLI 约定的 130；超时、取消或连接失败均不自动重试变更，按原 requestId 查询。
+
+管理宿主增加精确版本 `Microsoft.Extensions.Hosting.WindowsServices 10.0.12`（与当前 ASP.NET Core 依赖补丁一致），同步管理及集成测试锁文件。使用官方 `AddWindowsService`，SCM 模式的配置根目录取可执行文件目录，避免从 system32 加载配置；服务名称独立于受控业务服务。正常启动保持 ConsoleLifetime。清除包括服务注册可能添加的 EventLog 日志提供者，不输出管理请求、凭据、路径或工具内容；本机持久操作记录仍是审计入口。依据 [Microsoft Windows 服务托管说明](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/windows-service?view=aspnetcore-10.0)。
+
+晚上部署时：在仓库外发布并准备受保护配置、操作目录及管理 HTTPS 证书；为管理宿主注册独立服务，名称与 Management:ServiceName 一致，使用专用部署账户；确认其配置/私钥权限、受控业务服务查询启停权限及两个宿主生命周期独立。不要将 localhost 开发证书作为服务证书，不修改业务服务注册来掩盖管理注册问题。首先实测管理 SCM 启停、业务停止后的认证/状态与启动，以及管理重启后原操作查询；本轮不将 macOS 的 console/TestServer 生命周期当作 SCM 正向验证。
+
+### 本批实际验证
+
+macOS ARM64、SDK 10.0.401，TMPDIR=/private/tmp：
+
+- `dotnet restore tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --locked-mode` 通过；`dotnet restore src/Exam.Cli/Exam.Cli.csproj --locked-mode` 通过。新增官方依赖按精确版本还原并同步锁，未改变原依赖版本。
+- `dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex'` **1043/1043**，无失败、无跳过。新增 22 项客户端地址、身份/代次、无凭据、重定向/格式/大小及结果证据校验。
+- `dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex'` 最终 **56/56**，无失败、无跳过。新增 CLI/管理路由接线 6 项、宿主启动生命周期 1 项、真实回环 TLS 拒绝未信任证书 1 项。TLS 测试使用临时合成自签证书且不导入任何系统证书库，确认没有管理变更到达服务端。
+- 显式 CLI 及集成项目 Release build 均 **0 警告、0 错误**。CLI 首次 no-restore 缺本机 assets（NETSDK1004），按现有锁还原后通过。生命周期测试先后发现应用名使用完整程序集名、TestServer 主动替换为 NoopHostLifetime；分别改为短应用名、在注入 TestServer 前核对原宿主生命周期后通过。新增 TLS 测试首次缺两个 using，补齐后通过。
+- `dotnet restore Huaizhou.ExamSystem.sln --locked-mode` 本批再次实际返回 **NETSDK1100**（Windows/WPF 目标），未执行完整解决方案 build/test；不以分项目构建替代该检查。
+- 本批未重跑 PostgreSQL/物理恢复及 TeX，未改变数据库/恢复适配器或探针；此前 148 项的记录仍是历史证据。未验证原生 SCM、Windows 服务账户/证书私钥 ACL、WPF、真实双机或断电、T01/T02。CLI 命令注册未实现，测试调用的是可供注册的实际处理器，不声称 CLI 可执行文件已支持这些新命令。
 
 ## 晚上交给 Windows Codex 的指令
 
