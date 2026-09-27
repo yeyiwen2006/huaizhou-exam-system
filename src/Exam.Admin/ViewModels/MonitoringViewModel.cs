@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Common;
+using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
 
 namespace Exam.Admin.ViewModels;
@@ -15,6 +16,8 @@ public sealed class MonitoringViewModel : BindableBase
     private long _contextVersion;
     private long _loadVersion;
     private long _collectionRequestVersion;
+    private long _decisionRequestVersion;
+    private long _resendRequestVersion;
     private MonitoringRow? _selectedRow;
     public event Action<CollectionCompletedNotification>? CollectionCompleted;
 
@@ -39,6 +42,8 @@ public sealed class MonitoringViewModel : BindableBase
     private void ResetContext()
     {
         _contextVersion++;
+        _decisionRequestVersion++;
+        _resendRequestVersion++;
         Rows.Clear();
         CollectionEvents.Clear();
         _collectionCursors.Clear();
@@ -212,8 +217,7 @@ public sealed class MonitoringViewModel : BindableBase
         {
             return;
         }
-        if (results.Any(item => !StringComparer.Ordinal.Equals(item.ExamId, examId)))
-            throw new InvalidOperationException("参与记录中含有其他考试的数据，已拒绝显示。");
+        ValidateParticipations(results, examId);
         Rows.Clear();
         SelectedRow = null;
         foreach (var item in results)
@@ -243,10 +247,28 @@ public sealed class MonitoringViewModel : BindableBase
             return;
         }
 
+        var participationId = ParticipationId.Trim();
+        var selectedDeviceId = SelectedDeviceId.Trim();
+        var reason = DecisionReason.Trim();
+        var operatorId = _api.OperatorId;
         var context = _contextVersion;
-        var result = await _api.DecideDeviceAsync(
-            ParticipationId.Trim(), SelectedDeviceId.Trim(), expectedVersion, DecisionReason.Trim());
-        if (context != _contextVersion) return;
+        var operation = ++_decisionRequestVersion;
+        DeviceDecisionResult result;
+        try
+        {
+            result = await _api.DecideDeviceAsync(participationId, selectedDeviceId, expectedVersion, reason);
+        }
+        catch when (context != _contextVersion || operation != _decisionRequestVersion)
+        {
+            return;
+        }
+        if (context != _contextVersion || operation != _decisionRequestVersion) return;
+        if (!StringComparer.Ordinal.Equals(result.ParticipationId, participationId) ||
+            !StringComparer.Ordinal.Equals(result.AuthorizedDeviceId, selectedDeviceId) ||
+            string.IsNullOrWhiteSpace(result.RevokedDeviceId) || result.AuthorizationVersion < 1 ||
+            result.Version <= expectedVersion || !StringComparer.Ordinal.Equals(result.OperatorId, operatorId) ||
+            !StringComparer.Ordinal.Equals(result.Reason, reason))
+            throw new InvalidOperationException("设备裁决回执与当前请求不匹配，已拒绝应用。");
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var success = $"设备裁决已保存：授权设备 {result.AuthorizedDeviceId}，撤销设备 {result.RevokedDeviceId}；操作者 {result.OperatorId}，原因：{result.Reason}。";
         try
@@ -261,19 +283,52 @@ public sealed class MonitoringViewModel : BindableBase
         }
     }
 
-    private async Task ResendAsync()
+    public async Task ResendAsync()
     {
-        if (string.IsNullOrWhiteSpace(EventId) || string.IsNullOrWhiteSpace(ResendParticipationId) ||
+        if (string.IsNullOrWhiteSpace(ExamId) || string.IsNullOrWhiteSpace(EventId) || string.IsNullOrWhiteSpace(ResendParticipationId) ||
             string.IsNullOrWhiteSpace(ResendDeviceId) || !long.TryParse(EntryVersionText, out var entryVersion) || entryVersion < 0 ||
             !long.TryParse(AuthorizationVersionText, out var authorizationVersion) || authorizationVersion < 0)
         {
-            Status = "补发需要事件、参与、设备 ID，以及两个非负版本号。";
+            Status = "补发需要考试、事件、参与、设备 ID，以及两个非负版本号。";
             return;
         }
 
-        var result = await _api.ResendCommandAsync(
-            EventId.Trim(), ResendParticipationId.Trim(), entryVersion, ResendDeviceId.Trim(), authorizationVersion);
+        var examId = ExamId.Trim();
+        var eventId = EventId.Trim();
+        var participationId = ResendParticipationId.Trim();
+        var deviceId = ResendDeviceId.Trim();
+        var context = _contextVersion;
+        var operation = ++_resendRequestVersion;
+        Exam.Contracts.Commands.CommandEventView result;
+        try
+        {
+            result = await _api.ResendCommandAsync(eventId, participationId, entryVersion, deviceId, authorizationVersion);
+        }
+        catch when (context != _contextVersion || operation != _resendRequestVersion)
+        {
+            return;
+        }
+        if (context != _contextVersion || operation != _resendRequestVersion) return;
+        if (!StringComparer.Ordinal.Equals(result.EventId, eventId) ||
+            !StringComparer.Ordinal.Equals(result.ExamId, examId) ||
+            !StringComparer.Ordinal.Equals(result.ParticipationId, participationId) || result.EntryVersion != entryVersion ||
+            !StringComparer.Ordinal.Equals(result.TargetDeviceId, deviceId) ||
+            result.TargetAuthorizationVersion != authorizationVersion || result.DeliveryAttempts < 1)
+            throw new InvalidOperationException("补发回执与当前考试或请求不匹配，已拒绝应用。");
         Status = $"补发请求成功：事件 {result.EventId}，累计投递 {result.DeliveryAttempts} 次。";
+    }
+
+    private static void ValidateParticipations(
+        IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results,
+        string examId)
+    {
+        if (results.Any(item => item is null || !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
+            string.IsNullOrWhiteSpace(item.ParticipationId) || string.IsNullOrWhiteSpace(item.CandidateId) ||
+            string.IsNullOrWhiteSpace(item.AuthorizedDeviceId) || item.EntryVersion < 1 ||
+            item.AuthorizationVersion < 1 || item.Version < 1 || !Enum.IsDefined(item.BusinessState) ||
+            item.Lifecycle is { } lifecycle && !Enum.IsDefined(lifecycle)) ||
+            results.Select(item => item.ParticipationId).Distinct(StringComparer.Ordinal).Count() != results.Count)
+            throw new InvalidOperationException("参与记录的考试、标识、版本或状态无效，已拒绝显示。");
     }
 
     private bool MatchesFilter(MonitoringRow row)

@@ -7,6 +7,7 @@ using ClosedXML.Excel;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Activation;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
@@ -268,6 +269,38 @@ public sealed class ReviewRegressionTests
     }
 
     [Fact]
+    public async Task Monitoring_RejectsMalformedAuthoritativeRowsWithoutReplacingExistingRows()
+    {
+        using var handler = new Handler(_ => Success(new[]
+        {
+            Participation("exam-1"),
+            Participation("exam-1") with { CandidateId = "candidate-2" }
+        }));
+        using var api = Configured(handler);
+        var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
+            "未提交", "接口未提供", "接口未提供"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
+
+        Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
+    }
+
+    [Fact]
+    public async Task Monitoring_RejectsNullAuthoritativeRowWithoutReplacingExistingRows()
+    {
+        using var handler = new Handler(_ => Success(new ParticipationResult?[] { null }));
+        using var api = Configured(handler);
+        var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
+            "未提交", "接口未提供", "接口未提供"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
+
+        Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
+    }
+
+    [Fact]
     public async Task CollectionEvents_RejectOtherExamWithoutAdvancingCursorOrNotifying()
     {
         var calls = new List<string>();
@@ -320,6 +353,66 @@ public sealed class ReviewRegressionTests
         Assert.Contains("刷新失败", viewModel.Status, StringComparison.Ordinal);
         Assert.Contains("不要重复裁决", viewModel.Status, StringComparison.Ordinal);
         Assert.Equal("4", viewModel.ExpectedVersionText);
+    }
+
+    [Fact]
+    public async Task DeviceDecision_RejectsMismatchedAuthoritativeReceipt()
+    {
+        using var handler = new Handler(_ => Success(new DeviceDecisionResult("other-participation", "device-2", "device-1", 2, 4,
+            "operator-1", "synthetic reason", DateTimeOffset.UtcNow)));
+        using var api = Configured(handler);
+        var viewModel = DecisionViewModel(api);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.DecideDeviceAsync());
+
+        Assert.Equal("3", viewModel.ExpectedVersionText);
+    }
+
+    [Fact]
+    public async Task DeviceDecision_ResponseAfterExamSwitch_DoesNotPolluteNewContext()
+    {
+        var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new AsyncHandler(_ => release.Task);
+        using var api = Configured(handler);
+        var viewModel = DecisionViewModel(api);
+        var pending = viewModel.DecideDeviceAsync();
+
+        viewModel.ExamId = "exam-2";
+        release.SetResult(Success(new DeviceDecisionResult("part-1", "device-2", "device-1", 2, 4,
+            "operator-1", "synthetic reason", DateTimeOffset.UtcNow)));
+        await pending;
+
+        Assert.Empty(viewModel.ExpectedVersionText);
+        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resend_RejectsReceiptForAnotherExam()
+    {
+        using var handler = new Handler(_ => Success(CommandEvent("exam-2")));
+        using var api = Configured(handler);
+        var viewModel = ResendViewModel(api);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.ResendAsync());
+
+        Assert.DoesNotContain("补发请求成功", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resend_ResponseAfterExamSwitch_DoesNotPolluteNewContext()
+    {
+        var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new AsyncHandler(_ => release.Task);
+        using var api = Configured(handler);
+        var viewModel = ResendViewModel(api);
+        var pending = viewModel.ResendAsync();
+
+        viewModel.ExamId = "exam-2";
+        release.SetResult(Success(CommandEvent("exam-1")));
+        await pending;
+
+        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("补发请求成功", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -411,6 +504,29 @@ public sealed class ReviewRegressionTests
 
     private static ParticipationResult Participation(string examId) => new("part-1", examId, "candidate-1",
         ParticipationBusinessState.Waiting, "device-1", 1, 1, 1, null);
+
+    private static MonitoringViewModel DecisionViewModel(AdminApiClient api) => new(api)
+    {
+        ExamId = "exam-1",
+        ParticipationId = "part-1",
+        SelectedDeviceId = "device-2",
+        ExpectedVersionText = "3",
+        DecisionReason = "synthetic reason"
+    };
+
+    private static MonitoringViewModel ResendViewModel(AdminApiClient api) => new(api)
+    {
+        ExamId = "exam-1",
+        EventId = "event-1",
+        ResendParticipationId = "part-1",
+        ResendDeviceId = "device-1",
+        EntryVersionText = "1",
+        AuthorizationVersionText = "2"
+    };
+
+    private static CommandEventView CommandEvent(string examId) => new(
+        "event-1", examId, "part-1", 1, CommandEventType.Start, 1, "device-1", 2, null,
+        DateTimeOffset.UtcNow, false, 2);
 
     private static ExamVersionSnapshot Snapshot(long version) => new("exam-1", new VersionVector(version, 0, 0),
         Schedule, ExamLifecycle.Scheduled, null, null, null, null, new Dictionary<string, ParticipantVersionStatus>());
