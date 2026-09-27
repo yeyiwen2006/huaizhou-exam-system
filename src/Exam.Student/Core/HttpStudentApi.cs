@@ -97,11 +97,11 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         SyncProgressRequest request, CancellationToken ct = default) =>
         SendAsync<PersistedProgress>(HttpMethod.Put, "/api/v1/submissions/progress", request, true, ct);
 
-    public Task<ApiEnvelope<FinalSubmission>> SubmitFinalAnswersAsync(
+    public Task<ApiEnvelope<SubmissionReceipt>> SubmitFinalAnswersAsync(
         SubmitFinalAnswersRequest request, CancellationToken ct = default) =>
-        SendAsync<FinalSubmission>(HttpMethod.Post, "/api/v1/submissions/final", request, true, ct);
+        SendAsync<SubmissionReceipt>(HttpMethod.Post, "/api/v1/submissions/final", request, true, ct);
 
-    public Task<ApiEnvelope<FinalSubmission>> GetFinalSubmissionAsync(
+    public Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
         string participationId, long entryVersion, string deviceId, long authorizationVersion,
         CancellationToken ct = default)
     {
@@ -114,7 +114,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         var query = $"participationId={Uri.EscapeDataString(participationId)}" +
             $"&entryVersion={entryVersion}&deviceId={Uri.EscapeDataString(deviceId)}" +
             $"&authorizationVersion={authorizationVersion}";
-        return SendAsync<FinalSubmission>(HttpMethod.Get, $"/api/v1/submissions/receipts?{query}", null, true, ct);
+        return SendAsync<SubmissionReceipt>(HttpMethod.Get, $"/api/v1/submissions/receipts?{query}", null, true, ct);
     }
 
     public async Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(

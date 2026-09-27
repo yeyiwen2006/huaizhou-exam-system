@@ -38,11 +38,11 @@ public interface IStudentApi
         SyncProgressRequest request, CancellationToken ct = default);
 
     /// <summary>B05：提交固定答卷；同一 RequestId/SubmissionId 重试返回原结果和回执。</summary>
-    Task<ApiEnvelope<FinalSubmission>> SubmitFinalAnswersAsync(
+    Task<ApiEnvelope<SubmissionReceipt>> SubmitFinalAnswersAsync(
         SubmitFinalAnswersRequest request, CancellationToken ct = default);
 
     /// <summary>B05：按参试与设备查询服务器已持有的最终提交及回执，用于丢回执后恢复原结果。</summary>
-    Task<ApiEnvelope<FinalSubmission>> GetFinalSubmissionAsync(
+    Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
         string participationId, long entryVersion, string deviceId, long authorizationVersion,
         CancellationToken ct = default);
 }

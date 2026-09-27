@@ -18,6 +18,7 @@
                                     VerticalAlignment="Center" />
                     <Button Style="{StaticResource Btn.Danger}"
                             Content="提交答卷"
+                            Loaded="OnSubmitButtonLoaded"
                             IsEnabled="False"
                             Margin="16,0,0,0"
                             Click="OnSubmit" />

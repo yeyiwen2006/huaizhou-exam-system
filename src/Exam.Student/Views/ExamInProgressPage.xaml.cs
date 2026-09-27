@@ -20,6 +20,8 @@ public partial class ExamInProgressPage : UserControl
     private readonly SubmissionSyncService _sync;
     private bool _retryingLocalSave;
     private bool _submitting;
+    private Button? _submitButton;
+    private bool _syncStarted;
     private string? _localRetryError;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
@@ -45,7 +47,7 @@ public partial class ExamInProgressPage : UserControl
         InitializeComponent();
         DataContext = App.Services.Session;
 
-        _sync = new SubmissionSyncService(App.Services.Api, runtime, device);
+        _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock);
         _sync.StatusChanged += OnSyncStatusChanged;
 
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -54,7 +56,12 @@ public partial class ExamInProgressPage : UserControl
         UpdateClock();
         RefreshStatus();
         _runtime.StateChanged += OnRuntimeStateChanged;
-        _ = RunSyncAsync();
+        Loaded += async (_, _) =>
+        {
+            if (_syncStarted) return;
+            _syncStarted = true;
+            await RunSyncAsync();
+        };
         Unloaded += async (_, _) =>
         {
             _clock?.Stop();
@@ -73,6 +80,17 @@ public partial class ExamInProgressPage : UserControl
             await _sync.RunAsync(_lifetime.Token);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is InvalidOperationException or System.IO.IOException or
+            System.Text.Json.JsonException or ArgumentException)
+        {
+            SyncStatusText.Text = "同步服务已停止，原答卷保留，请联系考务人员恢复后重试。";
+        }
+    }
+
+    private void OnSubmitButtonLoaded(object sender, RoutedEventArgs e)
+    {
+        _submitButton = (Button)sender;
+        RefreshStatus();
     }
 
     private void OnToggleMark(object sender, RoutedEventArgs e)
@@ -114,20 +132,22 @@ public partial class ExamInProgressPage : UserControl
 
         var window = Window.GetWindow(this);
         if (window is null) { return; }
-        var confirmed = await ConfirmDialog.ShowAsync(
-            window,
-            "提前交卷",
-            "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
-            "提前交卷",
-            "继续答题",
-            isDanger: true);
-        if (!confirmed) { return; }
-
         _submitting = true;
-        Busy.IsBusy = true;
         RefreshStatus();
         try
         {
+            var confirmed = await ConfirmDialog.ShowAsync(
+                window,
+                "提前交卷",
+                "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
+                "提前交卷",
+                "继续答题",
+                isDanger: true);
+            if (!confirmed) { return; }
+
+            _lifetime.Token.ThrowIfCancellationRequested();
+            Busy.IsBusy = true;
+            RefreshStatus();
             // 提前交卷与 END 共用同一固定提交入口；失败时原标识与快照保留，由同步服务自动重试。
             var fix = await _runtime.Answers.FixSubmissionAsync($"subm-{Guid.NewGuid():N}", _lifetime.Token);
             if (!fix.Succeeded)
@@ -212,7 +232,7 @@ public partial class ExamInProgressPage : UserControl
         PaperBanner.Level = StatusLevel.Warning;
         PaperBanner.Message = _runtime.Manager.CurrentPhase switch
         {
-            ExamPackageManager.Phase.Ended => "服务器已结束考试。原参试记录继续保留，当前版本尚未提供完整答卷补传功能，请联系考务人员。",
+            ExamPackageManager.Phase.Ended => "服务器已结束考试。原答卷固定后自动补传；尚未取得并保存服务器回执前不视为交卷成功。",
             ExamPackageManager.Phase.Revoked => "当前设备的答题授权已撤销，已停止访问试题。请联系考务人员。",
             ExamPackageManager.Phase.Unlocked => "加密试题包已按服务器授权解锁，并已接入本地答案恢复和服务器交卷。真实题目展示（B03）尚未接入，不能用于正式考试。",
             _ => "试题尚未完成安全解锁，不能开始答题。请联系考务人员。",
@@ -226,5 +246,9 @@ public partial class ExamInProgressPage : UserControl
         RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave ? Visibility.Visible : Visibility.Collapsed;
         RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
         SyncStatusText.Text = _sync.StatusText;
+        if (_submitButton is not null)
+            _submitButton.IsEnabled = !_submitting && !_runtime.HasFixedSubmission &&
+                _runtime.Answers?.Status == AnswerSessionStatus.Active &&
+                _sync.Phase is not (SubmissionSyncPhase.Blocked or SubmissionSyncPhase.Confirmed);
     }
 }
