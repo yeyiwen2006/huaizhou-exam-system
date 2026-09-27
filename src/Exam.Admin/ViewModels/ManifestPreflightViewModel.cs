@@ -14,7 +14,6 @@ public sealed class ManifestPreflightViewModel : BindableBase
     public const long MaxManifestBytes = 10 * 1024 * 1024;
 
     private readonly IManifestFileDialogService _manifestFiles;
-    private readonly ExamManifestValidator _validator = new();
     private string _examId = string.Empty;
     private bool _isPreflighting;
     private bool _staticPreflightPassed;
@@ -100,7 +99,13 @@ public sealed class ManifestPreflightViewModel : BindableBase
                 return;
             }
 
-            ApplyManifestJson(json);
+            // D01 的结构扫描和表达式验证可能处理完整 10 MB 清单，不能在 WPF 线程执行。
+            var result = await Task.Run(() => InspectManifestJson(json));
+            if (context != _contextVersion || sequence != _preflightSequence)
+            {
+                return;
+            }
+            ApplyManifestResult(result);
         }
         catch (Exception exception) when (exception is IOException
             or InvalidDataException
@@ -134,12 +139,20 @@ public sealed class ManifestPreflightViewModel : BindableBase
             return;
         }
 
-        ApplyManifestJson(json);
+        ApplyManifestResult(InspectManifestJson(json));
     }
 
-    private void ApplyManifestJson(string json)
+    private static (ImportValidationReport Report, string? ExamId) InspectManifestJson(string json)
     {
-        var report = _validator.ValidateJson(json);
+        var report = new ExamManifestValidator().ValidateJson(json);
+        if (!report.IsValid) return (report, null);
+        using var document = JsonDocument.Parse(json);
+        return (report, document.RootElement.GetProperty("examId").GetString());
+    }
+
+    private void ApplyManifestResult((ImportValidationReport Report, string? ExamId) result)
+    {
+        var report = result.Report;
         foreach (var issue in report.Issues)
         {
             Issues.Add(issue);
@@ -151,9 +164,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
             return;
         }
 
-        using var document = JsonDocument.Parse(json);
-        var manifestExamId = document.RootElement.GetProperty("examId").GetString();
-        if (!string.Equals(manifestExamId, ExamId.Trim(), StringComparison.Ordinal))
+        if (!string.Equals(result.ExamId, ExamId.Trim(), StringComparison.Ordinal))
         {
             Status = "清单考试 ID 与当前考试 ID 不一致；未接受此预检结果。";
             return;

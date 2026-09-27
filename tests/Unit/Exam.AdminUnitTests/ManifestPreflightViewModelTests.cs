@@ -7,7 +7,7 @@ using Exam.Contracts.Importing;
 
 namespace Exam.AdminUnitTests;
 
-public sealed class ManifestPreflightViewModelTests
+public sealed partial class ManifestPreflightViewModelTests
 {
     [Fact]
     public void ValidSyntheticManifest_UsesD01AndKeepsCompletionBoundaryExplicit()
