@@ -133,6 +133,21 @@ public sealed class ManagementOperationPersistenceTests : IDisposable
     private FileManagementOperationStore Store() => new(_directory);
 
     [Fact]
+    public async Task OversizedJournalBlocksMutationAndPreservesOriginalFile()
+    {
+        var path = Path.Combine(_directory, "oversized.json");
+        await using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) file.SetLength(16 * 1024 * 1024);
+        var store = Store();
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.HasUnverifiedOperationsAsync(default));
+        var effects = 0;
+        await Assert.ThrowsAsync<InvalidDataException>(() => Runner().ExecuteAsync("blocked-start", "operator", ManagementOperationKind.Start,
+            "payload", (operation, token) => { effects++; return Task.FromResult(operation with { Phase = ManagementOperationPhase.Completed }); }));
+        Assert.Equal(0, effects);
+        Assert.Equal(16 * 1024 * 1024, new FileInfo(path).Length);
+        Assert.Single(Directory.GetFiles(_directory, "*.json"));
+    }
+
+    [Fact]
     public async Task InterruptedOperationCanBeReconciledAndPersistedWithoutRepeatingEffect()
     {
         var effects = 0;

@@ -92,8 +92,10 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
         {
             Check(path);
             // FindAsync also verifies the canonical filename and the complete persisted record.
-            var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-            if (bytes.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            if (input.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            var bytes = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(bytes, cancellationToken);
             using var document = JsonDocument.Parse(bytes);
             if (!document.RootElement.TryGetProperty("requestId", out var requestId) || requestId.ValueKind != JsonValueKind.String)
                 throw new InvalidDataException("操作记录缺少请求标识。");

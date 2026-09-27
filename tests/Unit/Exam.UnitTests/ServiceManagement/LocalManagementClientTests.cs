@@ -95,6 +95,48 @@ public sealed class LocalManagementClientTests
         await Assert.ThrowsAsync<HttpRequestException>(() => client.GetOperationAsync("original"));
     }
 
+    [Theory]
+    [InlineData(false, false, 5)]
+    [InlineData(true, false, 130)]
+    [InlineData(false, true, 5)]
+    public async Task BodyDeadlineCancellationAndReadFailureNeverRepeatMutation(bool cancelCaller, bool brokenStream, int expectedExit)
+    {
+        using var body = new InterruptedBodyStream(brokenStream);
+        using var transport = new ResponseTransport(_ => new(HttpStatusCode.OK) { Content = new StreamContent(body) });
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => "synthetic-token", transport,
+            requestTimeout: cancelCaller ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(150));
+        using var cancellation = new CancellationTokenSource();
+        if (cancelCaller) cancellation.CancelAfter(TimeSpan.FromMilliseconds(150));
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(expectedExit, await new LocalManagementCliHandler(client).RunAsync("stop",
+            "{\"requestId\":\"same-request\",\"serverId\":\"server\",\"nodeId\":\"node\"}", null, output, errors, cancellation.Token));
+        Assert.Equal(1, transport.Calls);
+        Assert.Equal("", output.ToString());
+        Assert.Contains("requestId", errors.ToString());
+        Assert.DoesNotContain("synthetic-stream-secret", errors.ToString());
+    }
+
+    private sealed class InterruptedBodyStream(bool broken) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+        {
+            if (broken) throw new IOException("synthetic-stream-secret");
+            await Task.Delay(Timeout.Infinite, token);
+            return 0;
+        }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private static LocalManagementClient Client(HttpMessageHandler handler) => new(new Uri("https://localhost:9443"), "server", "node", () => "synthetic-token", handler);
     private static HttpResponseMessage Json<T>(HttpStatusCode status, T value) => new(status)
     { Content = new StringContent(JsonSerializer.Serialize(value, JsonDefaults.Create()), Encoding.UTF8, "application/json") };

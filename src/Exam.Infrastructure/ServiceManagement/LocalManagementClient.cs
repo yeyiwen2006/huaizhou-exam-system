@@ -16,10 +16,11 @@ public sealed class LocalManagementClient : IDisposable
     private readonly string _serverId;
     private readonly string _nodeId;
     private readonly Func<string?> _token;
+    private readonly TimeSpan _requestTimeout;
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
 
     public LocalManagementClient(Uri endpoint, string serverId, string nodeId, Func<string?> token,
-        HttpMessageHandler? transport = null)
+        HttpMessageHandler? transport = null, TimeSpan? requestTimeout = null)
     {
         if (!endpoint.IsAbsoluteUri || endpoint.Scheme != Uri.UriSchemeHttps ||
             !(endpoint.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
@@ -30,9 +31,12 @@ public sealed class LocalManagementClient : IDisposable
         _serverId = serverId;
         _nodeId = nodeId;
         _token = token ?? throw new ArgumentNullException(nameof(token));
+        _requestTimeout = requestTimeout ?? TimeSpan.FromMinutes(65);
+        if (_requestTimeout <= TimeSpan.Zero || _requestTimeout.TotalMilliseconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         // Injected transports are for trusted composition/tests. Production uses normal certificate validation.
         _http = new HttpClient(transport ?? new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false, UseCookies = false })
-        { BaseAddress = endpoint, Timeout = TimeSpan.FromMinutes(65) };
+        { BaseAddress = endpoint, Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public Task<ManagementClientResponse<ManagementStatus>> GetStatusAsync(CancellationToken token = default) =>
@@ -73,6 +77,18 @@ public sealed class LocalManagementClient : IDisposable
     }
 
     private async Task<ManagementClientResponse<T>> SendAsync<T>(HttpMethod method, string path, string? body, CancellationToken token)
+    {
+        // ResponseHeadersRead only bounds headers with HttpClient.Timeout. Keep one deadline through body reading.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(_requestTimeout);
+        try { return await SendCoreAsync<T>(method, path, body, deadline.Token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new HttpRequestException("管理响应超时，须按原 requestId 核对变更结果。"); }
+        catch (IOException)
+        { throw new HttpRequestException("管理响应读取中断，须按原 requestId 核对变更结果。"); }
+    }
+
+    private async Task<ManagementClientResponse<T>> SendCoreAsync<T>(HttpMethod method, string path, string? body, CancellationToken token)
     {
         var credential = _token();
         if (string.IsNullOrWhiteSpace(credential)) throw new UnauthorizedAccessException("缺少受保护的管理凭据。");

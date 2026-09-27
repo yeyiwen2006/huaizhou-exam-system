@@ -199,6 +199,27 @@ macOS ARM64、SDK 10.0.401，TMPDIR=/private/tmp：
 - `dotnet restore Huaizhou.ExamSystem.sln --locked-mode` 本批再次实际返回 **NETSDK1100**（Windows/WPF 目标），未执行完整解决方案 build/test；不以分项目构建替代该检查。
 - 本批未重跑 PostgreSQL/物理恢复及 TeX，未改变数据库/恢复适配器或探针；此前 148 项的记录仍是历史证据。未验证原生 SCM、Windows 服务账户/证书私钥 ACL、WPF、真实双机或断电、T01/T02。CLI 命令注册未实现，测试调用的是可供注册的实际处理器，不声称 CLI 可执行文件已支持这些新命令。
 
+## 工作边界查漏与故障处理补强（2026-09-27）
+
+依据仓库需求、任务映射、实施指南、恢复边界及 ADR 0002 新增 [责任与缺口清单](f01-scope-checklist.md)，明确生产恢复运行闭环仍属 F01，不能以 T01/T02 归属为理由留作测试期实现。F02 提升/复制、F04 界面、F05 工具与 E 的注册各有边界，F01 的接口、开发期模块验证及与工具衔接仍需完成。尤其补记可恢复备份可用性、归档/程序提交关联、事件/定时实际运行、恢复后计分及新 Windows 账户/主机密钥恢复证据的未完成项；约 75%—80% 只是开发工作量估算。
+
+本轮修正操作目录扫描：先检查已打开文件长度，再有界读取，损坏/超大记录不触发无界文件分配，也不产生新的启动副作用，保留原件。共享管理客户端对响应头与响应体使用同一截止时间；读取中断或响应超时返回网络不可核实，调用者取消仍为 130，不自动重试变更，须用原 requestId 核对。
+
+提取 `ManagementEntryPoint.AddManagementRuntime` 供生产 Main 和接线测试使用同一延迟注册代码；业务数据库/配置/备份依赖仍按操作加载。业务 readiness HttpClient 由 DI 工厂创建并随宿主释放，禁止代理、重定向及 Cookie；Main 也释放应用容器。生产注册测试注入缺失/损坏/有效服务配置、缺失操作目录、错误业务服务名/就绪 URL、无效数据库连接及备份超时配置，证明有效身份仍能查询状态，无凭据仍拒绝，秘密不出现在响应且不创建部署目录。业务服务名刻意无效，测试不访问真实 SCM。
+
+新增两个无凭据的 Windows 部署模板及说明，模板只含合成身份/路径和证书指纹占位；填好的配置、证书/私钥或实际连接材料仍留在仓库外。模板不是可运行配置，不新增恢复切换协议。
+
+本轮实际命令（同一 macOS ARM64、SDK 10.0.401、TMPDIR=/private/tmp）：
+
+```sh
+dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex'
+dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex'
+```
+
+通用单元 **1047/1047**，非 PostgreSQL/非 TeX 集成 **60/60**，均无失败、无跳过。新增响应体超时/取消/读取故障 3 项、真实文件大小/阻断 1 项、生产注册故障诊断 4 项。此次未重跑 PostgreSQL/物理恢复、TeX 或完整解决方案；无新增依赖/迁移，沿用上一批完整还原 NETSDK1100 的平台限制，不记为完整构建或验收通过。
+
+另执行集成项目 `dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --verbosity quiet`，0 警告、0 错误。在仓库外 `/private/tmp/f01-process-audit-20260927` 构建临时验证程序（Release，0 警告、0 错误），运行 `python3 /private/tmp/f01-process-audit-20260927/check.py`：独立 .NET 进程通过实际 ManagementOperationRunner/FileManagementOperationStore 写入受理记录和一条合成副作用后，被 Python 强制终止；全新进程重放原请求得到 NeedsVerification，不重复副作用，并阻止新启动请求。结果通过。此检查覆盖 macOS 真实进程退出及锁释放，不覆盖 SCM、断电、文件系统持久性或真实业务服务恢复，不计入上述测试项数。临时程序和记录不提交仓库。
+
 ## 晚上交给 Windows Codex 的指令
 
 请在同一分支 `codex/f01-local-management` 继续 F01 #7，先读 AGENTS.md、ADR 0002 和本文件。保留当前成果与用户修改；已关闭 #57/#58/#59 已接续，不重开细碎 PR，不删除旧分支，不合并或推送 main。获取最新 origin/main，在集中分支同步基线，不强推。启动恢复、题包内容、业务/后台门禁、各类中断操作核对及真实物理副本继续收卷已在 macOS 完成模块验证，先复用这些实现和演练。优先验证 Windows 实际 SCM、管理 TLS 与 ACL，再按上节明确的边界接通生产恢复目标选择、核对和受控切换。不能将已通过演练写成生产恢复入口已完成。若缺 A 模块公共恢复入口，列出具体调用与缺口请 A 协调，不能猜接口、自动迁移或覆盖原库。

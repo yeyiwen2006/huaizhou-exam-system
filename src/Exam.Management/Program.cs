@@ -14,8 +14,6 @@ public static class ManagementEntryPoint
     {
         var builder = CreateHostBuilder(args);
         var configuration = builder.Configuration;
-        var serverId = Required("Management:ServerId");
-        var nodeId = Required("Management:NodeId");
         var port = configuration.GetValue<int>("Management:HttpsPort");
         if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
         if (configuration["Management:BindAddress"] is { } address && address != "127.0.0.1" && address != "::1" && address != "localhost")
@@ -28,29 +26,48 @@ public static class ManagementEntryPoint
             options.Limits.MaxRequestBodySize = 65536;
             options.Listen(IPAddress.Loopback, port, endpoint => endpoint.UseHttps(certificate));
         });
-        var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
-        var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
-        var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
-        var backups = new DeferredBackupCoordinator(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
-            Required("Backup:PostgresBinDirectory"), Required("ConnectionStrings:Exam"), Required("Backup:AllowedBackupRoot"),
-            Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
-            TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()));
-        var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
-        var preflight = new CompositeStartupReadinessProbe([
-            new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
-            new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
-            new ManagementDatabaseStartupProbe(configuration.GetConnectionString("Exam"), epoch),
-            new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? "")
-        ]);
-        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(5) };
-        builder.Services.AddSingleton(new ManagementRuntime(serverId, nodeId, store, process,
-            () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),
-            preflight, () => backups, journal, new SystemClock(), port,
-            token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
-                .ObserveReadyAsync(token)));
-        var app = builder.Build();
+        AddManagementRuntime(builder);
+        await using var app = builder.Build();
         app.MapManagementApi();
         await app.RunAsync();
+
+        string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
+            ? throw new InvalidOperationException($"缺少受保护部署配置项 {key}。") : configuration[key]!;
+    }
+
+    public static void AddManagementRuntime(WebApplicationBuilder builder)
+    {
+        var configuration = builder.Configuration;
+        var serverId = Required("Management:ServerId");
+        var nodeId = Required("Management:NodeId");
+        var port = configuration.GetValue<int>("Management:HttpsPort");
+        if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
+        builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler
+            { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(5) });
+        builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>()));
+
+        ManagementRuntime CreateRuntime(HttpClient http)
+        {
+            var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
+            var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
+            var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
+            var backups = new DeferredBackupCoordinator(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
+                Required("Backup:PostgresBinDirectory"), Required("ConnectionStrings:Exam"), Required("Backup:AllowedBackupRoot"),
+                Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
+                TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()));
+            var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
+            var preflight = new CompositeStartupReadinessProbe([
+                new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
+                new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
+                new ManagementDatabaseStartupProbe(configuration.GetConnectionString("Exam"), epoch),
+                new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? "")
+            ]);
+            return new ManagementRuntime(serverId, nodeId, store, process,
+                () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),
+                preflight, () => backups, journal, new SystemClock(), port,
+                token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
+                    .ObserveReadyAsync(token));
+        }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
             ? throw new InvalidOperationException($"缺少受保护部署配置项 {key}。") : configuration[key]!;

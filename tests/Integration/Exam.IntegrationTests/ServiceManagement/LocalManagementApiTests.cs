@@ -399,6 +399,55 @@ public sealed class LocalManagementApiTests : IDisposable
         await app.StopAsync();
     }
 
+    [Theory]
+    [InlineData("missing", true)]
+    [InlineData("corrupt", true)]
+    [InlineData("valid", true)]
+    [InlineData("missing", false)]
+    public async Task ProductionRegistrationDoesNotLoadBrokenBusinessDependenciesBeforeAuthenticationOrStatus(string configurationState, bool credentials)
+    {
+        var path = Path.Combine(_directory, "production-configuration.json");
+        if (configurationState == "valid") await new FileServiceConfigurationStore(path).SaveAsync(Configuration, 0);
+        else if (configurationState == "corrupt") await File.WriteAllTextAsync(path, "{}");
+        var builder = ManagementEntryPoint.CreateHostBuilder([]);
+        builder.WebHost.UseTestServer();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Management:ServerId"] = "server", ["Management:NodeId"] = "node", ["Management:HttpsPort"] = "9443",
+            ["Management:BusinessServiceName"] = "invalid/service", // Invalid before SCM access on every platform.
+            ["Management:ServiceConfigurationPath"] = path,
+            ["Management:OperationDirectory"] = Path.Combine(_directory, "missing-operation-directory"),
+            ["Management:BusinessReadyEndpoint"] = "http://invalid-ready-endpoint",
+            ["ConnectionStrings:Exam"] = "synthetic-invalid-connection-secret",
+            ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
+            ["ExamSecurity:OperatorToken"] = credentials ? Token : null,
+            ["ExamSecurity:OperatorId"] = credentials ? "operator" : null
+        });
+        ManagementEntryPoint.AddManagementRuntime(builder);
+        await using var app = builder.Build();
+        app.MapManagementApi();
+        await app.StartAsync();
+        using var client = Client(app);
+        var response = await client.GetAsync("/management/v1/service/status");
+        Assert.Equal(credentials ? HttpStatusCode.OK : HttpStatusCode.Unauthorized, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("synthetic-invalid-connection-secret", body);
+        Assert.DoesNotContain(Token, body);
+        var envelope = System.Text.Json.JsonSerializer.Deserialize<ManagementEnvelope<ManagementStatus>>(body, _json.Options)!;
+        Assert.Null(envelope.ServerEpoch);
+        Assert.False(envelope.EpochVerified);
+        if (credentials)
+        {
+            Assert.Equal(BusinessServiceStatus.Faulted, envelope.Result!.ProcessStatus);
+            Assert.Equal(configurationState == "valid", envelope.Result.Configuration is not null);
+            if (configurationState != "valid") Assert.Contains(envelope.Result.Checks, check => !check.Passed && check.BlocksWrites);
+            var configured = await client.GetAsync("/management/v1/service/configuration");
+            Assert.Equal(configurationState == "valid" ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, configured.StatusCode);
+        }
+        Assert.False(Directory.Exists(Path.Combine(_directory, "missing-operation-directory")));
+        await app.StopAsync();
+    }
+
     private static HttpClient Client(WebApplication app, string? token = Token)
     {
         var client = app.GetTestClient();

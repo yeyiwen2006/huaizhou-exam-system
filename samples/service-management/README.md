@@ -1,4 +1,4 @@
-# F01 本机管理合成响应
+# F01 本机管理合成响应与部署模板
 
 这些 JSON 均人工构造，仅用于管理契约说明，不包含真实试题、账号、配置或恢复数据。
 
@@ -16,3 +16,11 @@
 新增操作记录包含可选 `requestJson`（规范化原请求）；受保护持久记录使用它与 SHA-256 内容绑定核对配置保存结果。以上人工响应中的摘要仅为合成占位，不可直接写入本机操作目录。旧记录缺少该字段仍可读取；客户端不要用它替代 requestId、目标或预期版本校验。
 
 备份中断后可凭已绑定清单、文件摘要与 PostgreSQL 校验恢复为 Completed；恢复中断后最多凭暂存证据恢复为 Staged，输出仍如 `restore-staged.json`。检查成功不触发新的备份、再次恢复、库切换或业务启动；证据不足时返回待核对状态。
+
+`appsettings.management.example.json` 和 `service-configuration.example.json` 是人工构造的 **Windows 部署模板**，不是可直接投入使用的部署配置或操作记录。主、备机分别设置实际节点身份、独立服务名、端口和仓库外受控路径，逻辑服务器身份须与业务一致；示例路径没有自动创建。管理配置模板在仓库外配置为可执行文件目录的 `appsettings.json`，初始非秘密服务配置在仓库外配置到 `Management:ServiceConfigurationPath`。服务模式按可执行文件目录加载配置；不要从 system32 寻找文件。
+
+模板刻意不包含 `ExamSecurity:OperatorToken`、`ExamSecurity:OperatorId` 或数据库连接串。按既有受保护部署配置/服务账户配置提供这些项，令牌至少 32 字符；不放命令行，不把填好的文件提交到仓库。证书指纹占位必须替换，证书/私钥必须实际部署并受保护，不能通过关闭 TLS 校验使用模板。缺少管理 TLS 证书时不会启动管理 HTTPS；缺少有效凭据时返回 401；缺失业务数据库/节点证书时允许管理认证和状态诊断，但对应操作或自检失败。
+
+服务配置、操作目录及备份/暂存根目录分别保护。操作目录不放其他 JSON、不经过联接点，也不放在备份材料源目录内。模板的 `version=1` 仅为合成首次配置版本，不能用于覆盖现有配置；后续保存必须读取当前版本并携带 expectedVersion。`highAvailabilityEnabled=true` 不代表已完成配对或复制，`ExamServer:ServerEpoch=1` 仅为合成部署比较值，不是当前权威代次。模板不新增恢复库连接或自动切换设置，也不解决尚未完成的生产恢复闭环。
+
+完整责任与缺口见 [F01 工作边界清单](../../docs/f01-scope-checklist.md)；实际检查和 Windows 接续见 [集中交接](../../docs/f01-local-management-handoff.md)。
