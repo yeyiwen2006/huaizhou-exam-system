@@ -2,6 +2,7 @@ using Exam.Application.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
+using System.Text.Json;
 
 namespace Exam.Management;
 
@@ -10,11 +11,43 @@ public sealed class ManagementRuntime(
     string serverId, string nodeId, IServiceConfigurationStore configurations,
     IManagedBusinessHost process, Func<IManagedBusinessHost> readyHost,
     IStartupReadinessProbe preflight, Func<IBackupCoordinator> backups,
-    IManagementOperationStore journal, IClock clock, int managementPort = 0)
+    IManagementOperationStore journal, IClock clock, int managementPort = 0,
+    Func<CancellationToken, Task<bool>>? observeBusinessReady = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
-    public ManagementOperationRunner Operations { get; } = new(serverId, nodeId, journal, clock);
+    private readonly object _operationsGate = new();
+    private ManagementOperationRunner? _operations;
+    public ManagementOperationRunner Operations
+    {
+        get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync); }
+    }
+
+    private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)
+    {
+        if (operation.Kind == ManagementOperationKind.Stop && process.Status == BusinessServiceStatus.Stopped)
+            return operation with { Phase = ManagementOperationPhase.Completed, Error = null, Status = await GetStatusAsync(token) };
+        if (operation.Kind == ManagementOperationKind.Configure && operation.RequestJson is not null && process.Status == BusinessServiceStatus.Stopped)
+        {
+            var original = JsonSerializer.Deserialize<ManagementConfigurationRequest>(operation.RequestJson, JsonDefaults.Create());
+            if (original is null || original.RequestId != operation.RequestId || original.ServerId != ServerId || original.NodeId != NodeId ||
+                original.ExpectedVersion is < 1 or long.MaxValue) return null;
+            var configuration = await GetConfigurationAsync(token);
+            if (configuration == original.Configuration with { Version = original.ExpectedVersion + 1 })
+                return operation with { Phase = ManagementOperationPhase.Completed, Error = null, Configuration = configuration };
+        }
+        if (operation.Kind == ManagementOperationKind.Start && process.Status == BusinessServiceStatus.Running && observeBusinessReady is not null)
+        {
+            var configuration = await GetConfigurationAsync(token);
+            var checks = await preflight.RunAsync(configuration, token);
+            if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites) && await observeBusinessReady(token) &&
+                process.Status == BusinessServiceStatus.Running)
+                return operation with { Phase = ManagementOperationPhase.Completed, Error = null,
+                    Status = new(process.Status, BusinessReadiness.Ready, configuration, checks) };
+        }
+        // Backup/recovery cannot be inferred from a running process or the original database.
+        return null;
+    }
 
     public async Task<ManagementStatus> GetStatusAsync(CancellationToken cancellationToken)
     {

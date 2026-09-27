@@ -8,7 +8,8 @@ using Exam.Domain.Common;
 namespace Exam.Application.ServiceManagement;
 
 public sealed class ManagementOperationRunner(
-    string serverId, string nodeId, IManagementOperationStore store, IClock clock)
+    string serverId, string nodeId, IManagementOperationStore store, IClock clock,
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? reconcile = null)
 {
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
 
@@ -19,7 +20,8 @@ public sealed class ManagementOperationRunner(
     {
         if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200 || string.IsNullOrWhiteSpace(actorId))
             throw new DomainRuleException(ErrorCodes.InvalidInput, "请求标识或已认证操作者无效。");
-        var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, JsonDefaults.Create())));
+        var requestJson = JsonSerializer.Serialize(content, JsonDefaults.Create());
+        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(requestJson)));
         await using var guard = await store.AcquireAsync(cancellationToken);
         var previous = await store.FindAsync(requestId, cancellationToken);
         if (previous is not null)
@@ -27,7 +29,7 @@ public sealed class ManagementOperationRunner(
             if (previous.ServerId != serverId || previous.NodeId != nodeId || previous.ActorId != actorId ||
                 previous.Kind != kind || previous.ContentHash != hash)
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "requestId 已绑定不同的节点、操作者或操作内容。");
-            return ForQuery(previous);
+            return await ReconcileUnderLockAsync(previous, cancellationToken);
         }
 
         // Staged recovery and an interrupted mutation must never be bypassed by a different start id.
@@ -36,7 +38,7 @@ public sealed class ManagementOperationRunner(
             throw new DomainRuleException(ErrorCodes.ServiceRecovering, "存在待核对的本机操作或暂存恢复，禁止自动启动、修改配置或再次恢复。");
 
         var accepted = new ManagementOperation(requestId, serverId, nodeId, actorId, kind, hash,
-            ManagementOperationPhase.Accepted, clock.UtcNow, clock.UtcNow);
+            ManagementOperationPhase.Accepted, clock.UtcNow, clock.UtcNow, RequestJson: requestJson);
         await store.SaveAsync(accepted, cancellationToken); // No side effect before this durable write.
         _executing.TryAdd(requestId, 0);
         try
@@ -81,7 +83,36 @@ public sealed class ManagementOperationRunner(
             ?? throw new DomainRuleException(ErrorCodes.NotFound, "未找到本机管理操作。");
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
-        return ForQuery(operation);
+        if (_executing.ContainsKey(requestId) || reconcile is null ||
+            operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
+            return ForQuery(operation);
+        await using var guard = await store.AcquireAsync(cancellationToken);
+        operation = await store.FindAsync(requestId, cancellationToken)
+            ?? throw new DomainRuleException(ErrorCodes.NotFound, "未找到本机管理操作。");
+        if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
+            throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
+        return await ReconcileUnderLockAsync(operation, cancellationToken);
+    }
+
+    private async Task<ManagementOperation> ReconcileUnderLockAsync(ManagementOperation operation, CancellationToken token)
+    {
+        if (reconcile is null || _executing.ContainsKey(operation.RequestId) ||
+            operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
+            return ForQuery(operation);
+        ManagementOperation? observed;
+        try { observed = await reconcile(operation, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception) { return ForQuery(operation); }
+        if (observed is null) return ForQuery(operation);
+        if (observed.RequestId != operation.RequestId || observed.ServerId != operation.ServerId ||
+            observed.NodeId != operation.NodeId || observed.ActorId != operation.ActorId || observed.Kind != operation.Kind ||
+            observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||
+            observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null ||
+            observed.Phase != ManagementOperationPhase.Completed)
+            throw new InvalidOperationException("操作核对结果未保留原请求绑定。");
+        observed = observed with { UpdatedAt = clock.UtcNow };
+        await store.SaveAsync(observed, token);
+        return observed;
     }
 
     private ManagementOperation ForQuery(ManagementOperation operation) =>

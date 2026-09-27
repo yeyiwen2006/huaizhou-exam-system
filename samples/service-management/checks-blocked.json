@@ -1,0 +1,33 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-checks-correlation",
+  "result": {
+    "requestId": "synthetic-checks",
+    "serverId": "synthetic-server",
+    "nodeId": "synthetic-node",
+    "actorId": "synthetic-operator",
+    "kind": "checks",
+    "contentHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "phase": "completed",
+    "acceptedAt": "2026-09-27T00:00:00+00:00",
+    "updatedAt": "2026-09-27T00:01:00+00:00",
+    "status": null,
+    "configuration": null,
+    "checks": [
+      {
+        "name": "published-resources",
+        "passed": false,
+        "message": "持久数据或恢复依赖不一致，业务写入保持关闭。",
+        "blocksWrites": true
+      }
+    ],
+    "backup": null,
+    "restore": null,
+    "error": null
+  },
+  "error": null
+}

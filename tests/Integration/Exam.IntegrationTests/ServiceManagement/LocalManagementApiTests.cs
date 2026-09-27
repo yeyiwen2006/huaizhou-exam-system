@@ -151,7 +151,61 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(0, _host.StartCalls);
     }
 
-    private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false)
+    [Fact]
+    public async Task StopResultLostAfterSideEffectIsReconciledFromActualProcessWithoutStoppingAgain()
+    {
+        _host.Status = BusinessServiceStatus.Running;
+        await using (var app = await AppAsync(failCompletion: true))
+        {
+            var runtime = app.Services.GetRequiredService<ManagementRuntime>();
+            await Assert.ThrowsAsync<IOException>(() => runtime.ExecuteServiceAsync(new("lost-stop", "server", "node"),
+                "operator", ManagementOperationKind.Stop, default));
+        }
+        await using var restarted = await AppAsync();
+        using var client = Client(restarted);
+        var envelope = await client.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>("/management/v1/operations/lost-stop", _json.Options);
+        Assert.Equal(ManagementOperationPhase.Completed, envelope!.Result!.Phase);
+        Assert.Equal(BusinessServiceStatus.Stopped, envelope.Result.Status!.ProcessStatus);
+        Assert.Equal(1, _host.StopCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostConfigurationResultRequiresExactVersionAndContentBeforeReconciliation(bool alterSavedConfiguration)
+    {
+        var request = new ManagementConfigurationRequest("lost-config", "server", "node", 1, Configuration with { HttpsPort = 9443 });
+        await using (var app = await AppAsync(failCompletion: true))
+        {
+            var runtime = app.Services.GetRequiredService<ManagementRuntime>();
+            await Assert.ThrowsAsync<IOException>(() => runtime.ConfigureAsync(request, "operator", default));
+        }
+        if (alterSavedConfiguration)
+            await new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"))
+                .SaveAsync(request.Configuration with { HttpsPort = 9444, Version = 3 }, 2);
+        await using var restarted = await AppAsync();
+        var result = await restarted.Services.GetRequiredService<ManagementRuntime>().FindOperationAsync("lost-config", "operator", default);
+        Assert.Equal(alterSavedConfiguration ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Completed, result.Phase);
+        if (!alterSavedConfiguration) Assert.Equal(request.Configuration with { Version = 2 }, result.Configuration);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostStartResultNeedsFreshBusinessReadinessObservation(bool ready)
+    {
+        await using (var app = await AppAsync(failCompletion: true))
+        {
+            await Assert.ThrowsAsync<IOException>(() => app.Services.GetRequiredService<ManagementRuntime>()
+                .ExecuteServiceAsync(new("lost-start", "server", "node"), "operator", ManagementOperationKind.Start, default));
+        }
+        await using var restarted = await AppAsync(observedReady: ready);
+        var result = await restarted.Services.GetRequiredService<ManagementRuntime>().FindOperationAsync("lost-start", "operator", default);
+        Assert.Equal(ready ? ManagementOperationPhase.Completed : ManagementOperationPhase.NeedsVerification, result.Phase);
+        Assert.Equal(1, _host.StartCalls);
+    }
+
+    private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
@@ -159,8 +213,10 @@ public sealed class LocalManagementApiTests : IDisposable
         builder.WebHost.UseTestServer();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         { ["ExamSecurity:OperatorToken"] = credentials ? Token : null, ["ExamSecurity:OperatorId"] = credentials ? "operator" : null });
+        IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
+        if (failCompletion) journal = new FailCompletionStore(journal);
         builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, () => _host,
-            new Probe(blockStartup), () => _backups, new FileManagementOperationStore(Path.Combine(_directory, "operations")), new SystemClock()));
+            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: _ => Task.FromResult(observedReady)));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
@@ -199,4 +255,12 @@ public sealed class LocalManagementApiTests : IDisposable
     }
     private sealed class JsonSerializerOptionsProvider
     { public System.Text.Json.JsonSerializerOptions Options { get; } = JsonDefaults.Create(); }
+    private sealed class FailCompletionStore(IManagementOperationStore inner) : IManagementOperationStore
+    {
+        public Task<IAsyncDisposable> AcquireAsync(CancellationToken token) => inner.AcquireAsync(token);
+        public Task<ManagementOperation?> FindAsync(string id, CancellationToken token) => inner.FindAsync(id, token);
+        public Task<bool> HasUnverifiedOperationsAsync(CancellationToken token) => inner.HasUnverifiedOperationsAsync(token);
+        public Task SaveAsync(ManagementOperation operation, CancellationToken token) => operation.Phase == ManagementOperationPhase.Accepted
+            ? inner.SaveAsync(operation, token) : throw new IOException("合成结果落盘中断");
+    }
 }

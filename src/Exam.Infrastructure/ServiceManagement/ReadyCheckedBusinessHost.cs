@@ -120,6 +120,13 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
         await _processHost.StopAsync(cancellationToken);
     }
 
+    public async Task<bool> ObserveReadyAsync(CancellationToken cancellationToken)
+    {
+        if (_processHost.Status != BusinessServiceStatus.Running) return false;
+        var ready = await CheckReadyAsync(cancellationToken);
+        return ready && _processHost.Status == BusinessServiceStatus.Running;
+    }
+
     private async Task<bool> CheckReadyAsync(CancellationToken cancellationToken)
     {
         try

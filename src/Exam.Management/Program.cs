@@ -42,12 +42,14 @@ public static class ManagementEntryPoint
             new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
             new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
             new ManagementDatabaseStartupProbe(configuration.GetConnectionString("Exam"), epoch),
-            new RecoveryBoundaryProbe()
+            new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? "")
         ]);
         using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(5) };
         builder.Services.AddSingleton(new ManagementRuntime(serverId, nodeId, store, process,
             () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),
-            preflight, () => backups, journal, new SystemClock(), port));
+            preflight, () => backups, journal, new SystemClock(), port,
+            token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
+                .ObserveReadyAsync(token)));
         var app = builder.Build();
         app.MapManagementApi();
         await app.RunAsync();
@@ -81,13 +83,4 @@ public static class ManagementDeployment
         catch (Exception error) when (error is CryptographicException or PlatformNotSupportedException or UnauthorizedAccessException)
         { throw new InvalidOperationException("无法加载管理 HTTPS 证书及私钥。"); }
     }
-}
-
-// Published resources, original receipts, reliable events and timer recovery need a complete verification chain.
-// A local directory/database connectivity check must not be advertised as that chain.
-internal sealed class RecoveryBoundaryProbe : IStartupReadinessProbe
-{
-    public Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<StartupCheckResult>>([new("recovery-verification", false,
-            "题包、原回执、可靠事件与定时恢复核对链尚未接齐，业务启动保持关闭。", true)]);
 }

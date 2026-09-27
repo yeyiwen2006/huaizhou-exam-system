@@ -128,5 +128,7 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
             !Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
             operation.AcceptedAt == default || operation.UpdatedAt < operation.AcceptedAt)
             throw new InvalidDataException("操作记录缺少有效的身份、内容绑定或阶段。");
+        if (operation.RequestJson is not null && Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operation.RequestJson))) != operation.ContentHash)
+            throw new InvalidDataException("操作记录的原请求内容与绑定摘要不一致。");
     }
 }

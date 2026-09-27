@@ -116,6 +116,52 @@ public sealed class ManagementOperationPersistenceTests : IDisposable
     }
 
     private FileManagementOperationStore Store() => new(_directory);
+
+    [Fact]
+    public async Task InterruptedOperationCanBeReconciledAndPersistedWithoutRepeatingEffect()
+    {
+        var effects = 0;
+        var initial = new ManagementOperationRunner("server", "node", new FailCompletionStore(Store()), new SystemClock());
+        await Assert.ThrowsAsync<IOException>(() => initial.ExecuteAsync("interrupted", "operator", ManagementOperationKind.Stop, "payload",
+            (operation, token) => { effects++; return Task.FromResult(operation with { Phase = ManagementOperationPhase.Completed }); }));
+        var observed = 0;
+        var restarted = new ManagementOperationRunner("server", "node", Store(), new SystemClock(), (operation, token) =>
+        { observed++; return Task.FromResult<ManagementOperation?>(operation with { Phase = ManagementOperationPhase.Completed }); });
+        var result = await restarted.FindAsync("interrupted", "operator", default);
+        Assert.Equal(ManagementOperationPhase.Completed, result.Phase);
+        Assert.Equal(result, await Runner().FindAsync("interrupted", "operator", default));
+        Assert.Equal(1, effects);
+        Assert.Equal(1, observed);
+        await restarted.ExecuteAsync("interrupted", "operator", ManagementOperationKind.Stop, "payload",
+            (operation, token) => throw new InvalidOperationException("must not repeat"));
+        Assert.Equal(1, observed);
+    }
+
+    [Fact]
+    public async Task UnavailableObservationKeepsPending_AndChangedRequestBindingIsRejected()
+    {
+        await Runner().ExecuteAsync("pending", "operator", ManagementOperationKind.Start, "payload",
+            (op, token) => throw new IOException("synthetic interruption"));
+        var unknown = new ManagementOperationRunner("server", "node", Store(), new SystemClock(),
+            (op, token) => throw new IOException("synthetic unavailable observation"));
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, (await unknown.FindAsync("pending", "operator", default)).Phase);
+        var invalid = new ManagementOperationRunner("server", "node", Store(), new SystemClock(),
+            (op, token) => Task.FromResult<ManagementOperation?>(op with { Phase = ManagementOperationPhase.Completed, ActorId = "forged", Error = null }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => invalid.FindAsync("pending", "operator", default));
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, (await Runner().FindAsync("pending", "operator", default)).Phase);
+    }
+
+    [Fact]
+    public async Task LegacyJournalWithoutOriginalRequestStillLoads_AndChangedOriginalContentFailsClosed()
+    {
+        await Runner().ExecuteAsync("legacy", "operator", ManagementOperationKind.Stop, "payload",
+            (op, token) => Task.FromResult(op with { Phase = ManagementOperationPhase.Completed }));
+        var record = (await Store().FindAsync("legacy", default))!;
+        await Store().SaveAsync(record with { RequestJson = null }, default);
+        Assert.Null((await Runner().FindAsync("legacy", "operator", default)).RequestJson);
+        await Assert.ThrowsAsync<InvalidDataException>(() => Store().SaveAsync(record with { RequestJson = "forged" }, default));
+    }
+
     private ManagementOperationRunner Runner() => new("server", "node", Store(), new SystemClock());
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 

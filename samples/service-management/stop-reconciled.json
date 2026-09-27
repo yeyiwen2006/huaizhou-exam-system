@@ -1,0 +1,38 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-reconciliation-correlation",
+  "result": {
+    "requestId": "synthetic-interrupted-stop",
+    "serverId": "synthetic-server",
+    "nodeId": "synthetic-node",
+    "actorId": "synthetic-operator",
+    "kind": "stop",
+    "contentHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "phase": "completed",
+    "acceptedAt": "2026-09-27T00:00:00+00:00",
+    "updatedAt": "2026-09-27T00:02:00+00:00",
+    "status": {
+      "processStatus": "stopped",
+      "readiness": "unknown",
+      "configuration": null,
+      "checks": [
+        {
+          "name": "service-configuration",
+          "passed": false,
+          "message": "业务配置缺失、损坏或与管理节点不一致。",
+          "blocksWrites": true
+        }
+      ]
+    },
+    "configuration": null,
+    "checks": null,
+    "backup": null,
+    "restore": null,
+    "error": null
+  },
+  "error": null
+}

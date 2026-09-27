@@ -1,4 +1,5 @@
 using Exam.Contracts.Common;
+using System.Text.Json.Serialization;
 
 namespace Exam.Contracts.ServiceManagement;
 
@@ -34,4 +35,5 @@ public sealed record ManagementOperation(
     DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt,
     ManagementStatus? Status = null, ServiceConfiguration? Configuration = null,
     IReadOnlyList<StartupCheckResult>? Checks = null, BackupResult? Backup = null,
-    ManagementRestoreOutcome? Restore = null, ApiError? Error = null);
+    ManagementRestoreOutcome? Restore = null, ApiError? Error = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestJson = null);

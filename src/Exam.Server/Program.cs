@@ -80,6 +80,9 @@ app.MapGet("/health/ready", async (
 
     var readiness = await app.Services.GetRequiredService<PostgresReadinessProbe>()
         .CheckAsync(cancellationToken);
+    var recovery = app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
+    if (!recovery.Ready)
+        return Results.Json(new { status = "recovering", reason = "启动恢复核对尚未通过。" }, statusCode: 503);
     return readiness.Ready
         ? Results.Ok(new
         {

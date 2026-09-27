@@ -17,7 +17,7 @@ public sealed record ExamApiSecurityOptions(string OperatorToken, string Operato
 /// participation/session checks. Secrets are accepted only in headers and are never included in
 /// route values or log messages.
 /// </summary>
-public sealed class ExamApiAccessMiddleware(RequestDelegate next)
+public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecoveryGuard? recovery = null)
 {
     private const string DeviceIdHeader = "X-Exam-Device-Id";
     private const string DeviceCredentialHeader = "X-Exam-Device-Credential";
@@ -31,7 +31,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         ActiveNodeGuard activeNode,
         ServerNodeEnvelope server)
     {
-        if (!context.Request.Path.StartsWithSegments("/api/v1", out var remainder))
+        var realtime = context.Request.Path.StartsWithSegments("/hubs/exam-events");
+        if (!context.Request.Path.StartsWithSegments("/api/v1", out var remainder) && !realtime)
         {
             await next(context);
             return;
@@ -44,6 +45,16 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             await RejectNodeAsync(context, node, server);
             return;
         }
+
+        if (recovery is not null && !recovery.Snapshot.Ready)
+        {
+            await RejectAsync(context, server, StatusCodes.Status503ServiceUnavailable,
+                ErrorCodes.ServiceRecovering, "启动恢复核对尚未通过，业务写入保持关闭。", retryable: true);
+            return;
+        }
+
+        // SignalR validates device identity in its existing authorizer after the common node/recovery gates.
+        if (realtime) { await next(context); return; }
 
         if (IsPublic(context.Request.Method, route))
         {
