@@ -108,7 +108,7 @@ public partial class WaitingExamPage : UserControl
             }
             if (_runtime.HasFixedSubmission)
             {
-                ErrorBanner.Show("本机已有固定答卷，原记录已保留。当前版本尚未接入原回执核对和补传，请联系考务人员；不能重新开始作答。");
+                ErrorBanner.Show("本机已有固定答卷，原记录已保留。正在转入原答卷补传和回执核对，不能重新开始作答。");
                 return;
             }
 
@@ -325,6 +325,12 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
+        if (!_busy && _runtime?.HasFixedSubmission == true)
+        {
+            _navigated = true;
+            _navigation.GoToExamInProgress(_exam, _runtime);
+            return;
+        }
         var manager = _runtime?.Manager;
         InstructionList.ItemsSource = manager?.Instructions?.Lines.Select(line => InstructionTextRenderer.Create(line, (Style)FindResource("BodyText"))).ToArray();
         DownloadPill.Text = manager?.HasPackage == true ? "试题包已保存（加密）" : "试题包尚未完整获取";

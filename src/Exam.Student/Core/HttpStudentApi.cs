@@ -6,6 +6,7 @@ using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Student;
+using Exam.Contracts.Submissions;
 
 namespace Exam.Student.Core;
 
@@ -91,6 +92,30 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
 
     public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) =>
         SendAsync<ServerTimeSnapshot>(HttpMethod.Get, "/api/v1/commands/time", null, false, ct);
+
+    public Task<ApiEnvelope<PersistedProgress>> SyncProgressAsync(
+        SyncProgressRequest request, CancellationToken ct = default) =>
+        SendAsync<PersistedProgress>(HttpMethod.Put, "/api/v1/submissions/progress", request, true, ct);
+
+    public Task<ApiEnvelope<SubmissionReceipt>> SubmitFinalAnswersAsync(
+        SubmitFinalAnswersRequest request, CancellationToken ct = default) =>
+        SendAsync<SubmissionReceipt>(HttpMethod.Post, "/api/v1/submissions/final", request, true, ct);
+
+    public Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
+        string participationId, long entryVersion, string deviceId, long authorizationVersion,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(participationId) || string.IsNullOrWhiteSpace(deviceId) ||
+            entryVersion < 1 || authorizationVersion < 1)
+        {
+            throw new ArgumentException("查询最终提交需要完整的参试与设备授权信息。");
+        }
+
+        var query = $"participationId={Uri.EscapeDataString(participationId)}" +
+            $"&entryVersion={entryVersion}&deviceId={Uri.EscapeDataString(deviceId)}" +
+            $"&authorizationVersion={authorizationVersion}";
+        return SendAsync<SubmissionReceipt>(HttpMethod.Get, $"/api/v1/submissions/receipts?{query}", null, true, ct);
+    }
 
     public async Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(
         string sessionId, CancellationToken ct = default)

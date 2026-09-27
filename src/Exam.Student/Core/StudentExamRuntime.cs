@@ -32,6 +32,7 @@ public sealed class StudentExamRuntime(
     private string? _handlingError;
     private AnswerSessionContext? _answerContext;
     private FixedSubmissionRecord? _recoveredSubmission;
+    private FixedSubmissionRecord? _endedRecoveryIntent;
     private bool _localRecoveryChecked;
     private string? _localStateError;
     private StudentPaperManifest? _paper;
@@ -54,6 +55,27 @@ public sealed class StudentExamRuntime(
         }
         return bytes;
     }
+    /// <summary>仅供原答卷补传；不要求重新解锁或创建可编辑会话。</summary>
+    public FixedSubmissionRecord? FixedSubmission => (_recoveredSubmission ?? Answers?.FixedSubmission) is { } record
+        ? record with { FrozenAnswers = PersistedProgress.FreezeAnswers(record.FrozenAnswers) } : null;
+
+    public Task<PendingSnapshot?> LoadPendingSnapshotAsync(CancellationToken ct = default) =>
+        localState is not null && _localKey is not null
+            ? localState.LoadPendingSnapshotAsync(_localKey, ct) : Task.FromResult<PendingSnapshot?>(null);
+
+    public Task<StoreWriteResult> SaveSubmissionReceiptAsync(SubmissionReceipt receipt, CancellationToken ct = default) =>
+        localState is ISubmissionReceiptStore receiptStore && _localKey is not null
+            ? receiptStore.SaveSubmissionReceiptAsync(_localKey, receipt, ct)
+            : Task.FromResult(StoreWriteResult.Fail("本地存储尚未提供可靠回执保存，原答卷继续保留。"));
+
+    public Task RevokeSubmissionAuthorizationAsync()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        return dispatcher is null || dispatcher.CheckAccess()
+            ? InvalidateAuthorizationOnUiAsync()
+            : dispatcher.InvokeAsync(InvalidateAuthorizationOnUiAsync, DispatcherPriority.Send).Task.Unwrap();
+    }
+
     public bool LocalRecoveryChecked => _localRecoveryChecked;
     public bool HasFixedSubmission => _recoveredSubmission is not null || Answers?.Status == AnswerSessionStatus.Fixed ||
         Answers?.HasPendingSubmission == true;
@@ -104,6 +126,23 @@ public sealed class StudentExamRuntime(
                 _localStateError = "本机保留了上次已经开考的参试记录，但原本地答案缺失。不能重建空答卷或重新开始，请联系考务人员恢复原记录。";
                 return false;
             }
+            if (_recoveredSubmission is null && Manager.ExamEnded &&
+                await localState.LoadPendingSnapshotAsync(_localKey, ct) is { } snapshot)
+            {
+                // 已持久记录的 END 后崩溃：只冻结原可靠快照，绝不恢复编辑；服务端仍核对原授权。
+                if (snapshot.ExamId != _localKey.ExamId || snapshot.CandidateId != _localKey.CandidateId || snapshot.DeviceId != device.DeviceId)
+                    throw new InvalidDataException("结束恢复快照与当前考生、设备不一致。");
+                _endedRecoveryIntent ??= new FixedSubmissionRecord($"subm-{Guid.NewGuid():N}", snapshot.PaperVersion,
+                    snapshot.AnswerVersion, snapshot.Answers, snapshot.SavedAt, RequestIds.New(), snapshot.ParticipationId,
+                    snapshot.EntryVersion, snapshot.DeviceId, snapshot.AuthorizationVersion);
+                var fixedResult = await localState.TryFixSubmissionAsync(_localKey, _endedRecoveryIntent, ct);
+                if (!fixedResult.Result.Succeeded || fixedResult.Record is null)
+                {
+                    _localStateError = fixedResult.Result.Error ?? "结束后的原答卷尚未确认固定，请重试本地保存。";
+                    return false;
+                }
+                _recoveredSubmission = fixedResult.Record;
+            }
             _localRecoveryChecked = true;
             _localStateError = null;
             return true;
@@ -132,7 +171,7 @@ public sealed class StudentExamRuntime(
             if (Manager.ExamEnded)
             {
                 _paper = null;
-                if (Answers is { } ended) { await ended.SuspendAsync("考试已结束，答案已停止修改，原记录等待后续核对和补传。", ct); }
+                if (Answers is { } ended) { await FreezeEndedAnswersAsync(ended, ct); }
                 return;
             }
             if (HasFixedSubmission) { return; }
@@ -184,6 +223,7 @@ public sealed class StudentExamRuntime(
             Answers = answers;
             _answerContext = context;
             answers.WriteBlocked += OnAnswerWriteBlocked;
+            answers.StateSaved += OnAnswerStateSaved;
             answers.SubmissionFixed += OnSubmissionFixed;
             var restored = await answers.StartAsync(_localKey, context, ct);
             _recoveredSubmission ??= answers.FixedSubmission;
@@ -192,8 +232,10 @@ public sealed class StudentExamRuntime(
             // a completed load reactivate a runtime that has already entered a terminal state.
             if (Manager.CurrentPhase == ExamPackageManager.Phase.Revoked)
                 await answers.InvalidateAuthorizationAsync(ct);
-            else if (_disposed || Manager.ExamEnded)
-                await answers.SuspendAsync("考试已结束，原答案保留，不能新增修改。", ct);
+            else if (_disposed)
+                await answers.SuspendAsync("考试会话已关闭，原答案保留，不能新增修改。", ct);
+            else if (Manager.ExamEnded)
+                await FreezeEndedAnswersAsync(answers, ct);
         }
         catch (Exception error) when (IsLocalStorageError(error))
         {
@@ -215,6 +257,20 @@ public sealed class StudentExamRuntime(
         var result = await answers.RetrySaveAsync(ct);
         _localStateError = result.Succeeded ? null : result.Error;
         NotifyStateChanged();
+    }
+
+    private void OnAnswerStateSaved() => NotifyStateChanged();
+
+    private static async Task FreezeEndedAnswersAsync(AnswerSession answers, CancellationToken ct)
+    {
+        // 恢复读取期间先同步封锁编辑；完整状态读出后再固定，不补造空答卷。
+        if (answers.Status == AnswerSessionStatus.NotStarted)
+        {
+            await answers.SuspendAsync("服务器已结束考试，原状态恢复后立即固定。", ct);
+            return;
+        }
+        if (answers.Status == AnswerSessionStatus.PermissionDenied) return;
+        await answers.FixSubmissionAsync(answers.FixedSubmissionId ?? $"subm-{Guid.NewGuid():N}", ct);
     }
 
     private void OnAnswerWriteBlocked(string message)
@@ -342,7 +398,7 @@ public sealed class StudentExamRuntime(
             // The manager validates END's full identity before synchronously marking Ended.
             // Merely receiving an END-shaped message is not sufficient to suspend this exam.
             var answerStop = Manager.ExamEnded && Answers is { } answers
-                ? answers.SuspendAsync("考试已结束，答案已停止修改；固定提交与回执核对尚未完成。", CancellationToken.None)
+                ? FreezeEndedAnswersAsync(answers, CancellationToken.None)
                 : Task.CompletedTask;
             NotifyStateChanged();
             await Task.WhenAll(packageCommand, answerStop);
@@ -397,6 +453,7 @@ public sealed class StudentExamRuntime(
                         // A recovery may have been awaiting SQLite when disposal started.
                         await answers.SuspendAsync("考试会话已关闭，原记录保留。", CancellationToken.None);
                         answers.WriteBlocked -= OnAnswerWriteBlocked;
+                        answers.StateSaved -= OnAnswerStateSaved;
                         answers.SubmissionFixed -= OnSubmissionFixed;
                     }
                 }
