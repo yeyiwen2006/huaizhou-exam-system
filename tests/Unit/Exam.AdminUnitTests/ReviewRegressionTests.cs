@@ -16,7 +16,7 @@ using Exam.Contracts.Versioning;
 namespace Exam.AdminUnitTests;
 
 /// <summary>PR #42 review regressions; all identities, credentials and workbook rows are synthetic.</summary>
-public sealed class ReviewRegressionTests
+public sealed partial class ReviewRegressionTests
 {
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
     private static readonly ScheduleWindow Schedule = new(

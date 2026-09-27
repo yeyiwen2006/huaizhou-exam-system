@@ -18,6 +18,8 @@ public sealed class MonitoringViewModel : BindableBase
     private long _collectionRequestVersion;
     private long _decisionRequestVersion;
     private long _resendRequestVersion;
+    private long _decisionInputVersion;
+    private long _resendInputVersion;
     private MonitoringRow? _selectedRow;
     public event Action<CollectionCompletedNotification>? CollectionCompleted;
 
@@ -104,15 +106,15 @@ public sealed class MonitoringViewModel : BindableBase
         get => _onlySubmitted;
         set { if (SetProperty(ref _onlySubmitted, value)) OnPropertyChanged(nameof(FilteredRows)); }
     }
-    public string ParticipationId { get => _participationId; set => SetProperty(ref _participationId, value); }
-    public string SelectedDeviceId { get => _selectedDeviceId; set => SetProperty(ref _selectedDeviceId, value); }
-    public string ExpectedVersionText { get => _expectedVersionText; set => SetProperty(ref _expectedVersionText, value); }
-    public string DecisionReason { get => _decisionReason; set => SetProperty(ref _decisionReason, value); }
-    public string EventId { get => _eventId; set => SetProperty(ref _eventId, value); }
-    public string ResendParticipationId { get => _resendParticipationId; set => SetProperty(ref _resendParticipationId, value); }
-    public string ResendDeviceId { get => _resendDeviceId; set => SetProperty(ref _resendDeviceId, value); }
-    public string EntryVersionText { get => _entryVersionText; set => SetProperty(ref _entryVersionText, value); }
-    public string AuthorizationVersionText { get => _authorizationVersionText; set => SetProperty(ref _authorizationVersionText, value); }
+    public string ParticipationId { get => _participationId; set { if (SetProperty(ref _participationId, value)) _decisionInputVersion++; } }
+    public string SelectedDeviceId { get => _selectedDeviceId; set { if (SetProperty(ref _selectedDeviceId, value)) _decisionInputVersion++; } }
+    public string ExpectedVersionText { get => _expectedVersionText; set { if (SetProperty(ref _expectedVersionText, value)) _decisionInputVersion++; } }
+    public string DecisionReason { get => _decisionReason; set { if (SetProperty(ref _decisionReason, value)) _decisionInputVersion++; } }
+    public string EventId { get => _eventId; set { if (SetProperty(ref _eventId, value)) _resendInputVersion++; } }
+    public string ResendParticipationId { get => _resendParticipationId; set { if (SetProperty(ref _resendParticipationId, value)) _resendInputVersion++; } }
+    public string ResendDeviceId { get => _resendDeviceId; set { if (SetProperty(ref _resendDeviceId, value)) _resendInputVersion++; } }
+    public string EntryVersionText { get => _entryVersionText; set { if (SetProperty(ref _entryVersionText, value)) _resendInputVersion++; } }
+    public string AuthorizationVersionText { get => _authorizationVersionText; set { if (SetProperty(ref _authorizationVersionText, value)) _resendInputVersion++; } }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string CollectionStatus { get => _collectionStatus; private set => SetProperty(ref _collectionStatus, value); }
 
@@ -253,32 +255,37 @@ public sealed class MonitoringViewModel : BindableBase
         var operatorId = _api.OperatorId;
         var context = _contextVersion;
         var operation = ++_decisionRequestVersion;
+        var inputVersion = _decisionInputVersion;
         DeviceDecisionResult result;
         try
         {
             result = await _api.DecideDeviceAsync(participationId, selectedDeviceId, expectedVersion, reason);
         }
-        catch when (context != _contextVersion || operation != _decisionRequestVersion)
+        catch when (context != _contextVersion || operation != _decisionRequestVersion || inputVersion != _decisionInputVersion)
         {
             return;
         }
-        if (context != _contextVersion || operation != _decisionRequestVersion) return;
+        if (context != _contextVersion || operation != _decisionRequestVersion || inputVersion != _decisionInputVersion) return;
         if (!StringComparer.Ordinal.Equals(result.ParticipationId, participationId) ||
             !StringComparer.Ordinal.Equals(result.AuthorizedDeviceId, selectedDeviceId) ||
             string.IsNullOrWhiteSpace(result.RevokedDeviceId) || result.AuthorizationVersion < 1 ||
-            result.Version <= expectedVersion || !StringComparer.Ordinal.Equals(result.OperatorId, operatorId) ||
+            result.Version <= expectedVersion || result.DecidedAt == default ||
+            StringComparer.Ordinal.Equals(result.AuthorizedDeviceId, result.RevokedDeviceId) ||
+            !StringComparer.Ordinal.Equals(result.OperatorId, operatorId) ||
             !StringComparer.Ordinal.Equals(result.Reason, reason))
             throw new InvalidOperationException("设备裁决回执与当前请求不匹配，已拒绝应用。");
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        inputVersion = _decisionInputVersion;
         var success = $"设备裁决已保存：授权设备 {result.AuthorizedDeviceId}，撤销设备 {result.RevokedDeviceId}；操作者 {result.OperatorId}，原因：{result.Reason}。";
         try
         {
             await LoadAsync();
-            if (context == _contextVersion) Status = success;
+            if (context == _contextVersion && operation == _decisionRequestVersion && inputVersion == _decisionInputVersion)
+                Status = success;
         }
         catch (Exception exception)
         {
-            if (context == _contextVersion)
+            if (context == _contextVersion && operation == _decisionRequestVersion && inputVersion == _decisionInputVersion)
                 Status = $"{success} 但监测刷新失败：{exception.Message}。请刷新，不要重复裁决。";
         }
     }
@@ -299,16 +306,17 @@ public sealed class MonitoringViewModel : BindableBase
         var deviceId = ResendDeviceId.Trim();
         var context = _contextVersion;
         var operation = ++_resendRequestVersion;
+        var inputVersion = _resendInputVersion;
         Exam.Contracts.Commands.CommandEventView result;
         try
         {
             result = await _api.ResendCommandAsync(eventId, participationId, entryVersion, deviceId, authorizationVersion);
         }
-        catch when (context != _contextVersion || operation != _resendRequestVersion)
+        catch when (context != _contextVersion || operation != _resendRequestVersion || inputVersion != _resendInputVersion)
         {
             return;
         }
-        if (context != _contextVersion || operation != _resendRequestVersion) return;
+        if (context != _contextVersion || operation != _resendRequestVersion || inputVersion != _resendInputVersion) return;
         if (!StringComparer.Ordinal.Equals(result.EventId, eventId) ||
             !StringComparer.Ordinal.Equals(result.ExamId, examId) ||
             !StringComparer.Ordinal.Equals(result.ParticipationId, participationId) || result.EntryVersion != entryVersion ||
@@ -326,8 +334,10 @@ public sealed class MonitoringViewModel : BindableBase
             string.IsNullOrWhiteSpace(item.ParticipationId) || string.IsNullOrWhiteSpace(item.CandidateId) ||
             string.IsNullOrWhiteSpace(item.AuthorizedDeviceId) || item.EntryVersion < 1 ||
             item.AuthorizationVersion < 1 || item.Version < 1 || !Enum.IsDefined(item.BusinessState) ||
+            item.BusinessState == ParticipationBusinessState.NotParticipating ||
             item.Lifecycle is { } lifecycle && !Enum.IsDefined(lifecycle)) ||
-            results.Select(item => item.ParticipationId).Distinct(StringComparer.Ordinal).Count() != results.Count)
+            results.Select(item => item.ParticipationId).Distinct(StringComparer.Ordinal).Count() != results.Count ||
+            results.Select(item => item.CandidateId).Distinct(StringComparer.Ordinal).Count() != results.Count)
             throw new InvalidOperationException("参与记录的考试、标识、版本或状态无效，已拒绝显示。");
     }
 
