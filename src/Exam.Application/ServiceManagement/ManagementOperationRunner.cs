@@ -108,7 +108,9 @@ public sealed class ManagementOperationRunner(
             observed.NodeId != operation.NodeId || observed.ActorId != operation.ActorId || observed.Kind != operation.Kind ||
             observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||
             observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null ||
-            observed.Phase != ManagementOperationPhase.Completed)
+            (observed.Phase != ManagementOperationPhase.Completed &&
+             !(operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Staged &&
+               observed.Restore is { IsolationStaged: true, RecoveryVerified: false, BusinessReady: false })))
             throw new InvalidOperationException("操作核对结果未保留原请求绑定。");
         observed = observed with { UpdatedAt = clock.UtcNow };
         await store.SaveAsync(observed, token);

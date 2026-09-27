@@ -205,6 +205,50 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(1, _host.StartCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostRestoreResultReconcilesOnlyValidatedStaging_AndNeverClaimsBusinessRecovery(bool evidenceAvailable)
+    {
+        var request = new RestoreRequest("lost-restore", "synthetic-backup", "synthetic-source", "operator");
+        await using (var app = await AppAsync(failCompletion: true))
+            await Assert.ThrowsAsync<IOException>(() => app.Services.GetRequiredService<ManagementRuntime>().RestoreAsync(request, "operator", default));
+        _backups.EvidenceAvailable = evidenceAvailable;
+        await using var restarted = await AppAsync();
+        var runtime = restarted.Services.GetRequiredService<ManagementRuntime>();
+        var observed = await runtime.FindOperationAsync(request.RequestId, "operator", default);
+        Assert.Equal(evidenceAvailable ? ManagementOperationPhase.Staged : ManagementOperationPhase.NeedsVerification, observed.Phase);
+        if (evidenceAvailable)
+        {
+            Assert.True(observed.Restore!.IsolationStaged);
+            Assert.False(observed.Restore.RecoveryVerified);
+            Assert.False(observed.Restore.BusinessReady);
+        }
+        await runtime.RestoreAsync(request, "operator", default);
+        Assert.Equal(1, _backups.RestoreCalls);
+        await Assert.ThrowsAsync<DomainRuleException>(() => runtime.ExecuteServiceAsync(new("start-after-restore", "server", "node"),
+            "operator", ManagementOperationKind.Start, default));
+        Assert.Equal(0, _host.StartCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostBackupResultNeedsValidatedFileEvidence_AndNeverRepeatsBackup(bool evidenceAvailable)
+    {
+        _backups.CompleteBackup = true;
+        var request = new BackupRequest("lost-backup", "synthetic-destination", "operator");
+        await using (var app = await AppAsync(failCompletion: true))
+            await Assert.ThrowsAsync<IOException>(() => app.Services.GetRequiredService<ManagementRuntime>().BackupAsync(request, "operator", default));
+        _backups.EvidenceAvailable = evidenceAvailable;
+        await using var restarted = await AppAsync();
+        var runtime = restarted.Services.GetRequiredService<ManagementRuntime>();
+        var observed = await runtime.FindOperationAsync(request.RequestId, "operator", default);
+        Assert.Equal(evidenceAvailable ? ManagementOperationPhase.Completed : ManagementOperationPhase.NeedsVerification, observed.Phase);
+        await runtime.BackupAsync(request, "operator", default);
+        Assert.Equal(1, _backups.BackupCalls);
+    }
+
     private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
@@ -247,11 +291,23 @@ public sealed class LocalManagementApiTests : IDisposable
         public Task StartAsync(CancellationToken token) { StartCalls++; Status = BusinessServiceStatus.Running; return Task.CompletedTask; }
         public Task StopAsync(CancellationToken token) { StopCalls++; Status = BusinessServiceStatus.Stopped; return Task.CompletedTask; }
     }
-    private sealed class StagingBackups : IBackupCoordinator
+    private sealed class StagingBackups : IBackupCoordinator, IBackupOperationEvidence
     {
         public int RestoreCalls { get; private set; }
-        public Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken token) => throw new InvalidOperationException("合成备份依赖缺失");
+        public int BackupCalls { get; private set; }
+        public bool CompleteBackup { get; set; }
+        public bool EvidenceAvailable { get; set; }
+        public Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken token)
+        {
+            BackupCalls++;
+            return CompleteBackup ? Task.FromResult(Result(request)) : throw new InvalidOperationException("合成备份依赖缺失");
+        }
         public Task RestoreAsync(RestoreRequest request, CancellationToken token) { RestoreCalls++; return Task.CompletedTask; }
+        public Task<BackupResult?> FindCompletedBackupAsync(BackupRequest request, CancellationToken token) =>
+            Task.FromResult<BackupResult?>(EvidenceAvailable ? Result(request) : null);
+        public Task<bool> FindStagedRestoreAsync(RestoreRequest request, CancellationToken token) => Task.FromResult(EvidenceAvailable);
+        private static BackupResult Result(BackupRequest request) => new("synthetic-backup", request.DestinationDirectory,
+            new(2026, 9, 27, 0, 0, 0, TimeSpan.Zero), true, true, true);
     }
     private sealed class JsonSerializerOptionsProvider
     { public System.Text.Json.JsonSerializerOptions Options { get; } = JsonDefaults.Create(); }

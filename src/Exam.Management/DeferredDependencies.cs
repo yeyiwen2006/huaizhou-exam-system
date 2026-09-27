@@ -20,10 +20,14 @@ internal sealed class DeferredConfigurationStore(Func<IServiceConfigurationStore
         load().SaveAsync(requested, expectedVersion, cancellationToken);
 }
 
-internal sealed class DeferredBackupCoordinator(Func<IBackupCoordinator> load) : IBackupCoordinator
+internal sealed class DeferredBackupCoordinator(Func<IBackupCoordinator> load) : IBackupCoordinator, IBackupOperationEvidence
 {
     public Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken cancellationToken) => load().CreateAsync(request, cancellationToken);
     public Task RestoreAsync(RestoreRequest request, CancellationToken cancellationToken) => load().RestoreAsync(request, cancellationToken);
+    public Task<BackupResult?> FindCompletedBackupAsync(BackupRequest request, CancellationToken cancellationToken) =>
+        load() is IBackupOperationEvidence evidence ? evidence.FindCompletedBackupAsync(request, cancellationToken) : Task.FromResult<BackupResult?>(null);
+    public Task<bool> FindStagedRestoreAsync(RestoreRequest request, CancellationToken cancellationToken) =>
+        load() is IBackupOperationEvidence evidence ? evidence.FindStagedRestoreAsync(request, cancellationToken) : Task.FromResult(false);
 }
 
 internal sealed class DeferredOperationStore(Func<IManagementOperationStore> load) : IManagementOperationStore

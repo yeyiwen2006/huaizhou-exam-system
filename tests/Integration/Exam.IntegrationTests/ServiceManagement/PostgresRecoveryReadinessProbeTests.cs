@@ -235,9 +235,45 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         await app.StopAsync(timeout.Token);
     }
 
-    private async Task StoreResourceAsync()
+    [Theory]
+    [InlineData("wrong-exam")]
+    [InlineData("wrong-version")]
+    [InlineData("missing-pdf")]
+    [InlineData("invalid-pdf")]
+    [InlineData("unsafe-path")]
+    [InlineData("server-answer")]
+    [InlineData("not-zip")]
+    public async Task ValidEncryptionDoesNotHideInvalidStudentPackage(string damage)
     {
-        using var plain = new MemoryStream(new byte[9000]); // Synthetic bytes only; no real paper or answers.
+        var bytes = damage switch
+        {
+            "wrong-exam" => SyntheticRecoveryPaper.Build(examId: "wrong-exam"),
+            "wrong-version" => SyntheticRecoveryPaper.Build(version: 2),
+            "missing-pdf" => SyntheticRecoveryPaper.Build(omitPdf: true),
+            "invalid-pdf" => SyntheticRecoveryPaper.Build(invalidPdf: true),
+            "unsafe-path" => SyntheticRecoveryPaper.Build(extraPath: "../outside.pdf"),
+            "server-answer" => SyntheticRecoveryPaper.Build(extraPath: "server-only/answers.json"),
+            _ => new byte[9000]
+        };
+        await StoreResourceAsync(bytes);
+        Assert.Contains(await InspectAsync(), c => c.Name == "published-resources" && !c.Passed);
+    }
+
+    [Fact]
+    public async Task StudentManifestMustMatchCurrentPublishedQuestionStructure()
+    {
+        CreateExam();
+        await StoreResourceAsync(SyntheticRecoveryPaper.Build(questionId: "different-question"));
+        var published = new PostgresExamVersioningService(_database.DataSource).PublishPaper(new("synthetic-exam", 0,
+            "synthetic-resource", SyntheticRecoveryPaper.Structure(), [], new(true, true, true, true), "operator",
+            "合成结构不一致", DateTimeOffset.UtcNow, "publish-mismatch"));
+        Assert.True(published.Succeeded, published.Error);
+        Assert.Contains(await InspectAsync(), c => c.Name == "published-resources" && !c.Passed);
+    }
+
+    private async Task StoreResourceAsync(byte[]? payload = null)
+    {
+        using var plain = new MemoryStream(payload ?? SyntheticRecoveryPaper.Build());
         using var cipher = new MemoryStream();
         var envelope = await new PackageEncryptionService(4096).EncryptAsync(plain, cipher, "synthetic-resource", 1, [new("node", _certificate)]);
         await using var command = _database.DataSource.CreateCommand("""

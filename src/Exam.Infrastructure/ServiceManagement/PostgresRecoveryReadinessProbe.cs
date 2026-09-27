@@ -1,4 +1,5 @@
 using System.Data;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Exam.Application.ServiceManagement;
@@ -117,23 +118,72 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                WHERE r.exam_id = a.exam_id AND r.resource_kind = 'paper-package' AND r.resource_version = a.paper_version
                  AND a.unlock_reference = 'resource-envelope:' || r.resource_id AND a.package_length = octet_length(r.encrypted_content))
             """, connection, transaction, token)) return false;
+        var published = new Dictionary<(string ExamId, long Version), PaperStructure>();
+        await using (var projections = new NpgsqlCommand("SELECT snapshot::text FROM exam.version_state WHERE paper_version > 0", connection, transaction))
+        await using (var states = await projections.ExecuteReaderAsync(token))
+            while (await states.ReadAsync(token))
+            {
+                var snapshot = JsonSerializer.Deserialize<ExamVersionSnapshot>(states.GetString(0), Json);
+                if (snapshot?.Paper?.Structure is null) return false;
+                published.Add((snapshot.ExamId, snapshot.Paper.Version), snapshot.Paper.Structure);
+            }
         await using var command = new NpgsqlCommand("""
-            SELECT resource_id, resource_version, encryption_envelope::text, encrypted_content
+            SELECT resource_id, exam_id, resource_version, encryption_envelope::text, encrypted_content
               FROM exam.versioned_resources WHERE resource_kind = 'paper-package'
             """, connection, transaction);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
         while (await reader.ReadAsync(token))
         {
             var id = reader.GetString(0);
-            var version = reader.GetInt64(1);
-            var envelope = JsonSerializer.Deserialize<EncryptedPackageEnvelope>(reader.GetString(2), Json);
+            var examId = reader.GetString(1);
+            var version = reader.GetInt64(2);
+            var envelope = JsonSerializer.Deserialize<EncryptedPackageEnvelope>(reader.GetString(3), Json);
             if (envelope is null || envelope.PackageId != id || envelope.PaperVersion != version) return false;
             using var material = new PackageUnlockMaterial(id, version, envelope.ChunkSize, envelope.NoncePrefix, unwrapper.Unwrap(envelope));
-            await using var ciphertext = reader.GetStream(3);
-            // Authenticate all chunks and the final tag. Plaintext is discarded, never stored or returned.
-            await PackageCiphertext.DecryptAsync(ciphertext, Stream.Null, material, token);
+            await using var ciphertext = reader.GetStream(4);
+            // Use the student reader's existing ZIP/manifest/display checks. Plaintext stays bounded in memory.
+            using var plaintext = new BoundedPackageBuffer();
+            await PackageCiphertext.DecryptAsync(ciphertext, plaintext, material, token);
+            var bytes = plaintext.ToArray();
+            try
+            {
+                var manifest = StudentPaperPackage.ReadManifest(bytes, examId, version, token);
+                if (published.TryGetValue((examId, version), out var expected) &&
+                    !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(manifest.Structure, Json), JsonSerializer.SerializeToNode(expected, Json)))
+                    return false;
+            }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
         }
         return true;
+    }
+
+    private sealed class BoundedPackageBuffer : MemoryStream
+    {
+        private void RequireCapacity(long length)
+        {
+            if (length < 0 || length > StudentPaperPackage.MaxPackageBytes)
+                throw new InvalidDataException("恢复题包超出共享容量限制。");
+            if (length > Capacity)
+            {
+                TryGetBuffer(out var previous);
+                Capacity = (int)Math.Min(StudentPaperPackage.MaxPackageBytes, Math.Max(length, Math.Max(4096L, Capacity * 2L)));
+                // MemoryStream growth copies the buffer; erase the retired plaintext allocation as well.
+                if (previous.Array is not null) CryptographicOperations.ZeroMemory(previous.Array);
+            }
+        }
+        public override void SetLength(long value) { RequireCapacity(value); base.SetLength(value); }
+        public override void Write(byte[] buffer, int offset, int count) { RequireCapacity(Position + count); base.Write(buffer, offset, count); }
+        public override void Write(ReadOnlySpan<byte> buffer) { RequireCapacity(Position + buffer.Length); base.Write(buffer); }
+        public override void WriteByte(byte value) { RequireCapacity(Position + 1); base.WriteByte(value); }
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken token)
+        { RequireCapacity(Position + count); return base.WriteAsync(buffer, offset, count, token); }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken token = default)
+        { RequireCapacity(Position + buffer.Length); return base.WriteAsync(buffer, token); }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && TryGetBuffer(out var buffer)) CryptographicOperations.ZeroMemory(buffer.Array!);
+            base.Dispose(disposing);
+        }
     }
 
     private static async Task<bool> CheckReceiptsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)

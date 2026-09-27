@@ -16,7 +16,9 @@
 
 所有管理写请求明确声明预期服务器/节点头，启停、配置、自检的请求体还声明目标。真实操作者来自受保护凭据验证。记录绑定本机、操作者、操作类型与规范化请求内容 SHA-256；同标识不同内容拒绝执行。副作用前持久受理，结果落盘后才返回完成，多个管理实例通过本机独占锁串行执行。操作结果落盘失败或受理后取消时不得盲目重做；进程内仍在执行的操作显示 Accepted。
 
-重启查询和原请求重试可以在锁内执行只读核对：Stop 要求实际进程已停止；Configure 要求原请求的完整配置与持久版本 expectedVersion+1 同时相符；Start 要求实际进程运行、重新自检通过及当前 HTTPS 就绪身份/代次核对通过。确认结果重新落盘后才返回 Completed，不重复原副作用。原请求 JSON 与摘要一同保存在受保护记录中，旧格式缺少原请求仍可加载，但不能据此推断配置保存成功。未知结果、较新或不同配置、备份和隔离恢复保持 NeedsVerification/Staged，不自动清除记录。
+重启查询和原请求重试可以在锁内执行只读核对：Stop 要求实际进程已停止；Configure 要求原请求的完整配置与持久版本 expectedVersion+1 同时相符；Start 要求实际进程运行、重新自检通过及当前 HTTPS 就绪身份/代次核对通过。确认结果重新落盘后才返回 Completed，不重复原副作用。原请求 JSON 与摘要一同保存在受保护记录中，旧格式缺少原请求仍可加载，但不能据此推断配置保存成功。
+
+备份和隔离暂存也可核对中断结果：在实际进程已停止时，只读检查绑定原请求/操作者/路径的备份清单、文件摘要、恢复标记及真实 `pg_verifybackup`。完整备份可恢复为 Completed；已核对暂存只恢复为 Staged，仍是 `recoveryVerified=false`、`businessReady=false`，继续阻止业务启动。核对不访问业务数据库、不产生数据库记录、不执行 `pg_basebackup` 或再次复制恢复；部署工具和受控路径仍需有效。缺少或损坏证据、较新或不同配置继续保持 NeedsVerification，不删除记录。
 
 管理状态与普通配置查询不依赖操作记录目录可写。操作目录缺失、损坏或不可写时拒绝变更；初始化不自动创建部署目录。配置和操作文件使用同目录临时写入、刷新及完整替换。目录必须预先由部署人员设置 ACL，不能把其放进仓库、备份源目录或其他用户可写目录；操作目录专用于操作记录，不放服务配置等其他 JSON。
 
@@ -59,13 +61,13 @@ dotnet run --project src/Exam.Management/Exam.Management.csproj --configuration 
 
 - 已分配客户端编号的日期/序号与持久日序列一致。
 - 版本流修订连续、投影头及关键版本/时间/生命周期一致，定时入口投影与版本投影一致。
-- 当前发布题包及入口资源引用存在、长度相符；使用节点私钥解包数据密钥并认证全部密文分块及结束标记，明文输出丢弃。
+- 当前发布题包及入口资源引用存在、长度相符；使用节点私钥解包数据密钥并认证全部密文分块及结束标记。复用学生端 ZIP/清单读取器核对考试、版本、路径、文件完整性及显示文件头，当前发布题目结构必须与清单一致。明文仅在共享 256 MiB 上限内的内存中处理，处理后及扩容后的旧缓冲清零，不落盘或返回。
 - 已提交状态与持久答卷、原回执的成功幂等结果、计分 outbox 一致。
 - 可靠事件的参试/资源引用与已确认事件的原确认记录一致。
 
 同一探针在业务宿主启动时独立运行。恢复检查通过前，HTTP 业务 API、SignalR 建连/协商、定时触发、收卷恢复及可靠通知后台任务都被门禁阻断，`/health/ready` 返回 503。后台任务通过注册包装器延迟启动，原业务实现和 ActiveNodeGuard 继续保留；后台任务自身故障继续传递给宿主。探针失败每 10 秒重查，通过后完成本次启动核对；它不是持续完整性扫描。
 
-这些检查不是完整领域事件语义重放，也不校验解密后 ZIP/PDF 的内容。尚未提供隔离数据库选择/启动/切换公共流程，不将原数据库的观察当作隔离恢复成功。后续恢复继续收卷验收仍需 A 协调既有模块并在隔离环境完成。
+这些检查不是完整领域事件语义重放；显示文件检查复用共享读取器，不能当作真实 PDF 渲染验收。尚未提供生产隔离数据库选择/启动/切换公共流程，不将原数据库的观察当作隔离恢复成功。macOS 已完成下述真实隔离副本继续收卷演练，生产接线及 Windows 部署验收仍需补齐。
 
 现有 PostgreSQL 恢复适配器只做隔离暂存。新管理接口返回 Staged，`isolationStaged=true`、`recoveryVerified=false`、`businessReady=false`，不调用原库自检来冒充隔离库验证。存在 Staged/Accepted/NeedsVerification 时阻止新启动、配置修改及再次恢复；状态、自检和停止仍可用。只读核对探针可对部署连接运行，但尚未接入隔离 PostgreSQL 的启动、连接选择、受控切换及继续收卷。不得手工删记录绕过恢复门禁。额外恢复确认操作或迁移如超出 ADR 清单，先由 A 确认。
 
@@ -116,9 +118,43 @@ TMPDIR=/private/tmp/ dotnet test tests/Integration/Exam.IntegrationTests/Exam.In
 dotnet restore Huaizhou.ExamSystem.sln --locked-mode -m:1 -nr:false
 ```
 
+## 物理恢复与题包补强实际检查（2026-09-27）
+
+本批沿同一分支接续 `175d743`，再次明确获取 `origin/main` 后仍为 `0c4b8df`。本地 Codex 项目规则写在仓库上一层的 AGENTS.md，仅保存个人协作偏好，仓库 AGENTS.md 未修改。本批无数据库迁移、公共业务契约变化或 NuGet 新包。
+
+- 通用单元回归 **1021/1021**；最终非 TeX 集成回归 **148/148**，均无失败、无跳过。新增题包内容/发布结构检查 8 项、备份/暂存中断接口核对 4 项、真实物理恢复 1 项及操作/文件证据单元检查 4 项。最终显式执行集成项目 Release build，**0 警告、0 错误**。
+- Docker PostgreSQL 18.6 专用合成源容器，回环随机端口、tmpfs；每项数据库测试使用自有随机数据库。物理测试通过真实 `pg_basebackup` 制作备份、真实 `pg_verifybackup` 校验，调用产品协调器复制隔离暂存，再把副本拷入测试专用匿名卷，在另一个 PostgreSQL 实例启动。测试适配器仅将既有 Windows 工具调用委派给 Docker 内真实工具，不修改生产工具路径，也不将模拟工具结果充当实测。
+- 从暂存的合成节点密钥材料重新构建解密证书；恢复库的启动探针通过。测试宿主使用现有 PostgreSQL 注册、中间件、JSON 规则与交卷 HTTP 接口，查询备份前的原回执，继续接收另一份答卷，原请求重试返回同一新回执；宿主关闭后重建持久收卷处理器，确认两份答卷收齐。原库仍只有原答卷，备份原件和暂存标记未改动。核对备份/暂存证据还使用不可连接的业务连接配置证明不访问业务数据库。
+- **发现并修复产品缺陷：** 物理数据库暂存只复制文件，漏掉 `pg_notify` 等空目录；`pg_verifybackup` 仍可通过，但隔离副本无法启动。现在安全枚举保留空目录，同时继续拒绝符号链接/联接点。真实副本启动和继续收卷测试已覆盖修复。
+- 演练初期还修正 macOS 不支持测试 PFX 临时加载标志、Linux 副本数据目录权限、测试宿主遗漏 JSON 字符串枚举配置的问题；文件故障测试最初异常类型断言错误已修正。这些早期失败没有记为通过，最终完整回归才作为证据。
+- 原生 Windows SCM、TLS、证书存储及 ACL、WPF、完整解决方案、实际双机与断电尚未验证。生产仍返回暂存阶段；测试启动副本不代表产品已经具有自动切换恢复库的能力。完整解决方案仍沿用本轮早先实跑的 NETSDK1100 限制，未因新增平台无关测试声称 Windows 构建通过。
+
+物理测试同时带 `Category=Postgres` 和 `Category=PostgresPhysical`。未显式提供专用源容器及 Docker 可执行路径时，此项明确显示跳过，普通 PostgreSQL 检查不替代物理演练；本机最终回归显式提供了它们，因此 148 项无跳过。可在 macOS/Linux/Windows 的隔离 Docker 环境重复执行；镜像必须匹配源 PostgreSQL 主版本。
+
+```sh
+# 先创建仅含合成数据的专用 postgres:18 源容器：
+docker run --detach --name codex-f01-physical-source-test --publish 127.0.0.1::5432 --env POSTGRES_HOST_AUTH_METHOD=trust --tmpfs /var/lib/postgresql postgres:18
+docker port codex-f01-physical-source-test 5432/tcp
+# 将输出的回环端口配置到 EXAM_TEST_POSTGRES；连接、日志和密钥不得写入仓库。
+# 显式设置 EXAM_TEST_PHYSICAL_SOURCE_CONTAINER=codex-f01-physical-source-test
+# 以及 EXAM_TEST_DOCKER_EXECUTABLE 为本机 docker 的绝对路径。
+TMPDIR=/private/tmp/ dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --filter 'FullyQualifiedName~PostgresPhysicalRecoveryTests' -m:1 -nr:false
+TMPDIR=/private/tmp/ dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --filter 'Category!=Latex' -m:1 -nr:false
+TMPDIR=/private/tmp/ dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex' -m:1 -nr:false
+# 演练结束后只清理自己创建的专用源容器；测试自动删除自己的副本及匿名卷。
+docker stop codex-f01-physical-source-test
+docker rm codex-f01-physical-source-test
+```
+
+### 剩余代码缺口与平台验证分别处理
+
+生产恢复缺少受控隔离 PostgreSQL 宿主、固定恢复连接的目标核对、恢复阶段持久推进和业务连接切换。普通配置保存目前被 Staged 门禁阻止，不能删除记录绕过。需要由 A 确认恢复目标与旧库的隔离证据、允许切换的条件、秘密连接配置的版本及失败回退方式，再把现有探针和收卷接口接到该目标；不能仅凭隔离库可连或旧备份完整就开放业务写入。这是接口/恢复语义缺口，不是必须等 Windows 才能写的普通代码。
+
+管理进程的真实 Windows Service 生命周期托管也尚未实现；原生 SCM、TLS/私钥/ACL 与完整 WPF 解决方案需要 Windows 实测。CLI 注册及考务管理界面仍分别与 E/C 按任务边界协调。
+
 ## 晚上交给 Windows Codex 的指令
 
-请在同一分支 `codex/f01-local-management` 继续 F01 #7，先读 AGENTS.md、ADR 0002 和本文件。保留当前成果与用户修改；已关闭 #57/#58/#59 已接续，不重开细碎 PR，不删除旧分支，不合并或推送 main。获取最新 origin/main，在集中分支同步基线，不强推。启动恢复检查、业务/后台门禁及停机/配置/启动的中断核对已在 macOS 完成模块接线验证，先复用现有实现。优先验证 Windows 实际 SCM、管理 TLS 与 ACL，再推进隔离恢复后的连接选择、核对、受控切换及继续收卷。若缺 A 模块公共恢复入口，列出具体调用与缺口请 A 协调，不能猜接口、自动迁移或覆盖原库。
+请在同一分支 `codex/f01-local-management` 继续 F01 #7，先读 AGENTS.md、ADR 0002 和本文件。保留当前成果与用户修改；已关闭 #57/#58/#59 已接续，不重开细碎 PR，不删除旧分支，不合并或推送 main。获取最新 origin/main，在集中分支同步基线，不强推。启动恢复、题包内容、业务/后台门禁、各类中断操作核对及真实物理副本继续收卷已在 macOS 完成模块验证，先复用这些实现和演练。优先验证 Windows 实际 SCM、管理 TLS 与 ACL，再按上节明确的边界接通生产恢复目标选择、核对和受控切换。不能将已通过演练写成生产恢复入口已完成。若缺 A 模块公共恢复入口，列出具体调用与缺口请 A 协调，不能猜接口、自动迁移或覆盖原库。
 
 在隔离 Windows 环境检查真实 SCM/管理 TLS、ACL、数据库故障时认证和状态、备机管理、请求持久重试与崩溃窗口、配置冲突、启动失败及恢复继续收卷。真实业务配置、日志、证书、备份与测试报告保存在仓库外；仅提交脱敏结果。执行仓库三条检查并保存实际结果：
 

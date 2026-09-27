@@ -45,7 +45,27 @@ public sealed class ManagementRuntime(
                 return operation with { Phase = ManagementOperationPhase.Completed, Error = null,
                     Status = new(process.Status, BusinessReadiness.Ready, configuration, checks) };
         }
-        // Backup/recovery cannot be inferred from a running process or the original database.
+        if (operation.Kind is ManagementOperationKind.Backup or ManagementOperationKind.Restore &&
+            operation.RequestJson is not null && process.Status == BusinessServiceStatus.Stopped && backups() is IBackupOperationEvidence evidence)
+        {
+            if (operation.Kind == ManagementOperationKind.Backup)
+            {
+                var original = JsonSerializer.Deserialize<BackupRequest>(operation.RequestJson, JsonDefaults.Create());
+                if (original is null || original.RequestId != operation.RequestId || original.ActorId != operation.ActorId) return null;
+                var result = await evidence.FindCompletedBackupAsync(original, token);
+                if (result is not null && result.IncludesDatabase && result.IncludesProtectedConfiguration && result.IncludesVersionedResources &&
+                    process.Status == BusinessServiceStatus.Stopped)
+                    return operation with { Phase = ManagementOperationPhase.Completed, Error = null, Backup = result };
+            }
+            else
+            {
+                var original = JsonSerializer.Deserialize<RestoreRequest>(operation.RequestJson, JsonDefaults.Create());
+                if (original is null || original.RequestId != operation.RequestId || original.ActorId != operation.ActorId) return null;
+                if (await evidence.FindStagedRestoreAsync(original, token) && process.Status == BusinessServiceStatus.Stopped)
+                    return operation with { Phase = ManagementOperationPhase.Staged, Error = null, Restore = new(original.BackupId, true, false, false) };
+            }
+        }
+        // Recovery readiness cannot be inferred from the original database or a completed staging marker.
         return null;
     }
 

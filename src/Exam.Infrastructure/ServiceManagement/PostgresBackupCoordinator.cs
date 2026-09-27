@@ -21,10 +21,33 @@ public sealed class PostgresBackupCoordinator(
     PostgresBackupOptions options,
     IExternalProcessRunner processRunner,
     TimeProvider? timeProvider = null,
-    NpgsqlDataSource? dataSource = null) : IBackupCoordinator
+    NpgsqlDataSource? dataSource = null) : IBackupCoordinator, IBackupOperationEvidence
 {
     private const int ManifestFormatVersion = 2;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    public Task<BackupResult?> FindCompletedBackupAsync(BackupRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions();
+        var destination = ResolveWithinRoot(options.AllowedBackupRoot, request.DestinationDirectory);
+        // Observe the complete file manifest, not a possibly stale database backup record. No database access or repair.
+        return TryRecoverCompletedBackupAsync(request, destination, cancellationToken);
+    }
+
+    public async Task<bool> FindStagedRestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions();
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        var stagingRoot = Path.GetFullPath(options.RestoreStagingRoot);
+        var staging = ResolveWithinRoot(stagingRoot, Path.Combine(stagingRoot, request.BackupId));
+        if (!Directory.Exists(staging)) return false;
+        await ValidateCompletedRestoreAsync(staging, request, source, cancellationToken);
+        return true;
+    }
 
     public async Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken cancellationToken)
     {
@@ -615,8 +638,18 @@ public sealed class PostgresBackupCoordinator(
         CancellationToken cancellationToken)
     {
         RequireNonEmptyDirectory(source, "复制源目录");
-        var files = EnumerateFilesWithoutLinks(Path.GetFullPath(source));
+        var fullSource = Path.GetFullPath(source);
+        var directories = new List<string>();
+        var files = EnumerateFilesWithoutLinks(fullSource, directories);
         Directory.CreateDirectory(destination);
+        // pg_verifybackup authenticates files, but PostgreSQL also requires empty runtime directories at startup.
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(fullSource, directory);
+            PathBoundary.RejectExistingReparsePoints(fullSource, directory);
+            Directory.CreateDirectory(ResolveChild(destination, relative));
+        }
         foreach (var sourceFile in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -630,7 +663,7 @@ public sealed class PostgresBackupCoordinator(
         }
     }
 
-    private static List<string> EnumerateFilesWithoutLinks(string root)
+    private static List<string> EnumerateFilesWithoutLinks(string root, List<string>? directories = null)
     {
         var files = new List<string>();
         var pending = new Stack<string>();
@@ -647,6 +680,7 @@ public sealed class PostgresBackupCoordinator(
 
                 if (Directory.Exists(entry))
                 {
+                    directories?.Add(entry);
                     pending.Push(entry);
                 }
                 else

@@ -115,6 +115,21 @@ public sealed class ManagementOperationPersistenceTests : IDisposable
         Assert.Equal(ManagementOperationPhase.Completed, (await executing).Phase);
     }
 
+    [Fact]
+    public async Task ValidatedInterruptedRestoreStaysStagedAndKeepsNewStartBlocked()
+    {
+        await Runner().ExecuteAsync("restore", "operator", ManagementOperationKind.Restore, "payload",
+            (operation, token) => throw new IOException("synthetic interrupted result"));
+        var restarted = new ManagementOperationRunner("server", "node", Store(), new SystemClock(),
+            (operation, token) => Task.FromResult<ManagementOperation?>(operation with { Phase = ManagementOperationPhase.Staged,
+                Error = null, Restore = new("synthetic-backup", true, false, false) }));
+        var result = await restarted.FindAsync("restore", "operator", default);
+        Assert.Equal(ManagementOperationPhase.Staged, result.Phase);
+        Assert.Equal(result, await Runner().FindAsync("restore", "operator", default));
+        await Assert.ThrowsAsync<DomainRuleException>(() => Runner().ExecuteAsync("start", "operator", ManagementOperationKind.Start,
+            "payload", (op, token) => throw new InvalidOperationException("must not start")));
+    }
+
     private FileManagementOperationStore Store() => new(_directory);
 
     [Fact]

@@ -37,6 +37,8 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
             default);
 
         Assert.True(File.Exists(Path.Combine(staging, result.BackupId, "database", "backup_manifest")));
+        Assert.True(Directory.Exists(Path.Combine(staging, result.BackupId, "database", "pg_notify")));
+        Assert.True(Directory.Exists(Path.Combine(staging, result.BackupId, "database", "pg_wal", "archive_status")));
         Assert.True(File.Exists(Path.Combine(staging, result.BackupId, "protected-configuration", "key-recovery.dat")));
         Assert.True(File.Exists(Path.Combine(staging, result.BackupId, "restore-verified.json")));
         Assert.Equal(4, runner.Calls.Count);
@@ -199,6 +201,58 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
         await Assert.ThrowsAsync<InvalidDataException>(() => service.RestoreAsync(restore, default));
     }
 
+    [Fact]
+    public async Task ExistingFileEvidenceIsObservedWithoutDatabaseOrRepeatingSideEffects()
+    {
+        var backupRoot = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        var staging = Path.Combine(_root, "staging");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic material");
+        var runner = new FakePostgresTools();
+        var service = CreateService(backupRoot, resources, protectedConfig, staging, runner);
+        var request = new BackupRequest("backup", Path.Combine(backupRoot, "snapshot"), "operator");
+        Assert.Null(await service.FindCompletedBackupAsync(request, default));
+        var backup = await service.CreateAsync(request, default);
+        var restore = new RestoreRequest("restore", backup.BackupId, request.DestinationDirectory, "operator");
+        Assert.False(await service.FindStagedRestoreAsync(restore, default));
+        await service.RestoreAsync(restore, default);
+        var markerPath = Path.Combine(staging, backup.BackupId, "restore-verified.json");
+        var marker = await File.ReadAllBytesAsync(markerPath);
+        var restarted = CreateService(backupRoot, resources, protectedConfig, staging, runner);
+        Assert.Equal(backup, await restarted.FindCompletedBackupAsync(request, default));
+        Assert.True(await restarted.FindStagedRestoreAsync(restore, default));
+        Assert.Equal(marker, await File.ReadAllBytesAsync(markerPath));
+        Assert.Equal(1, runner.Calls.Count(c => c == "pg_basebackup.exe"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.FindCompletedBackupAsync(request with { ActorId = "forged" }, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.FindStagedRestoreAsync(restore with { RequestId = "other" }, default));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostMarkerOrDamagedStagedResourceCannotBecomeValidatedEvidence(bool damageResource)
+    {
+        var backupRoot = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        var staging = Path.Combine(_root, "staging");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic material");
+        var runner = new FakePostgresTools();
+        var service = CreateService(backupRoot, resources, protectedConfig, staging, runner);
+        var backup = await service.CreateAsync(new("backup", Path.Combine(backupRoot, "snapshot"), "operator"), default);
+        var restore = new RestoreRequest("restore", backup.BackupId, backup.DestinationDirectory, "operator");
+        await service.RestoreAsync(restore, default);
+        var target = Path.Combine(staging, backup.BackupId);
+        if (damageResource) await File.WriteAllTextAsync(Path.Combine(target, "resources", "paper.pkg"), "damaged synthetic file");
+        else File.Delete(Path.Combine(target, "restore-verified.json"));
+        if (damageResource) await Assert.ThrowsAsync<InvalidDataException>(() => service.FindStagedRestoreAsync(restore, default));
+        else await Assert.ThrowsAsync<IOException>(() => service.FindStagedRestoreAsync(restore, default));
+        Assert.Equal(1, runner.Calls.Count(c => c == "pg_basebackup.exe"));
+    }
+
     private static string RemoveProperty(string json, string name)
     {
         var node = JsonNode.Parse(json)!.AsObject();
@@ -265,6 +319,8 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
             {
                 var target = arguments[1];
                 Directory.CreateDirectory(target);
+                Directory.CreateDirectory(Path.Combine(target, "pg_notify"));
+                Directory.CreateDirectory(Path.Combine(target, "pg_wal", "archive_status"));
                 File.WriteAllText(Path.Combine(target, "backup_manifest"), "synthetic");
                 File.WriteAllText(Path.Combine(target, "PG_VERSION"), "18");
             }
