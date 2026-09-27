@@ -7,7 +7,8 @@ namespace Exam.Infrastructure.ServiceManagement;
 
 /// <summary>Verifies the actual isolated database location before running domain checks against that database.</summary>
 public sealed class PostgresWorkingCopyReadinessProbe(string originalConnectionString, string recoveryConnectionString,
-    string certificateThumbprint, long expectedEpoch, IStartupReadinessProbe? recoveryReadiness = null)
+    string certificateThumbprint, long expectedEpoch, IStartupReadinessProbe? recoveryReadiness = null,
+    NpgsqlDataSource? actualSource = null)
 {
     public async Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration,
         RecoveryWorkingCopy workingCopy, CancellationToken cancellationToken)
@@ -24,7 +25,8 @@ public sealed class PostgresWorkingCopyReadinessProbe(string originalConnectionS
                 throw new InvalidOperationException("恢复数据库必须为独立回环目标且使用原数据库标识。");
             var expectedDirectory = Path.GetFullPath(Path.Combine(workingCopy.WorkingDirectory, "database"));
             PathBoundary.RejectExistingReparsePoints(workingCopy.WorkingDirectory, expectedDirectory);
-            await using var source = ManagementProbeConnection.Create(recoveryConnectionString, 10);
+            await using var ownedSource = actualSource is null ? ManagementProbeConnection.Create(recoveryConnectionString, 10) : null;
+            var source = actualSource ?? ownedSource!;
             await using (var connection = await source.OpenConnectionAsync(cancellationToken))
             await using (var command = new NpgsqlCommand("SELECT current_database(), current_setting('data_directory'), inet_server_port(), pg_is_in_recovery()", connection))
             await using (var reader = await command.ExecuteReaderAsync(cancellationToken))

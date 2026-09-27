@@ -118,13 +118,30 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey))).RunAsync(configuration, workingCopy, default);
         Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
+        var wrongBusinessSource = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
+            new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey)), _source.DataSource)
+            .RunAsync(configuration, workingCopy, default);
+        Assert.False(Assert.Single(wrongBusinessSource).Passed);
+        var comparison = new PostgresRecoveryStateComparison(_source.ConnectionString, connection.ConnectionString, 1);
+        var completeState = await comparison.RunAsync(configuration, default);
+        Assert.True(completeState.Passed, completeState.Message);
+        Assert.False((await new PostgresRecoveryStateComparison(_source.ConnectionString, connection.ConnectionString, 2)
+            .RunAsync(configuration, default)).Passed);
+        var unavailable = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = 1, Timeout = 1 };
+        Assert.False((await new PostgresRecoveryStateComparison(unavailable.ConnectionString, connection.ConnectionString, 1)
+            .RunAsync(configuration, default)).Passed);
         var wrongTarget = workingCopy with { WorkingDirectory = Path.Combine(workingRoot, "other-slot") };
         Assert.False(Assert.Single(await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1)
             .RunAsync(configuration, wrongTarget, default)).Passed);
         var recoveredStore = new PostgresSubmissionStore(recovered);
         Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
 
-        await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey))
+        var selectionPath = Path.Combine(_root, "deployment-selection.json");
+        await new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(selectionPath), 1).SelectAsync(
+            new("synthetic-enable", "server", "node", "operator", ManagementOperationKind.Restore, new string('A', 64),
+                ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+                Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory), default);
+        await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString, selectionPath))
         {
             using var client = app.GetTestClient();
             client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
@@ -151,6 +168,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         var sourceStore = new PostgresSubmissionStore(_source.DataSource);
         Assert.Equal(original, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
         Assert.Null(await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
+        Assert.False((await comparison.RunAsync(configuration, default)).Passed);
         Assert.Equal(marker, await File.ReadAllBytesAsync(Path.Combine(staged, "restore-verified.json")));
         Assert.Equal(backup, await coordinator.CreateAsync(backupRequest, default));
     }
@@ -213,13 +231,15 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             catch (NpgsqlException) { await Task.Delay(100, timeout.Token); }
         }
     }
-    private static async Task<WebApplication> RecoveredApiAsync(string connectionString, X509Certificate2 certificate)
+    private static async Task<WebApplication> RecoveredApiAsync(string connectionString, X509Certificate2 certificate,
+        string originalConnection, string selectionPath)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ConnectionStrings:Exam"] = connectionString, ["ExamSecurity:OperatorToken"] = "synthetic-physical-recovery-operator-token",
+            ["ConnectionStrings:Exam"] = originalConnection, ["ConnectionStrings:ExamRecovery"] = connectionString,
+            ["Recovery:SelectionPath"] = selectionPath, ["ExamSecurity:OperatorToken"] = "synthetic-physical-recovery-operator-token",
             ["ExamSecurity:OperatorId"] = "operator", ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1"
         });
         builder.Services.AddSingleton(TimeProvider.System);

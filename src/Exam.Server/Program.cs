@@ -28,7 +28,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var identity = builder.Configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
     ?? new ServerIdentityOptions();
-var databaseConfigured = !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Exam"));
+var databaseConfigured = !string.IsNullOrWhiteSpace(Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveConnection(
+    key => builder.Configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch));
 if (databaseConfigured)
 {
     builder.Services.AddPostgresExamRuntime(

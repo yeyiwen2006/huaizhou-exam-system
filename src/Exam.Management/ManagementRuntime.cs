@@ -15,7 +15,9 @@ public sealed class ManagementRuntime(
     Func<CancellationToken, Task<bool>>? observeBusinessReady = null,
     Func<RestoreRequest, CancellationToken, Task>? prepareRecoveryWorkingCopy = null,
     Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyRecoveryTarget = null,
-    Func<string>? recoveryWorkingDirectory = null)
+    Func<string>? recoveryWorkingDirectory = null,
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation>>? activateRecovery = null,
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecoveryActivation = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
@@ -28,6 +30,8 @@ public sealed class ManagementRuntime(
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)
     {
+        if (operation.Kind == ManagementOperationKind.Restore && operation.RecoveryActivation is not null)
+            return observeRecoveryActivation is null ? null : await observeRecoveryActivation(operation, token);
         if (operation.Kind == ManagementOperationKind.Stop && process.Status == BusinessServiceStatus.Stopped)
             return operation with { Phase = ManagementOperationPhase.Completed, Error = null, Status = await GetStatusAsync(token) };
         if (operation.Kind == ManagementOperationKind.Configure && operation.RequestJson is not null && process.Status == BusinessServiceStatus.Stopped)
@@ -170,7 +174,8 @@ public sealed class ManagementRuntime(
                 await backups().RestoreAsync(request with { ActorId = actor }, token);
             if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("隔离暂存期间业务进程状态发生变化。");
             var staged = operation with { Phase = ManagementOperationPhase.Staged,
-                Restore = new(request.BackupId, true, false, false), RecoveryWorkingDirectory = targetDirectory };
+                Restore = new(request.BackupId, true, false, false), RecoveryWorkingDirectory = targetDirectory,
+                RecoveryActivation = null, Error = null };
             await journal.SaveAsync(staged, token); // Persist staging before creating an independently mutable target.
             if (prepareRecoveryWorkingCopy is null) return staged;
             await prepareRecoveryWorkingCopy(request with { ActorId = actor }, token);
@@ -192,6 +197,9 @@ public sealed class ManagementRuntime(
                     verified.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) &&
                     verified.All(c => c.Passed || !c.BlocksWrites), false) };
             }
-            return staged with { Checks = checks.AsReadOnly() };
+            staged = staged with { Checks = checks.AsReadOnly() };
+            await journal.SaveAsync(staged, token);
+            return staged.Restore is { RecoveryVerified: true } && activateRecovery is not null
+                ? await activateRecovery(staged, token) : staged;
         }, cancellationToken, resumeStagedRestore: prepareRecoveryWorkingCopy is not null);
 }

@@ -20,6 +20,7 @@ public sealed record ManagementConfigurationRequest(
 public enum ManagementOperationKind { Start, Stop, Configure, Checks, Backup, Restore }
 public enum ManagementOperationPhase { Accepted, Completed, Failed, NeedsVerification, Staged }
 public enum BusinessReadiness { Unknown, NotReady, Ready }
+public enum RecoveryActivationPhase { SelectionPending, Selected, StartingBusiness, BusinessReady, RollbackPending, RolledBack }
 
 // A process being Running is not evidence of business readiness.
 public sealed record ManagementStatus(
@@ -37,4 +38,5 @@ public sealed record ManagementOperation(
     IReadOnlyList<StartupCheckResult>? Checks = null, BackupResult? Backup = null,
     ManagementRestoreOutcome? Restore = null, ApiError? Error = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestJson = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryWorkingDirectory = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryWorkingDirectory = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryActivationPhase? RecoveryActivation = null);

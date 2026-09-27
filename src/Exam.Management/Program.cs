@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Exam.Application.ServiceManagement;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.Common;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 
@@ -51,24 +52,30 @@ public static class ManagementEntryPoint
             var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
             var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
+            var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
+            string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId, epoch);
+            IManagedBusinessHost ReadyHost() => new ReadyCheckedBusinessHost(process, http,
+                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch);
+            FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), epoch,
+                async (_, token) => (await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
+                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(await store.LoadAsync(token), token)).Passed);
             PostgresBackupCoordinator CreateBackups() => new(new PostgresBackupOptions(
-                Required("Backup:PostgresBinDirectory"), configuration.GetConnectionString("Exam") ?? "", Required("Backup:AllowedBackupRoot"),
+                Required("Backup:PostgresBinDirectory"), SelectedConnection() ?? "", Required("Backup:AllowedBackupRoot"),
                 Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
             var backups = new DeferredBackupCoordinator(CreateBackups);
-            var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
             var preflight = new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
                 new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
-                new ManagementDatabaseStartupProbe(configuration.GetConnectionString("Exam"), epoch),
-                new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
+                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(SelectedConnection(), epoch)),
+                new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(SelectedConnection(), configuration["PackageSecurity:CertificateThumbprint"] ?? "")),
                 new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
                     TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()),
                     configuration["Backup:StartupVerificationDirectory"], configuration["Backup:StartupVerificationBackupId"])
             ]);
             return new ManagementRuntime(serverId, nodeId, store, process,
-                () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),
+                ReadyHost,
                 preflight, () => backups, journal, new SystemClock(), port,
                 token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
                     .ObserveReadyAsync(token),
@@ -80,13 +87,51 @@ public static class ManagementEntryPoint
                 verifyRecoveryTarget: string.IsNullOrWhiteSpace(configuration.GetConnectionString("ExamRecovery")) ? null :
                     async (request, serviceConfiguration, token) =>
                     {
-                        var working = await CreateBackups().PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
-                        return await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
+                        var working = await CreateBackups().FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token)
+                            ?? throw new IOException("恢复工作副本尚未准备。");
+                        var checks = (await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
                             Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
-                            .RunAsync(serviceConfiguration, working, token);
+                            .RunAsync(serviceConfiguration, working, token)).ToList();
+                        if (!string.IsNullOrWhiteSpace(configuration["Recovery:SelectionPath"]))
+                        {
+                            checks.Add(await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
+                                Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(serviceConfiguration, token));
+                            checks.AddRange((await preflight.RunAsync(serviceConfiguration, token))
+                                .Select(check => check with { Name = "activation-" + check.Name }));
+                        }
+                        return checks;
                     },
                 recoveryWorkingDirectory: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
-                    () => Path.GetFullPath(Path.Combine(Required("Recovery:WorkingRoot"), "slot")));
+                    () => Path.GetFullPath(Path.Combine(Required("Recovery:WorkingRoot"), "slot")),
+                activateRecovery: string.IsNullOrWhiteSpace(configuration["Recovery:SelectionPath"]) ? null :
+                    (operation, token) => new RecoveryActivationRunner(process, ReadyHost, Deployment(), journal).ActivateAsync(operation, token),
+                observeRecoveryActivation: async (operation, token) =>
+                {
+                    // Query observes existing evidence only; it never copies, selects, rolls back or starts a service.
+                    if (operation.RequestJson is null || operation.Restore is not { RecoveryVerified: true, BusinessReady: false } ||
+                        operation.Checks?.Any(c => c.Name == "recovery-confirmed-state" && c.Passed && c.BlocksWrites) != true)
+                        return null;
+                    var selected = Deployment();
+                    if (process.Status == BusinessServiceStatus.Stopped &&
+                        operation.RecoveryActivation is RecoveryActivationPhase.RollbackPending or RecoveryActivationPhase.RolledBack &&
+                        selected.IsRolledBack(operation))
+                        return operation with { Phase = ManagementOperationPhase.Staged, RecoveryActivation = RecoveryActivationPhase.RolledBack, Error = null };
+                    if (process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
+                    var request = System.Text.Json.JsonSerializer.Deserialize<RestoreRequest>(operation.RequestJson, JsonDefaults.Create());
+                    if (request is null || request.RequestId != operation.RequestId || request.ActorId != operation.ActorId ||
+                        request.BackupId != operation.Restore.BackupId) return null;
+                    var working = await CreateBackups().FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
+                    if (working is null || working.WorkingDirectory != operation.RecoveryWorkingDirectory) return null;
+                    var checks = await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
+                        Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
+                        .RunAsync(await store.LoadAsync(token), working, token);
+                    if (!checks.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) ||
+                        checks.Any(c => !c.Passed && c.BlocksWrites) ||
+                        !await new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
+                            .ObserveReadyAsync(token) || process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
+                    return operation with { Phase = ManagementOperationPhase.Completed, RecoveryActivation = RecoveryActivationPhase.BusinessReady,
+                        Restore = operation.Restore with { BusinessReady = true }, Error = null };
+                });
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

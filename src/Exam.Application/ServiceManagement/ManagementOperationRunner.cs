@@ -43,7 +43,7 @@ public sealed class ManagementOperationRunner(
         async Task PreserveCheckpointAsync()
         {
             var checkpoint = await store.FindAsync(requestId, CancellationToken.None);
-            if (checkpoint is { Phase: ManagementOperationPhase.Staged } && checkpoint.RequestId == accepted.RequestId &&
+            if (checkpoint is { Phase: ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification } && checkpoint.RequestId == accepted.RequestId &&
                 checkpoint.ServerId == serverId && checkpoint.NodeId == nodeId && checkpoint.ActorId == actorId &&
                 checkpoint.Kind == kind && checkpoint.ContentHash == hash && checkpoint.RequestJson == accepted.RequestJson &&
                 checkpoint.AcceptedAt == accepted.AcceptedAt)
@@ -65,14 +65,14 @@ public sealed class ManagementOperationRunner(
             catch (DomainRuleException error)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase == ManagementOperationPhase.Staged || error.Code == ErrorCodes.PersistenceFailed
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(error.Code, error.Message, Retryable: error.Retryable) };
             }
             catch (ArgumentException)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase == ManagementOperationPhase.Staged
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
             }
@@ -123,9 +123,12 @@ public sealed class ManagementOperationRunner(
             observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||
             observed.RecoveryWorkingDirectory != operation.RecoveryWorkingDirectory ||
             observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null ||
+            (operation.Kind != ManagementOperationKind.Restore && observed.RecoveryActivation != operation.RecoveryActivation) ||
+            (operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Completed &&
+             observed.Restore is not { IsolationStaged: true, RecoveryVerified: true, BusinessReady: true }) ||
             (observed.Phase != ManagementOperationPhase.Completed &&
              !(operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Staged &&
-               observed.Restore is { IsolationStaged: true, RecoveryVerified: false, BusinessReady: false })))
+               observed.Restore is { IsolationStaged: true, BusinessReady: false })))
             throw new InvalidOperationException("操作核对结果未保留原请求绑定。");
         observed = observed with { UpdatedAt = clock.UtcNow };
         await store.SaveAsync(observed, token);

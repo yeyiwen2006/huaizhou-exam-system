@@ -124,6 +124,11 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     private static void Validate(ManagementOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        if (operation.RecoveryActivation is { } activation &&
+            (!Enum.IsDefined(activation) || operation.Kind != ManagementOperationKind.Restore ||
+             operation.RecoveryWorkingDirectory is null || operation.Restore is not { IsolationStaged: true, RecoveryVerified: true } ||
+             (activation == RecoveryActivationPhase.BusinessReady) != operation.Restore.BusinessReady))
+            throw new InvalidDataException("恢复启用阶段与核对结果不一致。");
         if (operation.RecoveryWorkingDirectory is not null &&
             (operation.Kind != ManagementOperationKind.Restore || !Path.IsPathFullyQualified(operation.RecoveryWorkingDirectory)))
             throw new InvalidDataException("恢复工作目标必须为本机绝对路径并绑定恢复操作。");

@@ -29,6 +29,29 @@ public sealed class PostgresBackupCoordinator(
     private const int ManifestFormatVersion = 2;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
+    /// <summary>Observes an existing bound copy without locks, copying, repair or starting a database.</summary>
+    public async Task<RecoveryWorkingCopy?> FindPreparedRecoveryWorkingCopyAsync(RestoreRequest request, string workingRoot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions(requireSourceDirectories: false);
+        if (!Path.IsPathFullyQualified(workingRoot) || !Directory.Exists(workingRoot))
+            throw new DirectoryNotFoundException("恢复工作根目录不存在。");
+        workingRoot = Path.GetFullPath(workingRoot);
+        PathBoundary.RejectExistingReparsePoints(workingRoot, workingRoot);
+        var working = ResolveChild(workingRoot, "slot");
+        if (!Directory.Exists(working)) return null;
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        await ValidateCompletedRestoreAsync(ResolveChild(options.RestoreStagingRoot, request.BackupId), request, source, cancellationToken);
+        var previous = await ReadStrictJsonAsync<RecoveryWorkingCopy>(ResolveChild(working, "working-copy.json"), 16 * 1024,
+            value => RequireExactProperties(value, ["requestId", "actorId", "backupId", "sourceDirectory", "workingDirectory", "preparedAt"]), cancellationToken);
+        if (previous.RequestId != request.RequestId || previous.ActorId != request.ActorId || previous.BackupId != request.BackupId ||
+            previous.SourceDirectory != source || previous.WorkingDirectory != working || previous.PreparedAt == default)
+            throw new InvalidDataException("恢复工作副本与原请求绑定不一致。");
+        return previous;
+    }
+
     /// <summary>Creates an independently mutable recovery target; never starts PostgreSQL or overwrites a partial target.</summary>
     public async Task<RecoveryWorkingCopy> PrepareRecoveryWorkingCopyAsync(RestoreRequest request, string workingRoot,
         CancellationToken cancellationToken)

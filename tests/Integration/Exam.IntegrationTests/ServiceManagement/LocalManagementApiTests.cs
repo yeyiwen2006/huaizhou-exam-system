@@ -269,10 +269,51 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(1, _backups.BackupCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestoreActivationReplaysOneStart_AndLostTerminalWriteIsObservedWithoutRepeatingEffects(bool loseTerminal)
+    {
+        var request = new RestoreRequest("activate", "backup", _directory, "operator");
+        var observations = 0;
+        Task<ManagementOperation?> Observe(ManagementOperation op, CancellationToken token)
+        {
+            observations++;
+            Assert.Equal(BusinessServiceStatus.Running, _host.Status);
+            Assert.Equal(RecoveryActivationPhase.StartingBusiness, op.RecoveryActivation);
+            Assert.True(new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1).IsSelected(op));
+            return Task.FromResult<ManagementOperation?>(op with { Phase = ManagementOperationPhase.Completed,
+                RecoveryActivation = RecoveryActivationPhase.BusinessReady, Restore = op.Restore! with { BusinessReady = true }, Error = null });
+        }
+        Task<IReadOnlyList<StartupCheckResult>> Verify(RestoreRequest _, ServiceConfiguration __, CancellationToken ___) =>
+            Task.FromResult<IReadOnlyList<StartupCheckResult>>([new("recovery-target", true, "合成目标", true)]);
+        await using (var first = await AppAsync(failCompletion: loseTerminal, failOnlyTerminal: true, prepareWorkingCopy: (_, _) => Task.CompletedTask,
+            verifyTarget: Verify, workingDirectory: () => _directory, activateRecovery: true))
+        {
+            using var client = Client(first);
+            var response = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+            Assert.Equal(loseTerminal ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK, response.StatusCode);
+            var saved = await new FileManagementOperationStore(Path.Combine(_directory, "operations")).FindAsync("activate", default);
+            Assert.Equal(loseTerminal ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Completed, saved!.Phase);
+        }
+        await using var restarted = await AppAsync(prepareWorkingCopy: (_, _) => throw new InvalidOperationException("不得重新复制"),
+            verifyTarget: Verify, workingDirectory: () => _directory, activateRecovery: true, observeRecovery: Observe);
+        using var replayClient = Client(restarted);
+        var replay = await replayClient.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        var result = (await replay.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Completed, result.Phase);
+        Assert.True(result.Restore!.BusinessReady);
+        Assert.Equal(1, _host.StartCalls);
+        Assert.Equal(1, _backups.RestoreCalls);
+        Assert.Equal(loseTerminal ? 1 : 0, observations);
+    }
+
     private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false,
         bool deploymentBuilder = false, Func<RestoreRequest, CancellationToken, Task>? prepareWorkingCopy = null,
         Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyTarget = null,
-        Func<string>? workingDirectory = null)
+        Func<string>? workingDirectory = null, bool activateRecovery = false,
+        Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecovery = null, bool failOnlyTerminal = false)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
@@ -281,10 +322,13 @@ public sealed class LocalManagementApiTests : IDisposable
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         { ["ExamSecurity:OperatorToken"] = credentials ? Token : null, ["ExamSecurity:OperatorId"] = credentials ? "operator" : null });
         IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
-        if (failCompletion) journal = new FailCompletionStore(journal);
+        if (failCompletion) journal = new FailCompletionStore(journal, failOnlyTerminal);
         builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, () => _host,
             new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: _ => Task.FromResult(observedReady),
-            prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory));
+            prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory,
+            activateRecovery: activateRecovery ? (op, token) => new RecoveryActivationRunner(_host, () => _host,
+                new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
+                .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
@@ -486,6 +530,8 @@ public sealed class LocalManagementApiTests : IDisposable
     [InlineData("missing", false)]
     public async Task ProductionRegistrationDoesNotLoadBrokenBusinessDependenciesBeforeAuthenticationOrStatus(string configurationState, bool credentials)
     {
+        var selection = Path.Combine(_directory, "corrupt-deployment.json");
+        await File.WriteAllTextAsync(selection, "{}");
         var path = Path.Combine(_directory, "production-configuration.json");
         if (configurationState == "valid") await new FileServiceConfigurationStore(path).SaveAsync(Configuration, 0);
         else if (configurationState == "corrupt") await File.WriteAllTextAsync(path, "{}");
@@ -499,6 +545,7 @@ public sealed class LocalManagementApiTests : IDisposable
             ["Management:OperationDirectory"] = Path.Combine(_directory, "missing-operation-directory"),
             ["Management:BusinessReadyEndpoint"] = "http://invalid-ready-endpoint",
             ["ConnectionStrings:Exam"] = "synthetic-invalid-connection-secret",
+            ["Recovery:SelectionPath"] = selection,
             ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
             ["ExamSecurity:OperatorToken"] = credentials ? Token : null,
             ["ExamSecurity:OperatorId"] = credentials ? "operator" : null
@@ -613,12 +660,13 @@ public sealed class LocalManagementApiTests : IDisposable
     }
     private sealed class JsonSerializerOptionsProvider
     { public System.Text.Json.JsonSerializerOptions Options { get; } = JsonDefaults.Create(); }
-    private sealed class FailCompletionStore(IManagementOperationStore inner) : IManagementOperationStore
+    private sealed class FailCompletionStore(IManagementOperationStore inner, bool onlyTerminal = false) : IManagementOperationStore
     {
         public Task<IAsyncDisposable> AcquireAsync(CancellationToken token) => inner.AcquireAsync(token);
         public Task<ManagementOperation?> FindAsync(string id, CancellationToken token) => inner.FindAsync(id, token);
         public Task<bool> HasUnverifiedOperationsAsync(CancellationToken token) => inner.HasUnverifiedOperationsAsync(token);
-        public Task SaveAsync(ManagementOperation operation, CancellationToken token) => operation.Phase == ManagementOperationPhase.Accepted
+        public Task SaveAsync(ManagementOperation operation, CancellationToken token) => operation.Phase == ManagementOperationPhase.Accepted ||
+            onlyTerminal && operation.Phase != ManagementOperationPhase.Completed
             ? inner.SaveAsync(operation, token) : throw new IOException("合成结果落盘中断");
     }
 }

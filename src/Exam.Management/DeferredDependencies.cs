@@ -3,6 +3,12 @@ using Exam.Contracts.ServiceManagement;
 
 namespace Exam.Management;
 
+internal sealed class DeferredReadinessProbe(Func<IStartupReadinessProbe> load) : IStartupReadinessProbe
+{
+    public Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration, CancellationToken token) =>
+        load().RunAsync(configuration, token);
+}
+
 internal sealed class DeferredBusinessHost(Func<IManagedBusinessHost> load) : IManagedBusinessHost
 {
     public BusinessServiceStatus Status

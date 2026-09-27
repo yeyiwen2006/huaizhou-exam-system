@@ -32,7 +32,8 @@ public static class PostgresRuntimeRegistration
         ServerIdentityOptions identity,
         bool allowUninitializedFailoverState)
     {
-        var connectionString = configuration.GetConnectionString("Exam");
+        var connectionString = FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key],
+            identity.ServerId, identity.NodeId, identity.ServerEpoch);
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(

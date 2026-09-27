@@ -32,7 +32,21 @@ public sealed class BusinessRecoveryWorker(
         {
             try
             {
-                var checks = await probe.RunAsync(local, stoppingToken);
+                var selection = FileRecoveryDeploymentSelection.ReadConfigured(key => configuration[key],
+                    identity.ServerId, identity.NodeId, identity.ServerEpoch);
+                IReadOnlyList<StartupCheckResult> checks;
+                if (selection is { ConnectionReference: "ExamRecovery" })
+                {
+                    var working = new RecoveryWorkingCopy(selection.RequestId, selection.ActorId, selection.BackupId,
+                        "unused-by-target-probe", selection.WorkingDirectory, timeProvider.GetUtcNow());
+                    // The registered business source itself must be the isolated target; do not verify a different connection.
+                    checks = await new PostgresWorkingCopyReadinessProbe(configuration.GetConnectionString("Exam") ?? "",
+                        configuration.GetConnectionString("ExamRecovery") ?? "", "", identity.ServerEpoch, probe, source)
+                        .RunAsync(local, working, stoppingToken);
+                    if (FileRecoveryDeploymentSelection.ReadConfigured(key => configuration[key], identity.ServerId,
+                        identity.NodeId, identity.ServerEpoch) != selection) throw new IOException("恢复部署选择发生变化。");
+                }
+                else checks = await probe.RunAsync(local, stoppingToken);
                 guard.Observe(checks, timeProvider.GetUtcNow());
                 if (guard.Snapshot.Ready) return;
                 await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
