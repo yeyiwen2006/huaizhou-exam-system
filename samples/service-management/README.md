@@ -23,4 +23,6 @@
 
 服务配置、操作目录及备份/暂存根目录分别保护。操作目录不放其他 JSON、不经过联接点，也不放在备份材料源目录内。模板的 `version=1` 仅为合成首次配置版本，不能用于覆盖现有配置；后续保存必须读取当前版本并携带 expectedVersion。`highAvailabilityEnabled=true` 不代表已完成配对或复制，`ExamServer:ServerEpoch=1` 仅为合成部署比较值，不是当前权威代次。模板不新增恢复库连接或自动切换设置，也不解决尚未完成的生产恢复闭环。
 
-完整责任与缺口见 [F01 工作边界清单](../../docs/f01-scope-checklist.md)；实际检查和 Windows 接续见 [集中交接](../../docs/f01-local-management-handoff.md)。
+`Backup:StartupVerificationDirectory` 与 `Backup:StartupVerificationBackupId` 指定启动自检的备份及其固定标识，必须在允许备份根目录内；不能保留占位值或自动选“最新”。先通过管理备份接口创建完整备份，再由部署人员更新受保护配置中的选择并重启管理宿主（当前无动态重载）。缺少选择、摘要损坏、工具失败或标识不符均产生阻止启动的 `backup-integrity` 检查；初始化时仍可认证、查询状态和创建备份。检查不依赖业务数据库、不写恢复目标，但不证明备份新鲜度、所属服务器、WAL 连续覆盖或密钥可实际解锁，完整恢复演练仍需执行。
+
+完整责任与缺口见 [F01 工作边界清单](../../docs/f01-scope-checklist.md)；恢复切换差异见 [待确认方案](../../docs/f01-recovery-switch-proposal.md)；实际检查和 Windows 接续见 [集中交接](../../docs/f01-local-management-handoff.md)。

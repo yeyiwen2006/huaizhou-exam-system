@@ -220,6 +220,23 @@ dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj
 
 另执行集成项目 `dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --verbosity quiet`，0 警告、0 错误。在仓库外 `/private/tmp/f01-process-audit-20260927` 构建临时验证程序（Release，0 警告、0 错误），运行 `python3 /private/tmp/f01-process-audit-20260927/check.py`：独立 .NET 进程通过实际 ManagementOperationRunner/FileManagementOperationStore 写入受理记录和一条合成副作用后，被 Python 强制终止；全新进程重放原请求得到 NeedsVerification，不重复副作用，并阻止新启动请求。结果通过。此检查覆盖 macOS 真实进程退出及锁释放，不覆盖 SCM、断电、文件系统持久性或真实业务服务恢复，不计入上述测试项数。临时程序和记录不提交仓库。
 
+## 启动备份完整性补齐（2026-09-27）
+
+生产管理宿主接入 `BackupIntegrityStartupReadinessProbe`，按部署固定的 `Backup:StartupVerificationDirectory`/`StartupVerificationBackupId` 核对备份清单、数据库工具校验和资源/受保护材料摘要，结果为 `backup-integrity`。缺失或不一致时阻止启动，但不阻断认证/状态/备份初始化。只读核验路径不连接业务数据库、不依赖原资源源目录、不创建恢复目标，不能据此声明完整恢复成功。选择配置当前需重启管理宿主生效。备份元数据也改为先核对打开文件长度，再有界读取，避免长度检查和重新打开之间的无界分配。
+
+本轮实际运行（macOS ARM64 / SDK 10.0.401）：
+
+```sh
+TMPDIR=/private/tmp dotnet test tests/Unit/Exam.UnitTests/Exam.UnitTests.csproj --no-build --configuration Release --filter 'Category!=Postgres&Category!=Latex'
+TMPDIR=/private/tmp dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --filter 'Category!=Postgres&Category!=Latex'
+```
+
+单元 **1053/1053**、集成 **61/61**，无失败/跳过。首次单元运行未指定 TMPDIR，默认 /var 路径经过符号链接，86 项路径保护场景失败；保留保护并按已约定的 /private/tmp 重跑通过，没有放宽校验。新增 6 项单元、1 项生产自检路由/持久查询接线。另以仓库外临时程序配置独立合成 PostgreSQL 18 容器、随机凭据、回环随机端口，实跑 `FullyQualifiedName~PostgresPhysicalRecoveryTests` **1/1**：真实 pg_verifybackup 的新生产核验路径通过，继而恢复独立实例、恢复密钥解锁、原回执查询、剩余收卷及收齐重建通过；源库/暂存证据保留，本次容器均清理。无完整解决方案、Windows、TeX 或计分恢复新证据，不合并历史测试数量。
+
+[生产恢复切换方案](f01-recovery-switch-proposal.md)把仍未接通的步骤列成实际调用差异和目标/权限/旧备份投入使用/续行请求绑定决定。它尚未实施，不当作闭环完成。开发估算仍为 75%—80%，不因自检修正宣称生产恢复完成。
+
+最终集成项目 Release 构建 `dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --no-restore --configuration Release --verbosity quiet`：0 警告、0 错误；合成 JSON 与本地文档引用校验通过。
+
 ## 晚上交给 Windows Codex 的指令
 
 请在同一分支 `codex/f01-local-management` 继续 F01 #7，先读 AGENTS.md、ADR 0002 和本文件。保留当前成果与用户修改；已关闭 #57/#58/#59 已接续，不重开细碎 PR，不删除旧分支，不合并或推送 main。获取最新 origin/main，在集中分支同步基线，不强推。启动恢复、题包内容、业务/后台门禁、各类中断操作核对及真实物理副本继续收卷已在 macOS 完成模块验证，先复用这些实现和演练。优先验证 Windows 实际 SCM、管理 TLS 与 ACL，再按上节明确的边界接通生产恢复目标选择、核对和受控切换。不能将已通过演练写成生产恢复入口已完成。若缺 A 模块公共恢复入口，列出具体调用与缺口请 A 协调，不能猜接口、自动迁移或覆盖原库。

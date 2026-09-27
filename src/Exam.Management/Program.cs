@@ -60,7 +60,11 @@ public static class ManagementEntryPoint
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
                 new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
                 new ManagementDatabaseStartupProbe(configuration.GetConnectionString("Exam"), epoch),
-                new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? "")
+                new ConfiguredRecoveryReadinessProbe(configuration.GetConnectionString("Exam"), configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
+                new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
+                    Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
+                    TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()),
+                    configuration["Backup:StartupVerificationDirectory"], configuration["Backup:StartupVerificationBackupId"])
             ]);
             return new ManagementRuntime(serverId, nodeId, store, process,
                 () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),

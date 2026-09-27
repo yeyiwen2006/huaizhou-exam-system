@@ -26,6 +26,22 @@ public sealed class PostgresBackupCoordinator(
     private const int ManifestFormatVersion = 2;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
+    /// <summary>Read-only integrity check of an explicitly selected backup; no live database access.</summary>
+    public async Task<BackupResult> VerifyAvailableBackupAsync(string directory, string expectedBackupId, CancellationToken cancellationToken)
+    {
+        if (!Path.IsPathFullyQualified(options.PostgresBinDirectory) ||
+            !Path.IsPathFullyQualified(options.AllowedBackupRoot) || string.IsNullOrWhiteSpace(expectedBackupId))
+            throw new InvalidOperationException("备份核验工具、根目录和备份标识必须明确配置。");
+        var destination = ResolveWithinRoot(options.AllowedBackupRoot, directory);
+        var manifest = await ReadManifestAsync(destination, cancellationToken);
+        if (!string.Equals(manifest.BackupId, expectedBackupId, StringComparison.Ordinal))
+            throw new InvalidDataException("指定备份标识与清单不匹配。");
+        await ValidateBackupContentsAsync(ResolveChild(destination, manifest.DatabaseDirectory),
+            ResolveChild(destination, manifest.ResourcesDirectory),
+            ResolveChild(destination, manifest.ProtectedConfigurationDirectory), manifest, true, cancellationToken);
+        return ToResult(destination, manifest);
+    }
+
     public Task<BackupResult?> FindCompletedBackupAsync(BackupRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -749,12 +765,11 @@ public sealed class PostgresBackupCoordinator(
         Action<JsonElement> validateShape,
         CancellationToken cancellationToken)
     {
-        if (new FileInfo(path).Length > maximumBytes)
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (input.Length is <= 0 || input.Length > maximumBytes)
             throw new InvalidDataException("备份元数据超过允许大小。");
-
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-        if (bytes.Length > maximumBytes)
-            throw new InvalidDataException("备份元数据超过允许大小。");
+        var bytes = new byte[checked((int)input.Length)];
+        await input.ReadExactlyAsync(bytes, cancellationToken);
 
         try
         {

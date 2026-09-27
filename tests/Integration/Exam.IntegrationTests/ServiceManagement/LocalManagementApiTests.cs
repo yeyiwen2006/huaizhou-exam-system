@@ -448,6 +448,42 @@ public sealed class LocalManagementApiTests : IDisposable
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task ProductionChecksPersistMissingBackupFailure_WithoutLoadingBackupToolsOrDatabaseSecrets()
+    {
+        var path = Path.Combine(_directory, "checks-configuration.json");
+        await new FileServiceConfigurationStore(path).SaveAsync(Configuration, 0);
+        var builder = ManagementEntryPoint.CreateHostBuilder([]);
+        builder.WebHost.UseTestServer();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Management:ServerId"] = "server", ["Management:NodeId"] = "node", ["Management:HttpsPort"] = "9443",
+            ["Management:ServiceConfigurationPath"] = path,
+            ["Management:OperationDirectory"] = Path.Combine(_directory, "operations"),
+            ["ConnectionStrings:Exam"] = "synthetic-invalid-connection-secret",
+            ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
+            ["ExamSecurity:OperatorToken"] = Token, ["ExamSecurity:OperatorId"] = "operator"
+        });
+        ManagementEntryPoint.AddManagementRuntime(builder);
+        await using var app = builder.Build();
+        app.MapManagementApi();
+        await app.StartAsync();
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/checks",
+            new ManagementServiceRequest("production-backup-check", "server", "node"), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("synthetic-invalid-connection-secret", body);
+        Assert.DoesNotContain(Token, body);
+        var operation = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Completed, operation.Phase); // Check completed, service is not ready.
+        Assert.Contains(operation.Checks!, check => check.Name == "backup-integrity" && !check.Passed && check.BlocksWrites);
+        var replay = await client.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>(
+            "/management/v1/operations/production-backup-check", _json.Options);
+        Assert.Contains(replay!.Result!.Checks!, check => check.Name == "backup-integrity" && !check.Passed && check.BlocksWrites);
+        await app.StopAsync();
+    }
+
     private static HttpClient Client(WebApplication app, string? token = Token)
     {
         var client = app.GetTestClient();

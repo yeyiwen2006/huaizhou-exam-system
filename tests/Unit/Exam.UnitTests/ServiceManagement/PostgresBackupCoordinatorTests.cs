@@ -8,6 +8,55 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"exam-backup-test-{Guid.NewGuid():N}");
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("wrong-id")]
+    [InlineData("resource-corrupt")]
+    [InlineData("protected-missing")]
+    [InlineData("tool-failure")]
+    public async Task StartupBackupIntegrity_UsesOnlySelectedBackupAndNeverCreatesRestoreTarget(string scenario)
+    {
+        var root = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic recovery material");
+        var destination = Path.Combine(root, "selected");
+        var created = await CreateService(root, resources, protectedConfig, Path.Combine(_root, "staging"),
+            new FakePostgresTools()).CreateAsync(new("backup-request", destination, "operator"), default);
+        var manifest = File.ReadAllBytes(Path.Combine(destination, "exam-backup.json"));
+        Directory.Delete(resources, true);
+        Directory.Delete(protectedConfig, true);
+        if (scenario == "resource-corrupt") File.WriteAllText(Path.Combine(destination, "resources", "paper.pkg"), "corrupt");
+        if (scenario == "protected-missing") File.Delete(Path.Combine(destination, "protected-configuration", "key.dat"));
+        var tools = new FakePostgresTools { FailedTool = scenario == "tool-failure" ? "pg_verifybackup.exe" : null,
+            FailureOutput = "synthetic-secret-do-not-report" };
+        var verifier = new PostgresBackupCoordinator(new PostgresBackupOptions(
+            Path.GetDirectoryName(Environment.ProcessPath!)!, "", root, "", "", "", TimeSpan.FromSeconds(5)), tools);
+        var probe = new BackupIntegrityStartupReadinessProbe(() => verifier, destination,
+            scenario == "wrong-id" ? "another-backup" : created.BackupId);
+        var result = Assert.Single(await probe.RunAsync(new("server", "node", "127.0.0.1", 443, _root, true, 1), default));
+        Assert.Equal("backup-integrity", result.Name);
+        Assert.Equal(scenario == "valid", result.Passed);
+        Assert.True(result.BlocksWrites);
+        Assert.DoesNotContain("synthetic-secret", result.Message);
+        Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(destination, "exam-backup.json")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "staging")));
+        Assert.DoesNotContain("pg_basebackup.exe", tools.Calls);
+        Assert.Equal(scenario is "valid" or "tool-failure" ? 1 : 0, tools.Calls.Count);
+    }
+
+    [Fact]
+    public async Task StartupBackupIntegrity_MissingSelectionDoesNotLoadDependencies_AndCancellationPropagates()
+    {
+        var probe = new BackupIntegrityStartupReadinessProbe(() => throw new Exception("Must stay deferred"), null, null);
+        var configuration = new ServiceConfiguration("server", "node", "127.0.0.1", 443, _root, true, 1);
+        Assert.False(Assert.Single(await probe.RunAsync(configuration, default)).Passed);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => probe.RunAsync(configuration, cancellation.Token));
+    }
+
     [Fact]
     public async Task BackupAndRestore_UseCompleteIsolatedDirectories()
     {

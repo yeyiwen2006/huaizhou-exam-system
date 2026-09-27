@@ -89,6 +89,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         await new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource).RestoreAsync(restore, default);
         Assert.Equal(3, tools.VerifyCalls);
         var offlineEvidence = new PostgresBackupCoordinator(options with { ConnectionString = "Host=127.0.0.1;Port=1;Database=unavailable" }, tools);
+        // The production startup integrity path must work without a live business database.
+        Assert.Equal(backup, await offlineEvidence.VerifyAvailableBackupAsync(backup.DestinationDirectory, backup.BackupId, default));
+        var backupCheck = new BackupIntegrityStartupReadinessProbe(() => offlineEvidence, backup.DestinationDirectory, backup.BackupId);
+        Assert.True(Assert.Single(await backupCheck.RunAsync(configuration, default)).Passed);
         Assert.Equal(backup, await offlineEvidence.FindCompletedBackupAsync(backupRequest, default));
         Assert.True(await offlineEvidence.FindStagedRestoreAsync(restore, default));
         var staged = Path.Combine(options.RestoreStagingRoot, backup.BackupId);
