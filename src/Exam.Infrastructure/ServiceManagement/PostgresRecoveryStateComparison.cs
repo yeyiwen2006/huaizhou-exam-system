@@ -34,7 +34,9 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
     {
         await using var connection = await source.OpenConnectionAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
-        await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL TIME ZONE 'UTC'", connection, transaction))
+        // This does not bypass RLS or grant privileges. PostgreSQL must fail rather than silently
+        // hash a filtered subset, including FORCE ROW LEVEL SECURITY on tables owned by this role.
+        await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL row_security=off; SET LOCAL TIME ZONE 'UTC'", connection, transaction))
             await readOnly.ExecuteNonQueryAsync(token);
         await using (var authority = new NpgsqlCommand("SELECT active_node_id, server_epoch, protection_mode FROM exam.server_state WHERE server_id=@server", connection, transaction))
         {

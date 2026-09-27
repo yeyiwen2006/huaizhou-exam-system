@@ -216,6 +216,67 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.Equal(backup, await coordinator.CreateAsync(backupRequest, default));
     }
 
+    [PhysicalPostgresFact]
+    public async Task IntactBackupAndExistingWalDoNotProvePostBackupAcknowledgedSubmission_WhenSourceBecomesUnreadable()
+    {
+        var original = await SeedAsync();
+        var configuration = new ServiceConfiguration("server", "node", "127.0.0.1", 8443, _root, false, 1);
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfiguration = Path.Combine(_root, "protected");
+        Directory.CreateDirectory(resources);
+        Directory.CreateDirectory(protectedConfiguration);
+        await File.WriteAllTextAsync(Path.Combine(resources, "synthetic.txt"), "synthetic-resource");
+        await File.WriteAllTextAsync(Path.Combine(protectedConfiguration, "synthetic.txt"), "synthetic-configuration");
+        await using var tools = new DockerPostgresTools();
+        var options = new PostgresBackupOptions(_root, _source.ConnectionString, Path.Combine(_root, "backups"),
+            Path.Combine(_root, "staging"), resources, protectedConfiguration, TimeSpan.FromMinutes(2));
+        var coordinator = new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource);
+        var backup = await coordinator.CreateAsync(new("stale-backup", Path.Combine(options.AllowedBackupRoot, "snapshot"), "operator"), default);
+        var restore = new RestoreRequest("stale-restore", backup.BackupId, backup.DestinationDirectory, "operator");
+        await coordinator.RestoreAsync(restore, default);
+        var workingRoot = Path.Combine(_root, "working");
+        Directory.CreateDirectory(workingRoot);
+        var working = await coordinator.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, default);
+        await tools.StartRestoredAsync(Path.Combine(working.WorkingDirectory, "database"));
+        var restoredConnection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = tools.RestoredPort };
+        await using var recovered = NpgsqlDataSource.Create(restoredConnection.ConnectionString);
+        await WaitForDatabaseAsync(recovered);
+        var recoveredStore = new PostgresSubmissionStore(recovered);
+        Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
+        var comparison = new PostgresRecoveryStateComparison(_source.ConnectionString, restoredConnection.ConnectionString, 1);
+        Assert.True((await comparison.RunAsync(configuration, default)).Passed);
+
+        // A real acknowledged business commit after the base backup, not a synthetic file timestamp.
+        var sourceStore = new PostgresSubmissionStore(_source.DataSource);
+        var committed = await sourceStore.SaveSubmissionAsync(Submission(2), DateTimeOffset.UtcNow, "post-backup-receipt");
+        Assert.Equal(SubmissionPersistenceStatus.Saved, committed.Status);
+        Assert.Equal(committed.Submission!.Receipt, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"))!.Receipt);
+        Assert.Null(await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(backup.DestinationDirectory, "database", "backup_manifest")));
+        var endLsn = manifest.RootElement.GetProperty("WAL-Ranges").EnumerateArray().Single().GetProperty("End-LSN").GetString()!;
+        await using (var position = _source.DataSource.CreateCommand("SELECT pg_current_wal_flush_lsn()::text"))
+            Assert.True(Lsn((string)(await position.ExecuteScalarAsync())!) > Lsn(endLsn));
+        Assert.NotEmpty(Directory.EnumerateFiles(Path.Combine(backup.DestinationDirectory, "database", "pg_wal")));
+        // pg_verifybackup and every backup digest still pass even though that acknowledged receipt is absent.
+        Assert.Equal(backup, await coordinator.VerifyAvailableBackupAsync(backup.DestinationDirectory, backup.BackupId, default));
+        Assert.False((await comparison.RunAsync(configuration, default)).Passed);
+        await tools.PauseSourceAsync();
+        try
+        {
+            // The actual original container is unavailable; no invented unreachable connection substitutes for it.
+            Assert.False((await comparison.RunAsync(configuration, default)).Passed);
+            Assert.Null(await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
+        }
+        finally { await tools.ResumeSourceAsync(); }
+        Assert.Equal(committed.Submission.Receipt, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"))!.Receipt);
+    }
+
+    private static ulong Lsn(string text)
+    {
+        var parts = text.Split('/');
+        return (Convert.ToUInt64(parts[0], 16) << 32) | Convert.ToUInt64(parts[1], 16);
+    }
+
     private async Task<SubmissionReceipt> SeedAsync()
     {
         var now = DateTimeOffset.UtcNow;
@@ -354,6 +415,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         private readonly string _remote = "/tmp/codex-f01-physical-" + Guid.NewGuid().ToString("N");
         private readonly string _restoredContainer = "codex-f01-restored-" + Guid.NewGuid().ToString("N");
         private bool _restoredCreated;
+        private bool _sourcePaused;
         public int BaseBackupCalls { get; private set; }
         public int VerifyCalls { get; private set; }
         public int RestoredPort { get; } = AllocatePort();
@@ -415,8 +477,22 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
                 throw new InvalidDataException("隔离副本必须只监听本机回环随机端口。");
             if (number != RestoredPort) throw new InvalidDataException("实际恢复端口与受控部署不一致。");
         }
+        public async Task PauseSourceAsync()
+        {
+            if (!_sourceContainer.StartsWith("codex-f01-physical-source-", StringComparison.Ordinal))
+                throw new InvalidOperationException("只允许暂停专用 F01 合成源容器。");
+            await DockerAsync(["pause", _sourceContainer]);
+            _sourcePaused = true;
+        }
+        public async Task ResumeSourceAsync()
+        {
+            if (!_sourcePaused) return;
+            await DockerAsync(["unpause", _sourceContainer]);
+            _sourcePaused = false;
+        }
         public async ValueTask DisposeAsync()
         {
+            await ResumeSourceAsync();
             if (_restoredCreated) await DockerAsync(["rm", "--force", "--volumes", _restoredContainer]);
             if (_sourceContainer.StartsWith("codex-f01-physical-source-", StringComparison.Ordinal))
                 await DockerAsync(["exec", _sourceContainer, "rm", "--recursive", "--force", _remote]);

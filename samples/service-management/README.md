@@ -42,6 +42,10 @@
 
 启用前业务须停止，自检及恢复目标检查通过，并只读比对原库与恢复库的全部 exam 业务表、列定义和序列（排除备份/恢复操作审计表）。必须已存在匹配节点和代次的 EmergencySingleNode 权威状态；本操作不启用应急模式、不提升节点、不改代次。原库不可读、状态不同或仍需重建双机保护时保持阻断，不把旧备份当作最新状态；离线原库的完整性证明及 F02 主备重新接线仍不在本路径内。
 
+状态比对的两条连接均在只读事务内设置 `row_security=off`。该设置不绕过 RLS、不授予权限；查询会受行级策略影响时 PostgreSQL 报错，核对失败并阻止启用或自动回退。数据库账户必须实际能读取完整业务表和序列；不能通过授予超级用户或 `BYPASSRLS` 来自动修复部署。表所有者也需考虑 `FORCE ROW LEVEL SECURITY`。设置只在诊断事务中有效，不改变业务连接的安全策略。语义见 [PostgreSQL 行级安全](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)。
+
+`pg_verifybackup` 成功、清单摘要相符或归档目录中存在 WAL 文件，均不证明备份已包含故障前最新已确认业务状态。`Invoke-WalArchive.ps1` 只复制 PostgreSQL 交给它的已完成文件，不提供与业务成功回执绑定的恢复位置；`archive_timeout=60s` 也不保证当前 WAL 段已经归档。当前受控恢复启动拒绝 `recovery.signal`/`standby.signal`，没有自动接入 `Restore-WalArchive.ps1` 或执行归档追平，不能把这条路径当作 PITR。归档恢复还需绑定原集群身份、时间线及故障前已确认状态对应的可靠恢复位置，校验所需 WAL 连续覆盖并实际重放到该位置，同时核对资源和密钥版本；不能从备份自身、归档最后文件或恢复库自行生成“最新”证据。原库无法比较且没有这些证据时保持阻断，保留原件与恢复副本。归档行为见 [PostgreSQL 连续归档与恢复](https://www.postgresql.org/docs/18/continuous-archiving.html)。
+
 选择写入后才启动固定业务服务，业务入口继续保留原活动节点门禁，并核对实际恢复数据目录后运行领域恢复检查。只有 HTTPS 就绪通过才返回恢复完成。失败或取消先停止业务，再重新核实原库与恢复库状态；一致才回退连接引用，原库不自动启动。已有新写入、原库不可读、停止或回退无法确认时保留选中的恢复库与 NeedsVerification，禁止覆盖较新答卷。同一已完成 requestId 只返回原结果。
 
 接口边界以 [ADR 0002](../../docs/decisions/0002-local-management-access.md) 为准，恢复原则见已有 [恢复运行说明](../../docs/backup-and-failover-runbook.md)。实际模块验证与未完成项在实现 PR 中记录。
