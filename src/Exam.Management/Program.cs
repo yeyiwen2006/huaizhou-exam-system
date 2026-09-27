@@ -63,6 +63,15 @@ public static class ManagementEntryPoint
                 Required("Backup:PostgresBinDirectory"), SelectedConnection() ?? "", Required("Backup:AllowedBackupRoot"),
                 Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
+            PostgresArchiveRecovery? ArchiveReplay()
+            {
+                var keys = new[] { "Recovery:WalArchiveDirectory", "Recovery:WalSystemIdentifier", "Recovery:WalTimeline", "Recovery:WalTargetLsn" };
+                if (keys.All(key => string.IsNullOrWhiteSpace(configuration[key]))) return null;
+                if (string.IsNullOrWhiteSpace(configuration["Recovery:PostgresServiceName"]))
+                    throw new InvalidOperationException("归档重放必须使用已部署的受控隔离数据库服务。");
+                return new(new(Required(keys[0]), ulong.Parse(Required(keys[1]), System.Globalization.CultureInfo.InvariantCulture),
+                    uint.Parse(Required(keys[2]), System.Globalization.CultureInfo.InvariantCulture), Required(keys[3])));
+            }
             var backups = new DeferredBackupCoordinator(CreateBackups);
             var preflight = new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
@@ -82,6 +91,7 @@ public static class ManagementEntryPoint
                 prepareRecoveryWorkingCopy: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
                     async (request, token) =>
                     {
+                        var archiveReplay = ArchiveReplay();
                         var coordinator = CreateBackups();
                         if (string.IsNullOrWhiteSpace(configuration["Recovery:PostgresServiceName"]))
                             await coordinator.PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
@@ -89,7 +99,8 @@ public static class ManagementEntryPoint
                             await new ControlledRecoveryDatabase(Required("Recovery:PostgresServiceName"),
                                 Required("Recovery:OriginalPostgresServiceName"), Required("Management:BusinessServiceName"),
                                 Required("Management:ServiceName"), Required("Backup:PostgresBinDirectory"), Required("Recovery:WorkingRoot"),
-                                Required("Recovery:PostgresConfigurationPath"), Required("ConnectionStrings:Exam"), Required("ConnectionStrings:ExamRecovery"))
+                                Required("Recovery:PostgresConfigurationPath"), Required("ConnectionStrings:Exam"), Required("ConnectionStrings:ExamRecovery"),
+                                archiveRecovery: archiveReplay)
                                 .PrepareAndStartAsync(request,
                                     ct => coordinator.PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), ct),
                                     ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), ct), token);

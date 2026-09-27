@@ -17,11 +17,12 @@ public sealed class ControlledRecoveryDatabase
     private readonly string _expectedCommand;
     private readonly IWindowsServiceDeployment _deployment;
     private readonly WindowsServiceBusinessHost _host;
+    private readonly PostgresArchiveRecovery? _archiveRecovery;
 
     public ControlledRecoveryDatabase(string serviceName, string originalServiceName, string businessServiceName,
         string managementServiceName, string postgresBinDirectory, string workingRoot, string configurationPath,
         string originalConnection, string recoveryConnection, IWindowsServiceControl? control = null,
-        IWindowsServiceDeployment? deployment = null)
+        IWindowsServiceDeployment? deployment = null, PostgresArchiveRecovery? archiveRecovery = null)
     {
         foreach (var name in new[] { serviceName, originalServiceName, businessServiceName, managementServiceName })
             _ = new WindowsServiceBusinessHost(name, control);
@@ -37,13 +38,17 @@ public sealed class ControlledRecoveryDatabase
         _serviceName = serviceName;
         _workingRoot = Absolute(workingRoot);
         _configurationPath = Absolute(configurationPath);
-        _expectedCommand = BuildServiceCommand(serviceName, postgresBinDirectory, workingRoot, configurationPath, recovery.Port);
+        _archiveRecovery = archiveRecovery;
+        _expectedCommand = BuildServiceCommand(serviceName, postgresBinDirectory, workingRoot, configurationPath, recovery.Port, archiveRecovery?.Options);
         _deployment = deployment ?? new ScmWindowsServiceControl();
         _host = new(serviceName, control);
     }
 
     public static string BuildServiceCommand(string serviceName, string postgresBinDirectory, string workingRoot,
-        string configurationPath, int port)
+        string configurationPath, int port) => BuildServiceCommand(serviceName, postgresBinDirectory, workingRoot, configurationPath, port, null);
+
+    public static string BuildServiceCommand(string serviceName, string postgresBinDirectory, string workingRoot,
+        string configurationPath, int port, PostgresArchiveRecoveryOptions? archiveRecovery)
     {
         _ = new WindowsServiceBusinessHost(serviceName);
         if (port is < 1 or > 65535) throw new ArgumentException("恢复端口无效。");
@@ -53,10 +58,26 @@ public sealed class ControlledRecoveryDatabase
         var options = $"-c config_file=\"{config.Replace('\\', '/')}\" -c data_directory=\"{database.Replace('\\', '/')}\" " +
             $"-c listen_addresses=127.0.0.1 -c port={port} -c archive_mode=off " +
             "-c shared_preload_libraries=\"\" -c session_preload_libraries=\"\" -c local_preload_libraries=\"\"";
+        if (archiveRecovery is not null)
+        {
+            options += BuildArchiveReplayOptions(archiveRecovery);
+        }
         // First the pg_ctl CRT parses -o, then the service passes these options to postgres's CRT.
         // Escape quotes for the first layer; PostgreSQL paths use forward slashes so no trailing slash escapes arise.
         var quotedOptions = '\"' + options.Replace("\"", "\\\"", StringComparison.Ordinal) + '\"';
         return $"\"{binary}\" runservice -N \"{serviceName}\" -D \"{database}\" -w -t 60 -o {quotedOptions}";
+    }
+
+    public static string BuildArchiveReplayOptions(PostgresArchiveRecoveryOptions archiveRecovery)
+    {
+        archiveRecovery.Validate();
+        // Missing files cannot invoke inherited restore/cleanup commands or fetch from an unrelated source.
+        // 'exit 1' is a fixed shell failure on both Windows and Unix; all selected WAL is already in pg_wal.
+        return " -c restore_command=\"exit 1\" -c archive_cleanup_command=\"\" -c recovery_end_command=\"\"" +
+            " -c primary_conninfo=\"\" -c primary_slot_name=\"\"" +
+            " -c recovery_target=\"\" -c recovery_target_name=\"\" -c recovery_target_time=\"\" -c recovery_target_xid=\"\"" +
+            $" -c recovery_target_lsn={archiveRecovery.TargetLsn} -c recovery_target_timeline={archiveRecovery.Timeline}" +
+            " -c recovery_target_inclusive=on -c recovery_target_action=promote";
     }
 
     private static string Absolute(string path)
@@ -84,6 +105,7 @@ public sealed class ControlledRecoveryDatabase
             // Repeated POST observes the existing binding, never copies under a running database.
             working = await observe(token) ?? throw new IOException("运行中的恢复实例没有原请求的完整工作副本证据。");
             Bind(working, request);
+            _archiveRecovery?.ReadBinding(working, request);
             CheckDeployment();
             if (_host.Status != BusinessServiceStatus.Running) throw new IOException("恢复实例状态改变。");
             return working;
@@ -92,12 +114,18 @@ public sealed class ControlledRecoveryDatabase
         working = await prepare(token);
         Bind(working, request);
         if (_host.Status != BusinessServiceStatus.Stopped) throw new IOException("准备期间恢复服务状态改变。");
+        if (_archiveRecovery is not null)
+        {
+            await _archiveRecovery.PrepareAsync(working, request, token);
+            if (_host.Status != BusinessServiceStatus.Stopped) throw new IOException("归档准备期间恢复服务状态改变。");
+        }
         var database = Path.Combine(working.WorkingDirectory, "database");
         foreach (var name in new[] { "postmaster.pid", "standby.signal", "recovery.signal" })
         {
             var file = Path.Combine(database, name);
             PathBoundary.RejectExistingReparsePoints(_workingRoot, file);
-            if (File.Exists(file)) throw new IOException("恢复副本含运行或复制/归档恢复信号，保留原件并阻止启动。");
+            if (File.Exists(file) && !(name == "recovery.signal" && _archiveRecovery is not null))
+                throw new IOException("恢复副本含运行或复制/归档恢复信号，保留原件并阻止启动。");
         }
         var automatic = Path.Combine(database, "postgresql.auto.conf");
         PathBoundary.RejectExistingReparsePoints(_workingRoot, automatic);
@@ -124,6 +152,13 @@ public sealed class ControlledRecoveryDatabase
             working.WorkingDirectory != Path.Combine(_workingRoot, "slot"))
             throw new IOException("恢复服务目标与原请求工作槽不匹配。");
         PathBoundary.RejectExistingReparsePoints(_workingRoot, Path.Combine(working.WorkingDirectory, "database"));
+        foreach (var name in new[] { "wal-recovery.json", "wal-recovery-plan.json" })
+        {
+            var archiveMarker = Path.Combine(working.WorkingDirectory, name);
+            PathBoundary.RejectExistingReparsePoints(_workingRoot, archiveMarker);
+            if (_archiveRecovery is null && File.Exists(archiveMarker))
+                throw new IOException("原请求已绑定归档恢复，不能通过移除部署配置改变恢复方式。");
+        }
     }
     private void CheckDeployment()
     {

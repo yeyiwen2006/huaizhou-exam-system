@@ -127,6 +127,31 @@ public sealed class ControlledRecoveryDatabaseTests : IDisposable
         Assert.Throws<ArgumentException>(() => ControlledRecoveryDatabase.BuildServiceCommand("RecoveryPG", _root, Working, Configuration + "' -c port=5432", 55432));
     }
 
+    [Theory]
+    [InlineData("wal-recovery.json")]
+    [InlineData("wal-recovery-plan.json")]
+    public async Task RemovingArchiveConfigurationCannotChangeBoundRunningRecovery(string marker)
+    {
+        await Prepare(default);
+        await File.WriteAllTextAsync(Path.Combine(Working, "slot", marker), "synthetic-bound-record");
+        _service.State = ManagedWindowsServiceState.Running;
+        await Assert.ThrowsAsync<IOException>(() => Controller().PrepareAndStartAsync(_request, _ => throw new IOException("不能复制"), Observe, default));
+        Assert.Equal(0, _service.Starts);
+    }
+
+    [Fact]
+    public void ArchiveCommandHasFixedLocalReplayAndNoInheritedRestoreCommands()
+    {
+        var options = new PostgresArchiveRecoveryOptions(Path.Combine(_root, "archive"), 1234, 1, "0/300028");
+        var command = ControlledRecoveryDatabase.BuildServiceCommand("RecoveryPG", _root, Working, Configuration, 55432, options);
+        Assert.Contains("-c restore_command=\\\"exit 1\\\"", command);
+        Assert.Contains("-c recovery_target_lsn=0/300028", command);
+        Assert.Contains("-c recovery_target_timeline=1", command);
+        Assert.Contains("-c primary_conninfo=\\\"\\\"", command);
+        Assert.DoesNotContain("latest", command);
+        Assert.Throws<ArgumentException>(() => ControlledRecoveryDatabase.BuildServiceCommand("RecoveryPG", _root, Working, Configuration, 55432, options with { Timeline = 2 }));
+    }
+
     private sealed class ServiceControl : IWindowsServiceControl, IWindowsServiceDeployment
     {
         public string Command { get; set; } = "";

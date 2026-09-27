@@ -413,6 +413,38 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingArchiveMaterialKeepsPersistedStagingAndBlocksBusinessAcrossManagementRestart()
+    {
+        var working = Path.Combine(_directory, "working", "slot"); Directory.CreateDirectory(working);
+        var request = new RestoreRequest("missing-archive", "synthetic-backup", Path.Combine(_directory, "snapshot"), "operator");
+        var preparations = 0;
+        Task Prepare(RestoreRequest original, CancellationToken token)
+        {
+            preparations++;
+            return new PostgresArchiveRecovery(new(Path.Combine(_directory, "missing-archive"), 1234, 1, "0/300028"))
+                .PrepareAsync(new(original.RequestId, original.ActorId, original.BackupId, original.SourceDirectory, working, DateTimeOffset.UtcNow), original, token);
+        }
+        await using (var first = await AppAsync(prepareWorkingCopy: Prepare, workingDirectory: () => working, activateRecovery: true))
+        {
+            using var client = Client(first);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options)).StatusCode);
+        }
+        var persisted = (await new FileManagementOperationStore(Path.Combine(_directory, "operations")).FindAsync(request.RequestId, default))!;
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, persisted.Phase);
+        Assert.True(persisted.Restore!.IsolationStaged);
+        Assert.False(persisted.Restore.RecoveryVerified); Assert.False(persisted.Restore.BusinessReady);
+        await using var second = await AppAsync(prepareWorkingCopy: Prepare, workingDirectory: () => working, activateRecovery: true);
+        using var next = Client(second);
+        var observed = await next.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>("/management/v1/operations/" + request.RequestId, _json.Options);
+        Assert.NotEqual(ManagementOperationPhase.Completed, observed!.Result!.Phase);
+        Assert.False(observed.Result.Restore!.BusinessReady);
+        Assert.Equal(1, preparations); // Querying never copies WAL or starts a service.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await next.PostAsJsonAsync("/management/v1/service/start",
+            new ManagementServiceRequest("bypass-missing-wal", "server", "node"), _json.Options)).StatusCode);
+        Assert.Equal(0, _host.StartCalls);
+    }
+
+    [Fact]
     public async Task ProductionHostBuilderRetainsConsoleLifecycleAndIndependentManagementRoutes()
     {
         await using (var consoleHost = ManagementEntryPoint.CreateHostBuilder([]).Build())
@@ -548,6 +580,10 @@ public sealed class LocalManagementApiTests : IDisposable
             ["Recovery:SelectionPath"] = selection,
             ["Recovery:PostgresServiceName"] = "invalid/recovery-service",
             ["Recovery:PostgresConfigurationPath"] = "relative-invalid-recovery-config",
+            ["Recovery:WalArchiveDirectory"] = "relative-invalid-archive",
+            ["Recovery:WalSystemIdentifier"] = "not-an-identifier",
+            ["Recovery:WalTimeline"] = "not-a-timeline",
+            ["Recovery:WalTargetLsn"] = "invalid-replay-position",
             ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
             ["ExamSecurity:OperatorToken"] = credentials ? Token : null,
             ["ExamSecurity:OperatorId"] = credentials ? "operator" : null

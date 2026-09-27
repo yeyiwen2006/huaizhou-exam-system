@@ -41,6 +41,7 @@ public sealed class PhysicalPostgresFactAttribute : FactAttribute
 
 [Trait("Category", "Postgres")]
 [Trait("Category", "PostgresPhysical")]
+[Collection(PostgresCollection.Name)] // Source suspension must not interrupt another PostgreSQL test's connections.
 public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
 {
     private readonly PostgresDatabaseFixture _source = new();
@@ -271,6 +272,93 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.Equal(committed.Submission.Receipt, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"))!.Receipt);
     }
 
+    [PhysicalPostgresFact]
+    public async Task ControlledArchivedWalReplayRecoversPostBackupReceipt_AndStillRequiresLatestStateComparison()
+    {
+        var original = await SeedAsync();
+        var configuration = new ServiceConfiguration("server", "node", "127.0.0.1", 8443, _root, false, 1);
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfiguration = Path.Combine(_root, "protected");
+        Directory.CreateDirectory(resources); Directory.CreateDirectory(protectedConfiguration);
+        await File.WriteAllTextAsync(Path.Combine(resources, "synthetic.txt"), "synthetic-resource");
+        await File.WriteAllTextAsync(Path.Combine(protectedConfiguration, "synthetic.txt"), "synthetic-configuration");
+        await using var tools = new DockerPostgresTools();
+        var options = new PostgresBackupOptions(_root, _source.ConnectionString, Path.Combine(_root, "backups"),
+            Path.Combine(_root, "staging"), resources, protectedConfiguration, TimeSpan.FromMinutes(2));
+        var coordinator = new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource);
+        var backup = await coordinator.CreateAsync(new("wal-backup", Path.Combine(options.AllowedBackupRoot, "snapshot"), "operator"), default);
+        var restore = new RestoreRequest("wal-restore", backup.BackupId, backup.DestinationDirectory, "operator");
+        await coordinator.RestoreAsync(restore, default);
+        var sourceStore = new PostgresSubmissionStore(_source.DataSource);
+        var committed = await sourceStore.SaveSubmissionAsync(Submission(2), DateTimeOffset.UtcNow, "wal-receipt");
+        Assert.Equal(SubmissionPersistenceStatus.Saved, committed.Status);
+        ulong systemIdentifier;
+        string target;
+        string sourceDirectory;
+        await using (var state = _source.DataSource.CreateCommand("SELECT system_identifier::text, pg_current_wal_flush_lsn()::text, current_setting('data_directory') FROM pg_control_system()"))
+        await using (var row = await state.ExecuteReaderAsync())
+        {
+            Assert.True(await row.ReadAsync());
+            systemIdentifier = ulong.Parse(row.GetString(0), System.Globalization.CultureInfo.InvariantCulture);
+            target = row.GetString(1); sourceDirectory = row.GetString(2);
+        }
+        await using (var closeSegment = _source.DataSource.CreateCommand("SELECT pg_switch_wal()")) await closeSegment.ExecuteScalarAsync();
+        var archive = Path.Combine(_root, "archive"); Directory.CreateDirectory(archive);
+        using var baseManifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(backup.DestinationDirectory, "database", "backup_manifest")));
+        var baseStart = baseManifest.RootElement.GetProperty("WAL-Ranges").EnumerateArray().Single().GetProperty("Start-LSN").GetString()!;
+        var archiveFiles = new List<string>();
+        await using (var files = _source.DataSource.CreateCommand("SELECT name FROM pg_ls_waldir() WHERE name >= pg_walfile_name($1::pg_lsn) AND name <= pg_walfile_name($2::pg_lsn) AND length(name)=24 ORDER BY name"))
+        {
+            files.Parameters.AddWithValue(baseStart); files.Parameters.AddWithValue(target);
+            await using var rows = await files.ExecuteReaderAsync();
+            while (await rows.ReadAsync()) archiveFiles.Add(rows.GetString(0));
+        }
+        await tools.ExportSourceWalAsync(sourceDirectory, archive, archiveFiles);
+        var replay = new PostgresArchiveRecovery(new(archive, systemIdentifier, 1, target));
+        var workingRoot = Path.Combine(_root, "working"); Directory.CreateDirectory(workingRoot);
+        var recoveryConfiguration = Path.Combine(_root, "recovery.conf");
+        await File.WriteAllTextAsync(recoveryConfiguration, "# synthetic recovery configuration\n");
+        var recoveredConnection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = tools.RestoredPort };
+        var service = new DockerRecoveryService(tools, Path.Combine(workingRoot, "slot", "database"),
+            ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecoveryPG", _root, workingRoot, recoveryConfiguration, tools.RestoredPort, replay.Options), replay.Options);
+        var controlled = new ControlledRecoveryDatabase("SyntheticRecoveryPG", "SyntheticOriginalPG", "SyntheticBusiness", "SyntheticManagement", _root,
+            workingRoot, recoveryConfiguration, _source.ConnectionString, recoveredConnection.ConnectionString, service, service, replay);
+        await controlled.PrepareAndStartAsync(restore,
+            ct => coordinator.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, ct),
+            ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
+        var working = (await coordinator.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, default))!;
+        var binding = replay.ReadBinding(working, restore);
+        Assert.Equal(target, binding.Options.TargetLsn);
+        await using var recovered = NpgsqlDataSource.Create(recoveredConnection.ConnectionString);
+        await WaitForDatabaseAsync(recovered);
+        await using (var replayState = recovered.CreateCommand("SELECT pg_is_in_recovery(), current_setting('recovery_target_lsn'), current_setting('restore_command'), pg_last_wal_replay_lsn()::text"))
+        await using (var row = await replayState.ExecuteReaderAsync())
+        {
+            Assert.True(await row.ReadAsync()); Assert.False(row.GetBoolean(0));
+            Assert.Equal(target, row.GetString(1)); Assert.Equal("exit 1", row.GetString(2));
+            Assert.True(Lsn(row.GetString(3)) >= Lsn(target));
+        }
+        var recoveredStore = new PostgresSubmissionStore(recovered);
+        Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
+        Assert.Equal(committed.Submission!.Receipt, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-2"))!.Receipt);
+        var comparison = new PostgresRecoveryStateComparison(_source.ConnectionString, recoveredConnection.ConnectionString, 1);
+        Assert.True((await comparison.RunAsync(configuration, default)).Passed);
+        Assert.All(await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, recoveredConnection.ConnectionString, "", 1,
+            new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(_certificate))).RunAsync(configuration, working, default),
+            c => Assert.True(c.Passed, c.Name));
+        await controlled.PrepareAndStartAsync(restore, _ => throw new IOException("运行中不能复制WAL"),
+            ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
+        Assert.Equal(1, service.Starts);
+        await tools.PauseSourceAsync();
+        try { Assert.False((await comparison.RunAsync(configuration, default)).Passed); }
+        finally { await tools.ResumeSourceAsync(); }
+        // A configured LSN and successful replay still do not prove that it is the latest acknowledged state.
+        await sourceStore.SetAuthorizationStateAsync(new("synthetic-exam", "candidate-2", "participation-2", 1,
+            "device-2", 2, ParticipationBusinessState.Submitted, 1, 1));
+        Assert.False((await comparison.RunAsync(configuration, default)).Passed);
+        Assert.Equal(backup, await coordinator.VerifyAvailableBackupAsync(backup.DestinationDirectory, backup.BackupId, default));
+    }
+
     private static ulong Lsn(string text)
     {
         var parts = text.Split('/');
@@ -392,7 +480,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public ValueTask<bool> IsActiveDeviceAsync(string deviceId, CancellationToken cancellationToken = default) => ValueTask.FromResult(deviceId is "device-1" or "device-2");
     }
 
-    private sealed class DockerRecoveryService(DockerPostgresTools tools, string directory, string command)
+    private sealed class DockerRecoveryService(DockerPostgresTools tools, string directory, string command, PostgresArchiveRecoveryOptions? archiveReplay = null)
         : IWindowsServiceControl, IWindowsServiceDeployment
     {
         public int Starts { get; private set; }
@@ -402,7 +490,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public void Start(string name)
         {
             Starts++;
-            Task.Run(() => tools.StartRestoredAsync(directory)).GetAwaiter().GetResult();
+            Task.Run(() => tools.StartRestoredAsync(directory, archiveReplay)).GetAwaiter().GetResult();
             _state = ManagedWindowsServiceState.Running;
         }
         public void Stop(string name) => throw new InvalidOperationException("本演练只在最终清理隔离容器。");
@@ -458,7 +546,20 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             else throw new InvalidOperationException("恢复演练只允许 PostgreSQL 物理备份及校验工具。");
             return new(0, "真实 PostgreSQL 工具完成。", "");
         }
-        public async Task StartRestoredAsync(string verifiedDatabaseDirectory)
+        public async Task ExportSourceWalAsync(string sourceDirectory, string archive, IReadOnlyList<string> files)
+        {
+            if (!_sourceContainer.StartsWith("codex-f01-physical-source-", StringComparison.Ordinal))
+                throw new InvalidOperationException("只允许专用合成源容器导出WAL。");
+            await DockerAsync(["exec", _sourceContainer, "mkdir", "-p", _remote + "/archive"]);
+            foreach (var file in files)
+            {
+                if (file.Length != 24 || file.Any(c => !"0123456789ABCDEF".Contains(c))) throw new InvalidDataException("合成归档文件名无效。");
+                // Docker's archive endpoint does not reliably resolve PGDATA through the source tmpfs mount.
+                await DockerAsync(["exec", _sourceContainer, "cp", sourceDirectory + "/pg_wal/" + file, _remote + "/archive/" + file]);
+                await DockerAsync(["cp", _sourceContainer + ":" + _remote + "/archive/" + file, Path.Combine(archive, file)]);
+            }
+        }
+        public async Task StartRestoredAsync(string verifiedDatabaseDirectory, PostgresArchiveRecoveryOptions? archiveReplay = null)
         {
             var image = Environment.GetEnvironmentVariable("EXAM_TEST_POSTGRES_IMAGE") ?? "postgres:18";
             var selectedPort = RestoredPort;
@@ -470,8 +571,9 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             await DockerAsync(["cp", verifiedDatabaseDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":" + verifiedDatabaseDirectory]);
             await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", verifiedDatabaseDirectory]);
             await DockerAsync(["exec", _restoredContainer, "chmod", "700", verifiedDatabaseDirectory]);
+            var replayOptions = archiveReplay is null ? "" : ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay);
             await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=" + verifiedDatabaseDirectory,
-                "--log=/tmp/codex-f01-recovery.log", $"--options=-p {selectedPort} -h 0.0.0.0", "--wait", "start"]);
+                "--log=/tmp/codex-f01-recovery.log", $"--options=-p {selectedPort} -h 0.0.0.0{replayOptions}", "--wait", "start"]);
             var port = (await DockerAsync(["port", _restoredContainer, selectedPort + "/tcp"])).StandardOutput.Trim();
             if (!port.StartsWith("127.0.0.1:", StringComparison.Ordinal) || !int.TryParse(port.Split(':')[1], out var number))
                 throw new InvalidDataException("隔离副本必须只监听本机回环随机端口。");
