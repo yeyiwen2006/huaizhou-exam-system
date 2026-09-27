@@ -1,5 +1,5 @@
 name: 任务卡
-description: 按A/B/C/D/E/F/T板块登记开发、团队测试或最终交付任务
+description: 按A/B/C/D/E/F/G/T板块登记开发、团队测试或最终交付任务
 title: '[任务编号] '
 labels:
 - task
@@ -11,7 +11,7 @@ body:
   id: task_code
   attributes:
     label: 当前任务编号
-    description: 使用A、B、C、D、E、F或T前缀；T01/T02是整体测试总单，T03是A负责的最终交付任务。
+    description: 使用A、B、C、D、E、F、G或T前缀；T01/T02是整体测试总单，T03是A负责的最终交付任务。
   validations:
     required: true
 - type: input

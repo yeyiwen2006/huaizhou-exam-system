@@ -24,9 +24,9 @@
 
 ## 当前分工与测试顺序
 
-六人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjaiqi）、E（@WorldChangerczx）、F（@Nostalgia-cy）。
+七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（董文祺，@kgwdonkey）。
 
-任务映射见`docs/task-map.md`，F01/F02/F03/F04/F05分别接续原服务管理、主备接管、学生端切主、考务服务管理和运维工具，主责F；D03仍由D开发。E01负责CLI/CI及测试基础设施，不能把产品运维工具和正式测试都混在E名下。
+任务映射见`docs/task-map.md`，F01/F02/F03/F04/F05分别接续原服务管理、主备接管、学生端切主、考务服务管理和运维工具，主责F；D03仍由D开发。G（董文祺，@kgwdonkey）负责G01排名统计与报表结果、G02 Excel导出、G03考务报表入口，分别接续原E02（#31）、E03（#32）、C06（#22）。D保留精确计分与重算，C保留考务核心和导入修改，E保留E01 CLI/CI及测试基础设施和E04候选包；G实现本模块业务CLI和模块测试。公共契约、权限、迁移及导航改动由A确认，不能把产品运维工具和正式测试都混在E名下。
 
 **开发期间仍需执行模块的各项测试**：适用单元、接口、真实数据库/文件、GUI、并发、故障恢复以及修改后的回归；模块接线测试及时执行，CI不停止。全部计划代码及真实接线完成后才统一进行T01全项目单机测试及修复，再进行T02多机联调联试及修复。T01/T02两张测试任务均由A组织、全员执行，E汇总，不另设测试后修复总单。
 
