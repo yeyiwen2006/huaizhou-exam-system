@@ -9,6 +9,56 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"exam-backup-test-{Guid.NewGuid():N}");
 
     [Theory]
+    [InlineData("replay")]
+    [InlineData("different-actor")]
+    [InlineData("different-request")]
+    [InlineData("partial")]
+    [InlineData("overlap")]
+    public async Task RecoveryWorkingCopy_IsBoundAndPreservedWithoutOriginalSourceMaterials(string scenario)
+    {
+        var root = Path.Combine(_root, "backups");
+        var resources = Path.Combine(_root, "resources");
+        var protectedConfig = Path.Combine(_root, "protected");
+        WriteFixture(resources, "paper.pkg", "synthetic ciphertext");
+        WriteFixture(protectedConfig, "key.dat", "synthetic key");
+        var service = CreateService(root, resources, protectedConfig, Path.Combine(_root, "staging"), new FakePostgresTools());
+        var backup = await service.CreateAsync(new("backup", Path.Combine(root, "selected"), "operator"), default);
+        Directory.Delete(resources, true);
+        Directory.Delete(protectedConfig, true);
+        var request = new RestoreRequest("restore", backup.BackupId, backup.DestinationDirectory, "operator");
+        await service.RestoreAsync(request, default); // Restore must use the backup, not demand healthy original sources.
+        var staged = Path.Combine(_root, "staging", backup.BackupId);
+        var stagedMarker = File.ReadAllBytes(Path.Combine(staged, "restore-verified.json"));
+        var workingRoot = scenario == "overlap" ? root : Path.Combine(_root, "working");
+        Directory.CreateDirectory(workingRoot);
+        if (scenario == "overlap")
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.PrepareRecoveryWorkingCopyAsync(request, workingRoot, default));
+            return;
+        }
+        var working = Path.Combine(workingRoot, "slot");
+        if (scenario == "partial")
+        {
+            WriteFixture(working, "keep.dat", "interrupted copy");
+            await Assert.ThrowsAnyAsync<IOException>(() => service.PrepareRecoveryWorkingCopyAsync(request, workingRoot, default));
+            Assert.Equal("interrupted copy", File.ReadAllText(Path.Combine(working, "keep.dat")));
+            Assert.False(File.Exists(Path.Combine(working, "working-copy.json")));
+            return;
+        }
+        var prepared = await service.PrepareRecoveryWorkingCopyAsync(request, workingRoot, default);
+        Assert.True(Directory.Exists(Path.Combine(working, "database", "pg_notify")));
+        Assert.Equal(stagedMarker, File.ReadAllBytes(Path.Combine(staged, "restore-verified.json")));
+        File.WriteAllText(Path.Combine(working, "database", "PG_VERSION"), "synthetic changed working state");
+        if (scenario == "replay")
+            Assert.Equal(prepared, await service.PrepareRecoveryWorkingCopyAsync(request, workingRoot, default));
+        else
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.PrepareRecoveryWorkingCopyAsync(
+                scenario == "different-actor" ? request with { ActorId = "another" } : request with { RequestId = "another" }, workingRoot, default));
+        Assert.Equal("synthetic changed working state", File.ReadAllText(Path.Combine(working, "database", "PG_VERSION")));
+        Assert.Equal("18", File.ReadAllText(Path.Combine(staged, "database", "PG_VERSION")));
+    }
+
+    [Theory]
     [InlineData("valid")]
     [InlineData("wrong-id")]
     [InlineData("resource-corrupt")]

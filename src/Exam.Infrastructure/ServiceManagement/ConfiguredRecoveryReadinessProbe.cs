@@ -11,8 +11,7 @@ public sealed class ConfiguredRecoveryReadinessProbe(string? connectionString, s
     {
         try
         {
-            await using var source = new PostgresConnectionOptions(connectionString ?? "", CommandTimeoutSeconds: 10,
-                MaximumPoolSize: 2, MinimumPoolSize: 0, ConnectionTimeoutSeconds: 3).CreateDataSource();
+            await using var source = ManagementProbeConnection.Create(connectionString ?? "", 10);
             return await new PostgresRecoveryReadinessProbe(source,
                 new CertificateStorePackageKeyUnwrapper(configuration.NodeId, certificateThumbprint)).RunAsync(configuration, cancellationToken);
         }

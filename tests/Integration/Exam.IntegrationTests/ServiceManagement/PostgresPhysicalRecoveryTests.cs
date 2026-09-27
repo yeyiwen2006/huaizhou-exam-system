@@ -97,6 +97,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.True(await offlineEvidence.FindStagedRestoreAsync(restore, default));
         var staged = Path.Combine(options.RestoreStagingRoot, backup.BackupId);
         var marker = await File.ReadAllBytesAsync(Path.Combine(staged, "restore-verified.json"));
+        var workingRoot = Path.Combine(_root, "working");
+        Directory.CreateDirectory(workingRoot);
+        var workingCopy = await offlineEvidence.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, default);
+        Assert.Equal(workingCopy, await offlineEvidence.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, default));
         using var restoredRsa = RSA.Create();
         var restoredBytes = await File.ReadAllBytesAsync(Path.Combine(staged, "protected-configuration", "synthetic-node.pk8"));
         try { restoredRsa.ImportPkcs8PrivateKey(restoredBytes, out _); }
@@ -105,12 +109,18 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         using var restoredKey = restoredPublic.CopyWithPrivateKey(restoredRsa);
 
         // Copy verified staging into a separate test-only PostgreSQL volume. No production switch or promotion is performed.
-        await tools.StartRestoredAsync(Path.Combine(staged, "database"));
+        await tools.StartRestoredAsync(Path.Combine(workingCopy.WorkingDirectory, "database"));
         var connection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Host = "127.0.0.1", Port = tools.RestoredPort };
         await using var recovered = NpgsqlDataSource.Create(connection.ConnectionString);
         await WaitForDatabaseAsync(recovered);
         var recoveredChecks = await new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey)).RunAsync(configuration, default);
         Assert.All(recoveredChecks, c => Assert.True(c.Passed, c.Name));
+        var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
+            new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey))).RunAsync(configuration, workingCopy, default);
+        Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
+        var wrongTarget = workingCopy with { WorkingDirectory = Path.Combine(workingRoot, "other-slot") };
+        Assert.False(Assert.Single(await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1)
+            .RunAsync(configuration, wrongTarget, default)).Passed);
         var recoveredStore = new PostgresSubmissionStore(recovered);
         Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
 
@@ -148,6 +158,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
     private async Task<SubmissionReceipt> SeedAsync()
     {
         var now = DateTimeOffset.UtcNow;
+        await using (var authority = _source.DataSource.CreateCommand(
+            "BEGIN; INSERT INTO exam.server_state VALUES ('server', 'node', 1, 'EmergencySingleNode', 1, now()); " +
+            "INSERT INTO exam.server_nodes VALUES ('server', 'node', 'Primary', true, false, 0, true, true, now()); COMMIT;"))
+            await authority.ExecuteNonQueryAsync();
         var versioning = new PostgresExamVersioningService(_source.DataSource);
         Assert.True(versioning.CreateExam(new("synthetic-exam", new(now.AddHours(1), now.AddHours(2)), now, "create")).Succeeded);
         using var plain = new MemoryStream(SyntheticRecoveryPaper.Build());
@@ -284,17 +298,21 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public async Task StartRestoredAsync(string verifiedDatabaseDirectory)
         {
             var image = Environment.GetEnvironmentVariable("EXAM_TEST_POSTGRES_IMAGE") ?? "postgres:18";
-            await DockerAsync(["create", "--name", _restoredContainer, "--label", "codex.f01.synthetic=true", "--publish", "127.0.0.1::5432",
+            var allocation = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            allocation.Start();
+            var selectedPort = ((IPEndPoint)allocation.LocalEndpoint).Port;
+            allocation.Stop();
+            await DockerAsync(["create", "--name", _restoredContainer, "--label", "codex.f01.synthetic=true", "--publish", $"127.0.0.1:{selectedPort}:{selectedPort}",
                 "--volume", "/var/lib/postgresql", "--entrypoint", "sleep", image, "infinity"]);
             _restoredCreated = true;
             await DockerAsync(["start", _restoredContainer]);
-            await DockerAsync(["exec", _restoredContainer, "mkdir", "-p", "/var/lib/postgresql/recovered"]);
-            await DockerAsync(["cp", verifiedDatabaseDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":/var/lib/postgresql/recovered"]);
-            await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", "/var/lib/postgresql/recovered"]);
-            await DockerAsync(["exec", _restoredContainer, "chmod", "700", "/var/lib/postgresql/recovered"]);
-            await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=/var/lib/postgresql/recovered",
-                "--log=/tmp/codex-f01-recovery.log", "--options=-p 5432 -h 0.0.0.0", "--wait", "start"]);
-            var port = (await DockerAsync(["port", _restoredContainer, "5432/tcp"])).StandardOutput.Trim();
+            await DockerAsync(["exec", _restoredContainer, "mkdir", "-p", verifiedDatabaseDirectory]);
+            await DockerAsync(["cp", verifiedDatabaseDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":" + verifiedDatabaseDirectory]);
+            await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", verifiedDatabaseDirectory]);
+            await DockerAsync(["exec", _restoredContainer, "chmod", "700", verifiedDatabaseDirectory]);
+            await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=" + verifiedDatabaseDirectory,
+                "--log=/tmp/codex-f01-recovery.log", $"--options=-p {selectedPort} -h 0.0.0.0", "--wait", "start"]);
+            var port = (await DockerAsync(["port", _restoredContainer, selectedPort + "/tcp"])).StandardOutput.Trim();
             if (!port.StartsWith("127.0.0.1:", StringComparison.Ordinal) || !int.TryParse(port.Split(':')[1], out var number))
                 throw new InvalidDataException("隔离副本必须只监听本机回环随机端口。");
             RestoredPort = number;

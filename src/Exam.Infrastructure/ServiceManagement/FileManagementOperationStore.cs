@@ -124,6 +124,9 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     private static void Validate(ManagementOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        if (operation.RecoveryWorkingDirectory is not null &&
+            (operation.Kind != ManagementOperationKind.Restore || !Path.IsPathFullyQualified(operation.RecoveryWorkingDirectory)))
+            throw new InvalidDataException("恢复工作目标必须为本机绝对路径并绑定恢复操作。");
         if (string.IsNullOrWhiteSpace(operation.RequestId) || string.IsNullOrWhiteSpace(operation.ServerId) ||
             string.IsNullOrWhiteSpace(operation.NodeId) || string.IsNullOrWhiteSpace(operation.ActorId) ||
             operation.ContentHash is null || operation.ContentHash.Length != 64 || !operation.ContentHash.All(char.IsAsciiHexDigit) ||

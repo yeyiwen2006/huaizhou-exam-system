@@ -51,10 +51,11 @@ public static class ManagementEntryPoint
             var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
             var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
-            var backups = new DeferredBackupCoordinator(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
-                Required("Backup:PostgresBinDirectory"), Required("ConnectionStrings:Exam"), Required("Backup:AllowedBackupRoot"),
+            PostgresBackupCoordinator CreateBackups() => new(new PostgresBackupOptions(
+                Required("Backup:PostgresBinDirectory"), configuration.GetConnectionString("Exam") ?? "", Required("Backup:AllowedBackupRoot"),
                 Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
-                TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()));
+                TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
+            var backups = new DeferredBackupCoordinator(CreateBackups);
             var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
             var preflight = new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
@@ -70,7 +71,22 @@ public static class ManagementEntryPoint
                 () => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch),
                 preflight, () => backups, journal, new SystemClock(), port,
                 token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
-                    .ObserveReadyAsync(token));
+                    .ObserveReadyAsync(token),
+                prepareRecoveryWorkingCopy: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
+                    async (request, token) =>
+                    {
+                        await CreateBackups().PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
+                    },
+                verifyRecoveryTarget: string.IsNullOrWhiteSpace(configuration.GetConnectionString("ExamRecovery")) ? null :
+                    async (request, serviceConfiguration, token) =>
+                    {
+                        var working = await CreateBackups().PrepareRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
+                        return await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
+                            Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
+                            .RunAsync(serviceConfiguration, working, token);
+                    },
+                recoveryWorkingDirectory: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
+                    () => Path.GetFullPath(Path.Combine(Required("Recovery:WorkingRoot"), "slot")));
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

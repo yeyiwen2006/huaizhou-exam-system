@@ -14,9 +14,7 @@ public sealed class ManagementDatabaseStartupProbe(string? connectionString, lon
             return [new("database", false, "业务数据库连接或预期服务代次未配置。", true)];
         try
         {
-            var options = new PostgresConnectionOptions(connectionString, CommandTimeoutSeconds: 5,
-                MaximumPoolSize: 2, MinimumPoolSize: 0, ConnectionTimeoutSeconds: 3);
-            await using var source = options.CreateDataSource();
+            await using var source = ManagementProbeConnection.Create(connectionString, 5);
             await using var connection = await source.OpenConnectionAsync(cancellationToken);
             var results = new List<StartupCheckResult> { new("database", true, "业务数据库连接可用。", true) };
             var applied = new HashSet<string>(StringComparer.Ordinal);

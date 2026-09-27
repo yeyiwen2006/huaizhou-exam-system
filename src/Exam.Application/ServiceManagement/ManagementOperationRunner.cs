@@ -16,7 +16,7 @@ public sealed class ManagementOperationRunner(
     public async Task<ManagementOperation> ExecuteAsync<T>(
         string requestId, string actorId, ManagementOperationKind kind, T content,
         Func<ManagementOperation, CancellationToken, Task<ManagementOperation>> execute,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool resumeStagedRestore = false)
     {
         if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200 || string.IsNullOrWhiteSpace(actorId))
             throw new DomainRuleException(ErrorCodes.InvalidInput, "请求标识或已认证操作者无效。");
@@ -29,16 +29,26 @@ public sealed class ManagementOperationRunner(
             if (previous.ServerId != serverId || previous.NodeId != nodeId || previous.ActorId != actorId ||
                 previous.Kind != kind || previous.ContentHash != hash)
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "requestId 已绑定不同的节点、操作者或操作内容。");
-            return await ReconcileUnderLockAsync(previous, cancellationToken);
+            if (!(resumeStagedRestore && kind == ManagementOperationKind.Restore && previous.Phase == ManagementOperationPhase.Staged))
+                return await ReconcileUnderLockAsync(previous, cancellationToken);
         }
 
         // Staged recovery and an interrupted mutation must never be bypassed by a different start id.
-        if (kind is ManagementOperationKind.Start or ManagementOperationKind.Configure or ManagementOperationKind.Restore &&
+        if (previous is null && kind is (ManagementOperationKind.Start or ManagementOperationKind.Configure or ManagementOperationKind.Restore) &&
             await store.HasUnverifiedOperationsAsync(cancellationToken))
             throw new DomainRuleException(ErrorCodes.ServiceRecovering, "存在待核对的本机操作或暂存恢复，禁止自动启动、修改配置或再次恢复。");
 
-        var accepted = new ManagementOperation(requestId, serverId, nodeId, actorId, kind, hash,
+        var accepted = previous ?? new ManagementOperation(requestId, serverId, nodeId, actorId, kind, hash,
             ManagementOperationPhase.Accepted, clock.UtcNow, clock.UtcNow, RequestJson: requestJson);
+        async Task PreserveCheckpointAsync()
+        {
+            var checkpoint = await store.FindAsync(requestId, CancellationToken.None);
+            if (checkpoint is { Phase: ManagementOperationPhase.Staged } && checkpoint.RequestId == accepted.RequestId &&
+                checkpoint.ServerId == serverId && checkpoint.NodeId == nodeId && checkpoint.ActorId == actorId &&
+                checkpoint.Kind == kind && checkpoint.ContentHash == hash && checkpoint.RequestJson == accepted.RequestJson &&
+                checkpoint.AcceptedAt == accepted.AcceptedAt)
+                accepted = checkpoint;
+        }
         await store.SaveAsync(accepted, cancellationToken); // No side effect before this durable write.
         _executing.TryAdd(requestId, 0);
         try
@@ -54,17 +64,21 @@ public sealed class ManagementOperationRunner(
             }
             catch (DomainRuleException error)
             {
-                result = accepted with { Phase = error.Code == ErrorCodes.PersistenceFailed
+                await PreserveCheckpointAsync();
+                result = accepted with { Phase = accepted.Phase == ManagementOperationPhase.Staged || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(error.Code, error.Message, Retryable: error.Retryable) };
             }
             catch (ArgumentException)
             {
-                result = accepted with { Phase = ManagementOperationPhase.Failed,
+                await PreserveCheckpointAsync();
+                result = accepted with { Phase = accepted.Phase == ManagementOperationPhase.Staged
+                        ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
             }
             catch (Exception)
             {
+                await PreserveCheckpointAsync();
                 // Includes cancellation after acceptance. SCM/tools may have taken effect; never repeat automatically.
                 result = accepted with { Phase = ManagementOperationPhase.NeedsVerification,
                     Error = new ApiError(ErrorCodes.ServiceRecovering, "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
@@ -107,6 +121,7 @@ public sealed class ManagementOperationRunner(
         if (observed.RequestId != operation.RequestId || observed.ServerId != operation.ServerId ||
             observed.NodeId != operation.NodeId || observed.ActorId != operation.ActorId || observed.Kind != operation.Kind ||
             observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||
+            observed.RecoveryWorkingDirectory != operation.RecoveryWorkingDirectory ||
             observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null ||
             (observed.Phase != ManagementOperationPhase.Completed &&
              !(operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Staged &&

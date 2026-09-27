@@ -1,10 +1,10 @@
-# F01 生产恢复闭环实施差异（待 A 确认）
+# F01 恢复阶段与生产接线
 
-这是 F01 生产恢复缺口的具体接线方案，尚未实施，不替代 [ADR 0002](decisions/0002-local-management-access.md)。类型命名已获授权；需确认的是秘密配置切换、旧备份数据边界和恢复续行权限。
+按 [ADR 0002](decisions/0002-local-management-access.md) 已授权范围推进，恢复阶段契约及内部接线不重复等待命名授权。仅新增迁移、扩大权限或改变既有业务契约语义才另行确认；本批不包含这些变更。
 
 ## 当前调用
 
-`POST /management/v1/backups/restore` → `ManagementRuntime.RestoreAsync` → `ServiceManagementService.RestoreAsync` → `PostgresBackupCoordinator.RestoreAsync`。当前只完成隔离暂存，持久结果为 `Staged`、`IsolationStaged=true/RecoveryVerified=false/BusinessReady=false`。原请求可核对暂存，新启动/配置/恢复请求被未决记录阻断；没有将暂存推进为业务可运行的生产路径。
+`POST /management/v1/service/restores` → `ManagementRuntime.RestoreAsync` → `PostgresBackupCoordinator.RestoreAsync`。先暂存并持久保存 Staged，再按部署选项准备工作副本和核对实际恢复数据库。业务层原有 ServiceManagementService.RestoreAsync 保留其既有行为。生产路径尚未接通业务开放，新启动/配置/恢复请求仍被未决记录阻断。
 
 业务宿主从受保护部署配置加载 `ConnectionStrings:Exam`。普通 `ServiceConfiguration` 没有连接或密钥字段，不能用普通配置保存偷渡秘密切换。现有领域及数据库探针不能证明原宿主已停止、实例来自该暂存或旧备份覆盖全部已确认数据。
 
@@ -20,12 +20,22 @@
 
 建议中间证据另存受保护本机恢复记录，通过既有操作查询表达检查结果，补旧记录兼容和合成中断样例。不使用业务库作为唯一日志，不新增迁移，不改变业务封套。
 
-## A 需确认的差异
+## 已确认的实施边界
 
-| 决定 | 建议 | 未确认时 |
+管理操作新增可选非秘密字段 `recoveryWorkingDirectory`，在准备副本前持久固定目标路径。旧记录缺少该字段仍可读取；配置在重启或续行时改到另一个工作槽会拒绝执行。暂存后的参数、存储或复制故障保留已落盘阶段和目标绑定，转为待核对，不能错误变成普通失败后允许新启动。
+
+| 项目 | 实施选择 | 保护条件 |
 | --- | --- | --- |
-| 恢复槽及秘密配置写权限 | 固定部署槽，只切换部署引用，不接收任意秘密路径/正文 | 不切换连接或导入密钥 |
-| 旧备份投入使用依据 | 核对备份/WAL 覆盖及已确认数据；完整性无法证明时由 A 决定处置 | 不以探针通过开放写入 |
-| 暂存续行的请求绑定 | 确认原请求内携带固定恢复计划，或新增显式续行操作；目标/授权/核对绑定持久内容 | 不改变原请求内容，不用新请求绕过 Staged，不自行新增操作 |
+| 恢复槽及秘密配置 | 固定部署槽，不接收任意秘密路径/正文 | 若实际需要扩大权限，提交差异确认；不以内部设计待定为由重复等待一般授权 |
+| 旧备份投入使用依据 | 核对备份/WAL 覆盖及已确认数据 | 不以探针通过开放写入，不默许旧状态替代当前权威状态 |
+| 暂存续行的请求绑定 | 同一恢复 POST、同一请求内容显式续行，沿原记录推进 | 不改变原内容；查询不执行副作用；新请求不能绕过 Staged |
 
-确认后 F01 实现平台恢复宿主、持久推进及连接切换。状态机、文件中断和 PostgreSQL 工作副本模块检查可以在 macOS 完成；Windows 验证 SCM、服务账户、私钥 ACL 和文件替换。继续收卷及计分仍须实测，不能以启动或探针通过判定闭环完成。
+平台恢复宿主、部署引用切换及业务开放仍为剩余实现，不是缺少一般授权，也不能留作 T01/T02 才实现。状态机、文件中断和 PostgreSQL 工作副本模块检查可以在 macOS 完成；Windows 验证 SCM、服务账户、私钥 ACL 和文件替换。继续收卷及计分仍须实测，不能以启动或探针通过判定闭环完成。
+
+## 已接通工作副本与恢复核对
+
+`Recovery:WorkingRoot` 为预建受保护目录，与备份/暂存/原资源/受保护材料源目录互不包含。固定槽为 `<WorkingRoot>/slot`，数据库位于 `slot/database`。完整复制、资源/材料摘要及 PostgreSQL 工具核验后才刷新持久 `working-copy.json`，绑定原 requestId、操作者、备份及路径。残缺槽保留且拒绝覆盖；完整槽重放不重新复制可能已运行的数据库。只读查询不续行。
+
+配置受保护的 `ConnectionStrings:ExamRecovery` 后，要求恢复连接为回环地址、数据库名与原配置一致、端口不同于本机原库。实际 SQL 核对数据库、端口及 data_directory 是否等于该工作槽路径，并拒绝备库角色，再对该目标执行迁移、节点/预期代次和领域恢复检查。独立诊断池不继承业务池大小；不连接原库推断恢复成功。
+
+暂存/工作副本阶段返回 true/false/false；实际目标及领域检查通过返回 true/true/false（IsolationStaged/RecoveryVerified/BusinessReady）。两者仍为 Staged，结果本机持久保存，CLI 不报告完成，管理当前代次仍不从配置推断。生产宿主目前不会启动 PostgreSQL、导入恢复密钥、切换业务连接或开放业务。

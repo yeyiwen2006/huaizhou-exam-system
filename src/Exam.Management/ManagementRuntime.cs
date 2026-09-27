@@ -12,7 +12,10 @@ public sealed class ManagementRuntime(
     IManagedBusinessHost process, Func<IManagedBusinessHost> readyHost,
     IStartupReadinessProbe preflight, Func<IBackupCoordinator> backups,
     IManagementOperationStore journal, IClock clock, int managementPort = 0,
-    Func<CancellationToken, Task<bool>>? observeBusinessReady = null)
+    Func<CancellationToken, Task<bool>>? observeBusinessReady = null,
+    Func<RestoreRequest, CancellationToken, Task>? prepareRecoveryWorkingCopy = null,
+    Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyRecoveryTarget = null,
+    Func<string>? recoveryWorkingDirectory = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
@@ -158,10 +161,37 @@ public sealed class ManagementRuntime(
         {
             if (process.Status != BusinessServiceStatus.Stopped)
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "隔离恢复前必须停止业务服务。");
-            await backups().RestoreAsync(request with { ActorId = actor }, token);
+            var targetDirectory = recoveryWorkingDirectory?.Invoke();
+            var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (operation.RecoveryWorkingDirectory is not null &&
+                !string.Equals(operation.RecoveryWorkingDirectory, targetDirectory, pathComparison))
+                throw new IOException("恢复部署目标已改变，原请求不能切换到另一工作槽。");
+            if (operation.Phase != ManagementOperationPhase.Staged)
+                await backups().RestoreAsync(request with { ActorId = actor }, token);
             if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("隔离暂存期间业务进程状态发生变化。");
-            // Existing coordinator stages files only. Do not run probes against the original database and call that recovery.
-            return operation with { Phase = ManagementOperationPhase.Staged,
-                Restore = new(request.BackupId, true, false, false) };
-        }, cancellationToken);
+            var staged = operation with { Phase = ManagementOperationPhase.Staged,
+                Restore = new(request.BackupId, true, false, false), RecoveryWorkingDirectory = targetDirectory };
+            await journal.SaveAsync(staged, token); // Persist staging before creating an independently mutable target.
+            if (prepareRecoveryWorkingCopy is null) return staged;
+            await prepareRecoveryWorkingCopy(request with { ActorId = actor }, token);
+            if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("工作副本准备期间业务进程状态发生变化。");
+            // Preparing a copy proves neither restored-domain correctness nor business readiness.
+            var checks = new List<StartupCheckResult> { new("recovery-working-copy", true,
+                "独立恢复工作副本已准备，尚未开放业务。", true) };
+            if (verifyRecoveryTarget is not null)
+            {
+                var verified = await verifyRecoveryTarget(request with { ActorId = actor }, await GetConfigurationAsync(token), token);
+                if (verified is null || verified.Count == 0 || verified.Any(c => c is null || string.IsNullOrWhiteSpace(c.Name)) ||
+                    verified.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != verified.Count)
+                    throw new IOException("恢复目标探针结果无效。");
+                checks.AddRange(verified);
+                if (checks.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != checks.Count)
+                    throw new IOException("恢复检查名称重复。");
+                if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("恢复核对期间业务进程状态发生变化。");
+                staged = staged with { Restore = new(request.BackupId, true,
+                    verified.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) &&
+                    verified.All(c => c.Passed || !c.BlocksWrites), false) };
+            }
+            return staged with { Checks = checks.AsReadOnly() };
+        }, cancellationToken, resumeStagedRestore: prepareRecoveryWorkingCopy is not null);
 }

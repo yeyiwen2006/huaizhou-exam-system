@@ -270,7 +270,9 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     private async Task<WebApplication> AppAsync(bool credentials = true, bool blockStartup = false, bool failCompletion = false, bool observedReady = false,
-        bool deploymentBuilder = false)
+        bool deploymentBuilder = false, Func<RestoreRequest, CancellationToken, Task>? prepareWorkingCopy = null,
+        Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyTarget = null,
+        Func<string>? workingDirectory = null)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
@@ -281,11 +283,89 @@ public sealed class LocalManagementApiTests : IDisposable
         IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
         if (failCompletion) journal = new FailCompletionStore(journal);
         builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, () => _host,
-            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: _ => Task.FromResult(observedReady)));
+            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: _ => Task.FromResult(observedReady),
+            prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
         return app;
+    }
+
+    [Fact]
+    public async Task RestoreContinuationPersistsStagingBeforeWorkingCopy_AndReusesOriginalRequestAcrossRestart()
+    {
+        var copies = 0;
+        var store = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
+        var request = new RestoreRequest("continue-restore", "synthetic-backup", "/synthetic-backup", "operator");
+        async Task Prepare(RestoreRequest original, CancellationToken token)
+        {
+            Assert.Equal(request, original);
+            var persisted = await store.FindAsync(request.RequestId, token);
+            Assert.Equal(ManagementOperationPhase.Staged, persisted!.Phase);
+            Assert.True(persisted.Restore!.IsolationStaged);
+            Assert.False(persisted.Restore.BusinessReady);
+            copies++;
+        }
+        await using (var first = await AppAsync(prepareWorkingCopy: Prepare))
+        {
+            using var client = Client(first);
+            var response = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var operation = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+            Assert.Contains(operation.Checks!, c => c.Name == "recovery-working-copy" && c.Passed);
+        }
+        await using var second = await AppAsync(prepareWorkingCopy: Prepare);
+        using var next = Client(second);
+        Assert.Equal(HttpStatusCode.OK, (await next.GetAsync("/management/v1/operations/continue-restore")).StatusCode);
+        Assert.Equal(1, copies); // Queries never resume side effects.
+        Assert.Equal(HttpStatusCode.OK, (await next.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options)).StatusCode);
+        Assert.Equal(2, copies); // Explicit continuation observes the same bound working-copy marker; no new staging.
+        Assert.Equal(1, _backups.RestoreCalls);
+        Assert.Equal(HttpStatusCode.Conflict, (await next.PostAsJsonAsync("/management/v1/service/restores",
+            request with { SourceDirectory = "/other" }, _json.Options)).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await next.PostAsJsonAsync("/management/v1/service/start",
+            new ManagementServiceRequest("bypass-restore", "server", "node"), _json.Options)).StatusCode);
+        Assert.Equal(0, _host.StartCalls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecoveryVerificationIsPersistedSeparatelyFromBusinessReadiness(bool verified)
+    {
+        await using var app = await AppAsync(prepareWorkingCopy: (_, _) => Task.CompletedTask,
+            verifyTarget: (_, _, _) => Task.FromResult<IReadOnlyList<StartupCheckResult>>(
+                [new("recovery-target", verified, "合成目标核对", true)]));
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/restores",
+            new RestoreRequest("verify-target", "synthetic-backup", "synthetic-source", "operator"), _json.Options);
+        var result = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Staged, result.Phase);
+        Assert.True(result.Restore!.IsolationStaged);
+        Assert.Equal(verified, result.Restore.RecoveryVerified);
+        Assert.False(result.Restore.BusinessReady);
+        var persisted = await new FileManagementOperationStore(Path.Combine(_directory, "operations")).FindAsync("verify-target", default);
+        Assert.Equal(result.Restore, persisted!.Restore);
+        Assert.Equal(0, _host.StartCalls);
+    }
+
+    [Fact]
+    public async Task DeploymentTargetChangeCannotRedirectAnExistingRestore()
+    {
+        var target = Path.Combine(_directory, "first-slot");
+        var copies = 0;
+        await using var app = await AppAsync(prepareWorkingCopy: (_, _) => { copies++; return Task.CompletedTask; },
+            workingDirectory: () => target);
+        using var client = Client(app);
+        var request = new RestoreRequest("fixed-target", "synthetic-backup", "synthetic-source", "operator");
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options)).StatusCode);
+        target = Path.Combine(_directory, "another-slot");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options)).StatusCode);
+        var persisted = await new FileManagementOperationStore(Path.Combine(_directory, "operations")).FindAsync("fixed-target", default);
+        Assert.Equal(Path.Combine(_directory, "first-slot"), persisted!.RecoveryWorkingDirectory);
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, persisted.Phase);
+        Assert.Equal(1, copies);
+        Assert.Equal(1, _backups.RestoreCalls);
     }
 
     [Fact]

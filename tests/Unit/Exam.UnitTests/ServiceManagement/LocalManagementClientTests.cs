@@ -9,6 +9,23 @@ namespace Exam.UnitTests.ServiceManagement;
 
 public sealed class LocalManagementClientTests
 {
+    [Fact]
+    public async Task VerifiedRecoveryWithoutBusinessReadinessRemainsIncompleteInCli()
+    {
+        var operation = new ManagementOperation("original", "server", "node", "operator", ManagementOperationKind.Restore,
+            "synthetic-hash", ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            Restore: new("backup", true, true, false));
+        using var transport = new ResponseTransport(_ => Json(HttpStatusCode.OK,
+            new ManagementEnvelope<ManagementOperation>("server", "node", null, false, null, "correlation", operation, null)));
+        using var client = Client(transport);
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(4, await new LocalManagementCliHandler(client).RunAsync("operation", null, "original", output, errors));
+        Assert.Equal("", output.ToString());
+        var observed = await client.GetOperationAsync("original");
+        Assert.True(observed.Envelope.Result!.Restore!.RecoveryVerified);
+        Assert.False(observed.Envelope.Result.Restore.BusinessReady);
+    }
     [Theory]
     [InlineData("http://localhost:9443")]
     [InlineData("https://example.com:9443")]

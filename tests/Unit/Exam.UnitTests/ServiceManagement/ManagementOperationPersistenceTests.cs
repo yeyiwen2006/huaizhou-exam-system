@@ -11,6 +11,26 @@ public sealed class ManagementOperationPersistenceTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "management-journal-" + Guid.NewGuid().ToString("N"));
     public ManagementOperationPersistenceTests() => Directory.CreateDirectory(_directory);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailureAfterStagingPreservesTargetBindingAndContinuesBlockingStart(bool invalidInput)
+    {
+        var runner = Runner();
+        var result = await runner.ExecuteAsync("recovery-checkpoint", "operator", ManagementOperationKind.Restore, "payload", async (op, token) =>
+        {
+            await Store().SaveAsync(op with { Phase = ManagementOperationPhase.Staged,
+                RecoveryWorkingDirectory = _directory, Restore = new("backup", true, false, false) }, token);
+            if (invalidInput) throw new ArgumentException("synthetic failure");
+            throw new IOException("synthetic failure");
+        });
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, result.Phase);
+        Assert.Equal(_directory, result.RecoveryWorkingDirectory);
+        Assert.True(result.Restore!.IsolationStaged);
+        await Assert.ThrowsAsync<DomainRuleException>(() => Runner().ExecuteAsync("new-start", "operator", ManagementOperationKind.Start,
+            "payload", (op, _) => Task.FromResult(op with { Phase = ManagementOperationPhase.Completed })));
+    }
+
     [Fact]
     public async Task RestartReplaysCompletedResult_AndRejectsChangedContentActorKindAndNode()
     {

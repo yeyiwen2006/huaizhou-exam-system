@@ -134,7 +134,7 @@ public sealed class LocalManagementClient : IDisposable
         if (!Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
             operation.Phase == ManagementOperationPhase.Staged &&
                 (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
-                    { IsolationStaged: true, RecoveryVerified: false, BusinessReady: false }) ||
+                    { IsolationStaged: true, BusinessReady: false }) ||
             operation.Phase == ManagementOperationPhase.Completed && (operation.Error is not null || !(operation.Kind switch
             {
                 ManagementOperationKind.Start => operation.Status is { ProcessStatus: BusinessServiceStatus.Running, Readiness: BusinessReadiness.Ready },

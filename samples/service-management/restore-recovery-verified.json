@@ -1,0 +1,39 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": {
+    "requestId": "synthetic-restore",
+    "serverId": "synthetic-server",
+    "nodeId": "synthetic-node",
+    "actorId": "synthetic-operator",
+    "kind": "restore",
+    "contentHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "phase": "staged",
+    "acceptedAt": "2026-09-27T00:00:00+00:00",
+    "updatedAt": "2026-09-27T00:01:00+00:00",
+    "status": null,
+    "configuration": null,
+    "checks": [
+      {
+        "name": "recovery-target",
+        "passed": true,
+        "message": "合成恢复目标及领域检查通过，业务尚未开放。",
+        "blocksWrites": true
+      }
+    ],
+    "backup": null,
+    "restore": {
+      "backupId": "synthetic-backup",
+      "isolationStaged": true,
+      "recoveryVerified": true,
+      "businessReady": false
+    },
+    "error": null,
+    "recoveryWorkingDirectory": "C:\\ExamSynthetic\\recovery-work\\slot"
+  },
+  "error": null
+}

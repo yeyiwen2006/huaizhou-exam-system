@@ -36,4 +36,5 @@ public sealed record ManagementOperation(
     ManagementStatus? Status = null, ServiceConfiguration? Configuration = null,
     IReadOnlyList<StartupCheckResult>? Checks = null, BackupResult? Backup = null,
     ManagementRestoreOutcome? Restore = null, ApiError? Error = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestJson = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestJson = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryWorkingDirectory = null);
