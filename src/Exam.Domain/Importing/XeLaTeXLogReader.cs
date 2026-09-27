@@ -30,6 +30,13 @@ public static class XeLaTeXLogReader
         new(@"Output written on \S*?(?<name>[^\\/:]+\.pdf)\s*\(\s*(?<pages>\d+)\s*pages?\s*\)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    /// <summary>"Output written on " 标记本身。该标记之后的片段可能被硬折行拆开，需单独还原。</summary>
+    private static readonly Regex OutputMarker =
+        new(@"Output written on ", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>识别窗口长度，足以覆盖路径、文件名与页数。</summary>
+    private const int OutputWindowLength = 512;
+
     private static readonly Regex FileNotFoundWarning =
         new(@"LaTeX Warning: File `(?<file>[^']+)' not found on input line (?<line>\d+)\.",
             RegexOptions.Compiled);
@@ -88,12 +95,7 @@ public static class XeLaTeXLogReader
         string? outputFileName = null;
 
         // 1. 输出与页数：找到即说明写出了 PDF，但不代表编译无误。
-        foreach (Match match in OutputWritten.Matches(log))
-        {
-            hasOutput = true;
-            pageCount = int.Parse(match.Groups["pages"].Value, CultureInfo.InvariantCulture);
-            outputFileName = match.Groups["name"].Value;
-        }
+        ReadOutput(log, out hasOutput, out pageCount, out outputFileName);
 
         // 2. 缺依赖。
         issues.AddRange(CollectMissingImages(log));
@@ -157,6 +159,36 @@ public static class XeLaTeXLogReader
             outputFileName,
             Deduplicate(issues).ToList(),
             Overfull.Matches(log).Count);
+    }
+
+    /// <summary>
+    /// 识别 `Output written on &lt;路径&gt; (N pages).`。
+    ///
+    /// TeX 按列宽硬折行，折点可能正好落在文件名的扩展名点上（例如 `..._1.` 换行 `pdf (3 pages).`）。
+    /// Fold 的句末规则会把这种情况当成两条记录，续行拼不回来，于是真的写出了 PDF 也被判成没有产物，
+    /// 合法的导入会被当成编译失败拒绝。真实材料文件名长度各异，折点位置不可控，必然命中。
+    /// 因此对该标记之后的片段单独去掉换行再匹配，不改变 Fold 对其它日志行的行为。
+    /// </summary>
+    private static void ReadOutput(string log, out bool hasOutput, out int pageCount, out string? outputFileName)
+    {
+        hasOutput = false;
+        pageCount = 0;
+        outputFileName = null;
+
+        foreach (Match marker in OutputMarker.Matches(log))
+        {
+            var end = Math.Min(log.Length, marker.Index + OutputWindowLength);
+            var window = log[marker.Index..end].Replace("\n", string.Empty);
+            var match = OutputWritten.Match(window);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            hasOutput = true;
+            pageCount = int.Parse(match.Groups["pages"].Value, CultureInfo.InvariantCulture);
+            outputFileName = match.Groups["name"].Value;
+        }
     }
 
     /// <summary>

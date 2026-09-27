@@ -51,6 +51,30 @@ public sealed class XeLaTeXLogTests
     }
 
     [Fact]
+    public void Read_OutputLineWrappedRightAfterFileNameDot_StillReportsOutput()
+    {
+        // 79 列硬折行的折点恰好落在文件名的扩展名点上，续行以 "pdf" 开头。
+        // Fold 的句末规则会把上一行当成句子结束，只按折叠结果匹配就找不到产物，
+        // 于是成功编译被判为「没有写出 PDF」，合法导入被拒绝。
+        // 真实材料的文件名长度各异，折点位置不可控，必然命中。
+        const string log = """
+            This is XeTeX, Version 3.141592653-2.6-0.999995 (MiKTeX 26.5)
+            entering extended mode
+            (./questions/合成选项题_1.tex
+            [1] (./合成选项题_1.aux)
+            Output written on C:\synthetic\output\compile-0123456789abcdef\合成选项题_1.
+            pdf (3 pages).
+            """;
+
+        var report = XeLaTeXLogReader.Read(log);
+
+        Assert.True(report.HasOutput);
+        Assert.Equal(3, report.PageCount);
+        Assert.Equal("合成选项题_1.pdf", report.OutputFileName);
+    }
+
+
+    [Fact]
     public void Read_MissingPicture_ReportsOnceWithLineAndTreatsGraphicsFailureAsCascade()
     {
         const string log = """
