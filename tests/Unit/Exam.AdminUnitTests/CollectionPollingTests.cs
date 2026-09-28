@@ -144,6 +144,53 @@ public sealed class CollectionPollingTests
     }
 
     [Fact]
+    public async Task SwitchingAndReconnecting_RedisplaysHistoryWithoutRepeatedReminderOnTheSameServer()
+    {
+        var serverId = "synthetic-server-a";
+        var includeNewAEvent = false;
+        using var handler = new Handler((request, _) =>
+        {
+            var exam = ExamId(request);
+            var cursor = Cursor(request);
+            var available = exam == "exam-a"
+                ? includeNewAEvent ? new[] { Event(exam, 1), Event(exam, 2) } : new[] { Event(exam, 1) }
+                : new[] { Event(exam, 1) };
+            return Task.FromResult(Success(available.Where(item => item.RosterVersion > cursor).ToArray(), serverId));
+        });
+        using var api = Configured(handler);
+        using var vm = new MonitoringViewModel(api) { ExamId = "exam-a" };
+        var reminders = new List<CollectionCompletedNotification>();
+        vm.CollectionCompleted += reminders.Add;
+
+        await vm.RefreshCollectionEventsAsync();
+        vm.ExamId = "exam-b";
+        await vm.RefreshCollectionEventsAsync();
+        vm.ExamId = "exam-a";
+        await vm.RefreshCollectionEventsAsync();
+
+        Assert.Equal(new[] { "exam-a", "exam-b" }, reminders.Select(item => item.ExamId));
+        Assert.Equal("exam-a", Assert.Single(vm.CollectionEvents).ExamId);
+
+        includeNewAEvent = true;
+        await vm.RefreshCollectionEventsAsync();
+        Assert.Equal(2, vm.CollectionEvents.Count);
+        Assert.Equal(2, reminders[^1].RosterVersion);
+        Assert.Equal(3, reminders.Count);
+
+        api.Disconnect();
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        await vm.RefreshCollectionEventsAsync();
+        Assert.Equal(3, reminders.Count); // Same logical server, same persisted history.
+
+        serverId = "synthetic-server-b";
+        api.Disconnect();
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        await vm.RefreshCollectionEventsAsync();
+        Assert.Equal(4, reminders.Count); // Identical event IDs from another server are independent.
+        Assert.Equal(2, reminders[^1].RosterVersion);
+    }
+
+    [Fact]
     public async Task ManualRefresh_DeduplicatesIdenticalOutOfOrderRecordsAndRejectsConflicts()
     {
         var calls = new List<long>();
@@ -207,9 +254,9 @@ public sealed class CollectionPollingTests
         return api;
     }
 
-    private static HttpResponseMessage Success<T>(T data) => new(HttpStatusCode.OK)
+    private static HttpResponseMessage Success<T>(T data, string serverId = "synthetic-server") => new(HttpStatusCode.OK)
     {
-        Content = JsonContent.Create(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+        Content = JsonContent.Create(new ApiEnvelope<T>(serverId, "synthetic-node", 1,
             "test", data, null), options: Json)
     };
 

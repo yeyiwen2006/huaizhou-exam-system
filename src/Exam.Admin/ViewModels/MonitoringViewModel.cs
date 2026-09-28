@@ -17,6 +17,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private bool _disposed;
     private readonly Dictionary<string, long> _collectionCursors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _seenCollectionEventVersions = new(StringComparer.Ordinal);
+    // Keep reminder history across exam switches and reconnects, but isolate different logical servers.
+    private readonly Dictionary<(string ServerId, string ExamId), Dictionary<string, long>> _remindedCollectionEvents = [];
     private string _examId = string.Empty;
     private long _contextVersion;
     private long _loadVersion;
@@ -162,13 +164,22 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 var previousCursor = cursor;
                 var events = await _api.ListCollectionEventsAsync(examId, cursor, cancellationToken);
                 if (context != _contextVersion || operation != _collectionRequestVersion) return;
+                var serverId = _api.ServerId ?? throw new InvalidOperationException("收齐事件响应缺少服务器身份。");
+                var reminderKey = (serverId, examId);
+                if (!_remindedCollectionEvents.TryGetValue(reminderKey, out var reminded))
+                {
+                    reminded = new Dictionary<string, long>(StringComparer.Ordinal);
+                    _remindedCollectionEvents.Add(reminderKey, reminded);
+                }
                 // Validate the whole page before advancing the cursor or displaying any row.
                 if (events.Any(item => !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
                     string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 || item.ParticipantCount < 0) ||
                     events.GroupBy(item => item.RosterVersion).Any(group => group.Distinct().Count() != 1) ||
                     events.GroupBy(item => item.EventId, StringComparer.Ordinal).Any(group => group.Distinct().Count() != 1) ||
                     events.Any(item => _seenCollectionEventVersions.TryGetValue(item.EventId, out var seenVersion) &&
-                        seenVersion != item.RosterVersion))
+                        seenVersion != item.RosterVersion) ||
+                    events.Any(item => reminded.TryGetValue(item.EventId, out var remindedVersion) &&
+                        remindedVersion != item.RosterVersion))
                     throw new InvalidOperationException("收齐事件的考试、标识或名单版本无效，未应用该页结果。");
                 foreach (var item in events.Distinct().OrderBy(item => item.RosterVersion))
                 {
@@ -176,7 +187,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                     if (_seenCollectionEventVersions.TryAdd(item.EventId, item.RosterVersion))
                     {
                         CollectionEvents.Add(item);
-                        newest = item;
+                        if (reminded.TryAdd(item.EventId, item.RosterVersion)) newest = item;
                         added++;
                         if (CollectionEvents.Count > 500)
                         {
