@@ -18,7 +18,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private readonly Dictionary<string, long> _collectionCursors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _seenCollectionEventVersions = new(StringComparer.Ordinal);
     // Keep reminder history across exam switches and reconnects, but isolate different logical servers.
-    private readonly Dictionary<(string ServerId, string ExamId), Dictionary<string, long>> _remindedCollectionEvents = [];
+    private readonly Dictionary<(string ServerId, string ExamId), CollectionEventHistory> _remindedCollectionEvents = [];
     private string _examId = string.Empty;
     private long _contextVersion;
     private long _loadVersion;
@@ -168,18 +168,18 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 var reminderKey = (serverId, examId);
                 if (!_remindedCollectionEvents.TryGetValue(reminderKey, out var reminded))
                 {
-                    reminded = new Dictionary<string, long>(StringComparer.Ordinal);
+                    reminded = new CollectionEventHistory();
                     _remindedCollectionEvents.Add(reminderKey, reminded);
                 }
                 // Validate the whole page before advancing the cursor or displaying any row.
-                if (events.Any(item => !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
-                    string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 || item.ParticipantCount < 0) ||
+                if (events.Any(item => item is null || !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
+                    string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 ||
+                    item.ParticipantCount <= 0 || item.CompletedAt == default) ||
                     events.GroupBy(item => item.RosterVersion).Any(group => group.Distinct().Count() != 1) ||
                     events.GroupBy(item => item.EventId, StringComparer.Ordinal).Any(group => group.Distinct().Count() != 1) ||
                     events.Any(item => _seenCollectionEventVersions.TryGetValue(item.EventId, out var seenVersion) &&
                         seenVersion != item.RosterVersion) ||
-                    events.Any(item => reminded.TryGetValue(item.EventId, out var remindedVersion) &&
-                        remindedVersion != item.RosterVersion))
+                    events.Any(reminded.Conflicts))
                     throw new InvalidOperationException("收齐事件的考试、标识或名单版本无效，未应用该页结果。");
                 foreach (var item in events.Distinct().OrderBy(item => item.RosterVersion))
                 {
@@ -187,7 +187,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                     if (_seenCollectionEventVersions.TryAdd(item.EventId, item.RosterVersion))
                     {
                         CollectionEvents.Add(item);
-                        if (reminded.TryAdd(item.EventId, item.RosterVersion)) newest = item;
+                        if (reminded.Remember(item)) newest = item;
                         added++;
                         if (CollectionEvents.Count > 500)
                         {
@@ -217,6 +217,24 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         {
             if (newest is not null && context == _contextVersion && operation == _collectionRequestVersion)
                 CollectionCompleted?.Invoke(newest);
+        }
+    }
+
+    private sealed class CollectionEventHistory
+    {
+        private readonly Dictionary<string, CollectionCompletedNotification> _byId = new(StringComparer.Ordinal);
+        private readonly Dictionary<long, string> _idByVersion = [];
+
+        public bool Conflicts(CollectionCompletedNotification item) =>
+            (_byId.TryGetValue(item.EventId, out var previous) && previous != item) ||
+            (_idByVersion.TryGetValue(item.RosterVersion, out var id) &&
+                !StringComparer.Ordinal.Equals(id, item.EventId));
+
+        public bool Remember(CollectionCompletedNotification item)
+        {
+            if (!_byId.TryAdd(item.EventId, item)) return false;
+            _idByVersion.Add(item.RosterVersion, item.EventId);
+            return true;
         }
     }
 

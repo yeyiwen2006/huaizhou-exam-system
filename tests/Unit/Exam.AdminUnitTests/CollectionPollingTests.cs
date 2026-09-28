@@ -9,7 +9,7 @@ using Exam.Contracts.Submissions;
 
 namespace Exam.AdminUnitTests;
 
-public sealed class CollectionPollingTests
+public sealed partial class CollectionPollingTests
 {
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
 
