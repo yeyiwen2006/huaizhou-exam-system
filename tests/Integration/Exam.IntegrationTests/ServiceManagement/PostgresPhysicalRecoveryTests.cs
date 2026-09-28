@@ -7,11 +7,13 @@ using Exam.Application.Activation;
 using Exam.Application.Scoring;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Common;
+using Exam.Contracts.Commands;
 using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Submissions;
 using Exam.Domain.Submissions;
 using Exam.Domain.Scoring;
 using Exam.Infrastructure.Postgres.Resources;
+using Exam.Infrastructure.Postgres.Commands;
 using Exam.Infrastructure.Postgres.Scoring;
 using Exam.Infrastructure.Postgres.Submissions;
 using Exam.Infrastructure.Postgres.Versioning;
@@ -25,6 +27,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace Exam.IntegrationTests.ServiceManagement;
@@ -292,6 +295,17 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         var sourceStore = new PostgresSubmissionStore(_source.DataSource);
         var committed = await sourceStore.SaveSubmissionAsync(Submission(2), DateTimeOffset.UtcNow, "wal-receipt");
         Assert.Equal(SubmissionPersistenceStatus.Saved, committed.Status);
+        await using (var pending = _source.DataSource.CreateCommand("""
+            BEGIN;
+            UPDATE exam.activation_daily_sequences SET last_sequence=3 WHERE activation_date='2026-09-27';
+            INSERT INTO exam.activation_devices VALUES
+              ('device-3', '20260927003', '2026-09-27', 'active', NULL, 'synthetic-verifier', 1, now(), NULL, 1);
+            INSERT INTO exam.candidate_roster_entries (exam_id, candidate_id, candidate_name, class_text, admission_no)
+              VALUES ('synthetic-exam', 'candidate-3', '合成考生三', '01', '000003');
+            COMMIT;
+            """)) await pending.ExecuteNonQueryAsync();
+        await sourceStore.SetAuthorizationStateAsync(new("synthetic-exam", "candidate-3", "participation-3", 1,
+            "device-3", 1, ParticipationBusinessState.Answering, 1, 1));
         ulong systemIdentifier;
         string target;
         string sourceDirectory;
@@ -360,6 +374,24 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         await sourceStore.SetAuthorizationStateAsync(new("synthetic-exam", "candidate-2", "participation-2", 1,
             "device-2", 2, ParticipationBusinessState.Submitted, 1, 1));
         Assert.False((await comparison.RunAsync(configuration, default)).Passed);
+        // Restarted scheduled work must use the recovered state and persist one end command transition.
+        var active = new ActiveNodeGuard(recovered, new ServerIdentityOptions
+            { ServerId = "server", NodeId = "node", ServerEpoch = 1 }, false);
+        var allowed = await active.CheckAsync();
+        Assert.True(allowed.Allowed, allowed.Reason);
+        await using (var before = recovered.CreateCommand("SELECT lifecycle FROM exam.version_state WHERE exam_id='synthetic-exam'"))
+            Assert.Equal("Running", await before.ExecuteScalarAsync());
+        PostgresScheduleProcessor Scheduler() => new(recovered, new PostgresExamVersioningService(recovered),
+            active, new FixedTimeProvider(DateTimeOffset.UtcNow.AddHours(3)), NullLogger<PostgresScheduleProcessor>.Instance);
+        Assert.Equal(1, await Scheduler().ExecuteDueAsync());
+        Assert.Equal(0, await Scheduler().ExecuteDueAsync());
+        await using (var schedule = recovered.CreateCommand("SELECT lifecycle FROM exam.version_state WHERE exam_id='synthetic-exam'"))
+            Assert.Equal("Ended", await schedule.ExecuteScalarAsync());
+        await using (var eventCount = recovered.CreateCommand("SELECT count(*) FROM exam.command_events WHERE exam_id='synthetic-exam' AND event_type='End'"))
+            Assert.True((long)(await eventCount.ExecuteScalarAsync())! > 0);
+        var due = await new PostgresCommandEventStore(recovered).ClaimDueForDeviceAsync(
+            "participation-3", 1, "device-3", 1, DateTimeOffset.UtcNow.AddHours(4));
+        Assert.Contains(due, item => item.EventType == CommandEventType.End);
         Assert.Equal(backup, await coordinator.VerifyAvailableBackupAsync(backup.DestinationDirectory, backup.BackupId, default));
     }
 
@@ -367,6 +399,11 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
     {
         var parts = text.Split('/');
         return (Convert.ToUInt64(parts[0], 16) << 32) | Convert.ToUInt64(parts[1], 16);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private async Task<SubmissionReceipt> SeedAsync()
