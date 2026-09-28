@@ -72,6 +72,23 @@ public sealed class ReportTableProjectionTests
         Assert.Equal("Synthetic B", tables[4].Title.Split('学')[0]);
     }
 
+    [Fact]
+    public void Projection_PreservesLongAnswerTextWithoutTruncatingTheValue()
+    {
+        var result = CreateResult();
+        var answer = new string('X', 500);
+        var source = result.Subjects[0];
+        var answerRow = source.Answers[0] with
+        {
+            Answers = [source.Answers[0].Answers[0] with { Text = answer }, source.Answers[0].Answers[1]]
+        };
+        result = result with { Subjects = [source with { Answers = [answerRow] }] };
+
+        var table = ReportTableProjection.Build(result)[2];
+
+        Assert.Equal(answer, table.Rows[0].Cells[4].Text);
+    }
+
     private static ReportCalculationResult CreateResult()
     {
         var participant = new ReportParticipant("synthetic-1", "0001", "Synthetic candidate", "02");

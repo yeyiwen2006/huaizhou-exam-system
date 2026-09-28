@@ -68,12 +68,12 @@ public partial class ReportTableView : UserControl
             if (!double.IsFinite(column.Width) || column.Width <= 0)
                 throw new ArgumentException("报表列宽无效。", nameof(Table));
             totalWidth += column.Width;
-            RowsGrid.Columns.Add(new DataGridTextColumn
+            RowsGrid.Columns.Add(new DataGridTemplateColumn
             {
                 Header = column.Header,
                 Width = new DataGridLength(column.Width),
-                Binding = new Binding($"Cells[{i}].Text"),
-                ElementStyle = CellStyle(i),
+                CellTemplate = CellTemplate(i),
+                ClipboardContentBinding = new Binding($"Cells[{i}].Text"),
                 CanUserSort = false
             });
             FooterGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(column.Width) });
@@ -114,6 +114,17 @@ public partial class ReportTableView : UserControl
         red.Setters.Add(new Setter(TextBlock.ForegroundProperty, ReportRed));
         style.Triggers.Add(red);
         return style;
+    }
+
+    private static DataTemplate CellTemplate(int index)
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding($"Cells[{index}].Text"));
+        text.SetBinding(FrameworkElement.ToolTipProperty, new Binding($"Cells[{index}].Text"));
+        text.SetValue(FrameworkElement.StyleProperty, CellStyle(index));
+        text.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 0, 8, 0));
+        text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        return new DataTemplate { VisualTree = text };
     }
 
     private static Border FooterCell(string text) => new()
