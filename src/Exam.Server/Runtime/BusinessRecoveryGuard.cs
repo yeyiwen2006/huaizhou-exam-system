@@ -38,11 +38,24 @@ public sealed class BusinessRecoveryWorker(
                 if (selection is { ConnectionReference: "ExamRecovery" })
                 {
                     var working = new RecoveryWorkingCopy(selection.RequestId, selection.ActorId, selection.BackupId,
-                        "unused-by-target-probe", selection.WorkingDirectory, timeProvider.GetUtcNow());
+                        selection.WorkingDirectory, selection.WorkingDirectory, timeProvider.GetUtcNow());
                     // The registered business source itself must be the isolated target; do not verify a different connection.
-                    checks = await new PostgresWorkingCopyReadinessProbe(configuration.GetConnectionString("Exam") ?? "",
+                    var verified = (await new PostgresWorkingCopyReadinessProbe(configuration.GetConnectionString("Exam") ?? "",
                         configuration.GetConnectionString("ExamRecovery") ?? "", "", identity.ServerEpoch, probe, source)
-                        .RunAsync(local, working, stoppingToken);
+                        .RunAsync(local, working, stoppingToken)).ToList();
+                    var archiveOptions = PostgresArchiveRecoveryOptions.ReadConfigured(key => configuration[key]);
+                    if (selection.ArchiveRecovery || archiveOptions is not null ||
+                        File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery-plan.json")) ||
+                        File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery.json")))
+                    {
+                        if (!selection.ArchiveRecovery || archiveOptions is null)
+                            verified.Add(new("recovery-wal-replay", false, "归档恢复部署选择与配置不匹配，禁止开放业务。", true));
+                        else
+                            verified.Add(await new PostgresArchiveRecovery(archiveOptions).VerifyReplayedAsync(working,
+                                new RestoreRequest(selection.RequestId, selection.BackupId, working.SourceDirectory, selection.ActorId),
+                                source, stoppingToken));
+                    }
+                    checks = verified;
                     if (FileRecoveryDeploymentSelection.ReadConfigured(key => configuration[key], identity.ServerId,
                         identity.NodeId, identity.ServerEpoch) != selection) throw new IOException("恢复部署选择发生变化。");
                 }

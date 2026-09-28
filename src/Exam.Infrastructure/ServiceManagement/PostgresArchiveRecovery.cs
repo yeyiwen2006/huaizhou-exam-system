@@ -12,6 +12,19 @@ namespace Exam.Infrastructure.ServiceManagement;
 public sealed record PostgresArchiveRecoveryOptions(string ArchiveDirectory, ulong SystemIdentifier, uint Timeline,
     string TargetLsn, long MaximumBytes = 4L * 1024 * 1024 * 1024)
 {
+    public static PostgresArchiveRecoveryOptions? ReadConfigured(Func<string, string?> get)
+    {
+        var keys = new[] { "Recovery:WalArchiveDirectory", "Recovery:WalSystemIdentifier", "Recovery:WalTimeline", "Recovery:WalTargetLsn" };
+        if (keys.All(key => string.IsNullOrWhiteSpace(get(key)))) return null;
+        string Required(string key) => !string.IsNullOrWhiteSpace(get(key)) ? get(key)! :
+            throw new InvalidOperationException($"缺少受保护部署配置项 {key}。");
+        var result = new PostgresArchiveRecoveryOptions(Required(keys[0]),
+            ulong.Parse(Required(keys[1]), CultureInfo.InvariantCulture),
+            uint.Parse(Required(keys[2]), CultureInfo.InvariantCulture), Required(keys[3]));
+        result.Validate();
+        return result;
+    }
+
     public ulong Position => ParseLsn(TargetLsn);
 
     public void Validate()
@@ -59,8 +72,22 @@ public sealed class PostgresArchiveRecovery(PostgresArchiveRecoveryOptions optio
     {
         try
         {
-            _ = ReadBinding(working, request);
             await using var source = ManagementProbeConnection.Create(recoveryConnection, 10);
+            return await VerifyReplayedAsync(working, request, source, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            return new("recovery-wal-replay", false, "无法核对实际数据库的归档重放位置或原请求绑定，禁止开放业务。", true);
+        }
+    }
+
+    public async Task<StartupCheckResult> VerifyReplayedAsync(RecoveryWorkingCopy working, RestoreRequest request,
+        NpgsqlDataSource source, CancellationToken token)
+    {
+        try
+        {
+            _ = ReadBinding(working, request);
             await using var command = source.CreateCommand("""
                 SELECT pg_is_in_recovery(), pg_last_wal_replay_lsn()::text,
                        current_setting('recovery_target_lsn'), current_setting('recovery_target_timeline'),

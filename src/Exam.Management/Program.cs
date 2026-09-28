@@ -58,19 +58,19 @@ public static class ManagementEntryPoint
                 new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch);
             FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), epoch,
                 async (_, token) => (await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
-                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(await store.LoadAsync(token), token)).Passed);
+                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(await store.LoadAsync(token), token)).Passed,
+                ArchiveReplay() is not null);
             PostgresBackupCoordinator CreateBackups() => new(new PostgresBackupOptions(
                 Required("Backup:PostgresBinDirectory"), SelectedConnection() ?? "", Required("Backup:AllowedBackupRoot"),
                 Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
             PostgresArchiveRecovery? ArchiveReplay()
             {
-                var keys = new[] { "Recovery:WalArchiveDirectory", "Recovery:WalSystemIdentifier", "Recovery:WalTimeline", "Recovery:WalTargetLsn" };
-                if (keys.All(key => string.IsNullOrWhiteSpace(configuration[key]))) return null;
+                var options = PostgresArchiveRecoveryOptions.ReadConfigured(key => configuration[key]);
+                if (options is null) return null;
                 if (string.IsNullOrWhiteSpace(configuration["Recovery:PostgresServiceName"]))
                     throw new InvalidOperationException("归档重放必须使用已部署的受控隔离数据库服务。");
-                return new(new(Required(keys[0]), ulong.Parse(Required(keys[1]), System.Globalization.CultureInfo.InvariantCulture),
-                    uint.Parse(Required(keys[2]), System.Globalization.CultureInfo.InvariantCulture), Required(keys[3])));
+                return new(options);
             }
             var backups = new DeferredBackupCoordinator(CreateBackups);
             var preflight = new CompositeStartupReadinessProbe([

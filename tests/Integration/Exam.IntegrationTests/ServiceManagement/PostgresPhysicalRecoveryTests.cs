@@ -364,6 +364,29 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.All(await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, recoveredConnection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(_certificate))).RunAsync(configuration, working, default),
             c => Assert.True(c.Passed, c.Name));
+        var selectedPath = Path.Combine(_root, "archive-deployment-selection.json");
+        await new FileRecoveryDeploymentSelection(selectedPath).SelectAsync(new RecoveryDeploymentSelection(
+            "server", "node", restore.RequestId, restore.ActorId, backup.BackupId, working.WorkingDirectory, 1, "ExamRecovery")
+            { ArchiveRecovery = true }, default);
+        Assert.True((await replay.VerifyReplayedAsync(working, restore, recovered, default)).Passed);
+        await using (var selected = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
+            _source.ConnectionString, selectedPath, replay.Options))
+        {
+            Assert.True(selected.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot.Ready);
+            using var client = selected.GetTestClient();
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+            var receipt = await client.GetFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(
+                "/api/v1/submissions/receipts?participationId=participation-1&entryVersion=1&deviceId=device-1&authorizationVersion=1", Json);
+            Assert.Equal(original, receipt!.Result);
+        }
+        await using (var missingWalConfiguration = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
+            _source.ConnectionString, selectedPath, expectReady: false))
+        {
+            var snapshot = missingWalConfiguration.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
+            Assert.False(snapshot.Ready);
+            Assert.Contains(snapshot.Checks, check => check.Name == "recovery-wal-replay" && !check.Passed && check.BlocksWrites);
+        }
         await controlled.PrepareAndStartAsync(restore, _ => throw new IOException("运行中不能复制WAL"),
             ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
         Assert.Equal(1, service.Starts);
@@ -479,16 +502,24 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         }
     }
     private static async Task<WebApplication> RecoveredApiAsync(string connectionString, X509Certificate2 certificate,
-        string originalConnection, string selectionPath)
+        string originalConnection, string selectionPath, PostgresArchiveRecoveryOptions? walOptions = null, bool expectReady = true)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        var settings = new Dictionary<string, string?>
         {
             ["ConnectionStrings:Exam"] = originalConnection, ["ConnectionStrings:ExamRecovery"] = connectionString,
             ["Recovery:SelectionPath"] = selectionPath, ["ExamSecurity:OperatorToken"] = "synthetic-physical-recovery-operator-token",
             ["ExamSecurity:OperatorId"] = "operator", ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1"
-        });
+        };
+        if (walOptions is not null)
+        {
+            settings["Recovery:WalArchiveDirectory"] = walOptions.ArchiveDirectory;
+            settings["Recovery:WalSystemIdentifier"] = walOptions.SystemIdentifier.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            settings["Recovery:WalTimeline"] = walOptions.Timeline.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            settings["Recovery:WalTargetLsn"] = walOptions.TargetLsn;
+        }
+        builder.Configuration.AddInMemoryCollection(settings);
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.ConfigureHttpJsonOptions(options =>
         {
@@ -507,7 +538,16 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         {
             await app.StartAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            while (!app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot.Ready) await Task.Delay(20, timeout.Token);
+            var guard = app.Services.GetRequiredService<BusinessRecoveryGuard>();
+            try
+            {
+                while (expectReady ? !guard.Snapshot.Ready : !guard.Snapshot.Checks.Any(check => check.Name == "recovery-wal-replay"))
+                    await Task.Delay(20, timeout.Token);
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                throw new InvalidOperationException("恢复业务宿主启动核对超时：" + JsonSerializer.Serialize(guard.Snapshot, Json));
+            }
             return app;
         }
         catch { await app.DisposeAsync(); throw; }

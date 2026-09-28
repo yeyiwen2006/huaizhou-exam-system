@@ -5,7 +5,11 @@ using Exam.Contracts.ServiceManagement;
 namespace Exam.Infrastructure.ServiceManagement;
 
 public sealed record RecoveryDeploymentSelection(string ServerId, string NodeId, string RequestId,
-    string ActorId, string BackupId, string WorkingDirectory, long ServerEpoch, string ConnectionReference);
+    string ActorId, string BackupId, string WorkingDirectory, long ServerEpoch, string ConnectionReference)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ArchiveRecovery { get; init; }
+}
 
 /// <summary>Protected non-secret reference to one of two pre-deployed connections. Corruption never falls back.</summary>
 public sealed class FileRecoveryDeploymentSelection
@@ -130,7 +134,7 @@ public sealed class FileRecoveryDeploymentSelection
 }
 
 public sealed class FileRecoveryDeploymentSwitch(FileRecoveryDeploymentSelection store, long epoch,
-    Func<ManagementOperation, CancellationToken, Task<bool>>? allowRollback = null)
+    Func<ManagementOperation, CancellationToken, Task<bool>>? allowRollback = null, bool archiveRecovery = false)
     : Exam.Application.ServiceManagement.IRecoveryDeploymentSwitch
 {
     private RecoveryDeploymentSelection Bind(ManagementOperation operation)
@@ -139,8 +143,8 @@ public sealed class FileRecoveryDeploymentSwitch(FileRecoveryDeploymentSelection
             { IsolationStaged: true, RecoveryVerified: true, BusinessReady: false } ||
             operation.RecoveryWorkingDirectory is null)
             throw new InvalidOperationException("恢复操作尚未核对，不能选择部署。");
-        return new(operation.ServerId, operation.NodeId, operation.RequestId, operation.ActorId,
-            operation.Restore.BackupId, operation.RecoveryWorkingDirectory, epoch, "ExamRecovery");
+        return new RecoveryDeploymentSelection(operation.ServerId, operation.NodeId, operation.RequestId, operation.ActorId,
+            operation.Restore.BackupId, operation.RecoveryWorkingDirectory, epoch, "ExamRecovery") { ArchiveRecovery = archiveRecovery };
     }
     public Task SelectAsync(ManagementOperation operation, CancellationToken token) => store.SelectAsync(Bind(operation), token);
     public async Task RollbackAsync(ManagementOperation operation, CancellationToken token)
