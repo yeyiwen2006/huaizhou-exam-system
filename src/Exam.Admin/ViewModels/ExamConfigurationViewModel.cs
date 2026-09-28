@@ -256,10 +256,16 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var context = _contextVersion;
         var edits = _editVersion;
         var operation = ++_scheduleOperation;
-        var snapshot = await _api.SaveScheduleAsync(examId, new ScheduleWindow(start, end), _expectedScheduleVersion);
+        var expectedVersion = _expectedScheduleVersion;
+        // A05 creates version 1 and increments exactly once for each conditional update.
+        // Capture before awaiting: a positive but stale/unrelated version is not a save receipt.
+        var savedVersion = expectedVersion is { } version ? checked(version + 1) : 1;
+        var schedule = new ScheduleWindow(start, end);
+        var snapshot = await _api.SaveScheduleAsync(examId, schedule, expectedVersion);
         if (context != _contextVersion || operation != _scheduleOperation) return;
         if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId) ||
-            snapshot.Schedule != new ScheduleWindow(start, end) || snapshot.Versions.ScheduleVersion < 1)
+            snapshot.Schedule != schedule || snapshot.Versions is null ||
+            snapshot.Versions.ScheduleVersion != savedVersion)
             throw new InvalidOperationException("服务器保存回执的考试、计划时间或版本与请求不符，请核对原服务器，不能视为保存成功。");
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
