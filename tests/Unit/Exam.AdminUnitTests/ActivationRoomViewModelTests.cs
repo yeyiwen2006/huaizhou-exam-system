@@ -41,4 +41,22 @@ public sealed class ActivationRoomViewModelTests
 
         Assert.Single(viewModel.Groups);
     }
+
+    [Theory]
+    [InlineData("unverified-group")]
+    [InlineData("  unverified-group  ")]
+    public void Approval_RejectsUnverifiedRoomGroupBeforeAnyServerCall(string roomGroupId)
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ActivationRoomViewModel(api)
+        {
+            ActivationRequestId = "synthetic-request",
+            ApprovalRoomGroupId = roomGroupId
+        };
+
+        viewModel.ApproveCommand.Execute(null);
+
+        Assert.Contains("不能按本地草稿或手填 ID 指定试场", viewModel.Status, StringComparison.Ordinal);
+        Assert.Empty(viewModel.Devices);
+    }
 }
