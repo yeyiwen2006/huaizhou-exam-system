@@ -254,14 +254,24 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         Status = "正在保存服务器当前支持的考试计划字段…";
         var examId = ExamId.Trim();
         var context = _contextVersion;
+        var edits = _editVersion;
         var operation = ++_scheduleOperation;
-        var snapshot = await _api.SaveScheduleAsync(examId, new ScheduleWindow(start, end), _expectedScheduleVersion);
+        var expectedVersion = _expectedScheduleVersion;
+        // A05 creates version 1 and increments exactly once for each conditional update.
+        // Capture before awaiting: a positive but stale/unrelated version is not a save receipt.
+        var savedVersion = expectedVersion is { } version ? checked(version + 1) : 1;
+        var schedule = new ScheduleWindow(start, end);
+        var snapshot = await _api.SaveScheduleAsync(examId, schedule, expectedVersion);
         if (context != _contextVersion || operation != _scheduleOperation) return;
-        if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId))
-            throw new InvalidOperationException("服务器返回了不同考试的保存结果，请核对原服务器，不能视为保存成功。");
+        if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId) ||
+            snapshot.Schedule != schedule || snapshot.Versions is null ||
+            snapshot.Versions.ScheduleVersion != savedVersion)
+            throw new InvalidOperationException("服务器保存回执的考试、计划时间或版本与请求不符，请核对原服务器，不能视为保存成功。");
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
-        Status = $"计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}。名称、类别、科目、题组和计分规则仍为本地草稿，等待 A 的正式元数据 API。";
+        Status = edits == _editVersion
+            ? $"计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}。名称、类别、科目、题组和计分规则仍为本地草稿，等待 A 的正式元数据 API。"
+            : $"先前的计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}；等待回执期间修改的当前时间仍是未保存草稿，请核对后再次保存。";
     }
 
     private void RefreshInstructions()
