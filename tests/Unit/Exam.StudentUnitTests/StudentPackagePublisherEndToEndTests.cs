@@ -22,8 +22,7 @@ namespace Exam.StudentUnitTests;
 /// CI 运行机没有 TeX 发行版，必须在流水线里排除；本机没有 XeLaTeX 时明确失败而不是跳过。
 /// 夹具全部为合成内容，未使用真实试卷材料。
 /// </summary>
-[Trait("Category", "Latex")]
-public sealed class StudentPackagePublisherEndToEndTests : IDisposable
+public sealed partial class StudentPackagePublisherEndToEndTests : IDisposable
 {
     private const string ExamId = "synthetic-publish";
     private const long PaperVersion = 1;
@@ -47,6 +46,7 @@ public sealed class StudentPackagePublisherEndToEndTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Latex")]
     public async Task Publish_RealCompiledQuestion_YieldsV2PackageReadableByStudentReader()
     {
         var packageRoot = Path.Combine(_root, "package");
