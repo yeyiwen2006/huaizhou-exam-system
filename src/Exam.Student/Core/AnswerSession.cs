@@ -49,12 +49,14 @@ public sealed class AnswerSession
 {
     private readonly ILocalStateStore _store;
     private readonly TimeProvider _time;
-    private readonly PaperStructure? _paper;
+    private PaperStructure? _paper;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LocalStateKey? _key;
     private AnswerSessionContext? _context;
     private AnswerStateRecord? _reliable;
     private PendingWrite? _pendingWrite;
+    private PendingWrite? _paperUpdateRetry;
+    private bool _paperUpdateUncertain;
     private FixedSubmissionRecord? _frozenIntent;
     private FixedSubmissionRecord? _fixed;
     private string? _requestedSubmissionId;
@@ -82,6 +84,8 @@ public sealed class AnswerSession
         _status;
 
     public long AnswerVersion => _reliable?.AnswerVersion ?? 0;
+    public long PaperVersion => _reliable?.PaperVersion ?? 0;
+    public bool HasPendingPaperUpdate => _paperUpdateRetry is not null || _paperUpdateUncertain;
     public string? CurrentQuestionId => _reliable?.CurrentQuestionId;
     public string? FixedSubmissionId => _fixed?.SubmissionId ?? _frozenIntent?.SubmissionId ?? _requestedSubmissionId;
     public string? LastError { get; private set; }
@@ -217,6 +221,8 @@ public sealed class AnswerSession
                 var result = await PersistFixedAsync(ct).ConfigureAwait(false);
                 return result.Succeeded ? AnswerChangeResult.Ok(AnswerVersion) : ChangeFailure(result.Error!);
             }
+            if (HasPendingPaperUpdate)
+                return ChangeFailure("试卷更新尚未确认，请重试更新；不能独立推进答案的试卷版本。");
             if (_pendingWrite is null) return AnswerChangeResult.Ok(AnswerVersion);
             return await PersistPendingAsync(ct).ConfigureAwait(false);
         }, ct);
@@ -231,6 +237,102 @@ public sealed class AnswerSession
             return Task.FromResult(true);
         }, ct);
     }
+
+    /// <summary>
+    /// B06 试卷修订版本切换：同一参试/设备/授权不变，仅提升 PaperVersion。
+    /// 原答案、标记与当前题整体结转为新版本的下一次待保存修改（AnswerVersion+1），
+    /// 事务落盘成功后按新版本继续作答；失败进入 WriteBlocked，原可靠状态保留。
+    /// 试卷结构可同时替换（服务器拒绝结构性变更，正常情况下题目选项标识不变）。
+    /// </summary>
+    public Task<AnswerChangeResult> SwitchPaperVersionAsync(
+        long newPaperVersion, PaperStructure? newStructure = null, CancellationToken ct = default) =>
+        SerializedAsync(() => CommitPaperVersionCoreAsync(newPaperVersion, newStructure,
+            () => true, (_, _) => { }, () => { }, ct), ct);
+
+    internal Task<AnswerChangeResult> CommitPaperUpdateAsync(PreparedPaperUpdate update,
+        Action publishRuntime, CancellationToken ct) => SerializedAsync(() => CommitPaperVersionCoreAsync(
+            update.Manifest.PaperVersion, update.Manifest.Structure, update.CanCommit, update.SaveIntent,
+            () => { update.Publish(); publishRuntime(); }, ct), ct);
+
+    private async Task<AnswerChangeResult> CommitPaperVersionCoreAsync(long newPaperVersion,
+        PaperStructure? newStructure, Func<bool> canCommit, Action<AnswerStateRecord, PendingSnapshot> saveIntent,
+        Action publish, CancellationToken ct)
+    {
+        if (_key is null || _context is null || _reliable is null)
+            return ChangeFailure("答题会话尚未启动，不能切换试卷版本。");
+        if (_paperUpdateUncertain)
+            return ChangeFailure("上次更新保存结果仍无法核对，请保留本地文件并重新进入恢复；不能猜测版本。");
+        var retrying = _paperUpdateRetry is not null && Status == AnswerSessionStatus.WriteBlocked;
+        if (Volatile.Read(ref _authorizationInvalid) != 0 || _loadFailed ||
+            Volatile.Read(ref _freezeRequested) != 0 || Volatile.Read(ref _suspendRequested) != 0 ||
+            (!retrying && Status != AnswerSessionStatus.Active) || !canCommit())
+            return ChangeFailure("当前答卷或授权不可修改，不能切换试卷版本。");
+        if (newPaperVersion <= _context.PaperVersion)
+            return ChangeFailure("新试卷版本不高于当前版本，无需切换。");
+        if (newStructure is not null &&
+            ((_paper is not null && !PaperUpdateCompatibility.SameStructure(_paper, newStructure)) ||
+             AnswerSheetContract.Validate(newStructure, _reliable.Answers) is not null))
+            return ChangeFailure("新版改变了题目、选项、编号、题型或归属，原答案与题包保留，不能在线切换。");
+
+        var context = _context with { PaperVersion = newPaperVersion };
+        var pending = _paperUpdateRetry is { } retry && retry.State.PaperVersion == newPaperVersion
+            ? retry : BuildPendingForContext(context, checked(_reliable.AnswerVersion + 1),
+                _reliable.Answers, _reliable.Marks, _reliable.CurrentQuestionId);
+        ct.ThrowIfCancellationRequested();
+        saveIntent(pending.State, pending.Snapshot); // 未写成恢复意图时，绝不推进 SQLite 或销毁旧包。
+        if (!canCommit() || Volatile.Read(ref _freezeRequested) != 0 || Volatile.Read(ref _authorizationInvalid) != 0)
+            return ChangeFailure("更新提交前考试状态已变化，未推进本地答案。");
+
+        StoreWriteResult saved;
+        try { saved = await _store.SaveAnswerStateAsync(_key, pending.State, pending.Snapshot, ct).ConfigureAwait(false); }
+        catch (Exception) { saved = StoreWriteResult.Fail("更新写入结果尚未确认。"); }
+        if (!saved.Succeeded)
+        {
+            // 未知提交结果先回读；不能把已提交的版本当成失败后继续用旧版本覆盖。
+            try
+            {
+                var actual = await _store.LoadAnswerStateAsync(_key, CancellationToken.None).ConfigureAwait(false);
+                var snapshot = await _store.LoadPendingSnapshotAsync(_key, CancellationToken.None).ConfigureAwait(false);
+                if (SameStoredState(actual, pending.State) && snapshot?.RequestId == pending.Snapshot.RequestId)
+                    saved = StoreWriteResult.Ok();
+                else _paperUpdateUncertain = !SameStoredState(actual, _reliable);
+            }
+            catch (Exception) { _paperUpdateUncertain = true; }
+            if (!saved.Succeeded)
+            {
+                _paperUpdateRetry = pending; // 只是版本结转，不混入普通待保存编辑或旧版固定答卷。
+                BlockWrites(_paperUpdateUncertain
+                    ? "新版答案保存结果无法确认，原文件与恢复意图已保留，请重新进入恢复。"
+                    : "新版答案保存失败，旧版答案和题包未替换；更新流程将重试，期间暂停新增作答。");
+                return ChangeFailure(LastError!);
+            }
+        }
+        _context = context;
+        if (newStructure is not null) _paper = FreezeStructure(newStructure);
+        _reliable = pending.State;
+        _paperUpdateRetry = null;
+        _status = AnswerSessionStatus.Active;
+        LastError = null;
+        try { publish(); }
+        catch
+        {
+            _paperUpdateUncertain = true;
+            BlockWrites("新版答案已保存但界面发布未完成，恢复意图已保留，请重新进入恢复。");
+            throw;
+        }
+        StateSaved?.Invoke();
+        return AnswerChangeResult.Ok(AnswerVersion);
+    }
+
+    private static bool SameStoredState(AnswerStateRecord? a, AnswerStateRecord b) => a is not null &&
+        a.ParticipationId == b.ParticipationId && a.EntryVersion == b.EntryVersion &&
+        a.DeviceId == b.DeviceId && a.AuthorizationVersion == b.AuthorizationVersion &&
+        a.PaperVersion == b.PaperVersion && a.AnswerVersion == b.AnswerVersion &&
+        a.CurrentQuestionId == b.CurrentQuestionId && a.UpdatedAt == b.UpdatedAt &&
+        a.Marks.SetEquals(b.Marks) && SameAnswers(a.Answers, b.Answers);
+
+    private static PaperStructure FreezeStructure(PaperStructure paper) => new(Array.AsReadOnly(
+        paper.Questions.Select(q => q with { OptionIds = Array.AsReadOnly(q.OptionIds.ToArray()) }).ToArray()));
 
     public Task SuspendAsync(string reason, CancellationToken ct = default)
     {
@@ -336,14 +438,18 @@ public sealed class AnswerSession
     }
 
     private PendingWrite BuildPending(long version, IReadOnlyDictionary<string, AnswerValue> answers,
-        IReadOnlySet<string> marks, string? currentQuestion)
+        IReadOnlySet<string> marks, string? currentQuestion) =>
+        BuildPendingForContext(_context!, version, answers, marks, currentQuestion);
+
+    private PendingWrite BuildPendingForContext(AnswerSessionContext context, long version,
+        IReadOnlyDictionary<string, AnswerValue> answers, IReadOnlySet<string> marks, string? currentQuestion)
     {
         var now = _time.GetUtcNow();
-        var state = new AnswerStateRecord(_context!.ParticipationId, _context.EntryVersion, _context.AuthorizationVersion,
-            _context.PaperVersion, version, currentQuestion, now, FreezeAnswers(answers),
-            new HashSet<string>(marks, StringComparer.Ordinal), _context.DeviceId);
-        var snapshot = new PendingSnapshot(_key!.ExamId, _key.CandidateId, _context.ParticipationId,
-            _context.EntryVersion, _context.DeviceId, _context.AuthorizationVersion, version, _context.PaperVersion,
+        var state = new AnswerStateRecord(context.ParticipationId, context.EntryVersion, context.AuthorizationVersion,
+            context.PaperVersion, version, currentQuestion, now, FreezeAnswers(answers),
+            new HashSet<string>(marks, StringComparer.Ordinal), context.DeviceId);
+        var snapshot = new PendingSnapshot(_key!.ExamId, _key.CandidateId, context.ParticipationId,
+            context.EntryVersion, context.DeviceId, context.AuthorizationVersion, version, context.PaperVersion,
             FreezeAnswers(answers), currentQuestion, now, RequestIds.New());
         return new PendingWrite(state, snapshot);
     }

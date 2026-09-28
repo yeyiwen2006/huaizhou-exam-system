@@ -134,6 +134,7 @@ public partial class ExamSelectionPage : UserControl
 
         await App.Services.Session.ReleaseExamAsync();
         App.Services.Session.Logout();
+        if (window is MainWindow main) main.PrepareForApplicationExit();
         Application.Current.Shutdown();
     }
 
