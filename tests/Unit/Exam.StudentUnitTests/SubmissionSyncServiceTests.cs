@@ -24,6 +24,35 @@ namespace Exam.StudentUnitTests;
 public sealed partial class SubmissionSyncServiceTests
 {
     [Fact]
+    public async Task FocusLossIsReportedPromptlyWithNewRequestId_AndRegularSyncSkipsIt()
+    {
+        await using var fixture = await StartedAsync();
+        var answers = fixture.Answers!;
+        var focus = new FocusTracker();
+        var sync = fixture.CreateSync(focus);
+        Assert.True((await answers.SetAnswerAsync("q1", AnswerValue.Selected("A"))).Succeeded);
+        await sync.KickAsync();
+        Assert.Single(fixture.SubmissionApi.ProgressRequests);
+        Assert.Equal(0, fixture.SubmissionApi.ProgressRequests[0].FocusLostCount);
+
+        // 失焦→复焦：答案版本未变，但失焦计数变化触发补报（新请求标识 + 失焦字段）。
+        focus.OnFocusLost();
+        focus.OnFocusRegained();
+        await sync.KickAsync();
+        Assert.Equal(2, fixture.SubmissionApi.ProgressRequests.Count);
+        var supplement = fixture.SubmissionApi.ProgressRequests[1];
+        Assert.Equal(1, supplement.FocusLostCount);
+        Assert.NotNull(supplement.LastFocusRegainedAt);
+        Assert.NotEqual(fixture.SubmissionApi.ProgressRequests[0].RequestId, supplement.RequestId);
+        Assert.Equal(fixture.SubmissionApi.ProgressRequests[0].AnswerVersion, supplement.AnswerVersion);
+
+        // 已上报的失焦计数不重复触发。
+        await sync.KickAsync();
+        Assert.Equal(2, fixture.SubmissionApi.ProgressRequests.Count);
+        await sync.DisposeAsync();
+    }
+
+    [Fact]
     public async Task ProgressUploadUsesStableRequestIdPerVersion_AndSkipsAlreadySyncedVersion()
     {
         await using var fixture = await StartedAsync();
@@ -286,7 +315,8 @@ public sealed partial class SubmissionSyncServiceTests
             }
         }
 
-        public SubmissionSyncService CreateSync() => new(SubmissionApi, Runtime, Device);
+        public SubmissionSyncService CreateSync(FocusTracker? focus = null) =>
+            new(SubmissionApi, Runtime, Device, focus: focus);
 
         public async ValueTask DisposeAsync()
         {

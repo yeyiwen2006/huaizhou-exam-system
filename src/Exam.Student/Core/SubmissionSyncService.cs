@@ -17,7 +17,8 @@ public sealed record SubmissionSyncStatusChangedEventArgs(SubmissionSyncPhase Ph
 /// 网络写入串行；Confirmed/Blocked 为终态。只有匹配且已在本机保留的服务器回执才能确认成功。
 /// </summary>
 public sealed class SubmissionSyncService(
-    IStudentApi api, StudentExamRuntime runtime, DeviceRecord device, TimeProvider? timeProvider = null, ServerClock? clock = null) : IAsyncDisposable
+    IStudentApi api, StudentExamRuntime runtime, DeviceRecord device, TimeProvider? timeProvider = null,
+    ServerClock? clock = null, FocusTracker? focus = null) : IAsyncDisposable
 {
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(20);
@@ -38,6 +39,7 @@ public sealed class SubmissionSyncService(
     private string? _syncedRequestId;
     private long _syncedAt;
     private int _uploadRetryCount;
+    private int _lastReportedFocusLostCount = -1;
     private (long Version, AnswerSessionStatus Status, bool Fixed, bool Ended, bool Revoked) _observedState;
 
     public event EventHandler<SubmissionSyncStatusChangedEventArgs>? StatusChanged;
@@ -170,14 +172,23 @@ public sealed class SubmissionSyncService(
             snapshot.PaperVersion != runtime.Manager.Descriptor?.PaperVersion)
             return await BlockAsync("可靠快照与当前参试、设备或版本不一致，原记录已保留，请核对后恢复。");
 
-        if (_syncedRequestId == snapshot.RequestId)
+        // B06 失焦补报：答案快照未变但失焦计数变化时，不等待 60 秒周期立即补报。
+        var focusChanged = focus is not null && focus.FocusLostCount != _lastReportedFocusLostCount;
+        if (_syncedRequestId == snapshot.RequestId && !focusChanged)
         {
             var remaining = ProgressInterval - _time.GetElapsedTime(_syncedAt);
             if (remaining > TimeSpan.Zero) return remaining;
         }
-        var request = new SyncProgressRequest(snapshot.RequestId, snapshot.ExamId, snapshot.CandidateId,
+        // 失焦补报属于内容变化，换用新的请求标识让服务器区分幂等重放与现场状态补充；
+        // 正常重报沿用快照原标识，保持同一版本重试的幂等语义。
+        var supplementRequestId = focusChanged && _syncedRequestId == snapshot.RequestId;
+        var request = new SyncProgressRequest(
+            supplementRequestId ? RequestIds.New() : snapshot.RequestId,
+            snapshot.ExamId, snapshot.CandidateId,
             snapshot.ParticipationId!, snapshot.EntryVersion, snapshot.DeviceId!, snapshot.AuthorizationVersion,
-            snapshot.AnswerVersion, snapshot.PaperVersion, snapshot.Answers, snapshot.CurrentQuestionId);
+            snapshot.AnswerVersion, snapshot.PaperVersion, snapshot.Answers, snapshot.CurrentQuestionId,
+            FocusLostCount: focus?.FocusLostCount,
+            LastFocusRegainedAt: focus?.LastFocusRegainedAt);
         var response = await api.SyncProgressAsync(request, ct).ConfigureAwait(false);
         if (response is { IsSuccess: true, Result: { } saved })
         {
@@ -190,6 +201,7 @@ public sealed class SubmissionSyncService(
                 return await BlockAsync("服务器返回的进度与本次可靠快照不一致，已停止自动写入并保留原记录。");
             _syncedRequestId = snapshot.RequestId;
             _syncedAt = _time.GetTimestamp();
+            if (focus is not null) _lastReportedFocusLostCount = focus.FocusLostCount;
             SetPhase(SubmissionSyncPhase.Progressing,
                 $"答题进度已由服务器确认（版本 {saved.AnswerVersion}）；每 60 秒重报原快照，新修改及时上报。");
             return ProgressInterval;

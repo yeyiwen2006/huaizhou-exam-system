@@ -26,6 +26,10 @@ public enum SubmissionErrorCode
     PersistenceFailed
 }
 
+/// <summary>
+/// B06 失焦检测补报：可选的现场状态补充字段。旧客户端不发送时保持 null，
+/// 序列化向后兼容；服务端是否持久化及考务端展示由 A/C 侧接续实现。
+/// </summary>
 public sealed record SyncProgressRequest(
     string RequestId,
     string ExamId,
@@ -37,7 +41,9 @@ public sealed record SyncProgressRequest(
     long AnswerVersion,
     long PaperVersion,
     IReadOnlyDictionary<string, AnswerValue> Answers,
-    string? CurrentQuestionId);
+    string? CurrentQuestionId,
+    int? FocusLostCount = null,
+    DateTimeOffset? LastFocusRegainedAt = null);
 
 public sealed record PersistedProgress(
     string ExamId,

@@ -12,6 +12,13 @@ namespace Exam.Student.Core;
 
 public sealed record PackageDownloadProgress(long ReceivedBytes, long TotalBytes);
 
+/// <summary>B06 在线更新结果：成功时 InstalledPaperVersion 为切换后的版本；失败保留旧版可继续作答。</summary>
+public sealed record PaperUpdateResult(bool Succeeded, long InstalledPaperVersion, string? Error)
+{
+    public static PaperUpdateResult Ok(long version) => new(true, version, null);
+    public static PaperUpdateResult Fail(string error) => new(false, 0, error);
+}
+
 /// <summary>B02 control operations are serialized and ambiguous requests survive in a DPAPI journal.</summary>
 public sealed class ExamPackageManager : IDisposable
 {
@@ -78,6 +85,12 @@ public sealed class ExamPackageManager : IDisposable
     public string? ParticipationId => Participation?.ParticipationId;
     public string? UnlockReference => Participation?.UnlockReference;
     public string? LastError { get; private set; }
+    /// <summary>已收到的最新试卷版本（PaperUpdated 事件推进）；高于当前描述符版本表示有待应用的更新。</summary>
+    public long NewestPaperVersion => _state.NewestPaperVersion;
+    /// <summary>B06 设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
+    public bool DeviceDecisionPending =>
+        !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
+        _state.Preparation is { Status: EntryPreparationStatus.DeviceDecisionPending };
     public byte[]? UnlockedPayload { get { lock (_plaintextGate) return _unlockedPayload; } }
     public bool ExamStarted => _state.Started;
     public bool ExamEnded => _state.Ended || _terminalInMemory;
@@ -177,6 +190,226 @@ public sealed class ExamPackageManager : IDisposable
     public Task<ApiEnvelope<ParticipationResult>?> WithdrawAsync(CancellationToken ct = default) =>
         LockedAsync(() => WithdrawCoreAsync(ct), ct);
     public Task<bool> UnlockAsync(CancellationToken ct = default) => LockedAsync(() => UnlockCoreAsync(ct), ct);
+
+    /// <summary>
+    /// B06 在线更新：重新准备→下载新版→重新确认拿新解锁引用→解密并解析新版清单，
+    /// 全部通过后才一次性切换明文与控制状态；任一步失败时旧版明文、描述符与参试状态
+    /// 全部保持原样，考试可以继续用旧包作答，稍后重试。
+    /// </summary>
+    public Task<PaperUpdateResult> ApplyPaperUpdateAsync(
+        IProgress<PackageDownloadProgress>? progress = null, CancellationToken ct = default) =>
+        LockedAsync(async () =>
+        {
+            if (CurrentPhase != Phase.Unlocked || UnlockedPayload is null)
+                return PaperUpdateResult.Fail("试题尚未解锁，不能应用试卷更新。");
+            if (ExamEnded || _state.Revoked)
+                return PaperUpdateResult.Fail("考试已结束或授权已失效，不再应用试卷更新。");
+            if (Descriptor is not { } currentDescriptor || Participation is not { BusinessState: ParticipationBusinessState.Answering } currentParticipation)
+                return PaperUpdateResult.Fail("当前没有可更新的已确认参试状态。");
+            if (_state.NewestPaperVersion <= currentDescriptor.PaperVersion)
+                return PaperUpdateResult.Fail("当前没有待应用的试卷更新。");
+            if (_state.PendingWithdraw is not null)
+                return PaperUpdateResult.Fail("正在退出参试，不能应用试卷更新。");
+
+            var generation = ControlGeneration;
+
+            // 1) 重新准备，取得新版资源描述符。
+            var prepareRequest = new PrepareExamEntryRequest(RequestIds.New(), SessionId, ExamId);
+            var prepared = await _api.PrepareEntryAsync(prepareRequest, ct);
+            ValidateServer(prepared);
+            if (!prepared.IsSuccess || prepared.Result is not { } preparation)
+                return PaperUpdateResult.Fail($"试卷更新准备失败：{prepared.Error?.Message ?? "服务器未确认"}");
+            if (preparation.Status == EntryPreparationStatus.DeviceDecisionPending)
+                return PaperUpdateResult.Fail("该账号存在设备冲突，请等待考务人员裁决。");
+            if (preparation.ExamId != ExamId || string.IsNullOrWhiteSpace(preparation.PreparationId) ||
+                preparation.Resources is not { } descriptor ||
+                descriptor.PaperVersion <= currentDescriptor.PaperVersion ||
+                descriptor.PaperVersion > _state.NewestPaperVersion ||
+                descriptor.PackageLength <= 0 || descriptor.PackageLength > MaximumPackageBytes ||
+                descriptor.InstructionsVersion < 1 ||
+                string.IsNullOrWhiteSpace(descriptor.EncryptedPackageUri) ||
+                (preparation.AuthorizedDeviceId is not null && preparation.AuthorizedDeviceId != _device.DeviceId))
+                return PaperUpdateResult.Fail("服务器返回的新版资源描述不完整或版本异常。");
+            if ((preparation.ParticipationId is not null && preparation.ParticipationId != currentParticipation.ParticipationId) ||
+                (preparation.EntryVersion is not null && preparation.EntryVersion != currentParticipation.EntryVersion))
+                return PaperUpdateResult.Fail("服务器返回的准备记录与当前参试不一致。");
+
+            // 2) 考试说明版本变化时一并取新说明。
+            InstructionsDocument? instructions = _state.Instructions;
+            if (instructions is null || instructions.Version != descriptor.InstructionsVersion)
+            {
+                var document = await _api.GetInstructionsAsync(preparation.PreparationId, prepareRequest.SessionId, ct);
+                ValidateServer(document);
+                if (!document.IsSuccess || document.Result is not { } updated ||
+                    updated.Version != descriptor.InstructionsVersion || updated.Lines is null ||
+                    updated.Lines.Count == 0 || updated.Lines.Any(string.IsNullOrWhiteSpace))
+                    return PaperUpdateResult.Fail("新版考试说明获取失败！");
+                instructions = updated;
+            }
+
+            // 3) 原子下载新版密文（.part + 长度核对；旧版文件不受影响）。
+            if (!await DownloadUpdatePackageAsync(descriptor, preparation.PreparationId,
+                    prepareRequest.SessionId, progress, ct))
+                return PaperUpdateResult.Fail(LastError ?? "新版试题下载失败！");
+
+            // 4) 重新确认参试，取得新版解锁引用。
+            var confirmRequest = new ConfirmParticipationRequest(RequestIds.New(), SessionId, ExamId,
+                preparation.PreparationId, descriptor.PaperVersion, instructions.Version);
+            var confirmed = await _api.ConfirmParticipationAsync(confirmRequest, ct);
+            ValidateServer(confirmed);
+            if (!confirmed.IsSuccess || confirmed.Result is not { } participation)
+                return PaperUpdateResult.Fail($"试卷更新确认失败：{confirmed.Error?.Message ?? "服务器未确认"}");
+            ValidateParticipation(participation);
+            if (participation.ParticipationId != currentParticipation.ParticipationId ||
+                participation.EntryVersion != currentParticipation.EntryVersion ||
+                participation.AuthorizedDeviceId != _device.DeviceId ||
+                participation.AuthorizationVersion < currentParticipation.AuthorizationVersion ||
+                participation.BusinessState != ParticipationBusinessState.Answering ||
+                string.IsNullOrWhiteSpace(participation.UnlockReference))
+                return PaperUpdateResult.Fail("服务器返回的参试授权与当前作答状态不一致，不能切换试卷。");
+            var ended = participation.Lifecycle == ExamLifecycle.Ended;
+            if (ended)
+                return PaperUpdateResult.Fail("考试已结束，不再应用试卷更新。");
+
+            // 5) 解锁新版并解密、解析清单；解析失败不切换。
+            var unlockRequest = new PackageUnlockRequest(RequestIds.New(),
+                participation.ParticipationId, participation.EntryVersion, _device.DeviceId,
+                participation.AuthorizationVersion, descriptor.PaperVersion, participation.UnlockReference,
+                _state.ServerId, Server!.ServerEpoch);
+            var unlock = await _api.ResolveUnlockAsync(unlockRequest, ct);
+            using var material = unlock.Result;
+            ValidateServer(unlock);
+            if (!unlock.IsSuccess || material is null)
+                return PaperUpdateResult.Fail($"新版试题解锁失败：{unlock.Error?.Message ?? "服务器未确认"}");
+            if (material.PaperVersion != descriptor.PaperVersion ||
+                !string.Equals(participation.UnlockReference, $"resource-envelope:{material.PackageId}", StringComparison.Ordinal))
+                return PaperUpdateResult.Fail("新版解锁材料与试卷版本不一致，不能切换。");
+
+            byte[]? newPayload = null;
+            var protectedMaterial = _store.ProtectUnlock(material);
+            try
+            {
+                await using var encrypted = new FileStream(_store.PackagePath(descriptor.PaperVersion), FileMode.Open,
+                    FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await using var plaintext = new MemoryStream();
+                await PackageCiphertext.DecryptAsync(encrypted, plaintext, material, ct);
+                newPayload = plaintext.ToArray();
+                // 先解析清单再切换：坏包在切换前被发现，旧版明文继续可用。
+                _ = await Task.Run(() => StudentPaperPackage.ReadManifest(
+                    newPayload, ExamId, descriptor.PaperVersion, ct), ct);
+            }
+            catch (CryptographicException)
+            {
+                ZeroIfNotNull(newPayload);
+                return PaperUpdateResult.Fail("新版试题解密失败！密钥或题包认证不匹配，已保留当前版本。");
+            }
+            catch (EndOfStreamException)
+            {
+                ZeroIfNotNull(newPayload);
+                return PaperUpdateResult.Fail("新版试题解密失败！题包不完整，已保留当前版本。");
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
+            {
+                ZeroIfNotNull(newPayload);
+                return PaperUpdateResult.Fail($"新版试题清单校验失败：{error.Message} 已保留当前版本。");
+            }
+
+            // 6) 一次性切换：先提交明文（带代次核对），再保存控制状态。
+            lock (_plaintextGate)
+            {
+                if (generation != _controlGeneration || ExamEnded || !_authorizedThisRun || _disposed)
+                {
+                    CryptographicOperations.ZeroMemory(newPayload);
+                    return PaperUpdateResult.Fail("更新期间考试状态或授权发生变化，已保留当前版本，稍后重试。");
+                }
+                var previous = _unlockedPayload;
+                _unlockedPayload = newPayload;
+                if (previous is not null) CryptographicOperations.ZeroMemory(previous);
+            }
+            Save(_state with
+            {
+                PendingPrepare = null,
+                Preparation = preparation,
+                PreparationSessionId = prepareRequest.SessionId,
+                Instructions = instructions,
+                PendingConfirm = null,
+                Participation = participation,
+                CompletedPaperVersion = descriptor.PaperVersion,
+                CompletedPackageUri = descriptor.EncryptedPackageUri,
+                ProtectedUnlockMaterial = protectedMaterial,
+                NewestPaperVersion = descriptor.PaperVersion
+            });
+            CurrentPhase = Phase.Unlocked;
+            LastError = null;
+            return PaperUpdateResult.Ok(descriptor.PaperVersion);
+        }, ct);
+
+    /// <summary>对已收到并确认（Received）的 PaperUpdated 事件补发更新结果：成功 Applied+实际版本，失败 ResourceUpdateFailed+原因。</summary>
+    public Task<bool> ReportUpdateOutcomeAsync(
+        string eventId, bool applied, long actualPaperVersion, string? failureReason, CancellationToken ct = default) =>
+        LockedAsync(async () =>
+        {
+            if (Participation is not { } participation)
+            {
+                LastError = "参试登记尚未就绪，不能上报更新结果。";
+                return false;
+            }
+            var acknowledgement = new AcknowledgeCommandRequest(
+                RequestIds.New(), eventId, participation.ParticipationId, participation.EntryVersion,
+                _device.DeviceId, participation.AuthorizationVersion,
+                applied ? CommandProcessingResult.Applied : CommandProcessingResult.ResourceUpdateFailed,
+                applied ? actualPaperVersion : null,
+                applied ? null : failureReason);
+            var response = await _api.AcknowledgeCommandAsync(acknowledgement, ct);
+            ValidateServer(response);
+            if (!response.IsSuccess || response.Result is not { } result)
+            {
+                RecordFailure(response.Error);
+                return false;
+            }
+            if (result.EventId != eventId || result.RequestId != acknowledgement.RequestId ||
+                result.ProcessingResult != acknowledgement.ProcessingResult)
+                throw new InvalidDataException("服务器返回的指令确认与当前指令不一致。");
+            return true;
+        }, ct);
+
+    private static void ZeroIfNotNull(byte[]? bytes)
+    {
+        if (bytes is not null) CryptographicOperations.ZeroMemory(bytes);
+    }
+
+    private async Task<bool> DownloadUpdatePackageAsync(ExamResourceDescriptor descriptor, string preparationId,
+        string sessionId, IProgress<PackageDownloadProgress>? progress, CancellationToken ct)
+    {
+        var final = _store.PackagePath(descriptor.PaperVersion);
+        Directory.CreateDirectory(Path.GetDirectoryName(final)!);
+        var temporary = final + $".{Guid.NewGuid():N}.part";
+        try
+        {
+            await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                             64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
+                {
+                    if (chunk.Length > descriptor.PackageLength - file.Length)
+                        throw new InvalidDataException("试题下载数据超出声明的长度。");
+                    await file.WriteAsync(chunk, ct);
+                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
+                }
+                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
+                file.Flush(flushToDisk: true);
+            }
+            if (File.Exists(final)) File.Replace(temporary, final, final + ".bak");
+            else File.Move(temporary, final);
+            return true;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidDataException)
+        {
+            LastError = "新版试题获取失败！请检查网络或磁盘后重试，当前版本可继续作答。";
+            return false;
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
 
     public Task InvalidateAuthorizationAsync(CancellationToken ct = default)
     {

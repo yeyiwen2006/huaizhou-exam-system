@@ -63,6 +63,13 @@ public sealed record PreparationRecord(
     string Phase,
     DateTimeOffset UpdatedAt);
 
+/// <summary>B06 试卷修题复核记录：考生确认已复核修订版试卷的时间凭证，首次确认后不可覆盖。</summary>
+public sealed record PaperUpdateReviewRecord(
+    long PaperVersion,
+    DateTimeOffset ReceivedAt,
+    DateTimeOffset InstalledAt,
+    DateTimeOffset ConfirmedAt);
+
 public sealed record StoreWriteResult(bool Succeeded, string? Error)
 {
     public static StoreWriteResult Ok() => new(true, null);
@@ -91,6 +98,14 @@ public interface ILocalStateStore : IDisposable
     Task<StoreWriteResult> SavePreparationAsync(LocalStateKey key, PreparationRecord record, CancellationToken ct = default);
     Task<PreparationRecord?> LoadPreparationAsync(LocalStateKey key, CancellationToken ct = default);
 
+    /// <summary>保存试卷修题复核确认；同一版本首次确认后保持原记录，不因重复确认覆盖。</summary>
+    Task<StoreWriteResult> SavePaperUpdateReviewAsync(
+        LocalStateKey key, PaperUpdateReviewRecord record, CancellationToken ct = default);
+
+    /// <summary>按版本升序读取全部复核确认记录。</summary>
+    Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(
+        LocalStateKey key, CancellationToken ct = default);
+
     /// <summary>只允许清理没有答题状态的准备记录，正常客户端不能删除答案或固定提交。</summary>
     Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default);
 }
@@ -102,7 +117,8 @@ public interface ILocalStateStore : IDisposable
 /// </summary>
 public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceiptStore
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
+    private const int LegacySchemaVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = JsonDefaults.Create();
     private readonly BlockingCollection<WorkItem> _queue = new(new ConcurrentQueue<WorkItem>(), 128);
     private readonly TaskCompletionSource<bool> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -219,7 +235,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         try
         {
             connection.Open();
-            if (!isNew) ValidateDatabase(connection, identity);
+            if (!isNew) identity = ValidateDatabase(connection, identity);
             ConfigureDurability(connection);
             if (isNew) CreateSchema(connection, identity);
             return connection;
@@ -262,7 +278,8 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
                 throw new InvalidDataException("本地数据库初始化记录无效。");
             var identity = JsonSerializer.Deserialize<StoreIdentity>(
                 File.ReadAllText(_identityPath, new UTF8Encoding(false, true)), JsonOptions);
-            if (identity is null || identity.SchemaVersion != SchemaVersion ||
+            if (identity is null ||
+                (identity.SchemaVersion != SchemaVersion && identity.SchemaVersion != LegacySchemaVersion) ||
                 !Guid.TryParseExact(identity.DatabaseId, "N", out _))
                 throw new InvalidDataException("本地数据库初始化记录损坏或版本不受支持。");
             return (identity, false);
@@ -295,7 +312,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             throw new InvalidDataException("本地数据库不能启用 FULL 同步，未开始答题存储。");
     }
 
-    private static void ValidateDatabase(SqliteConnection connection, StoreIdentity identity)
+    private StoreIdentity ValidateDatabase(SqliteConnection connection, StoreIdentity identity)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA integrity_check;";
@@ -305,7 +322,16 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
                 throw new InvalidDataException("本地数据库完整性检查失败；已保留原文件，不能自动重建。");
         }
         command.CommandText = "PRAGMA user_version;";
-        if (Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) != SchemaVersion)
+        var userVersion = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (userVersion == LegacySchemaVersion && identity.SchemaVersion == LegacySchemaVersion)
+        {
+            // v1 → v2：只增补 paper_update_review 复核记录表，不动既有答案数据。
+            UpgradeSchemaV1ToV2(connection);
+            identity = identity with { SchemaVersion = SchemaVersion };
+            PersistIdentityUpgrade(identity);
+            userVersion = SchemaVersion;
+        }
+        if (userVersion != SchemaVersion)
             throw new InvalidDataException("本地数据库结构版本不受支持；不能补造授权信息或覆盖已有答案。");
         command.CommandText = "SELECT database_id FROM store_identity WHERE singleton=1;";
         if (!string.Equals(command.ExecuteScalar() as string, identity.DatabaseId, StringComparison.Ordinal))
@@ -315,10 +341,43 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         {
             if (reader.Read()) throw new InvalidDataException("本地答题状态关联损坏；已保留原文件。");
         }
-        foreach (var table in new[] { "answer_state", "pending_snapshot", "fixed_submission", "preparation" })
+        foreach (var table in new[]
+                 { "answer_state", "pending_snapshot", "fixed_submission", "preparation", "paper_update_review" })
         {
             command.CommandText = $"SELECT server_key,exam_id,candidate_id,payload FROM {table} LIMIT 0;";
             using var reader = command.ExecuteReader();
+        }
+        return identity;
+    }
+
+    private static void UpgradeSchemaV1ToV2(SqliteConnection connection)
+    {
+        using var tx = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS paper_update_review(
+                server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+                paper_version INTEGER NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(server_key,exam_id,candidate_id,paper_version));
+            PRAGMA user_version=2;
+            """;
+        command.ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    private void PersistIdentityUpgrade(StoreIdentity identity)
+    {
+        // 与初始化相同的临时文件替换写入，升级后身份记录与数据库结构版本保持一致。
+        var temporary = _identityPath + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(identity, JsonOptions));
+            File.Replace(temporary, _identityPath, _identityPath + ".bak");
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
@@ -344,8 +403,12 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             CREATE TABLE preparation(
                 server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL, payload TEXT NOT NULL,
                 PRIMARY KEY(server_key,exam_id,candidate_id));
+            CREATE TABLE paper_update_review(
+                server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+                paper_version INTEGER NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(server_key,exam_id,candidate_id,paper_version));
             INSERT INTO store_identity(singleton,database_id) VALUES(1,$database_id);
-            PRAGMA user_version=1;
+            PRAGMA user_version=2;
             """;
         command.Parameters.AddWithValue("$database_id", identity.DatabaseId);
         command.ExecuteNonQuery();
@@ -515,6 +578,43 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             var record = ReadRecord<PreparationRecord>(conn, tx, key, "preparation");
             if (record is not null) ValidatePreparation(record);
             return record;
+        }, ct);
+
+    public Task<StoreWriteResult> SavePaperUpdateReviewAsync(
+        LocalStateKey key, PaperUpdateReviewRecord record, CancellationToken ct = default) =>
+        WriteAsync(key, (conn, tx) =>
+        {
+            Require(record.PaperVersion >= 1, "复核记录的试卷版本无效。");
+            // 首次确认保持原记录：重复确认（崩溃后重放）不改变原始确认时间。
+            using var command = KeyCommand(conn, tx, key, """
+                INSERT INTO paper_update_review(server_key,exam_id,candidate_id,paper_version,payload)
+                VALUES($s,$e,$c,$v,$payload)
+                ON CONFLICT(server_key,exam_id,candidate_id,paper_version) DO NOTHING;
+                """);
+            command.Parameters.AddWithValue("$v", record.PaperVersion);
+            command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(record, JsonOptions));
+            command.ExecuteNonQuery();
+        }, ct);
+
+    public Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(
+        LocalStateKey key, CancellationToken ct = default) =>
+        ReadAsync<IReadOnlyList<PaperUpdateReviewRecord>>(key, (conn, tx) =>
+        {
+            using var command = KeyCommand(conn, tx, key, """
+                SELECT payload FROM paper_update_review
+                 WHERE server_key=$s AND exam_id=$e AND candidate_id=$c
+                 ORDER BY paper_version;
+                """);
+            using var reader = command.ExecuteReader();
+            var records = new List<PaperUpdateReviewRecord>();
+            while (reader.Read())
+            {
+                var record = JsonSerializer.Deserialize<PaperUpdateReviewRecord>(reader.GetString(0), JsonOptions);
+                if (record is null || record.PaperVersion < 1)
+                    throw new InvalidDataException("试卷复核记录损坏，不能作为空记录处理。");
+                records.Add(record);
+            }
+            return (IReadOnlyList<PaperUpdateReviewRecord>)records.AsReadOnly();
         }, ct);
 
     public Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default) =>

@@ -385,6 +385,8 @@ public sealed class StudentExamRuntimeTests
         public Task<FixedSubmissionRecord?> LoadFixedSubmissionAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadFixedSubmissionAsync(key, ct);
         public Task<StoreWriteResult> SavePreparationAsync(LocalStateKey key, PreparationRecord record, CancellationToken ct = default) => inner.SavePreparationAsync(key, record, ct);
         public Task<PreparationRecord?> LoadPreparationAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadPreparationAsync(key, ct);
+        public Task<StoreWriteResult> SavePaperUpdateReviewAsync(LocalStateKey key, PaperUpdateReviewRecord record, CancellationToken ct = default) => inner.SavePaperUpdateReviewAsync(key, record, ct);
+        public Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadPaperUpdateReviewsAsync(key, ct);
         public Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default) => inner.DeleteAsync(key, ct);
         public void Dispose() { } // The fixture owns the underlying store.
     }

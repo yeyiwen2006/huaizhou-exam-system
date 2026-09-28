@@ -49,7 +49,7 @@ public sealed class AnswerSession
 {
     private readonly ILocalStateStore _store;
     private readonly TimeProvider _time;
-    private readonly PaperStructure? _paper;
+    private PaperStructure? _paper;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LocalStateKey? _key;
     private AnswerSessionContext? _context;
@@ -231,6 +231,45 @@ public sealed class AnswerSession
             return Task.FromResult(true);
         }, ct);
     }
+
+    /// <summary>
+    /// B06 试卷修订版本切换：同一参试/设备/授权不变，仅提升 PaperVersion。
+    /// 原答案、标记与当前题整体结转为新版本的下一次待保存修改（AnswerVersion+1），
+    /// 事务落盘成功后按新版本继续作答；失败进入 WriteBlocked，原可靠状态保留。
+    /// 试卷结构可同时替换（服务器拒绝结构性变更，正常情况下题目选项标识不变）。
+    /// </summary>
+    public Task<AnswerChangeResult> SwitchPaperVersionAsync(
+        long newPaperVersion, PaperStructure? newStructure = null, CancellationToken ct = default) =>
+        SerializedAsync(async () =>
+        {
+            if (_key is null || _context is null || _reliable is null)
+                return ChangeFailure("答题会话尚未启动，不能切换试卷版本。");
+            if (Volatile.Read(ref _authorizationInvalid) != 0 || _loadFailed ||
+                Status is not AnswerSessionStatus.Active)
+                return ChangeFailure("当前答卷不可修改，不能切换试卷版本。");
+            if (newPaperVersion <= _context.PaperVersion)
+                return ChangeFailure("新试卷版本不高于当前版本，无需切换。");
+            if (newStructure is not null && AnswerSheetContract.Validate(newStructure, _reliable.Answers) is not null)
+                return ChangeFailure("新试卷结构与当前答卷不一致，原答案已保留，不能静默切换。");
+
+            var candidate = _pendingWrite?.State ?? _reliable;
+            var nextVersion = checked(candidate.AnswerVersion + 1);
+            _context = _context with { PaperVersion = newPaperVersion };
+            if (newStructure is not null)
+            {
+                _paper = FreezeStructure(newStructure);
+            }
+            _pendingWrite = BuildPending(nextVersion, candidate.Answers, candidate.Marks, candidate.CurrentQuestionId);
+            var result = await PersistPendingAsync(ct).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                LastError = null;
+            }
+            return result;
+        }, ct);
+
+    private static PaperStructure FreezeStructure(PaperStructure paper) => new(Array.AsReadOnly(
+        paper.Questions.Select(q => q with { OptionIds = Array.AsReadOnly(q.OptionIds.ToArray()) }).ToArray()));
 
     public Task SuspendAsync(string reason, CancellationToken ct = default)
     {

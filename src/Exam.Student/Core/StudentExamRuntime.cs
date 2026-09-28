@@ -36,9 +36,13 @@ public sealed class StudentExamRuntime(
     private bool _localRecoveryChecked;
     private string? _localStateError;
     private StudentPaperManifest? _paper;
+    private (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt)? _lastInstalledUpdate;
+    private PaperUpdateCoordinator? _paperUpdate;
 
     public ExamPackageManager Manager { get; } = manager;
     public AnswerSession? Answers { get; private set; }
+    /// <summary>B06 在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
+    public PaperUpdateCoordinator PaperUpdate => _paperUpdate ??= new PaperUpdateCoordinator(Manager, this);
     public StudentPaperManifest? Paper => !_disposed && !Manager.ExamEnded &&
         Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked ? _paper : null;
 
@@ -213,8 +217,33 @@ public sealed class StudentExamRuntime(
             {
                 if (_answerContext != context)
                 {
-                    await Answers.InvalidateAuthorizationAsync(ct);
-                    _localStateError = "参试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
+                    if (_answerContext is { } previous &&
+                        previous.ParticipationId == context.ParticipationId &&
+                        previous.EntryVersion == context.EntryVersion &&
+                        previous.AuthorizationVersion == context.AuthorizationVersion &&
+                        previous.DeviceId == context.DeviceId &&
+                        context.PaperVersion > previous.PaperVersion &&
+                        Answers.Status == AnswerSessionStatus.Active)
+                    {
+                        // B06 试卷修订：同一参试/设备/授权下仅版本提升时，
+                        // 答案、标记与当前题结转为新版本继续作答，不清空不重建。
+                        var switched = await Answers.SwitchPaperVersionAsync(
+                            context.PaperVersion, _paper?.Structure, ct);
+                        if (switched.Succeeded)
+                        {
+                            _answerContext = context;
+                            _localStateError = null;
+                        }
+                        else
+                        {
+                            _localStateError = $"试卷版本切换未完成：{switched.Error} 原答案已保留，请联系考务人员。";
+                        }
+                    }
+                    else
+                    {
+                        await Answers.InvalidateAuthorizationAsync(ct);
+                        _localStateError = "参试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
+                    }
                 }
                 return;
             }
@@ -260,6 +289,45 @@ public sealed class StudentExamRuntime(
     }
 
     private void OnAnswerStateSaved() => NotifyStateChanged();
+
+    /// <summary>记录一次已安装的试卷修订（由 B06 编排器在切换成功后回调）。</summary>
+    public void RecordInstalledPaperUpdate(long version, DateTimeOffset receivedAt, DateTimeOffset installedAt)
+    {
+        _lastInstalledUpdate = (version, receivedAt, installedAt);
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// B06 复核记录：考生确认已复核修订后的试题；同一版本首次确认后保持原记录。
+    /// 返回 null 表示尚未有可确认的已安装更新。
+    /// </summary>
+    public Task<StoreWriteResult?> ConfirmPaperUpdateReviewAsync(CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var installed = _lastInstalledUpdate;
+        if (localState is null || _localKey is null || installed is not { } update)
+        {
+            return Task.FromResult<StoreWriteResult?>(null);
+        }
+        return ConfirmPaperUpdateReviewCoreAsync(update, ct);
+    }
+
+    private async Task<StoreWriteResult?> ConfirmPaperUpdateReviewCoreAsync(
+        (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt) update, CancellationToken ct)
+    {
+        var record = new PaperUpdateReviewRecord(
+            update.Version, update.ReceivedAt, update.InstalledAt, DateTimeOffset.UtcNow);
+        var result = await localState!.SavePaperUpdateReviewAsync(_localKey!, record, ct);
+        if (!result.Succeeded)
+        {
+            _localStateError = $"复核确认保存失败：{result.Error}";
+            NotifyStateChanged();
+        }
+        return result;
+    }
+
+    /// <summary>已安装修订的待复核版本；没有已安装更新为 null。</summary>
+    public long? PendingReviewVersion => _lastInstalledUpdate?.Version;
 
     private static async Task FreezeEndedAnswersAsync(AnswerSession answers, CancellationToken ct)
     {
@@ -400,6 +468,11 @@ public sealed class StudentExamRuntime(
             var answerStop = Manager.ExamEnded && Answers is { } answers
                 ? FreezeEndedAnswersAsync(answers, CancellationToken.None)
                 : Task.CompletedTask;
+            // B06：PaperUpdated 事件先记录最新版本并确认 Received 后，交给更新编排器同步新版题包。
+            if (delivery.EventType == CommandEventType.PaperUpdated)
+            {
+                _paperUpdate?.Notify(delivery);
+            }
             NotifyStateChanged();
             await Task.WhenAll(packageCommand, answerStop);
             await SynchronizeLocalAnswersAsync(ct);
@@ -431,6 +504,12 @@ public sealed class StudentExamRuntime(
         _lifetime.Cancel();
         try
         {
+            // B06：先停更新编排器，避免其后台循环再触碰正在关闭的管理器与会话。
+            var updateCoordinator = _paperUpdate;
+            if (updateCoordinator is not null)
+            {
+                await updateCoordinator.DisposeAsync();
+            }
             if (_feed is not null)
             {
                 await _feed.DisposeAsync();

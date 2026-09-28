@@ -10,14 +10,43 @@ namespace Exam.Student;
 /// <summary>
 /// 学生端主壳：承载页面区域与导航。所有页面切换经由 Navigation，
 /// 保证编号姓名显示、账号数据隔离和后续全屏/重连（B06/B08）有统一挂载点。
+/// B06：激活态霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
+/// 取消激活后恢复常规窗口。Ctrl+Alt+Del 用户态不可拦截，属文档注明边界。
 /// </summary>
 public partial class MainWindow : Window
 {
     private Navigation _navigation = null!;
+    private KioskGuard? _kiosk;
 
     public MainWindow()
     {
         InitializeComponent();
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        ApplyKioskState();
+    }
+
+    /// <summary>激活态霸屏：拦截标题栏与系统关闭；取消激活后恢复常规关闭。</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (App.Services.Session.IsActivated)
+        {
+            e.Cancel = true;
+            if (WindowState != WindowState.Maximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            Activate();
+        }
+        else
+        {
+            _kiosk?.Disable();
+            _kiosk = null;
+        }
+        base.OnClosing(e);
     }
 
     /// <summary>启动流程：已激活 → 登录页；未激活 → 激活页。</summary>
@@ -41,6 +70,23 @@ public partial class MainWindow : Window
         _navigation.GoToActivation();
     }
 
+    /// <summary>根据激活状态切换霸屏与常规窗口；每次页面切换都会核对。</summary>
+    private void ApplyKioskState()
+    {
+        var activated = App.Services.Session.IsActivated;
+        if (activated && _kiosk is null)
+        {
+            _kiosk = KioskGuard.Enable(this);
+            Topmost = true;
+        }
+        else if (!activated && _kiosk is not null)
+        {
+            _kiosk.Disable();
+            _kiosk = null;
+            Topmost = false;
+        }
+    }
+
     /// <summary>页面导航。所有页面切换经由本类，保证统一行为。</summary>
     public sealed class Navigation
     {
@@ -59,6 +105,11 @@ public partial class MainWindow : Window
                 window.WindowStyle = App.Services.Session.IsActivated ? WindowStyle.None : WindowStyle.SingleBorderWindow;
                 window.ResizeMode = App.Services.Session.IsActivated ? ResizeMode.NoResize : ResizeMode.CanResize;
                 window.WindowState = App.Services.Session.IsActivated ? WindowState.Maximized : WindowState.Normal;
+                // B06 霸屏随激活状态启停（含取消激活后的恢复）。
+                if (window is MainWindow main)
+                {
+                    main.ApplyKioskState();
+                }
             }
         }
 
