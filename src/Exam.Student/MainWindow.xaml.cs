@@ -17,6 +17,7 @@ public partial class MainWindow : Window
 {
     private Navigation _navigation = null!;
     private KioskGuard? _kiosk;
+    private bool _applicationExitRequested;
 
     public MainWindow()
     {
@@ -32,7 +33,7 @@ public partial class MainWindow : Window
     /// <summary>激活态霸屏：拦截标题栏与系统关闭；取消激活后恢复常规关闭。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (App.Services.Session.IsActivated)
+        if (!_applicationExitRequested && App.Services.Session.IsActivated)
         {
             e.Cancel = true;
             if (WindowState != WindowState.Maximized)
@@ -47,6 +48,22 @@ public partial class MainWindow : Window
             _kiosk = null;
         }
         base.OnClosing(e);
+    }
+
+    /// <summary>只由已确认的退出系统路径调用，先释放本窗口限制再结束进程。</summary>
+    public void PrepareForApplicationExit()
+    {
+        _applicationExitRequested = true;
+        _kiosk?.Disable();
+        _kiosk = null;
+        Topmost = false;
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _kiosk?.Disable();
+        _kiosk = null;
+        base.OnClosed(e);
     }
 
     /// <summary>启动流程：已激活 → 登录页；未激活 → 激活页。</summary>
@@ -78,6 +95,9 @@ public partial class MainWindow : Window
         {
             _kiosk = KioskGuard.Enable(this);
             Topmost = true;
+            if (!_kiosk.IsInstalled)
+                MessageBox.Show(this, $"快捷键防护未能启用（Windows 错误 {_kiosk.InstallationError}）。窗口仍保持全屏；请通知考务人员，不能视为防护正常。",
+                    "快捷键防护未启用", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         else if (!activated && _kiosk is not null)
         {

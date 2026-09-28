@@ -27,21 +27,21 @@ namespace Exam.StudentUnitTests;
 /// 4) 修题提示与复核记录——同一版本首次确认后保持原记录；
 /// 5) 失焦检测补报与霸屏按键判定。
 /// </summary>
-public sealed class PaperUpdateTests
+public sealed partial class PaperUpdateTests
 {
     // ---------- B06-1 霸屏按键判定（纯函数） ----------
 
     [Fact]
     public void KioskBlocksExitShortcutsButAllowsNormalKeys()
     {
-        const int alt = 0x20, ctrl = 0x02;
+        const int alt = 0x20;
         const int vkTab = 0x09, vkEsc = 0x1B, vkF4 = 0x73, vkLwin = 0x5B, vkRwin = 0x5C, vkA = 0x41;
 
         Assert.Equal(KioskKeyDecision.SuppressAndRefocus, KioskGuard.Decide(vkLwin, 0, isSystemKey: false));
         Assert.Equal(KioskKeyDecision.SuppressAndRefocus, KioskGuard.Decide(vkRwin, 0, isSystemKey: false));
         Assert.Equal(KioskKeyDecision.SuppressAndRefocus, KioskGuard.Decide(vkTab, alt, isSystemKey: true));
         Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, alt, isSystemKey: true));
-        Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, ctrl, isSystemKey: false));
+        Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, 0, isSystemKey: false, controlDown: true));
         Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkF4, alt, isSystemKey: true));
         // 普通按键与不带 Alt 的 F4（应用内自定义场景）放行。
         Assert.Equal(KioskKeyDecision.Allow, KioskGuard.Decide(vkA, 0, isSystemKey: false));
@@ -85,7 +85,10 @@ public sealed class PaperUpdateTests
     {
         private DateTimeOffset _now = new(2026, 9, 28, 10, 0, 0, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => _now;
-        public void Advance(TimeSpan span) => _now += span;
+        private long _timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _timestamp;
+        public void Advance(TimeSpan span) { _now += span; _timestamp += span.Ticks; }
     }
 
     // ---------- B06-3 答案会话版本切换 ----------
@@ -215,6 +218,7 @@ public sealed class PaperUpdateTests
 
         fixture.Api.CurrentPaperVersion = 2;
         fixture.Api.DenyUnlock = true;
+        fixture.Api.UnlockErrorCode = ErrorCodes.ServiceRecovering; // 只有临时失败保留作答；撤权另有拒绝用例。
         var update = fixture.Api.Delivery(CommandEventType.PaperUpdated, eventId: "update-2", resourceVersion: 2, stateVersion: 2);
         await manager.HandleCommandAsync(update);
 
@@ -435,6 +439,8 @@ public sealed class PaperUpdateTests
     private sealed class UpdateFixture : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), $"exam-b06-tests-{Guid.NewGuid():N}");
+        public string DatabasePath => Path.Combine(_root, "state.db");
+        public string ControlPath => Directory.GetFiles(_root, "control.protected", SearchOption.AllDirectories).Single();
         public LocalStateKey Key { get; } = new("server", "exam", "candidate");
         public SqliteLocalStateStore Store { get; }
         public VersionedPackageApi Api { get; }
@@ -453,7 +459,7 @@ public sealed class PaperUpdateTests
         public static async Task<UpdateFixture> CreateAsync() => new(await VersionedPackageApi.CreateAsync());
 
         public ExamPackageManager Manager() => new(Api, Path.Combine(_root, "packages"), _device, _session, "exam");
-        public StudentExamRuntime Runtime() => new(Manager(), _device, Store, Key.CandidateId);
+        public StudentExamRuntime Runtime(ILocalStateStore? store = null) => new(Manager(), _device, store ?? Store, Key.CandidateId);
 
         public void Dispose()
         {
@@ -483,8 +489,15 @@ public sealed class PaperUpdateTests
         public long CurrentPaperVersion { get; set; } = 1;
         public bool TruncateDownload { get; set; }
         public bool DenyUnlock { get; set; }
+        public string UnlockErrorCode { get; set; } = ErrorCodes.AuthorizationRevoked;
+        public Func<AcknowledgeCommandRequest, ApiEnvelope<CommandAcknowledgement>>? AckHandler { get; set; }
         public EntryPreparationStatus PreparationStatus { get; set; } = EntryPreparationStatus.Ready;
-        public List<AcknowledgeCommandRequest> Acks { get; } = [];
+        public System.Collections.Concurrent.ConcurrentQueue<AcknowledgeCommandRequest> Acks { get; } = new();
+        public Func<long, CancellationToken, Task>? BeforeDownload { get; set; }
+        public Action<PackageUnlockRequest>? BeforeUnlock { get; set; }
+        public Func<ConfirmParticipationRequest, ApiEnvelope<ParticipationResult>>? ConfirmHandler { get; set; }
+        public List<PrepareExamEntryRequest> PrepareRequests { get; } = [];
+        public List<ConfirmParticipationRequest> ConfirmRequests { get; } = [];
 
         private VersionedPackageApi(X509Certificate2 node) => _node = node;
 
@@ -500,7 +513,7 @@ public sealed class PaperUpdateTests
                 var source = Directory.CreateDirectory(Path.Combine(root, "source")).FullName;
                 var compiled = Directory.CreateDirectory(Path.Combine(root, "compiled")).FullName;
                 await File.WriteAllTextAsync(Path.Combine(source, "manifest.json"), ManifestJson, Encoding.UTF8);
-                for (var version = 1; version <= 2; version++)
+                for (var version = 1; version <= 3; version++)
                 {
                     for (var number = 1; number <= 2; number++)
                     {
@@ -524,6 +537,7 @@ public sealed class PaperUpdateTests
 
         public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default)
         {
+            PrepareRequests.Add(request);
             var ciphertext = _ciphertexts[CurrentPaperVersion];
             return Task.FromResult(Ok(new EntryPreparationResult(request.RequestId, "exam", PreparationStatus,
                 new ExamResourceDescriptor("/api/v1/resources/package", ciphertext.Length, CurrentPaperVersion, 1),
@@ -538,6 +552,7 @@ public sealed class PaperUpdateTests
         {
             ct.ThrowIfCancellationRequested();
             await Task.Yield();
+            if (BeforeDownload is not null) await BeforeDownload(descriptor.PaperVersion, ct);
             var bytes = _ciphertexts[descriptor.PaperVersion];
             if (TruncateDownload)
             {
@@ -547,20 +562,24 @@ public sealed class PaperUpdateTests
             yield return bytes;
         }
 
-        public Task<ApiEnvelope<ParticipationResult>> ConfirmParticipationAsync(ConfirmParticipationRequest request, CancellationToken ct = default) =>
-            Task.FromResult(Ok(new ParticipationResult("participation", "exam", "candidate",
+        public Task<ApiEnvelope<ParticipationResult>> ConfirmParticipationAsync(ConfirmParticipationRequest request, CancellationToken ct = default)
+        {
+            ConfirmRequests.Add(request);
+            return Task.FromResult(ConfirmHandler?.Invoke(request) ?? Ok(new ParticipationResult("participation", "exam", "candidate",
                 ParticipationBusinessState.Answering, "device", 1, 1, 7, "resource-envelope:package",
                 Lifecycle: ExamLifecycle.Running)));
+        }
 
         public Task<ApiEnvelope<ParticipationResult>> WithdrawParticipationAsync(WithdrawParticipationRequest request, CancellationToken ct = default) =>
             throw new NotSupportedException("B06 测试不执行退出。");
 
         public Task<ApiEnvelope<PackageUnlockMaterial>> ResolveUnlockAsync(PackageUnlockRequest request, CancellationToken ct = default)
         {
+            BeforeUnlock?.Invoke(request);
             if (DenyUnlock && request.PaperVersion > 1)
             {
                 return Task.FromResult(new ApiEnvelope<PackageUnlockMaterial>("server", "node", 1, "correlation",
-                    null, new ApiError(ErrorCodes.AuthorizationRevoked, "测试：新版解锁被拒绝。")));
+                    null, new ApiError(UnlockErrorCode, "测试：新版解锁被拒绝。")));
             }
             var envelope = _envelopes[request.PaperVersion];
             return Task.FromResult(Ok(new PackageUnlockMaterial(envelope.PackageId, envelope.PaperVersion,
@@ -570,7 +589,8 @@ public sealed class PaperUpdateTests
 
         public Task<ApiEnvelope<CommandAcknowledgement>> AcknowledgeCommandAsync(AcknowledgeCommandRequest request, CancellationToken ct = default)
         {
-            Acks.Add(request);
+            Acks.Enqueue(request);
+            if (AckHandler is not null) return Task.FromResult(AckHandler(request));
             return Task.FromResult(Ok(new CommandAcknowledgement(request.EventId, request.RequestId,
                 request.ProcessingResult, request.ActualPaperVersion, request.FailureReason, DateTimeOffset.UtcNow)));
         }

@@ -40,6 +40,7 @@ public partial class ExamInProgressPage : UserControl
     private readonly FocusTracker _focus = new();
     private Window? _focusWindow;
     private bool _reviewPending;
+    private bool _reviewSaving;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
@@ -164,7 +165,7 @@ public partial class ExamInProgressPage : UserControl
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
         if (_lifetime.IsCancellationRequested) return;
-        _focus.OnFocusLost();
+        if (_focus.OnFocusLost()) _ = KickSyncAfterRefocusAsync();
         RefreshFocusStatus();
     }
 
@@ -191,7 +192,7 @@ public partial class ExamInProgressPage : UserControl
     {
         var count = _focus.FocusLostCount;
         FocusStatusText.Text = count > 0
-            ? $"累计失焦 {count} 次（约 {Math.Round(_focus.TotalUnfocusedDuration.TotalSeconds)} 秒），已随进度上报"
+            ? $"累计失焦 {count} 次（约 {Math.Round(_focus.TotalUnfocusedDuration.TotalSeconds)} 秒），仅为本机会话记录，尚无服务器留痕回执"
             : string.Empty;
     }
 
@@ -210,61 +211,44 @@ public partial class ExamInProgressPage : UserControl
         };
     }
 
-    /// <summary>B06 修题提示：新版本切换完成后弹出复核提示；确认即写入本地复核记录。</summary>
-    private async void OnPaperUpdateInstalled(object? sender, (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt) e)
+    /// <summary>先允许考生阅读修订内容，再由按钮明确确认，不用挡住题目的弹窗代替复核。</summary>
+    private void OnPaperUpdateInstalled(object? sender, (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt) e)
     {
-        if (_lifetime.IsCancellationRequested) { return; }
+        if (_lifetime.IsCancellationRequested) return;
         _runtime.RecordInstalledPaperUpdate(e.Version, e.ReceivedAt, e.InstalledAt);
-        _reviewPending = true;
-        ReviewUpdateButton.Visibility = Visibility.Visible;
         RefreshStatus();
-        if (Window.GetWindow(this) is not { } window) { return; }
-        var confirmed = await ConfirmDialog.ShowAsync(
-            window,
-            "试题已修订",
-            $"本场考试的试题已修订为版本 {e.Version}，你已作答的答案、标记和当前题全部保留。" +
-            "请从头到尾复核修订后的试题；如发现题目内容异常，请立即联系考务人员。",
-            "已复核修订试题",
-            "稍后复核",
-            isDanger: false);
-        if (confirmed)
-        {
-            await ConfirmReviewCoreAsync();
-        }
     }
 
     private async void OnConfirmReview(object sender, RoutedEventArgs e)
     {
-        await ConfirmReviewCoreAsync();
-    }
-
-    private async Task ConfirmReviewCoreAsync()
-    {
-        if (!_reviewPending || _lifetime.IsCancellationRequested) { return; }
-        var result = await _runtime.ConfirmPaperUpdateReviewAsync(_lifetime.Token);
-        if (result is { Succeeded: true })
+        if (_reviewSaving || !_reviewPending || _lifetime.IsCancellationRequested ||
+            _runtime.PendingReviewVersion is not { } version) return;
+        _reviewSaving = true;
+        ReviewUpdateButton.IsEnabled = false;
+        try
         {
-            _reviewPending = false;
-            ReviewUpdateButton.Visibility = Visibility.Collapsed;
-            PaperBanner.Level = StatusLevel.Info;
-            PaperBanner.Message = "修订版试题复核确认已记录。";
+            var result = await _runtime.ConfirmPaperUpdateReviewAsync(version, _lifetime.Token);
+            if (_lifetime.IsCancellationRequested) return;
+            PaperBanner.Level = result is { Succeeded: true } ? StatusLevel.Info : StatusLevel.Warning;
+            PaperBanner.Message = result is { Succeeded: true }
+                ? $"版本 {version} 的复核确认已保存在本机。"
+                : "复核确认尚未保存或版本已变化，请查看当前试题后重试。";
             PaperBanner.IsOpen = true;
         }
-        else if (result is { Succeeded: false })
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        finally
         {
-            PaperBanner.Level = StatusLevel.Warning;
-            PaperBanner.Message = "复核确认尚未保存成功，原确认要求保留，请重试。";
-            PaperBanner.IsOpen = true;
+            _reviewSaving = false;
+            if (!_lifetime.IsCancellationRequested) RefreshStatus();
         }
-        RefreshStatus();
     }
 
-    /// <summary>B06 设备裁决：本设备被撤销后返回选择考试（答案已保留并同步）。</summary>
+    /// <summary>B06 设备裁决：本设备被撤销后返回选择考试（本机已有答案已保留）。</summary>
     private async void OnRevokedBack(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is not { } window) { return; }
         var confirmed = await ConfirmDialog.ShowAsync(
-            window, "返回选择考试", "确定返回选择考试页面吗？本机已停止作答，答案已保留并同步服务器。",
+            window, "返回选择考试", "确定返回选择考试页面吗？本机已停止作答并保留已有记录；服务器仅保留此前确认同步的进度。",
             "返回", "留在本页", isDanger: false);
         if (!confirmed) { return; }
         _lifetime.Cancel();
@@ -273,7 +257,7 @@ public partial class ExamInProgressPage : UserControl
     }
 
     private bool CanAnswer =>
-        !_lifetime.IsCancellationRequested && !_submitting && !_rendering &&
+        !_lifetime.IsCancellationRequested && !_submitting && !_rendering && !_runtime.IsPaperUpdateInProgress &&
         _sync.Phase is not (SubmissionSyncPhase.Blocked or SubmissionSyncPhase.Confirmed) &&
         _runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked &&
         ReferenceEquals(_loadedPaper, _runtime.Paper) && QuestionView.HasQuestion &&
@@ -707,6 +691,10 @@ public partial class ExamInProgressPage : UserControl
         RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
         SyncStatusText.Text = _sync.StatusText;
         RefreshFocusStatus();
+        _reviewPending = _runtime.PendingReviewVersion is not null && !revoked && !_runtime.HasFixedSubmission && !_runtime.Manager.ExamEnded;
+        ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;
+        ReviewUpdateButton.IsEnabled = _reviewPending && !_reviewSaving && !_runtime.IsPaperUpdateInProgress;
+        if (_reviewPending) ReviewUpdateButton.Content = $"已复核版本 {_runtime.PendingReviewVersion} 的修订试题";
     }
 
     private static string QuestionTypeTitle(string questionType) => questionType switch

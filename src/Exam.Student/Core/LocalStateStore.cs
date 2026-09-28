@@ -317,37 +317,56 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA integrity_check;";
         using (var reader = command.ExecuteReader())
-        {
             if (!reader.Read() || reader.GetString(0) != "ok" || reader.Read())
                 throw new InvalidDataException("本地数据库完整性检查失败；已保留原文件，不能自动重建。");
-        }
         command.CommandText = "PRAGMA user_version;";
-        var userVersion = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (userVersion == LegacySchemaVersion && identity.SchemaVersion == LegacySchemaVersion)
-        {
-            // v1 → v2：只增补 paper_update_review 复核记录表，不动既有答案数据。
-            UpgradeSchemaV1ToV2(connection);
-            identity = identity with { SchemaVersion = SchemaVersion };
-            PersistIdentityUpgrade(identity);
-            userVersion = SchemaVersion;
-        }
-        if (userVersion != SchemaVersion)
-            throw new InvalidDataException("本地数据库结构版本不受支持；不能补造授权信息或覆盖已有答案。");
+        var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (version is not (LegacySchemaVersion or SchemaVersion) ||
+            (version == LegacySchemaVersion && identity.SchemaVersion != LegacySchemaVersion))
+            throw new InvalidDataException("本地数据库与初始化记录的结构版本不受支持，原文件未修改。");
         command.CommandText = "SELECT database_id FROM store_identity WHERE singleton=1;";
         if (!string.Equals(command.ExecuteScalar() as string, identity.DatabaseId, StringComparison.Ordinal))
-            throw new InvalidDataException("本地数据库与初始化记录不匹配，不能替换为其他数据库。");
+            throw new InvalidDataException("本地数据库与初始化记录不匹配，不能迁移或替换其他数据库。");
         command.CommandText = "PRAGMA foreign_key_check;";
         using (var reader = command.ExecuteReader())
-        {
             if (reader.Read()) throw new InvalidDataException("本地答题状态关联损坏；已保留原文件。");
-        }
-        foreach (var table in new[]
-                 { "answer_state", "pending_snapshot", "fixed_submission", "preparation", "paper_update_review" })
+        foreach (var table in new[] { "answer_state", "pending_snapshot", "fixed_submission", "preparation" })
         {
             command.CommandText = $"SELECT server_key,exam_id,candidate_id,payload FROM {table} LIMIT 0;";
             using var reader = command.ExecuteReader();
         }
+        if (version == LegacySchemaVersion)
+        {
+            command.CommandText = "SELECT count(*) FROM sqlite_master WHERE name='paper_update_review';";
+            if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                throw new InvalidDataException("旧版数据库出现非预期复核表，未自动覆盖或迁移。");
+            // 身份与旧结构均核对后才改变持久化设置；DDL 和 user_version 同一 FULL 事务提交。
+            ConfigureDurability(connection);
+            UpgradeSchemaV1ToV2(connection);
+        }
+        ValidateReviewTable(connection);
+        if (identity.SchemaVersion == LegacySchemaVersion)
+        {
+            // DB v2 / sidecar v1 是 SQL 事务提交后、侧文件替换前中断的唯一可恢复组合。
+            // 已核对 database_id、完整结构及外键，不能仅凭版本号修复任意文件。
+            identity = identity with { SchemaVersion = SchemaVersion };
+            PersistIdentityUpgrade(identity);
+        }
         return identity;
+    }
+
+    private static void ValidateReviewTable(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(paper_update_review);";
+        using var reader = command.ExecuteReader();
+        var columns = new List<(string Name, string Type, long Required, long Primary)>();
+        while (reader.Read()) columns.Add((reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetInt64(5)));
+        (string, string, long, long)[] expected =
+        [ ("server_key", "TEXT", 1, 1), ("exam_id", "TEXT", 1, 2), ("candidate_id", "TEXT", 1, 3),
+          ("paper_version", "INTEGER", 1, 4), ("payload", "TEXT", 1, 0) ];
+        if (!columns.SequenceEqual(expected))
+            throw new InvalidDataException("试卷复核表的字段或唯一键不符合已知结构，原库已保留。");
     }
 
     private static void UpgradeSchemaV1ToV2(SqliteConnection connection)
@@ -356,7 +375,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         using var command = connection.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            CREATE TABLE IF NOT EXISTS paper_update_review(
+            CREATE TABLE paper_update_review(
                 server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
                 paper_version INTEGER NOT NULL, payload TEXT NOT NULL,
                 PRIMARY KEY(server_key,exam_id,candidate_id,paper_version));
@@ -372,7 +391,12 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         var temporary = _identityPath + $".{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(identity, JsonOptions));
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                       4096, FileOptions.WriteThrough))
+            {
+                stream.Write(JsonSerializer.SerializeToUtf8Bytes(identity, JsonOptions));
+                stream.Flush(flushToDisk: true);
+            }
             File.Replace(temporary, _identityPath, _identityPath + ".bak");
         }
         finally

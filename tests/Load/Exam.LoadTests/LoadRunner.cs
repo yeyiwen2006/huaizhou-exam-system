@@ -13,12 +13,20 @@ public sealed partial class LoadRunner : IAsyncDisposable
     private readonly LoadManifest _manifest;
     private readonly HttpClient _http;
     private readonly LoadReport _report;
-    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly TimeProvider _timeProvider;
+    private readonly ElapsedClock _clock;
+    private sealed class ElapsedClock(TimeProvider time)
+    {
+        private readonly long _started = time.GetTimestamp();
+        public TimeSpan Elapsed => time.GetElapsedTime(_started);
+    }
     private readonly string _runId = Guid.NewGuid().ToString("N");
     private readonly long[] _versions;
 
-    public LoadRunner(LoadOptions options, LoadManifest manifest, HttpMessageHandler? handler = null)
+    public LoadRunner(LoadOptions options, LoadManifest manifest, HttpMessageHandler? handler = null, TimeProvider? timeProvider = null)
     {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _clock = new ElapsedClock(_timeProvider);
         _options = options;
         _manifest = manifest;
         _versions = manifest.Sessions.Select(s => s.InitialAnswerVersion).ToArray();
@@ -259,7 +267,7 @@ public sealed partial class LoadRunner : IAsyncDisposable
     private async Task DelayUntilAsync(double due, CancellationToken ct)
     {
         var delay = due - _clock.Elapsed.TotalMilliseconds;
-        if (delay > 0) await Task.Delay(TimeSpan.FromMilliseconds(delay), ct);
+        if (delay > 0) await Task.Delay(TimeSpan.FromMilliseconds(delay), _timeProvider, ct);
         ct.ThrowIfCancellationRequested();
     }
     public ValueTask DisposeAsync() { _http.Dispose(); _report.Dispose(); return ValueTask.CompletedTask; }

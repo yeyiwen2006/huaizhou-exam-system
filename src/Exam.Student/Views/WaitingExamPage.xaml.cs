@@ -59,7 +59,7 @@ public partial class WaitingExamPage : UserControl
 
     private async Task PrepareAndDownloadAsync()
     {
-        if (_busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
+        if (_lifetime.IsCancellationRequested || _busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
         {
             return;
         }
@@ -317,7 +317,7 @@ public partial class WaitingExamPage : UserControl
     /// <summary>B06：等待/已下载阶段收到试卷更新事件后自动重新获取新版资料。</summary>
     private async void MaybeAutoRefreshForUpdate()
     {
-        if (_busy || _navigated || _updateRefreshQueued ||
+        if (_lifetime.IsCancellationRequested || _busy || _navigated || _updateRefreshQueued ||
             _runtime?.Manager is not { } manager || manager.DeviceDecisionPending)
         {
             return;
@@ -441,7 +441,7 @@ public partial class WaitingExamPage : UserControl
     /// <summary>B06 设备裁决：待裁决状态每 15 秒自动重试准备，裁决通过后自动继续。</summary>
     private void MaybeRetryArbitration()
     {
-        if (_navigated || _busy || _runtime?.Manager is not { DeviceDecisionPending: true })
+        if (_lifetime.IsCancellationRequested || _navigated || _busy || _runtime?.Manager is not { DeviceDecisionPending: true })
         {
             _arbitrationRetryCountdown = 0;
             return;

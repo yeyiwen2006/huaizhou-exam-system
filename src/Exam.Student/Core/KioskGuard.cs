@@ -17,7 +17,7 @@ public enum KioskKeyDecision
 /// B06 普通权限霸屏：低级键盘钩子（WH_KEYBOARD_LL）在标准用户会话内即可安装，
 /// 拦截 Win、Ctrl+Esc、Alt+Tab、Alt+Esc、Alt+F4 等离开考试界面的快捷键。
 /// Ctrl+Alt+Del 由 Windows 安全注意画面处理，用户态无法拦截，属文档注明的行为边界；
-/// 失焦由 FocusTracker 检测并补报，不依赖钩子。钩子回调须保持极简，不做任何阻塞操作。
+/// 失焦由 FocusTracker 做会话内统计，不依赖钩子。钩子回调须保持极简，不做任何阻塞操作。
 /// </summary>
 public sealed class KioskGuard
 {
@@ -35,16 +35,14 @@ public sealed class KioskGuard
     private static readonly object InstallLock = new();
     private static KioskGuard? _active;
 
-    private readonly Native.HookProc _proc;
+    private static readonly Native.HookProc HookProcedure = HookCallback;
     private readonly WeakReference _window = new(null);
     private nint _hook;
     private bool _disposed;
 
-    private KioskGuard()
-    {
-        // 委托实例必须保持强引用，否则 GC 回收后钩子调用会崩溃。
-        _proc = HookCallback;
-    }
+    private KioskGuard() { }
+    public bool IsInstalled => _hook != nint.Zero && !_disposed;
+    public int InstallationError { get; private set; }
 
     /// <summary>当前是否有霸屏守卫处于激活状态（同进程同时只有一个）。</summary>
     public static KioskGuard? Active
@@ -66,9 +64,10 @@ public sealed class KioskGuard
 
             var guard = new KioskGuard();
             guard._window.Target = window;
-            var hook = Native.SetWindowsHookExW(WhKeyboardLl, guard._proc, nint.Zero, 0);
+            var hook = Native.SetWindowsHookExW(WhKeyboardLl, HookProcedure, nint.Zero, 0);
             if (hook == nint.Zero)
             {
+                guard.InstallationError = Marshal.GetLastWin32Error();
                 // 安装失败（例如受限会话）时不阻断考试：窗口仍全屏置顶，
                 // 快捷键拦截降级为文档说明的行为边界。
                 return guard;
@@ -140,7 +139,9 @@ public sealed class KioskGuard
             return Native.CallNextHookEx(nint.Zero, code, wParam, lParam);
         }
 
-        var decision = Decide(data.VkCode, data.Flags, message == WmSyskeydown);
+        // Ctrl 是另一个已经按下的修饰键；flags 的 0x02 是 LOWER_IL_INJECTED，不是 Ctrl。
+        var controlDown = (Native.GetAsyncKeyState(0x11) & 0x8000) != 0;
+        var decision = Decide(data.VkCode, data.Flags, message == WmSyskeydown, controlDown);
         if (decision == KioskKeyDecision.Allow)
         {
             return Native.CallNextHookEx(nint.Zero, code, wParam, lParam);
@@ -164,13 +165,13 @@ public sealed class KioskGuard
     }
 
     /// <summary>纯判定函数：霸屏状态下给定按键是否拦截，独立于钩子可测。</summary>
-    public static KioskKeyDecision Decide(int vkCode, int flags, bool isSystemKey)
+    public static KioskKeyDecision Decide(int vkCode, int flags, bool isSystemKey, bool controlDown = false)
     {
         const int LlkhfAltDown = 0x00000020;
-        const int LlkhfCtrlDown = 0x00000002;
+        if ((flags & LlkhfInjected) != 0) return KioskKeyDecision.Allow;
 
         var alt = (flags & LlkhfAltDown) != 0;
-        var ctrl = (flags & LlkhfCtrlDown) != 0;
+        var ctrl = controlDown;
 
         if (vkCode is VkLwin or VkRwin)
         {
@@ -208,6 +209,9 @@ public sealed class KioskGuard
         }
 
         public delegate nint HookProc(int code, nint wParam, nint lParam);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int virtualKey);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern nint SetWindowsHookExW(int idHook, HookProc lpfn, nint hMod, uint dwThreadId);

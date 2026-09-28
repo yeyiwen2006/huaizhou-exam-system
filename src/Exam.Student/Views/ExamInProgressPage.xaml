@@ -200,7 +200,7 @@
                            HorizontalAlignment="Center"
                            TextWrapping="Wrap"
                            Margin="0,10,0,0"
-                           Text="考务人员已将本场考试的作答授权转移至其他设备。本机已停止作答并停止显示试题；你的答案已保留并同步至服务器，请联系考务人员。" />
+                           Text="考务人员已将本场考试的作答授权转移至其他设备。本机已停止作答并停止显示试题；本机已有记录已保留；服务器仅保存此前确认同步的进度，请联系考务人员。" />
                 <Button Style="{StaticResource Btn.Secondary}"
                         Content="返回选择考试"
                         Margin="0,18,0,0"
