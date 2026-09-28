@@ -160,7 +160,10 @@ public sealed class PostgresArchiveRecoveryTests : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(Working, "wal-recovery.json"));
         var replay = new PostgresArchiveRecovery(Options);
-        await Assert.ThrowsAnyAsync<IOException>(() => replay.PrepareAsync(Copy, _request, default));
+        // Windows reports a directory occupying the marker path as access denied;
+        // Unix reports it as an I/O error. Both must leave the recovery signal intact.
+        var failure = await Record.ExceptionAsync(() => replay.PrepareAsync(Copy, _request, default));
+        Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
         Assert.True(File.Exists(Path.Combine(Database, "recovery.signal")));
         Assert.True(Directory.Exists(Path.Combine(Working, "wal-recovery.json")));
         await Assert.ThrowsAsync<IOException>(() => replay.PrepareAsync(Copy, _request, default));

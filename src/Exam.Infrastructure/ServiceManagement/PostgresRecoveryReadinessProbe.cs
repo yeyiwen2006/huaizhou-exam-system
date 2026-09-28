@@ -100,13 +100,16 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
             var snapshot = JsonSerializer.Deserialize<ExamVersionSnapshot>(reader.GetString(7), Json);
             if (snapshot is null || snapshot.Versions is null || snapshot.Schedule is null || snapshot.Participants is null ||
                 snapshot.ExamId != reader.GetString(0) || snapshot.Versions != new VersionVector(reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3)) ||
-                snapshot.Schedule.StartsAt != reader.GetFieldValue<DateTimeOffset>(4) || snapshot.Schedule.EndsAt != reader.GetFieldValue<DateTimeOffset>(5) ||
+                PostgreSqlTimestampTicks(snapshot.Schedule.StartsAt) != reader.GetFieldValue<DateTimeOffset>(4).UtcTicks ||
+                PostgreSqlTimestampTicks(snapshot.Schedule.EndsAt) != reader.GetFieldValue<DateTimeOffset>(5).UtcTicks ||
                 snapshot.LifecycleState.ToString() != reader.GetString(6) ||
                 (snapshot.Versions.PaperVersion > 0 && (snapshot.Paper is null || snapshot.Paper.Version != snapshot.Versions.PaperVersion)) ||
                 (snapshot.Versions.GradingVersion > 0 && (snapshot.Grading is null || snapshot.Grading.Version != snapshot.Versions.GradingVersion))) return false;
         }
         return true;
     }
+
+    private static long PostgreSqlTimestampTicks(DateTimeOffset value) => value.UtcTicks / 10 * 10;
 
     private async Task<bool> CheckResourcesAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
     {

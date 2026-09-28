@@ -6,7 +6,17 @@ using Exam.Server.Realtime;
 using Exam.Server.Runtime;
 using Exam.Server.Diagnostics;
 
-var builder = WebApplication.CreateBuilder(args);
+// SCM starts with system32 as its working directory; service configuration lives beside this executable.
+var serviceMode = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService();
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{ Args = args, ContentRootPath = serviceMode ? AppContext.BaseDirectory : null });
+if (serviceMode)
+{
+    var name = builder.Configuration["ExamServer:WindowsServiceName"];
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 256 || name.IndexOfAny(['/', '\\']) >= 0)
+        throw new InvalidOperationException("缺少有效的业务 Windows 服务名称。");
+    builder.Services.AddWindowsService(options => options.ServiceName = name);
+}
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSignalR().AddJsonProtocol(options =>

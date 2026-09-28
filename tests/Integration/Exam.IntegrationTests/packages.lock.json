@@ -473,7 +473,8 @@
         "dependencies": {
           "Exam.Application": "[1.0.0, )",
           "Exam.Contracts": "[1.0.0, )",
-          "Exam.Infrastructure": "[1.0.0, )"
+          "Exam.Infrastructure": "[1.0.0, )",
+          "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.12, )"
         }
       }
     }

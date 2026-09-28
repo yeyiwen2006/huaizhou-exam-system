@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Application\Exam.Application.csproj" />
     <ProjectReference Include="..\Exam.Infrastructure\Exam.Infrastructure.csproj" />

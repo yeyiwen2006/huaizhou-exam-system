@@ -140,7 +140,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.All(recoveredChecks, c => Assert.True(c.Passed, c.Name));
         var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey))).RunAsync(configuration, workingCopy, default);
-        Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
+        // Docker copies the Windows working directory into a Linux path. The production probe must reject
+        // that different data_directory; Windows SCM coverage checks the matching native path separately.
+        if (OperatingSystem.IsWindows()) Assert.False(Assert.Single(targetChecks).Passed);
+        else Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
         var wrongBusinessSource = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey)), _source.DataSource)
             .RunAsync(configuration, workingCopy, default);
@@ -174,23 +177,36 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             new("synthetic-enable", "server", "node", "operator", ManagementOperationKind.Restore, new string('A', 64),
                 ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
                 Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory), default);
-        await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString, selectionPath))
+        await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString,
+            selectionPath, expectReady: !OperatingSystem.IsWindows()))
         {
-            using var client = app.GetTestClient();
-            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
-            client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
-            var receipt = await client.GetFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(
-                "/api/v1/submissions/receipts?participationId=participation-1&entryVersion=1&deviceId=device-1&authorizationVersion=1", Json);
-            Assert.Equal(original, receipt!.Result);
-            client.DefaultRequestHeaders.Remove("X-Exam-Device-Id");
-            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-2");
-            var remaining = Submission(2);
-            var response = await client.PostAsJsonAsync("/api/v1/submissions/final", remaining, Json);
-            Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
-            var saved = await response.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json);
-            Assert.NotNull(saved!.Result);
-            var replay = await client.PostAsJsonAsync("/api/v1/submissions/final", remaining, Json);
-            Assert.Equal(saved.Result, (await replay.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json))!.Result);
+            if (OperatingSystem.IsWindows())
+            {
+                // A Linux Docker data_directory cannot match the Windows host working path.
+                Assert.Contains(app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot.Checks,
+                    check => check.Name == "recovery-target" && !check.Passed && check.BlocksWrites);
+                Assert.Equal(original, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
+                Assert.Equal(SubmissionPersistenceStatus.Saved,
+                    (await recoveredStore.SaveSubmissionAsync(Submission(2), DateTimeOffset.UtcNow, "remaining-receipt")).Status);
+            }
+            else
+            {
+                using var client = app.GetTestClient();
+                client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
+                client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+                var receipt = await client.GetFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(
+                    "/api/v1/submissions/receipts?participationId=participation-1&entryVersion=1&deviceId=device-1&authorizationVersion=1", Json);
+                Assert.Equal(original, receipt!.Result);
+                client.DefaultRequestHeaders.Remove("X-Exam-Device-Id");
+                client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-2");
+                var remaining = Submission(2);
+                var response = await client.PostAsJsonAsync("/api/v1/submissions/final", remaining, Json);
+                Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+                var saved = await response.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json);
+                Assert.NotNull(saved!.Result);
+                var replay = await client.PostAsJsonAsync("/api/v1/submissions/final", remaining, Json);
+                Assert.Equal(saved.Result, (await replay.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json))!.Result);
+            }
         }
         // Recreate the store after host shutdown; persisted pending collection is sufficient to finish.
         var collection = new PostgresCollectionCompletionStore(recovered);
@@ -361,31 +377,39 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.Equal(committed.Submission!.Receipt, (await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-2"))!.Receipt);
         var comparison = new PostgresRecoveryStateComparison(_source.ConnectionString, recoveredConnection.ConnectionString, 1);
         Assert.True((await comparison.RunAsync(configuration, default)).Passed);
-        Assert.All(await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, recoveredConnection.ConnectionString, "", 1,
-            new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(_certificate))).RunAsync(configuration, working, default),
-            c => Assert.True(c.Passed, c.Name));
+        var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, recoveredConnection.ConnectionString, "", 1,
+            new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(_certificate))).RunAsync(configuration, working, default);
+        if (OperatingSystem.IsWindows()) Assert.False(Assert.Single(targetChecks).Passed);
+        else Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
         var selectedPath = Path.Combine(_root, "archive-deployment-selection.json");
         await new FileRecoveryDeploymentSelection(selectedPath).SelectAsync(new RecoveryDeploymentSelection(
             "server", "node", restore.RequestId, restore.ActorId, backup.BackupId, working.WorkingDirectory, 1, "ExamRecovery")
             { ArchiveRecovery = true }, default);
         Assert.True((await replay.VerifyReplayedAsync(working, restore, recovered, default)).Passed);
         await using (var selected = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
-            _source.ConnectionString, selectedPath, replay.Options))
+            _source.ConnectionString, selectedPath, replay.Options, expectReady: !OperatingSystem.IsWindows()))
         {
-            Assert.True(selected.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot.Ready);
-            using var client = selected.GetTestClient();
-            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
-            client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
-            var receipt = await client.GetFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(
-                "/api/v1/submissions/receipts?participationId=participation-1&entryVersion=1&deviceId=device-1&authorizationVersion=1", Json);
-            Assert.Equal(original, receipt!.Result);
+            var snapshot = selected.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
+            if (OperatingSystem.IsWindows())
+                Assert.Contains(snapshot.Checks, check => check.Name == "recovery-target" && !check.Passed && check.BlocksWrites);
+            else
+            {
+                Assert.True(snapshot.Ready);
+                using var client = selected.GetTestClient();
+                client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-1");
+                client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+                var receipt = await client.GetFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(
+                    "/api/v1/submissions/receipts?participationId=participation-1&entryVersion=1&deviceId=device-1&authorizationVersion=1", Json);
+                Assert.Equal(original, receipt!.Result);
+            }
         }
         await using (var missingWalConfiguration = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
             _source.ConnectionString, selectedPath, expectReady: false))
         {
             var snapshot = missingWalConfiguration.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
             Assert.False(snapshot.Ready);
-            Assert.Contains(snapshot.Checks, check => check.Name == "recovery-wal-replay" && !check.Passed && check.BlocksWrites);
+            Assert.Contains(snapshot.Checks, check => check.Name == (OperatingSystem.IsWindows() ? "recovery-target" : "recovery-wal-replay")
+                && !check.Passed && check.BlocksWrites);
         }
         await controlled.PrepareAndStartAsync(restore, _ => throw new IOException("运行中不能复制WAL"),
             ct => coordinator.FindPreparedRecoveryWorkingCopyAsync(restore, workingRoot, ct), default);
@@ -541,7 +565,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             var guard = app.Services.GetRequiredService<BusinessRecoveryGuard>();
             try
             {
-                while (expectReady ? !guard.Snapshot.Ready : !guard.Snapshot.Checks.Any(check => check.Name == "recovery-wal-replay"))
+                while (expectReady ? !guard.Snapshot.Ready : guard.Snapshot.Checks.Count == 0)
                     await Task.Delay(20, timeout.Token);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
@@ -648,12 +672,23 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
                 "--volume", "/var/lib/postgresql", "--entrypoint", "sleep", image, "infinity"]);
             _restoredCreated = true;
             await DockerAsync(["start", _restoredContainer]);
-            await DockerAsync(["exec", _restoredContainer, "mkdir", "-p", verifiedDatabaseDirectory]);
-            await DockerAsync(["cp", verifiedDatabaseDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":" + verifiedDatabaseDirectory]);
-            await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", verifiedDatabaseDirectory]);
-            await DockerAsync(["exec", _restoredContainer, "chmod", "700", verifiedDatabaseDirectory]);
+            // The verified source is a Windows host path; PostgreSQL inside Docker needs a Linux path.
+            var remoteDatabase = _remote + "/restored-database";
+            await DockerAsync(["exec", _restoredContainer, "mkdir", "-p", remoteDatabase]);
+            await DockerAsync(["cp", verifiedDatabaseDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":" + remoteDatabase]);
+            await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", remoteDatabase]);
+            await DockerAsync(["exec", _restoredContainer, "chmod", "700", remoteDatabase]);
+            var remoteArchive = _remote + "/archive";
+            if (archiveReplay is not null)
+            {
+                await DockerAsync(["exec", _restoredContainer, "mkdir", "-p", remoteArchive]);
+                await DockerAsync(["cp", archiveReplay.ArchiveDirectory + Path.DirectorySeparatorChar + ".", _restoredContainer + ":" + remoteArchive]);
+                await DockerAsync(["exec", _restoredContainer, "chown", "-R", "postgres:postgres", remoteArchive]);
+            }
+            // The replay switches contain no archive path. Validate the real host archive before using
+            // these switches inside the Linux test container.
             var replayOptions = archiveReplay is null ? "" : ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay);
-            await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=" + verifiedDatabaseDirectory,
+            await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=" + remoteDatabase,
                 "--log=/tmp/codex-f01-recovery.log", $"--options=-p {selectedPort} -h 0.0.0.0{replayOptions}", "--wait", "start"]);
             var port = (await DockerAsync(["port", _restoredContainer, selectedPort + "/tcp"])).StandardOutput.Trim();
             if (!port.StartsWith("127.0.0.1:", StringComparison.Ordinal) || !int.TryParse(port.Split(':')[1], out var number))
