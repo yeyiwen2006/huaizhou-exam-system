@@ -297,7 +297,7 @@
                     <StackPanel Margin="14">
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                             <StackPanel>
-                                <TextBlock Text="D01 manifest.json 静态预检" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="D01 导入源 manifest.json 静态预检（非 D03 学生包清单）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
                                 <TextBlock Text="当前考试 ID" Style="{StaticResource FormLabel}"/>
                                 <TextBox Text="{Binding ManifestPreflight.ExamId, UpdateSourceTrigger=PropertyChanged}"
                                          ToolTip="必须与清单 examId 完全一致" Margin="0,0,0,10"/>

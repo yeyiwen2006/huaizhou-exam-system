@@ -1,9 +1,12 @@
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Importing;
+using Exam.Contracts.Resources;
+using Exam.Contracts.Versioning;
 
 namespace Exam.AdminUnitTests;
 
@@ -75,6 +78,31 @@ public sealed partial class ManifestPreflightViewModelTests
         Assert.Contains(viewModel.Issues, issue =>
             issue.Rule == ManifestRuleIds.RequiredMissing && issue.Location == "/examName");
         Assert.DoesNotContain(viewModel.Issues, issue => issue.Rule == ManifestRuleIds.InvalidJson);
+    }
+
+    [Theory]
+    [InlineData(StudentPaperPackage.LegacySchemaVersion)]
+    [InlineData(StudentPaperPackage.OptionRegionSchemaVersion)]
+    public void StudentPackageManifest_CannotReplaceImportSourceManifest(int studentSchemaVersion)
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ManifestPreflightViewModel(api) { ExamId = "synthetic-minimal" };
+        viewModel.ValidateManifestJson(File.ReadAllText(SampleManifest("minimal")));
+        Assert.True(viewModel.StaticPreflightPassed);
+
+        // Serialize the formal D03 student DTO, not a hand-written lookalike schema.
+        var studentManifest = new StudentPaperManifest(studentSchemaVersion, "synthetic-minimal", "合成考试", 1,
+            [new StudentPaperSubject("subject", "合成科目")],
+            [new StudentPaperGroup("group", "subject", "单项选择", 1)],
+            [new StudentPaperQuestion(new PaperQuestionStructure("q-001", 1, "subject", "group", "single", ["A", "B"]),
+                "questions/合成考试_1.pdf", null)], []);
+        viewModel.ValidateManifestJson(JsonSerializer.Serialize(studentManifest, ImportJson.Create()));
+
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Contains(viewModel.Issues, issue =>
+            issue.Rule == ManifestRuleIds.RequiredMissing && issue.Location == "/resourceRoots");
+        Assert.Contains("导入源清单", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("学生包清单", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -17,7 +17,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
     private string _examId = string.Empty;
     private bool _isPreflighting;
     private bool _staticPreflightPassed;
-    private string _status = "尚未执行本地清单静态预检；这不代表可以编译、计分、发布或完成客户端更新。";
+    private string _status = "请选择导入源包的 manifest.json，而非 D03 学生包清单；静态预检不代表可以编译、计分、发布或完成客户端更新。";
     private long _contextVersion;
     private long _preflightSequence;
 
@@ -160,7 +160,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
 
         if (!report.IsValid)
         {
-            Status = $"清单静态校验未通过，共 {Issues.Count} 项问题；未编译、未计分、未发布。";
+            Status = $"导入源清单静态校验未通过，共 {Issues.Count} 项问题；请勿选择 D03 学生包清单。未编译、未计分、未发布。";
             return;
         }
 
