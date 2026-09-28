@@ -30,7 +30,10 @@ public enum StudentPackageIssueCode
     NoQuestions,
 
     /// <summary>加密失败。</summary>
-    EncryptionFailed
+    EncryptionFailed,
+
+    /// <summary>提供了选项坐标产物，但它与本包的考试、试卷版本或题目选项集合不一致。</summary>
+    OptionRegionInvalid
 }
 
 /// <summary>一条组包问题。Path 为包内相对路径（能确定时给出）。</summary>

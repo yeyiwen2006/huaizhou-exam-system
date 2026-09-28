@@ -290,6 +290,119 @@ public sealed class StudentPackageBuilderTests : IDisposable
         Assert.Equal(before, Snapshot(_packageRoot));
     }
 
+    [Fact]
+    public async Task Build_WithOptionRegions_ProducesV2ManifestAndCoordinateFile()
+    {
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(
+            Request() with { OptionRegions = OptionRegions() });
+
+        Assert.True(result.Succeeded, Describe(result));
+        Assert.Contains(OptionRegionArtifact.FileName, result.Plan.IncludedPaths);
+        Assert.True(File.Exists(Path.Combine(_studentDirectory, OptionRegionArtifact.FileName)));
+        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, PackagedSchemaVersion());
+    }
+
+    [Fact]
+    public async Task Build_WithoutOptionRegions_StaysV1AndCarriesNoCoordinateFile()
+    {
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request());
+
+        Assert.True(result.Succeeded, Describe(result));
+        Assert.DoesNotContain(OptionRegionArtifact.FileName, result.Plan.IncludedPaths);
+        Assert.False(File.Exists(Path.Combine(_studentDirectory, OptionRegionArtifact.FileName)));
+        Assert.Equal(StudentPaperPackage.LegacySchemaVersion, PackagedSchemaVersion());
+    }
+
+    [Fact]
+    public async Task Build_OptionRegionsNotMatchingManifest_IsRejectedWithoutWriting()
+    {
+        var cases = new (string Name, OptionRegionArtifact Artifact)[]
+        {
+            ("考试不一致", OptionRegions() with { ExamId = "other-exam" }),
+            ("试卷版本不一致", OptionRegions() with { PaperVersion = PaperVersion + 1 }),
+            ("坐标规范不符", OptionRegions() with { AnchorScheme = "pageTopLeftV2" }),
+            ("产物版本不符", OptionRegions() with { ArtifactVersion = OptionRegionArtifact.CurrentArtifactVersion + 1 }),
+            ("缺少题目", OptionRegions() with { Questions = [new OptionRegionQuestion("q-999", [Region("A")])] }),
+            ("缺少选项", OptionRegions(["A", "B", "C"])),
+            ("清单外选项", OptionRegions(["A", "B", "C", "D", "E"]))
+        };
+
+        foreach (var item in cases)
+        {
+            var result = await new StudentPackageBuilder(_encryption).BuildAsync(
+                Request() with { OptionRegions = item.Artifact });
+
+            Assert.False(result.Succeeded);
+            Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.OptionRegionInvalid);
+            Assert.False(Directory.Exists(_studentDirectory) &&
+                Directory.EnumerateFiles(_studentDirectory, "*", SearchOption.AllDirectories).Any());
+        }
+    }
+
+    [Theory]
+    [InlineData("duplicate-option", false)]
+    [InlineData("duplicate-option", true)]
+    [InlineData("null-questions", false)]
+    [InlineData("null-questions", true)]
+    [InlineData("null-question", false)]
+    [InlineData("null-question", true)]
+    [InlineData("null-options", false)]
+    [InlineData("null-options", true)]
+    [InlineData("null-option", false)]
+    [InlineData("null-option", true)]
+    [InlineData("negative-page", false)]
+    [InlineData("negative-page", true)]
+    [InlineData("out-of-bounds", false)]
+    [InlineData("out-of-bounds", true)]
+    [InlineData("non-finite", false)]
+    [InlineData("non-finite", true)]
+    public async Task Build_InvalidCoordinates_ReportCoordinateFailureWithoutPublishing(string defect, bool encrypted)
+    {
+        var valid = OptionRegions();
+        var question = valid.Questions[0];
+        var options = question.Options.ToArray();
+        var invalid = defect switch
+        {
+            "duplicate-option" => OptionRegions(["A", "A", "C", "D"]),
+            "null-questions" => valid with { Questions = null! },
+            "null-question" => valid with { Questions = [null!] },
+            "null-options" => valid with { Questions = [question with { Options = null! }] },
+            "null-option" => valid with { Questions = [question with { Options = [null!, options[1], options[2], options[3]] }] },
+            "negative-page" => valid with { Questions = [question with { Options = [options[0] with { PageIndex = -1 }, options[1], options[2], options[3]] }] },
+            "out-of-bounds" => valid with { Questions = [question with { Options = [options[0] with { X = 0.99, Width = 0.2 }, options[1], options[2], options[3]] }] },
+            "non-finite" => valid with { Questions = [question with { Options = [options[0] with { X = double.NaN }, options[1], options[2], options[3]] }] },
+            _ => throw new ArgumentOutOfRangeException(nameof(defect))
+        };
+        var encryptedPath = _studentDirectory + ".epkg";
+
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(
+            Request() with { OptionRegions = invalid, EncryptedPackagePath = encrypted ? encryptedPath : null });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.OptionRegionInvalid);
+        Assert.Null(result.Envelope);
+        Assert.Null(result.EncryptedPackagePath);
+        Assert.False(File.Exists(encryptedPath));
+        Assert.False(Directory.Exists(_studentDirectory) &&
+            Directory.EnumerateFiles(_studentDirectory, "*", SearchOption.AllDirectories).Any());
+    }
+
+    private int PackagedSchemaVersion()
+    {
+        var text = File.ReadAllText(Path.Combine(_studentDirectory, StudentPaperPackage.ManifestPath));
+        using var document = System.Text.Json.JsonDocument.Parse(text);
+        return document.RootElement.GetProperty("schemaVersion").GetInt32();
+    }
+
+    private static OptionRegion Region(string optionId) => new(optionId, 0, 0.1, 0.1, 0.02, 0.02);
+
+    private static OptionRegionArtifact OptionRegions(IReadOnlyList<string>? optionIds = null) =>
+        new(OptionRegionArtifact.CurrentArtifactVersion,
+            OptionRegionArtifact.AnchorSchemeName,
+            ExamId,
+            PaperVersion,
+            [new OptionRegionQuestion("q-001", (optionIds ?? ["A", "B", "C", "D"]).Select(Region).ToList())]);
+
     private StudentPackageRequest Request() =>
         new(_packageRoot, _compilationOutput, _studentDirectory, PackageId, PaperVersion)
         { DisplayResourcePaths = ["figures/chemistry/q-figure-01.png"] };
