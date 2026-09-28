@@ -223,7 +223,11 @@ public sealed class ReportWorkbookWriter
     private static bool TryExcelNumber(string text, out double number)
     {
         number = 0;
-        if (text.TrimStart('-').Split('.')[0].Length > 15 ||
+        // Decimal.TryParse itself rounds sufficiently long fractions. Check the original
+        // significant digits first, otherwise that rounding can falsely prove an exact round trip.
+        var significantDigits = text.TrimStart('-').Replace(".", string.Empty, StringComparison.Ordinal)
+            .TrimStart('0').TrimEnd('0').Length;
+        if (significantDigits > 15 || text.TrimStart('-').Split('.')[0].Length > 15 ||
             (text.Contains('.') && text.Length - text.IndexOf('.') - 1 > 15) ||
             !decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var original) ||
             !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ||
@@ -237,7 +241,9 @@ public sealed class ReportWorkbookWriter
     private static void Text(IXLCell cell, string value)
     {
         cell.Style.NumberFormat.Format = "@";
-        cell.Value = value;
+        // ClosedXML consumes one initial apostrophe as Excel's quote prefix, even for text cells.
+        // Escape that prefix so an actual leading apostrophe survives save/readback unchanged.
+        cell.Value = value.StartsWith('\'') ? "'" + value : value;
     }
 
     private static void Finish(IXLWorksheet sheet, int lastColumn)
@@ -256,7 +262,9 @@ public sealed class ReportWorkbookWriter
         while (true)
         {
             var suffix = index == 1 ? string.Empty : "~" + index.ToString(CultureInfo.InvariantCulture);
-            var prefix = cleaned[..Math.Min(cleaned.Length, 31 - suffix.Length)];
+            var length = Math.Min(cleaned.Length, 31 - suffix.Length);
+            if (length > 0 && char.IsHighSurrogate(cleaned[length - 1])) length--;
+            var prefix = cleaned[..length];
             var candidate = prefix + suffix;
             if (used.Add(candidate)) return candidate;
             index++;

@@ -8,7 +8,7 @@ using Exam.Infrastructure.Reporting;
 namespace Exam.UnitTests.Reporting;
 
 /// <summary>Workbook readback uses synthetic examples, never operational records.</summary>
-public sealed class ReportWorkbookWriterTests
+public sealed partial class ReportWorkbookWriterTests
 {
     [Fact]
     public void Workbook_HasFiveSheetsAndPreservesRowsTypesFooterAndIndependentColors()
