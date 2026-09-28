@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Importing;
 
@@ -7,13 +9,15 @@ namespace Exam.Infrastructure.Compilation;
 /// <c>option-regions.json</c> 的规范读写。字段名、出现顺序与坐标精度在此固定，B03 按此解析。
 /// 契约见 docs/d03-option-region-contract.md 第 4.4 节。
 ///
-/// 写出一律按 <see cref="CoordinateDecimals"/> 位小数**向零**舍入：向零舍入不会让任何值变小或变大到
-/// 越出 <c>[0,1]</c>，也不会让 <c>x + width</c> 超过 1，因此舍入后的结果仍满足契约的取值约束。
+/// 写出前校验原始区域，不能通过舍入隐藏越界。合法坐标按最短往返十进制表示向零舍入到
+/// <see cref="CoordinateDecimals"/> 位；小于精度的正数保留原值，避免宽高变为零。
+/// 已规范化的坐标再次写出保持不变。
 /// </summary>
 public static class OptionRegionArtifactJson
 {
     /// <summary>归一化坐标写出的小数位。1e-6 页宽在显示上远小于一个像素，足够表达点击区域。</summary>
     public const int CoordinateDecimals = 6;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     /// <summary>
     /// 缩进固定为两个空格、换行固定为 <c>\n</c>、属性顺序即写出顺序：产物必须与平台无关，
@@ -23,7 +27,7 @@ public static class OptionRegionArtifactJson
 
     public static string Serialize(OptionRegionArtifact artifact)
     {
-        ArgumentNullException.ThrowIfNull(artifact);
+        ValidateArtifact(artifact);
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream, WriterOptions))
@@ -74,6 +78,21 @@ public static class OptionRegionArtifactJson
         if (string.IsNullOrWhiteSpace(json))
             return Fail(OptionRegionIssueCode.RequestInvalid, "坐标文件为空");
 
+        try
+        {
+            // Reject unpaired UTF-16 surrogates before the JSON APIs can replace them.
+            StrictUtf8.GetByteCount(json);
+            return DeserializeCore(json);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or EncoderFallbackException)
+        {
+            // GetString also throws InvalidOperationException for escaped invalid surrogates.
+            return Fail(OptionRegionIssueCode.RequestInvalid, "坐标文件不是合法 JSON 或包含无效 Unicode");
+        }
+    }
+
+    private static OptionRegionExtractionResult DeserializeCore(string json)
+    {
         if (HasDuplicateProperties(json))
             return Fail(OptionRegionIssueCode.RequestInvalid, "坐标文件存在重复的 JSON 字段");
 
@@ -169,7 +188,7 @@ public static class OptionRegionArtifactJson
                 !TryNumber(option, "width", out var width) || !TryNumber(option, "height", out var height))
                 return (null, Invalid("坐标必须是有限数", questionId, optionId));
 
-            if (!(width > 0) || !(height > 0) || x < 0 || y < 0 || x + width > 1 || y + height > 1)
+            if (!IsValidRegion(x, y, width, height))
                 return (null, new OptionRegionIssue(
                     OptionRegionIssueCode.RegionOutOfBounds, "坐标越出 [0,1] 或宽高非正",
                     questionId, optionId, pageIndex));
@@ -186,11 +205,53 @@ public static class OptionRegionArtifactJson
     private static OptionRegionExtractionResult Fail(OptionRegionIssueCode code, string message) =>
         OptionRegionExtractionResult.Failure([new OptionRegionIssue(code, message)]);
 
-    /// <summary>向零舍入；极小值（小于精度）保留原值，避免被舍成 0 而破坏「宽高为正」。</summary>
+    private static void ValidateArtifact(OptionRegionArtifact artifact)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        if (artifact.ArtifactVersion != OptionRegionArtifact.CurrentArtifactVersion ||
+            artifact.AnchorScheme != OptionRegionArtifact.AnchorSchemeName || artifact.PaperVersion < 1)
+            throw new ArgumentException("坐标产物版本、坐标规范或试卷版本无效。", nameof(artifact));
+        RequireText(artifact.ExamId, nameof(artifact.ExamId));
+        if (artifact.Questions is null || artifact.Questions.Count == 0)
+            throw new ArgumentException("坐标产物必须包含题目。", nameof(artifact));
+
+        var questionIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var question in artifact.Questions)
+        {
+            ArgumentNullException.ThrowIfNull(question);
+            RequireText(question.QuestionId, nameof(question.QuestionId));
+            if (!questionIds.Add(question.QuestionId) || question.Options is null || question.Options.Count == 0)
+                throw new ArgumentException("题目标识重复或缺少选项。", nameof(artifact));
+            var optionIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var option in question.Options)
+            {
+                ArgumentNullException.ThrowIfNull(option);
+                RequireText(option.OptionId, nameof(option.OptionId));
+                if (!optionIds.Add(option.OptionId) || option.PageIndex < 0 ||
+                    !IsValidRegion(option.X, option.Y, option.Width, option.Height))
+                    throw new ArgumentException("选项标识重复、页索引无效或原始区域越界。", nameof(artifact));
+            }
+        }
+    }
+
+    private static void RequireText(string? value, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, name);
+        StrictUtf8.GetByteCount(value);
+    }
+
+    private static bool IsValidRegion(double x, double y, double width, double height) =>
+        double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(width) && double.IsFinite(height) &&
+        x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= 1 && y + height <= 1;
+
+    /// <summary>按往返十进制向零舍入；小于精度的正数保留，不以二进制乘法再次截掉末位。</summary>
     private static double Round(double value)
     {
-        var rounded = Math.Round(value, CoordinateDecimals, MidpointRounding.ToZero);
-        return rounded > 0 ? rounded : value;
+        if (value == 0) return 0; // Canonicalize negative zero.
+        if (value < 0.000001) return value;
+        var decimalValue = decimal.Parse(value.ToString("R", CultureInfo.InvariantCulture),
+            NumberStyles.Float, CultureInfo.InvariantCulture);
+        return (double)decimal.Round(decimalValue, CoordinateDecimals, MidpointRounding.ToZero);
     }
 
     private static string? UnexpectedProperty(JsonElement element, string[] allowed)
@@ -237,7 +298,7 @@ public static class OptionRegionArtifactJson
     {
         try
         {
-            var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(json));
+            var reader = new Utf8JsonReader(StrictUtf8.GetBytes(json));
             var stack = new Stack<HashSet<string>>();
 
             while (reader.Read())

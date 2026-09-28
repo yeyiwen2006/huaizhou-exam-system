@@ -81,7 +81,7 @@ public sealed class OptionRegionArtifactJsonTests
         var artifact = Artifact() with
         {
             Questions = [new OptionRegionQuestion("q-001", [
-                new OptionRegion("A", 0, 0.999999999, 0.999999999, 0.0000004, 0.0000004)
+                new OptionRegion("A", 0, 0.9999996, 0.9999996, 0.0000004, 0.0000004)
             ])]
         };
 
