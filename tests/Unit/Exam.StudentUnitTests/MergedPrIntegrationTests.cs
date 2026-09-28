@@ -24,6 +24,43 @@ namespace Exam.StudentUnitTests;
 public sealed class MergedPrIntegrationTests
 {
     [Fact]
+    public async Task D03V2Package_OptionRegions_RoundTripThroughStudentReader()
+    {
+        // D03 组包器写入的坐标产物，必须能被学生端读取器原样接受并逐题逐选项核对通过。
+        var artifact = new OptionRegionArtifact(
+            OptionRegionArtifact.CurrentArtifactVersion,
+            OptionRegionArtifact.AnchorSchemeName,
+            "exam",
+            1,
+            [
+                new OptionRegionQuestion("q1", FourOptions(0.2300)),
+                new OptionRegionQuestion("q2", FourOptions(0.5400))
+            ]);
+        using var fixture = await StudentPaperFixture.CreateAsync(optionRegions: artifact);
+
+        var plaintext = await fixture.DecryptAsStudentAsync();
+        var manifest = StudentPaperPackage.ReadManifest(plaintext, "exam", 1);
+
+        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, manifest.SchemaVersion);
+        var map = OptionRegionMap.TryReadFromPackage(plaintext, manifest);
+        Assert.NotNull(map);
+        var first = map!.ForQuestion("q1")!;
+        Assert.Equal(4, first.Count);
+        Assert.Equal(0.2300, first["A"].X, 6);
+        Assert.Equal(0, first["A"].PageIndex);
+        Assert.Equal(0.5400, map.ForQuestion("q2")!["D"].X, 6);
+    }
+
+    private static List<Exam.Contracts.Importing.OptionRegion> FourOptions(double top)
+    {
+        var optionIds = new[] { "A", "B", "C", "D" };
+        return optionIds
+            .Select((optionId, index) => new Exam.Contracts.Importing.OptionRegion(
+                optionId, 0, top, 0.18 + (index * 0.03), 0.02, 0.02))
+            .ToList();
+    }
+
+    [Fact]
     public async Task D03Package_B02Unlock_B04Freeze_A05Submission_D04Grade_PreservesUntouchedQuestions()
     {
         using var fixture = await StudentPaperFixture.CreateAsync();
@@ -155,7 +192,8 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
 
     private StudentPaperFixture() => Store = new SqliteLocalStateStore(Path.Combine(_root, "state.db"));
 
-    public static async Task<StudentPaperFixture> CreateAsync(string manifestExamId = "exam", byte[]? plaintextOverride = null)
+    public static async Task<StudentPaperFixture> CreateAsync(string manifestExamId = "exam", byte[]? plaintextOverride = null,
+        OptionRegionArtifact? optionRegions = null)
     {
         var fixture = new StudentPaperFixture();
         try
@@ -174,9 +212,10 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
                 await File.WriteAllTextAsync(Path.Combine(compiled, Path.GetFileNameWithoutExtension(question.Source) + ".pdf"),
                     "%PDF-1.4\n% Synthetic header-only fixture; not a rendering/TeX acceptance test.\n");
             var encryption = new PackageEncryptionService(4096);
-            var result = await new StudentPackageBuilder(encryption).BuildAsync(new(input, compiled,
+            var request = new StudentPackageRequest(input, compiled,
                 Path.Combine(fixture._root, "preview"), "package", 1, Path.Combine(fixture._root, "paper.epkg"),
-                [new("node", fixture._node)]));
+                [new("node", fixture._node)]) { OptionRegions = optionRegions };
+            var result = await new StudentPackageBuilder(encryption).BuildAsync(request);
             Assert.True(result.Succeeded, string.Join("; ", result.Issues.Select(issue => issue.Message)));
             fixture._envelope = result.Envelope!;
             fixture._ciphertext = await File.ReadAllBytesAsync(result.EncryptedPackagePath!);
@@ -229,6 +268,20 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
             return runtime;
         }
         catch { await runtime.DisposeAsync(); throw; }
+    }
+
+    /// <summary>
+    /// 按学生端的解密路径还原明文包，供读取器直接核对。夹具已经把数据密钥随解锁材料下发，
+    /// 这里不额外绕过任何校验。
+    /// </summary>
+    public async Task<byte[]> DecryptAsStudentAsync()
+    {
+        var material = new PackageUnlockMaterial(_envelope.PackageId, _envelope.PaperVersion, _envelope.ChunkSize,
+            _envelope.NoncePrefix, PackageEncryptionService.UnwrapDataKey(_envelope, "node", _node));
+        await using var plaintext = new MemoryStream();
+        await using var ciphertext = new MemoryStream(_ciphertext, writable: false);
+        await PackageCiphertext.DecryptAsync(ciphertext, plaintext, material);
+        return plaintext.ToArray();
     }
 
     public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default) =>

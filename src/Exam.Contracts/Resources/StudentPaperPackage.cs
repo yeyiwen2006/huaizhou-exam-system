@@ -27,6 +27,12 @@ public static class StudentPaperPackage
     public const int MaxPackageBytes = StudentPackageLayout.MaxContentBytes;
     public const string ManifestPath = StudentPackagePlan.MetadataFileName;
 
+    /// <summary>学生清单 v1：不带坐标文件；学生端不猜测点击位置，不宣称具备坐标作答能力。</summary>
+    public const int LegacySchemaVersion = 1;
+
+    /// <summary>学生清单 v2：必须附带根目录选项坐标文件，学生端据此绑定选项控件。</summary>
+    public const int OptionRegionSchemaVersion = 2;
+
     public static StudentPaperManifest ReadManifest(byte[] payload, string examId, long paperVersion, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -75,6 +81,22 @@ public static class StudentPaperPackage
                 throw new InvalidDataException("显示资源清单无效。");
             ValidateDisplayEntry(zip, resource, cancellationToken);
         }
+        // 坐标文件只作为专用元数据接受：声明 v2 就必须在，声明 v1 就不许夹带，
+        // 否则同一份清单会有两种解释。逐题逐选项与清单的语义核对由学生端 OptionRegionMap 执行。
+        var declaresOptionRegions = manifest.SchemaVersion == OptionRegionSchemaVersion;
+        var hasOptionRegions = zip.Entries.Any(entry =>
+            string.Equals(entry.FullName, OptionRegionArtifact.FileName, StringComparison.Ordinal));
+        if (declaresOptionRegions != hasOptionRegions)
+            throw new InvalidDataException(declaresOptionRegions
+                ? "v2 学生清单必须附带根目录选项坐标文件。"
+                : "v1 学生清单不得附带选项坐标文件。");
+        if (hasOptionRegions)
+        {
+            if (!expected.Add(OptionRegionArtifact.FileName))
+                throw new InvalidDataException("选项坐标文件路径与显示清单冲突。");
+            ValidateOptionRegionEntry(zip, OptionRegionArtifact.FileName);
+        }
+
         if (!expected.SetEquals(zip.Entries.Select(e => e.FullName)))
             throw new InvalidDataException("显示清单与包内文件不一致。");
         cancellationToken.ThrowIfCancellationRequested();
@@ -151,9 +173,33 @@ public static class StudentPaperPackage
         finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
     }
 
+    /// <summary>
+    /// 坐标文件只作为专用元数据接受：核对大小与 JSON 形态，不按显示资源校验文件头，
+    /// 也不会因扩展名而放行其它 JSON 资源。
+    /// </summary>
+    private static void ValidateOptionRegionEntry(ZipArchive zip, string path)
+    {
+        var bytes = ReadEntry(zip, path, StudentPackageLayout.MaxMetadataBytes);
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("选项坐标文件根必须是对象。");
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("选项坐标 JSON 或 UTF-8 编码无效。", error);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
     private static void ValidateManifest(StudentPaperManifest manifest, string examId, long version)
     {
-        if (manifest.SchemaVersion != 1 || manifest.ExamId != examId || manifest.PaperVersion != version || version < 1 ||
+        if (manifest.SchemaVersion is not (LegacySchemaVersion or OptionRegionSchemaVersion) ||
+            manifest.ExamId != examId || manifest.PaperVersion != version || version < 1 ||
             string.IsNullOrWhiteSpace(manifest.ExamId) || string.IsNullOrWhiteSpace(manifest.ExamName) ||
             manifest.Subjects is null || manifest.Groups is null || manifest.Questions is null ||
             manifest.DisplayResources is null || manifest.Questions.Count == 0)
