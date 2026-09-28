@@ -151,7 +151,7 @@ public static class ReportTableProjection
     private static List<string> BaseFooter() => [string.Empty, string.Empty, string.Empty, string.Empty];
 
     private static string Score(Exam.Domain.Scoring.ExactRational score) => score.ToString();
-    private static string Mean(ReportMean? mean) => mean?.Display ?? string.Empty;
+    private static string Mean(ReportMean? mean) => mean?.Display ?? "无有效样本";
 
     private static ReportTable Make(ReportTableKind kind, string title, string? subjectId,
         List<ReportTableColumn> columns, ReportTableRow[] rows, List<string>? footer) =>

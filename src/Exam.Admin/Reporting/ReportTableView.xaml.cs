@@ -79,7 +79,9 @@ public partial class ReportTableView : UserControl
             FooterGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(column.Width) });
         }
 
-        TableBody.Width = totalWidth;
+        // Horizontal scrolling belongs to the outer viewer. Reserve space for the inner
+        // vertical scrollbar or its disabled horizontal viewport clips the last score column.
+        TableBody.Width = totalWidth + SystemParameters.VerticalScrollBarWidth;
         RowsGrid.ItemsSource = table.Rows;
         if (table.MeanFooter is not null)
         {
@@ -134,6 +136,7 @@ public partial class ReportTableView : UserControl
         Child = new TextBlock
         {
             Text = text,
+            ToolTip = text,
             Foreground = Brushes.Black,
             Padding = new Thickness(8, 7, 8, 7),
             TextTrimming = TextTrimming.CharacterEllipsis

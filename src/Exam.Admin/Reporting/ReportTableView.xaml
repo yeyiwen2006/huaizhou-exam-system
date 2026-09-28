@@ -13,14 +13,14 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <DataGrid x:Name="RowsGrid" Grid.Row="0" AutoGenerateColumns="False"
+                <DataGrid x:Name="RowsGrid" Grid.Row="0" AutoGenerateColumns="False" BorderThickness="0"
                           IsReadOnly="True" CanUserSortColumns="False" CanUserReorderColumns="False"
                           CanUserResizeColumns="False" CanUserAddRows="False"
                           CanUserDeleteRows="False" HeadersVisibility="Column"
                           HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
                           SelectionUnit="CellOrRowHeader" ClipboardCopyMode="IncludeHeader" />
                 <Border x:Name="FooterBorder" Grid.Row="1" Style="{DynamicResource TableFooterRow}"
-                        Padding="0" Visibility="Collapsed">
+                        Padding="0" BorderThickness="0,1,0,0" Visibility="Collapsed">
                     <Grid x:Name="FooterGrid" />
                 </Border>
             </Grid>

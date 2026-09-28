@@ -6,7 +6,7 @@ using Exam.Domain.Scoring;
 namespace Exam.AdminUnitTests.Reporting;
 
 /// <summary>All identifiers and scores are synthetic examples, not real candidate data.</summary>
-public sealed class ReportTableProjectionTests
+public sealed partial class ReportTableProjectionTests
 {
     [Fact]
     public void Projection_UsesServerOrderRanksMeansAndTwoIndependentColorFlags()
@@ -49,7 +49,7 @@ public sealed class ReportTableProjectionTests
         Assert.Equal(ReportTableKind.ClassAverages, classes.Kind);
         Assert.Null(classes.MeanFooter);
         Assert.Equal("02", classes.Rows[0].Cells[0].Text);
-        Assert.Equal("", classes.Rows[0].Cells[1].Text);
+        Assert.Equal("无有效样本", classes.Rows[0].Cells[1].Text);
         Assert.Equal("", classes.Rows[0].Cells[2].Text);
     }
 
