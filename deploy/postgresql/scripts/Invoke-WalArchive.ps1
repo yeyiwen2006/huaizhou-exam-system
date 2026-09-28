@@ -13,11 +13,14 @@ if (([System.IO.File]::GetAttributes($source) -band [System.IO.FileAttributes]::
     throw 'WAL source must not be a reparse point.'
 }
 
-if ([System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
+if ($WalFileName -in @('.', '..') -or [System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
     throw 'WAL file name must not contain a directory component.'
 }
 
-if (-not [System.IO.Path]::IsPathFullyQualified($ArchiveRoot)) {
+$pathRoot = [System.IO.Path]::GetPathRoot($ArchiveRoot)
+if (-not [System.IO.Path]::IsPathRooted($ArchiveRoot) -or
+    [string]::IsNullOrEmpty($pathRoot) -or $pathRoot.Length -lt 2 -or
+    -not ($pathRoot.EndsWith('\') -or $pathRoot.EndsWith('/'))) {
     throw 'WAL archive root must be an absolute path.'
 }
 $root = [System.IO.Path]::GetFullPath($ArchiveRoot)
@@ -27,8 +30,8 @@ if (([System.IO.File]::GetAttributes($root) -band [System.IO.FileAttributes]::Re
     throw 'WAL archive root must not be a reparse point.'
 }
 $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($root, $WalFileName))
-$relative = [System.IO.Path]::GetRelativePath($root, $target)
-if ($relative -eq '..' -or $relative.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)")) {
+$prefix = $root.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $target.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'WAL archive target escapes the configured archive root.'
 }
 
