@@ -79,6 +79,7 @@ public sealed class AdminApiClient : IDisposable
                                 _httpClient.DefaultRequestHeaders.Authorization is not null &&
                                 !string.IsNullOrWhiteSpace(_operatorId);
 
+    public string? ServerId => _serverId;
     public string OperatorId => _operatorId;
 
     public void Configure(string baseAddress, string operatorToken, string operatorId)

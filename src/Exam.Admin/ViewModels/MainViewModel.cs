@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 
@@ -14,6 +15,7 @@ public sealed class MainViewModel : IDisposable
         Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService());
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
+        Connection.PropertyChanged += OnConnectionPropertyChanged;
         Dependencies = new DependencyStatusViewModel();
         ManifestPreflight = new ManifestPreflightViewModel(_api);
     }
@@ -26,7 +28,18 @@ public sealed class MainViewModel : IDisposable
     public DependencyStatusViewModel Dependencies { get; }
     public ManifestPreflightViewModel ManifestPreflight { get; }
 
-    public void Dispose() => _api.Dispose();
+    private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ConnectionViewModel.IsConnected))
+            Monitoring.ConnectionReady = Connection.IsConnected;
+    }
+
+    public void Dispose()
+    {
+        Connection.PropertyChanged -= OnConnectionPropertyChanged;
+        Monitoring.Dispose();
+        _api.Dispose();
+    }
 }
 
 public sealed class ConnectionViewModel : BindableBase
