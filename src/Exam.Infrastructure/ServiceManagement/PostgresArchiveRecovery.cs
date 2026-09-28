@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
+using Npgsql;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
@@ -50,6 +51,34 @@ public sealed class PostgresArchiveRecovery(PostgresArchiveRecoveryOptions optio
         var plan = ReadBound(working, request, "wal-recovery-plan.json");
         if (!SameBinding(binding, plan)) throw new InvalidDataException("归档恢复最终记录与复制前计划不匹配。");
         return binding;
+    }
+
+    /// <summary>Checks the actual promoted PostgreSQL server after replay, never infers success from files alone.</summary>
+    public async Task<StartupCheckResult> VerifyReplayedAsync(RecoveryWorkingCopy working, RestoreRequest request,
+        string recoveryConnection, CancellationToken token)
+    {
+        try
+        {
+            _ = ReadBinding(working, request);
+            await using var source = ManagementProbeConnection.Create(recoveryConnection, 10);
+            await using var command = source.CreateCommand("""
+                SELECT pg_is_in_recovery(), pg_last_wal_replay_lsn()::text,
+                       current_setting('recovery_target_lsn'), current_setting('recovery_target_timeline'),
+                       current_setting('restore_command')
+                """);
+            await using var row = await command.ExecuteReaderAsync(token);
+            if (!await row.ReadAsync(token) || row.GetBoolean(0) || row.IsDBNull(1) ||
+                PostgresArchiveRecoveryOptions.ParseLsn(row.GetString(1)) < Options.Position ||
+                row.GetString(2) != Options.TargetLsn || row.GetString(3) != Options.Timeline.ToString(CultureInfo.InvariantCulture) ||
+                row.GetString(4) != "exit 1" || await row.ReadAsync(token))
+                throw new InvalidDataException("实际数据库未按固定目标完成受控重放。");
+            return new("recovery-wal-replay", true, "实际数据库已核对归档重放位置及固定部署边界；此位置不证明最新已确认状态。", true);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            return new("recovery-wal-replay", false, "无法核对实际数据库的归档重放位置或原请求绑定，禁止开放业务。", true);
+        }
     }
 
     private static bool SameBinding(ArchiveRecoveryBinding left, ArchiveRecoveryBinding right)

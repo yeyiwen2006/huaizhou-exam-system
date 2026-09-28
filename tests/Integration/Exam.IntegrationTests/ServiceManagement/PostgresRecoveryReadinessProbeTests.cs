@@ -130,6 +130,40 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RowPolicyCannotHideCorruptReliableEventFromRecoveryGate()
+    {
+        await ExecuteAsync("""
+            INSERT INTO exam.command_events (event_id, create_request_id, exam_id, participation_id, entry_version,
+              event_type, state_version, target_device_id, target_authorization_version, created_at, next_delivery_at)
+              VALUES ('hidden-event', 'hidden-request', 'synthetic-exam', 'missing', 1, 'End', 1, 'device', 1, now(), now());
+            """);
+        var role = "f01_probe_" + Guid.NewGuid().ToString("N");
+        await ExecuteAsync($"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS");
+        try
+        {
+            await ExecuteAsync($"GRANT USAGE ON SCHEMA exam TO {role}; GRANT SELECT ON ALL TABLES IN SCHEMA exam TO {role}");
+            await ExecuteAsync("ALTER TABLE exam.command_events ENABLE ROW LEVEL SECURITY; " +
+                "CREATE POLICY synthetic_visible_events ON exam.command_events FOR SELECT USING (event_id <> 'hidden-event')");
+            var readerConnection = new NpgsqlConnectionStringBuilder(_database.ConnectionString)
+                { Options = "-c role=" + role }.ConnectionString;
+            await using var reader = NpgsqlDataSource.Create(readerConnection);
+            await using (var visible = reader.CreateCommand("SELECT count(*) FROM exam.command_events"))
+                Assert.Equal(0L, await visible.ExecuteScalarAsync());
+            var checks = await new PostgresRecoveryReadinessProbe(reader, new TestUnwrapper(_certificate))
+                .RunAsync(Configuration, default);
+            Assert.Contains(checks, c => c.BlocksWrites && !c.Passed);
+            var guard = new BusinessRecoveryGuard();
+            guard.Observe(checks, DateTimeOffset.UtcNow);
+            Assert.False(guard.Snapshot.Ready);
+        }
+        finally
+        {
+            await ExecuteAsync("DROP POLICY IF EXISTS synthetic_visible_events ON exam.command_events; ALTER TABLE exam.command_events DISABLE ROW LEVEL SECURITY");
+            await ExecuteAsync($"REVOKE SELECT ON ALL TABLES IN SCHEMA exam FROM {role}; REVOKE USAGE ON SCHEMA exam FROM {role}; DROP ROLE {role}");
+        }
+    }
+
+    [Fact]
     public async Task PublishedPaperUsesExistingVersioningAndResourceContracts()
     {
         CreateExam();

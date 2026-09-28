@@ -331,6 +331,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.Equal(target, binding.Options.TargetLsn);
         await using var recovered = NpgsqlDataSource.Create(recoveredConnection.ConnectionString);
         await WaitForDatabaseAsync(recovered);
+        Assert.True((await replay.VerifyReplayedAsync(working, restore, recoveredConnection.ConnectionString, default)).Passed);
+        Assert.False((await replay.VerifyReplayedAsync(working, restore, _source.ConnectionString, default)).Passed);
+        Assert.False((await new PostgresArchiveRecovery(replay.Options with { TargetLsn = "0/1" })
+            .VerifyReplayedAsync(working, restore, recoveredConnection.ConnectionString, default)).Passed);
         await using (var replayState = recovered.CreateCommand("SELECT pg_is_in_recovery(), current_setting('recovery_target_lsn'), current_setting('restore_command'), pg_last_wal_replay_lsn()::text"))
         await using (var row = await replayState.ExecuteReaderAsync())
         {

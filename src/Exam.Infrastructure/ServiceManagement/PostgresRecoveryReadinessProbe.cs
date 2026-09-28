@@ -28,7 +28,9 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
         {
             await using var connection = await source.OpenConnectionAsync(token);
             await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
-            await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY", connection, transaction))
+            // A filtered read can hide corrupt rows. This does not bypass RLS: PostgreSQL rejects
+            // a query whose results would be affected by a policy, keeping the write gate closed.
+            await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL row_security=off", connection, transaction))
                 await readOnly.ExecuteNonQueryAsync(token);
             await AddAsync(Names[0], async () => await NoRowsAsync("""
                 SELECT 1 FROM exam.activation_devices d

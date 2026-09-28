@@ -113,6 +113,8 @@ public static class ManagementEntryPoint
                         var checks = (await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
                             Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
                             .RunAsync(serviceConfiguration, working, token)).ToList();
+                        if (ArchiveReplay() is { } replay)
+                            checks.Add(await replay.VerifyReplayedAsync(working, request, Required("ConnectionStrings:ExamRecovery"), token));
                         if (!string.IsNullOrWhiteSpace(configuration["Recovery:SelectionPath"]))
                         {
                             checks.Add(await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
@@ -143,11 +145,16 @@ public static class ManagementEntryPoint
                         request.BackupId != operation.Restore.BackupId) return null;
                     var working = await CreateBackups().FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token);
                     if (working is null || working.WorkingDirectory != operation.RecoveryWorkingDirectory) return null;
+                    var replay = ArchiveReplay();
+                    if (replay is null &&
+                        (File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery-plan.json")) ||
+                         File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery.json")))) return null;
                     var checks = await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
                         Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
                         .RunAsync(await store.LoadAsync(token), working, token);
                     if (!checks.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) ||
                         checks.Any(c => !c.Passed && c.BlocksWrites) ||
+                        replay is not null && !(await replay.VerifyReplayedAsync(working, request, Required("ConnectionStrings:ExamRecovery"), token)).Passed ||
                         !await new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
                             .ObserveReadyAsync(token) || process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
                     return operation with { Phase = ManagementOperationPhase.Completed, RecoveryActivation = RecoveryActivationPhase.BusinessReady,

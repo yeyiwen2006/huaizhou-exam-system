@@ -54,6 +54,8 @@
 
 归档模式下SCM BinaryPath须使用 `BuildServiceCommand(..., archiveRecoveryOptions)` 的完整返回值，原五参数形式仅用于基础备份模式。命令固定目标LSN/时间线，禁用继承的复制连接、恢复/清理命令；缺段时只执行固定 `exit 1` 失败命令，不能从其他位置下载或执行任意恢复脚本。已选段在 `pg_wal` 中完成重放，到指定位置结束归档恢复并产生新的PostgreSQL时间线；这不修改考试系统的活动节点、保护模式或代次，也不执行F02备库接管。配置及实际行为见 [PostgreSQL 恢复目标](https://www.postgresql.org/docs/18/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)。仍须实际目标/领域检查和原库完整比较，原库不可读或晚于该位置的新状态未恢复时不能开放业务；恢复至固定位置不等于故障前数据完整。
 
+归档模式的恢复核对还从实际隔离数据库读取 `pg_last_wal_replay_lsn()`、恢复目标与固定 `restore_command`，确认已结束恢复且重放位置达到绑定目标；操作记录中断后重新查询业务就绪时也重复这项核对。领域恢复自检与全库状态比对都在只读事务内设置 `row_security=off`：若行级策略会过滤诊断结果则拒绝开放，不能用看似为空的结果通过检查。
+
 选择写入后才启动固定业务服务，业务入口继续保留原活动节点门禁，并核对实际恢复数据目录后运行领域恢复检查。只有 HTTPS 就绪通过才返回恢复完成。失败或取消先停止业务，再重新核实原库与恢复库状态；一致才回退连接引用，原库不自动启动。已有新写入、原库不可读、停止或回退无法确认时保留选中的恢复库与 NeedsVerification，禁止覆盖较新答卷。同一已完成 requestId 只返回原结果。
 
 接口边界以 [ADR 0002](../../docs/decisions/0002-local-management-access.md) 为准，恢复原则见已有 [恢复运行说明](../../docs/backup-and-failover-runbook.md)。实际模块验证与未完成项在实现 PR 中记录。
