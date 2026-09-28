@@ -10,7 +10,7 @@
 | [A02 #2](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/2) | 已完成，保持关闭 | 激活编号、正式接口、PostgreSQL 并发与恢复测试已完成 |
 | [A03 #3](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/3) | 已完成，保持关闭 | 参试与授权事务已完成，B01/B02 真实接入及截止后恢复修正已合并 |
 | [A04 #4](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/4) | 已完成，关闭 | 持久指令、真实推送补发、受授权解锁及 B02 消费已接通 |
-| [A05 #5](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/5) | 已完成，关闭 | 权威实际名单、自动持久检查、可恢复收齐事件及考务补取 API 已交付；现场通知时限仍由 E04/E05 验收 |
+| [A05 #5](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/5) | 已完成，关闭 | 权威实际名单、自动持久检查、可恢复收齐事件及考务补取 API 已交付；现场通知时限仍由 T01/T02 验收 |
 | [A06 #6](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/6) | 已完成，保持关闭 | 时间与资源版本发布、并发检查、通知原子性及终态保护已完成 |
 | [A07 #7](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/7) | 部分完成，继续打开 | 缺独立 Windows 管理宿主、完整启动自检与完整恢复运行验证 |
 | [A08 #8](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/8) | 部分完成，继续打开 | 接管协调器尚未接入持久化和管理 API/CLI，尚未完成真实双机闭环 |
@@ -25,7 +25,7 @@
 
 证据：`Huaizhou.ExamSystem.sln`、`global.json`、`Directory.Build.props`、`src/Exam.Contracts`、`samples/contracts`、`samples/synthetic/minimal`、`.github/workflows/build.yml`、`docs/architecture.md`、`docs/database-migrations.md`、`docs/integration-sequence.md`、`tests/Unit/Exam.UnitTests/Common/ContractSerializationTests.cs`。
 
-本卡没有尚未交付的基础架构待办。持续协调和未来新增契约属于后续开发管理；完整 GUI/CLI、D01 样包深化及 E04/E05/E07 验收仍按各自任务执行，不将“所有后续模块完成”追加为 A01 的关闭条件。
+本卡没有尚未交付的基础架构待办。持续协调和未来新增契约属于后续开发管理；完整 GUI/CLI、D01 样包深化及 T01/T02/T03 验收仍按各自任务执行，不将“所有后续模块完成”追加为 A01 的关闭条件。
 
 ### A02 激活与编号
 
@@ -45,7 +45,7 @@
 
 证据：`tests/Unit/Exam.UnitTests/Commands/ReliableCommandServiceTests.cs`、`tests/Integration/Exam.IntegrationTests/Commands/PostgresCommandEventStoreTests.cs`、`tests/Integration/Exam.IntegrationTests/Resources/PostgresPackageUnlockServiceTests.cs`、`tests/Unit/Exam.StudentUnitTests/SignalRExamCommandFeedTests.cs`。记录包括丢通知补发、同事件重放、持久租约恢复、授权撤销、截止竞态，以及慢 START 不阻挡 END/撤销的真实 Hub 回归。
 
-本卡没有已识别的未实现指令基础服务。D03 正式组包发布、B05 自动交卷、B06 资源更新应用由对应任务负责；300 会话、丢包及服务重启后的时限实测由 E04/E05 跟踪，未宣称这些整体场景已通过。A05 自动收齐链路已在本轮补齐；300 会话与双机/现场时限仍由 E04/E05 跟踪。
+本卡没有已识别的未实现指令基础服务。D03 正式组包发布、B05 自动交卷、B06 资源更新应用由对应任务负责；300 会话、丢包及服务重启后的时限实测由 T01/T02 跟踪，未宣称这些整体场景已通过。A05 自动收齐链路已在本轮补齐；300 会话与双机/现场时限仍由 T01/T02 跟踪。
 
 ### A05 进度与最终交卷
 
@@ -57,7 +57,7 @@
 
 回归证据包括伪造精简名单、最后两份并发提交、等待退出、零人、新参试者形成新名单版本、outbox/通知事务失败回滚、worker 重启恢复、并发队列清理不丢唤醒，以及真实 HTTP 管理员认证、游标和提交屏障。本轮本机 300 会话基线还独立核对了 300 个实际参试者、300 份最终答卷、300 个唯一回执、300 个计分任务、1 条权威收齐事件、0 条待检查，答案结构全部一致。
 
-A05 的服务端关闭不表示 C04/C06 弹窗展示、双机同步持久化或现场 2 秒通知时限已经通过。`collectionPersistedAfterLastReceiptTimestampMs` 只比较数据库处理时间戳，不是提交完成或考务 GUI 展示时间；这些继续由 E04/E05/E07 在目标双机、独立负载机和现场网络中验收。
+A05 的服务端关闭不表示 C04/C06 弹窗展示、双机同步持久化或现场 2 秒通知时限已经通过。`collectionPersistedAfterLastReceiptTimestampMs` 只比较数据库处理时间戳，不是提交完成或考务 GUI 展示时间；这些继续由 T01/T02/T03 在目标双机、独立负载机和现场网络中验收。
 
 ### A06 时间与资源版本发布
 

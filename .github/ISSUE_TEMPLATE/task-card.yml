@@ -59,8 +59,8 @@ body:
 - type: textarea
   id: acceptance
   attributes:
-    label: 整体验收与关闭条件
-    description: 关联T01/T02及Sxx，明确修复/复测证据；测试轮次内已包含修复，不另设修复总单；T03填写验收版本一致性及发布移交条件。
+    label: 本卡关闭条件与独立验收归属
+    description: 非T卡以本卡开发、必要接线、适用模块测试和A审查合并完成为关闭条件，不等待最终多机实测或整项目打包；这些记录到T01/T02/T03。T卡保留原实际场景、修复回归、版本一致性及移交条件。
   validations:
     required: true
 - type: textarea
