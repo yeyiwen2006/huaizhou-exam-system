@@ -168,6 +168,19 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             void AddOptionRegions(OptionRegionArtifact artifact)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                string json;
+                try
+                {
+                    // The canonical writer validates original geometry, unique identifiers and null collections.
+                    // Validate before enumerating or quantizing; invalid coordinates are not an encryption error.
+                    json = OptionRegionArtifactJson.Serialize(artifact);
+                }
+                catch (ArgumentException)
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标原始产物无效，未发布预览或加密产物。", OptionRegionArtifact.FileName));
+                    return;
+                }
                 if (!string.Equals(artifact.ExamId, examId, StringComparison.Ordinal) ||
                     artifact.PaperVersion != request.PaperVersion)
                 {
@@ -209,7 +222,7 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                     return;
                 }
 
-                var bytes = Encoding.UTF8.GetBytes(OptionRegionArtifactJson.Serialize(artifact));
+                var bytes = Encoding.UTF8.GetBytes(json);
                 if (bytes.Length > MaxMetadataBytes || totalBytes + bytes.Length > MaxPackageBytes ||
                     files.Count >= StudentPackageLayout.MaxEntryCount)
                 {
