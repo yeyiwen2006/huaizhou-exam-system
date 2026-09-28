@@ -144,9 +144,17 @@
                                 Click="OnToggleMark" />
                     </Grid>
 
-                    <!-- 状态横幅：解锁/交卷状态、运行时错误、本地保存错误 -->
+                    <!-- 状态横幅：解锁/交卷状态、运行时错误、本地保存错误、在线更新（B06） -->
                     <StackPanel Grid.Row="1" Margin="4,0,4,8">
                         <controls:Banner x:Name="PaperBanner" Level="Info" />
+                        <controls:Banner x:Name="PaperUpdateBanner" Level="Warning" Margin="0,8,0,0" />
+                        <Button x:Name="ReviewUpdateButton" Style="{StaticResource Btn.Secondary}"
+                                Content="已复核修订试题"
+                                Margin="0,8,0,0"
+                                Padding="14,5"
+                                HorizontalAlignment="Left"
+                                Visibility="Collapsed"
+                                Click="OnConfirmReview" />
                         <controls:Banner x:Name="RuntimeErrorBanner" Level="Danger" Margin="0,8,0,0" />
                         <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
                     </StackPanel>
@@ -154,7 +162,7 @@
                     <!-- 原版题目 + 圆形选项控件 -->
                     <views:PdfQuestionView x:Name="QuestionView" Grid.Row="2" Margin="4,0,4,0" />
 
-                    <!-- 底部状态条：本地保存（B04）与服务器同步（B05） -->
+                    <!-- 底部状态条：本地保存（B04）、服务器同步（B05）与失焦统计（B06） -->
                     <Border Grid.Row="3"
                             BorderBrush="{DynamicResource Brush.Border}"
                             BorderThickness="0,1,0,0"
@@ -169,11 +177,37 @@
                             <TextBlock x:Name="SyncStatusText" Style="{StaticResource CaptionText}"
                                        VerticalAlignment="Center" TextWrapping="Wrap"
                                        Margin="16,0,0,0" Text="同步服务尚未启动。" />
+                            <TextBlock x:Name="FocusStatusText" Style="{StaticResource CaptionText}"
+                                       VerticalAlignment="Center" Margin="16,0,0,0" Text="" />
                         </StackPanel>
                     </Border>
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- B06 设备裁决/撤权撤销遮罩：本设备被撤销后停止作答，仅允许返回选择考试 -->
+        <Border x:Name="RevokedOverlay"
+                Grid.RowSpan="2"
+                Background="#F2FFFFFF"
+                Visibility="Collapsed">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
+                <TextBlock Style="{StaticResource SectionTitle}"
+                           FontSize="{DynamicResource Font.Size.Body.Large}"
+                           HorizontalAlignment="Center"
+                           Text="本设备的答题授权已被撤销" />
+                <TextBlock x:Name="RevokedOverlayText"
+                           Style="{StaticResource BodyText}"
+                           HorizontalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Margin="0,10,0,0"
+                           Text="考务人员已将本场考试的作答授权转移至其他设备。本机已停止作答并停止显示试题；本机已有记录已保留；服务器仅保存此前确认同步的进度，请联系考务人员。" />
+                <Button Style="{StaticResource Btn.Secondary}"
+                        Content="返回选择考试"
+                        Margin="0,18,0,0"
+                        HorizontalAlignment="Center"
+                        Click="OnRevokedBack" />
+            </StackPanel>
+        </Border>
 
         <controls:BusyOverlay x:Name="Busy"
                               Grid.RowSpan="2"

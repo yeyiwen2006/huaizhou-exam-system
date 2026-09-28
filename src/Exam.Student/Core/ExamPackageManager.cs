@@ -12,8 +12,15 @@ namespace Exam.Student.Core;
 
 public sealed record PackageDownloadProgress(long ReceivedBytes, long TotalBytes);
 
+/// <summary>B06 在线更新结果：成功时 InstalledPaperVersion 为切换后的版本；失败保留旧版可继续作答。</summary>
+public sealed record PaperUpdateResult(bool Succeeded, long InstalledPaperVersion, string? Error)
+{
+    public static PaperUpdateResult Ok(long version) => new(true, version, null);
+    public static PaperUpdateResult Fail(string error) => new(false, 0, error);
+}
+
 /// <summary>B02 control operations are serialized and ambiguous requests survive in a DPAPI journal.</summary>
-public sealed class ExamPackageManager : IDisposable
+public sealed partial class ExamPackageManager : IDisposable
 {
     private const long MaximumPackageBytes = 512L * 1024 * 1024;
     private readonly IExamPackageApi _api;
@@ -25,10 +32,10 @@ public sealed class ExamPackageManager : IDisposable
     private readonly object _plaintextGate = new();
     private byte[]? _unlockedPayload;
     private long _controlGeneration;
-    private PackageControlState _state;
+    private volatile PackageControlState _state;
     private bool _freshPreparation;
-    private bool _authorizedThisRun;
-    private bool _terminalInMemory;
+    private volatile bool _authorizedThisRun;
+    private volatile bool _terminalInMemory;
     private bool _disposed;
 
     public ExamPackageManager(IExamPackageApi api, string storageRoot, DeviceRecord device,
@@ -78,6 +85,12 @@ public sealed class ExamPackageManager : IDisposable
     public string? ParticipationId => Participation?.ParticipationId;
     public string? UnlockReference => Participation?.UnlockReference;
     public string? LastError { get; private set; }
+    /// <summary>已收到的最新试卷版本（PaperUpdated 事件推进）；高于当前描述符版本表示有待应用的更新。</summary>
+    public long NewestPaperVersion => _state.NewestPaperVersion;
+    /// <summary>B06 设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
+    public bool DeviceDecisionPending =>
+        !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
+        _state.Preparation is { Status: EntryPreparationStatus.DeviceDecisionPending };
     public byte[]? UnlockedPayload { get { lock (_plaintextGate) return _unlockedPayload; } }
     public bool ExamStarted => _state.Started;
     public bool ExamEnded => _state.Ended || _terminalInMemory;
@@ -95,6 +108,11 @@ public sealed class ExamPackageManager : IDisposable
         CancellationToken ct = default) => LockedAsync(async () =>
     {
         var generation = ControlGeneration;
+        if (_state.PendingPaperInstallation is not null)
+        {
+            LastError = "本地更新提交结果尚未核对，请先执行答案恢复，不能覆盖原准备记录。";
+            return false;
+        }
         if (ExamEnded && Participation is null) { LastError = "当前考试已经结束。"; return false; }
         _authorizedThisRun = false;
         _freshPreparation = false;
@@ -178,6 +196,39 @@ public sealed class ExamPackageManager : IDisposable
         LockedAsync(() => WithdrawCoreAsync(ct), ct);
     public Task<bool> UnlockAsync(CancellationToken ct = default) => LockedAsync(() => UnlockCoreAsync(ct), ct);
 
+    private async Task<bool> DownloadUpdatePackageAsync(ExamResourceDescriptor descriptor, string preparationId,
+        string sessionId, IProgress<PackageDownloadProgress>? progress, CancellationToken ct)
+    {
+        var final = _store.PackagePath(descriptor.PaperVersion);
+        Directory.CreateDirectory(Path.GetDirectoryName(final)!);
+        var temporary = final + $".{Guid.NewGuid():N}.part";
+        try
+        {
+            await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                             64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
+                {
+                    if (chunk.Length > descriptor.PackageLength - file.Length)
+                        throw new InvalidDataException("试题下载数据超出声明的长度。");
+                    await file.WriteAsync(chunk, ct);
+                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
+                }
+                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
+                file.Flush(flushToDisk: true);
+            }
+            if (File.Exists(final)) File.Replace(temporary, final, final + ".bak");
+            else File.Move(temporary, final);
+            return true;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidDataException)
+        {
+            LastError = "新版试题获取失败！请检查网络或磁盘后重试，当前版本可继续作答。";
+            return false;
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
     public Task InvalidateAuthorizationAsync(CancellationToken ct = default)
     {
         StopImmediately(ended: false);
@@ -192,22 +243,25 @@ public sealed class ExamPackageManager : IDisposable
     public Task<bool> HandleCommandAsync(CommandDelivery delivery, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(delivery);
-        // A verified END stops visible content before waiting behind a long network operation.
+        // END 和设备裁决先撤掉可见内容，不排在长下载后面；只接受已核对的当前上下文。
         if (delivery.EventType == CommandEventType.End && MatchesCurrentAuthorization(delivery)) EndLocally();
+        var decision = IsVerifiedDeviceDecision(delivery);
+        var decisionParticipation = decision ? Participation : null;
+        if (decision) StopImmediately(ended: false);
         return LockedAsync(async () =>
         {
-            ArgumentNullException.ThrowIfNull(delivery);
-            if (delivery.EventType == CommandEventType.DeviceDecided && Participation is { } current &&
-                delivery.Server.ServerId == _state.ServerId && delivery.Server.ServerEpoch >= (Server?.ServerEpoch ?? 1) &&
-                delivery.ExamId == ExamId && delivery.ParticipationId == current.ParticipationId &&
-                delivery.EntryVersion == current.EntryVersion && delivery.TargetDeviceId == _device.DeviceId &&
-                delivery.TargetAuthorizationVersion > current.AuthorizationVersion)
+            if (decision && Participation is { } current && decisionParticipation is { } prior &&
+                current.ParticipationId == prior.ParticipationId && current.EntryVersion == prior.EntryVersion &&
+                current.AuthorizationVersion == prior.AuthorizationVersion)
             {
-                _authorizedThisRun = false;
-                ClearPlaintext();
-                CurrentPhase = Phase.Revoked;
                 Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
-                LastError = "当前设备的授权版本已变化，请重新进入以核对服务器授权。";
+                LastError = "当前设备的授权已变化，已停止作答，请重新进入核对服务器授权。";
+                if (delivery.TargetAuthorizationVersion != current.AuthorizationVersion) return false;
+                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
+            }
+            if (delivery.EventType == CommandEventType.PaperUpdated && delivery.ResourceVersion is not > 0)
+            {
+                LastError = "试卷更新指令缺少有效资源版本，未使用其他版本字段猜测。";
                 return false;
             }
             if (!MatchesCurrentAuthorization(delivery))
@@ -280,7 +334,7 @@ public sealed class ExamPackageManager : IDisposable
                 Save(_state with
                 {
                     NewestPaperVersion = delivery.EventType == CommandEventType.PaperUpdated
-                        ? Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion ?? delivery.StateVersion)
+                        ? Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion!.Value)
                         : _state.NewestPaperVersion,
                     LifecycleStateVersion = delivery.EventType == CommandEventType.ScheduleChanged
                         ? Math.Max(_state.LifecycleStateVersion, delivery.StateVersion) : _state.LifecycleStateVersion
@@ -496,7 +550,7 @@ public sealed class ExamPackageManager : IDisposable
         var record = new ProcessedPackageCommand(delivery,
             new AcknowledgeCommandRequest(RequestIds.New(), delivery.EventId, delivery.ParticipationId,
                 delivery.EntryVersion, _device.DeviceId, delivery.TargetAuthorizationVersion, result,
-                Descriptor?.PaperVersion, result == CommandProcessingResult.Received ? LastError : null), false);
+                Descriptor?.PaperVersion, result == CommandProcessingResult.Received ? LastError : null), false, DateTimeOffset.UtcNow);
         Save(_state with { Commands = _state.Commands.Append(record).ToArray() });
         return await SendAcknowledgementAsync(record, ct);
     }
@@ -509,12 +563,15 @@ public sealed class ExamPackageManager : IDisposable
         { RecordFailure(response.Error); return false; }
         if (acknowledgement.EventId != record.Delivery.EventId ||
             acknowledgement.RequestId != record.Acknowledgement.RequestId ||
-            acknowledgement.ProcessingResult != record.Acknowledgement.ProcessingResult)
+            acknowledgement.ProcessingResult != record.Acknowledgement.ProcessingResult ||
+            acknowledgement.ActualPaperVersion != record.Acknowledgement.ActualPaperVersion ||
+            acknowledgement.FailureReason != record.Acknowledgement.FailureReason)
             throw new InvalidDataException("服务器返回的指令确认与当前指令不一致。");
         if (!record.Acknowledged)
             Save(_state with
             {
-                Commands = _state.Commands.Select(item => item.Delivery.EventId == record.Delivery.EventId
+                Commands = _state.Commands.Select(item => item.Delivery.EventId == record.Delivery.EventId &&
+                    item.Acknowledgement.RequestId == record.Acknowledgement.RequestId
                 ? item with { Acknowledged = true } : item).ToArray()
             });
         return true;
@@ -562,9 +619,7 @@ public sealed class ExamPackageManager : IDisposable
         LastError = error?.Message ?? "服务器未确认操作结果，请重试。";
         if (error?.Code is ErrorCodes.AuthorizationRevoked or ErrorCodes.NotActivated or "UNAUTHORIZED")
         {
-            _authorizedThisRun = false;
-            ClearPlaintext();
-            CurrentPhase = Phase.Revoked;
+            StopImmediately(ended: false);
             Save(_state with { Revoked = true, ProtectedUnlockMaterial = null });
         }
     }

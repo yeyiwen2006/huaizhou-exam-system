@@ -13,11 +13,24 @@ namespace Exam.Student.Core;
 internal sealed record ProcessedPackageCommand(
     CommandDelivery Delivery,
     AcknowledgeCommandRequest Acknowledgement,
-    bool Acknowledged);
+    bool Acknowledged, DateTimeOffset? ReceivedAt = null);
+
+internal sealed record PaperUpdateInstallation(long PaperVersion, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt);
+
+internal sealed record PaperUpdateTransfer(PrepareExamEntryRequest PrepareRequest,
+    string ParticipationId, long EntryVersion, long AuthorizationVersion, long SourcePaperVersion, long RequestedVersion,
+    EntryPreparationResult? Preparation = null, InstructionsDocument? Instructions = null,
+    ConfirmParticipationRequest? ConfirmRequest = null, ParticipationResult? Participation = null,
+    PackageUnlockRequest? UnlockRequest = null);
+
+internal sealed record PendingPaperInstallation(long PreviousPaperVersion, long MinimumAnswerVersion,
+    string SnapshotRequestId, EntryPreparationResult Preparation, string SessionId,
+    InstructionsDocument Instructions, ParticipationResult Participation, byte[] ProtectedUnlockMaterial,
+    PaperUpdateInstallation Installation);
 
 internal sealed record PackageControlState
 {
-    public int FormatVersion { get; init; } = 1;
+    public int FormatVersion { get; init; } = 2;
     public required string ServerId { get; init; }
     public required string DeviceId { get; init; }
     public required string CandidateId { get; init; }
@@ -38,6 +51,9 @@ internal sealed record PackageControlState
     public bool Revoked { get; init; }
     public long LifecycleStateVersion { get; init; }
     public long NewestPaperVersion { get; init; }
+    public PaperUpdateTransfer? UpdateTransfer { get; init; }
+    public PendingPaperInstallation? PendingPaperInstallation { get; init; }
+    public PaperUpdateInstallation? LastPaperInstallation { get; init; }
     public IReadOnlyList<ProcessedPackageCommand> Commands { get; init; } = [];
 }
 
@@ -93,7 +109,7 @@ internal sealed class PackageControlStore : IDisposable
         {
             var state = JsonSerializer.Deserialize<PackageControlState>(plaintext, JsonOptions)
                 ?? throw new InvalidDataException("考试恢复记录为空。");
-            if (state.FormatVersion != 1 || state.ServerId != empty.ServerId || state.DeviceId != empty.DeviceId ||
+            if (state.FormatVersion is not (1 or 2) || state.ServerId != empty.ServerId || state.DeviceId != empty.DeviceId ||
                 state.CandidateId != empty.CandidateId || state.ExamId != empty.ExamId || state.Commands is null ||
                 state.Commands.Count > 4096 || state.Commands.Select(command => command.Delivery.EventId)
                     .Distinct(StringComparer.Ordinal).Count() != state.Commands.Count)
@@ -112,7 +128,7 @@ internal sealed class PackageControlStore : IDisposable
     public void Save(PackageControlState state)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state with { FormatVersion = 2 }, JsonOptions);
         byte[] encrypted;
         try
         {

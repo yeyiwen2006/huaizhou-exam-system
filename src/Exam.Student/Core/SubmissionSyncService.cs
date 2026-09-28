@@ -17,7 +17,8 @@ public sealed record SubmissionSyncStatusChangedEventArgs(SubmissionSyncPhase Ph
 /// 网络写入串行；Confirmed/Blocked 为终态。只有匹配且已在本机保留的服务器回执才能确认成功。
 /// </summary>
 public sealed class SubmissionSyncService(
-    IStudentApi api, StudentExamRuntime runtime, DeviceRecord device, TimeProvider? timeProvider = null, ServerClock? clock = null) : IAsyncDisposable
+    IStudentApi api, StudentExamRuntime runtime, DeviceRecord device, TimeProvider? timeProvider = null,
+    ServerClock? clock = null, FocusTracker? focus = null) : IAsyncDisposable
 {
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(20);
@@ -38,6 +39,7 @@ public sealed class SubmissionSyncService(
     private string? _syncedRequestId;
     private long _syncedAt;
     private int _uploadRetryCount;
+    private long _observedFocusRevision = -1;
     private (long Version, AnswerSessionStatus Status, bool Fixed, bool Ended, bool Revoked) _observedState;
 
     public event EventHandler<SubmissionSyncStatusChangedEventArgs>? StatusChanged;
@@ -152,6 +154,7 @@ public sealed class SubmissionSyncService(
     private async Task<TimeSpan> SyncProgressAsync(CancellationToken ct)
     {
         var answers = runtime.Answers;
+        if (runtime.IsPaperUpdateInProgress) return TimeSpan.FromSeconds(1);
         if (answers?.Status != AnswerSessionStatus.Active || runtime.Manager.ExamEnded ||
             runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked)
         {
@@ -162,6 +165,9 @@ public sealed class SubmissionSyncService(
         var snapshot = await runtime.LoadPendingSnapshotAsync(ct).ConfigureAwait(false);
         if (answers.Status != AnswerSessionStatus.Active || runtime.HasFixedSubmission || runtime.Manager.ExamEnded)
             return TimeSpan.Zero;
+        if (runtime.IsPaperUpdateInProgress ||
+            (snapshot is not null && snapshot.PaperVersion != answers.PaperVersion))
+            return TimeSpan.FromSeconds(1); // 读取快照期间恰好提交新版，重读而不是永久封锁同步。
         var participation = runtime.Manager.Participation;
         if (snapshot is null || participation is null || string.IsNullOrWhiteSpace(snapshot.RequestId) ||
             snapshot.ExamId != runtime.Manager.ExamId || snapshot.CandidateId != runtime.Manager.CandidateId ||
@@ -170,7 +176,10 @@ public sealed class SubmissionSyncService(
             snapshot.PaperVersion != runtime.Manager.Descriptor?.PaperVersion)
             return await BlockAsync("可靠快照与当前参试、设备或版本不一致，原记录已保留，请核对后恢复。");
 
-        if (_syncedRequestId == snapshot.RequestId)
+        // 复焦只触发原答案快照的幂等核对，不伪造同版本新写入，也不宣称已保存失焦事件。
+        var focusRevision = focus?.Revision ?? 0;
+        var focusChanged = focus is not null && focusRevision != _observedFocusRevision;
+        if (_syncedRequestId == snapshot.RequestId && !focusChanged)
         {
             var remaining = ProgressInterval - _time.GetElapsedTime(_syncedAt);
             if (remaining > TimeSpan.Zero) return remaining;
@@ -190,6 +199,7 @@ public sealed class SubmissionSyncService(
                 return await BlockAsync("服务器返回的进度与本次可靠快照不一致，已停止自动写入并保留原记录。");
             _syncedRequestId = snapshot.RequestId;
             _syncedAt = _time.GetTimestamp();
+            _observedFocusRevision = focusRevision; // 不把等待回执期间的新失焦算作已处理。
             SetPhase(SubmissionSyncPhase.Progressing,
                 $"答题进度已由服务器确认（版本 {saved.AnswerVersion}）；每 60 秒重报原快照，新修改及时上报。");
             return ProgressInterval;

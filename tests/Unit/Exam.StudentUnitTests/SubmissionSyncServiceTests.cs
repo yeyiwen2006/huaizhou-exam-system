@@ -24,6 +24,28 @@ namespace Exam.StudentUnitTests;
 public sealed partial class SubmissionSyncServiceTests
 {
     [Fact]
+    public async Task RefocusReplaysOriginalSnapshotWithoutAddingUnsupportedTelemetry()
+    {
+        await using var fixture = await StartedAsync();
+        var focus = new FocusTracker();
+        await using var sync = fixture.CreateSync(focus);
+        Assert.True((await fixture.Answers!.SetAnswerAsync("q1", AnswerValue.Selected("A"))).Succeeded);
+        await sync.KickAsync();
+        Assert.Single(fixture.SubmissionApi.ProgressRequests);
+        focus.OnFocusLost();
+        focus.OnFocusRegained();
+        await sync.KickAsync();
+        var requests = fixture.SubmissionApi.ProgressRequests;
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(requests[0].RequestId, requests[1].RequestId);
+        Assert.Equal(requests[0].AnswerVersion, requests[1].AnswerVersion);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(requests[0], JsonDefaults.Create()),
+            System.Text.Json.JsonSerializer.Serialize(requests[1], JsonDefaults.Create()));
+        await sync.KickAsync();
+        Assert.Equal(2, requests.Count);
+    }
+
+    [Fact]
     public async Task ProgressUploadUsesStableRequestIdPerVersion_AndSkipsAlreadySyncedVersion()
     {
         await using var fixture = await StartedAsync();
@@ -286,7 +308,8 @@ public sealed partial class SubmissionSyncServiceTests
             }
         }
 
-        public SubmissionSyncService CreateSync() => new(SubmissionApi, Runtime, Device);
+        public SubmissionSyncService CreateSync(FocusTracker? focus = null) =>
+            new(SubmissionApi, Runtime, Device, focus: focus);
 
         public async ValueTask DisposeAsync()
         {

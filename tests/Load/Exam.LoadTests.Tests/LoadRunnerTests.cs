@@ -7,7 +7,7 @@ using Exam.Contracts.Submissions;
 
 namespace Exam.LoadTests.Tests;
 
-public sealed class LoadRunnerTests
+public sealed partial class LoadRunnerTests
 {
     private static string FreshPath() => Path.Combine(Path.GetTempPath(), "exam-load-tests-" + Guid.NewGuid().ToString("N"));
     private static LoadOptions Options(string scenario = "burst") => new(new("http://127.0.0.1:5089"), "unused", scenario, FreshPath(), 1, 2, true);
@@ -64,10 +64,12 @@ public sealed class LoadRunnerTests
     {
         var options = Options();
         var calls = 0;
+        var time = new SyntheticTimeProvider();
         using var handler = new Handler(async request =>
         {
             Assert.Equal("private-test-credential", request.Headers.GetValues("X-Exam-Device-Credential").Single());
             calls++;
+            time.Advance(TimeSpan.FromMilliseconds(25));
             if (request.RequestUri!.AbsolutePath.EndsWith("/time"))
                 return Envelope(new ServerTimeSnapshot(DateTimeOffset.UtcNow, new("server", "node", 1)));
             var body = await request.Content!.ReadFromJsonAsync<SyncProgressRequest>(LoadJson.Options);
@@ -75,7 +77,7 @@ public sealed class LoadRunnerTests
             return Envelope(new PersistedProgress(body.ExamId, body.CandidateId, body.ParticipationId, body.EntryVersion,
                 body.DeviceId, body.AuthorizationVersion, body.AnswerVersion, body.PaperVersion, body.Answers, body.CurrentQuestionId, DateTimeOffset.UtcNow));
         });
-        await using (var runner = new LoadRunner(options, Manifest(), handler)) Assert.Equal(0, await runner.RunAsync(default));
+        await using (var runner = new LoadRunner(options, Manifest(), handler, time)) Assert.Equal(0, await runner.RunAsync(default));
         Assert.Equal(2, calls);
         var report = await File.ReadAllTextAsync(Path.Combine(options.OutputDirectory, "summary.json"));
         Assert.DoesNotContain("private-test-credential", report);

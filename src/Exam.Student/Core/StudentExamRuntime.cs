@@ -12,7 +12,7 @@ using Exam.Contracts.Resources;
 namespace Exam.Student.Core;
 
 /// <summary>一场考试的包与指令连接，在等待页转到答题页时继续保留。</summary>
-public sealed class StudentExamRuntime(
+public sealed partial class StudentExamRuntime(
     ExamPackageManager manager,
     DeviceRecord device,
     ILocalStateStore? localState = null,
@@ -36,11 +36,30 @@ public sealed class StudentExamRuntime(
     private bool _localRecoveryChecked;
     private string? _localStateError;
     private StudentPaperManifest? _paper;
+    private PaperUpdateInstallation? _lastInstalledUpdate;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, byte> _confirmedReviewVersions = new();
+    private readonly object _updateSync = new();
+    private int _paperUpdateCommitting;
+    private PaperUpdateCoordinator? _paperUpdate;
 
     public ExamPackageManager Manager { get; } = manager;
     public AnswerSession? Answers { get; private set; }
+    /// <summary>B06 在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
+    public PaperUpdateCoordinator PaperUpdate
+    {
+        get
+        {
+            lock (_updateSync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _paperUpdate ??= new PaperUpdateCoordinator(Manager, this);
+            }
+        }
+    }
     public StudentPaperManifest? Paper => !_disposed && !Manager.ExamEnded &&
-        Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked ? _paper : null;
+        Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked &&
+        _paper?.PaperVersion == Manager.Descriptor?.PaperVersion &&
+        (Answers is null || Answers.PaperVersion == _paper?.PaperVersion) ? _paper : null;
 
     /// <summary>B03 显示层读取 PDF 的入口。调用方负责释放显示副本；终止后禁止再次读取。</summary>
     public byte[] ReadQuestionPdf(string questionId)
@@ -119,6 +138,15 @@ public sealed class StudentExamRuntime(
         }
         try
         {
+            if (Manager.HasPendingPaperInstallation)
+            {
+                var recoveredAnswer = await localState.LoadAnswerStateAsync(_localKey, ct);
+                var recoveredSnapshot = await localState.LoadPendingSnapshotAsync(_localKey, ct);
+                await Manager.RecoverPendingPaperInstallationAsync(_localKey, recoveredAnswer, recoveredSnapshot, ct);
+            }
+            _lastInstalledUpdate = Manager.LastPaperInstallation;
+            foreach (var review in await localState.LoadPaperUpdateReviewsAsync(_localKey, ct))
+                _confirmedReviewVersions.TryAdd(review.PaperVersion, 0);
             _recoveredSubmission = await localState.LoadFixedSubmissionAsync(_localKey, ct);
             if (_recoveredSubmission is null && Manager.RequiresLocalAnswerRecovery &&
                 await localState.LoadAnswerStateAsync(_localKey, ct) is null)
@@ -199,7 +227,7 @@ public sealed class StudentExamRuntime(
                         Manager.Participation != participation || Manager.Server != server) return;
                     _paper = parsed;
                 }
-                catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
+                catch (Exception error) when (error is IOException or InvalidDataException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
                 {
                     _paper = null;
                     _localStateError = "试题包清单、PDF 或版本核对失败，原答案保留，不能开始作答。";
@@ -213,8 +241,33 @@ public sealed class StudentExamRuntime(
             {
                 if (_answerContext != context)
                 {
-                    await Answers.InvalidateAuthorizationAsync(ct);
-                    _localStateError = "参试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
+                    if (_answerContext is { } previous &&
+                        previous.ParticipationId == context.ParticipationId &&
+                        previous.EntryVersion == context.EntryVersion &&
+                        previous.AuthorizationVersion == context.AuthorizationVersion &&
+                        previous.DeviceId == context.DeviceId &&
+                        context.PaperVersion > previous.PaperVersion &&
+                        Answers.Status == AnswerSessionStatus.Active)
+                    {
+                        // B06 试卷修订：同一参试/设备/授权下仅版本提升时，
+                        // 答案、标记与当前题结转为新版本继续作答，不清空不重建。
+                        var switched = await Answers.SwitchPaperVersionAsync(
+                            context.PaperVersion, _paper?.Structure, ct);
+                        if (switched.Succeeded)
+                        {
+                            _answerContext = context;
+                            _localStateError = null;
+                        }
+                        else
+                        {
+                            _localStateError = $"试卷版本切换未完成：{switched.Error} 原答案已保留，请联系考务人员。";
+                        }
+                    }
+                    else
+                    {
+                        await Answers.InvalidateAuthorizationAsync(ct);
+                        _localStateError = "参试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
+                    }
                 }
                 return;
             }
@@ -254,6 +307,11 @@ public sealed class StudentExamRuntime(
             return;
         }
         if (Answers is not { } answers) { return; }
+        if (answers.HasPendingPaperUpdate && !answers.HasPendingSubmission)
+        {
+            PaperUpdate.Retry();
+            return;
+        }
         var result = await answers.RetrySaveAsync(ct);
         _localStateError = result.Succeeded ? null : result.Error;
         NotifyStateChanged();
@@ -376,7 +434,7 @@ public sealed class StudentExamRuntime(
         {
             return;
         }
-        catch (Exception error) when (error is IOException or CryptographicException or UnauthorizedAccessException)
+        catch (Exception error) when (error is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException)
         {
             _handlingError = "当前设备授权已失效，已停止访问试题；本机停用记录保存失败，请联系考务人员恢复。";
         }
@@ -397,11 +455,18 @@ public sealed class StudentExamRuntime(
             var packageCommand = Manager.HandleCommandAsync(delivery, ct);
             // The manager validates END's full identity before synchronously marking Ended.
             // Merely receiving an END-shaped message is not sufficient to suspend this exam.
-            var answerStop = Manager.ExamEnded && Answers is { } answers
-                ? FreezeEndedAnswersAsync(answers, CancellationToken.None)
+            var answerStop = Answers is { } answers
+                ? Manager.CurrentPhase == ExamPackageManager.Phase.Revoked
+                    ? answers.InvalidateAuthorizationAsync(CancellationToken.None)
+                    : Manager.ExamEnded ? FreezeEndedAnswersAsync(answers, CancellationToken.None) : Task.CompletedTask
                 : Task.CompletedTask;
             NotifyStateChanged();
-            await Task.WhenAll(packageCommand, answerStop);
+            try { await Task.WhenAll(packageCommand, answerStop); }
+            finally
+            {
+                // 依据本机已验证的持久指令，而不是原始网络消息；Received 回执丢失也不丢掉更新任务。
+                if (Manager.IsRecordedPaperUpdate(delivery)) _paperUpdate?.Notify(delivery);
+            }
             await SynchronizeLocalAnswersAsync(ct);
             _handlingError = null;
         }
@@ -409,7 +474,7 @@ public sealed class StudentExamRuntime(
         {
             return;
         }
-        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or TimeoutException
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException or InvalidOperationException or TimeoutException
             or OperationCanceledException or CryptographicException or UnauthorizedAccessException or ArgumentException)
         {
             _handlingError = "服务器指令尚未处理完成，将继续使用原事件重试。请保持客户端运行。";
@@ -431,6 +496,12 @@ public sealed class StudentExamRuntime(
         _lifetime.Cancel();
         try
         {
+            // B06：先停更新编排器，避免其后台循环再触碰正在关闭的管理器与会话。
+            var updateCoordinator = _paperUpdate;
+            if (updateCoordinator is not null)
+            {
+                await updateCoordinator.DisposeAsync();
+            }
             if (_feed is not null)
             {
                 await _feed.DisposeAsync();

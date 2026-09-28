@@ -37,6 +37,10 @@ public partial class ExamInProgressPage : UserControl
     private int _workbenchGeneration;
     private bool _rendering;
     private bool _started;
+    private readonly FocusTracker _focus = new();
+    private Window? _focusWindow;
+    private bool _reviewPending;
+    private bool _reviewSaving;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
@@ -82,8 +86,12 @@ public partial class ExamInProgressPage : UserControl
         InitializeComponent();
         DataContext = App.Services.Session;
 
-        _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock);
+        _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock, focus: _focus);
         _sync.StatusChanged += OnSyncStatusChanged;
+
+        // B06 在线更新：编排器状态与切换结果驱动提示横幅与复核记录。
+        runtime.PaperUpdate.StatusChanged += OnPaperUpdateStatusChanged;
+        runtime.PaperUpdate.UpdateInstalled += OnPaperUpdateInstalled;
 
         QuestionView.OptionClicked += OnOptionClicked;
         QuestionView.AbstainClicked += OnAbstainClicked;
@@ -97,6 +105,7 @@ public partial class ExamInProgressPage : UserControl
         _runtime.StateChanged += OnRuntimeStateChanged;
         Loaded += (_, _) =>
         {
+            AttachFocusWindow();
             if (_started || _lifetime.IsCancellationRequested) return;
             _started = true;
             _ = RunSyncAsync();
@@ -106,7 +115,11 @@ public partial class ExamInProgressPage : UserControl
         {
             _clock?.Stop();
             _lifetime.Cancel();
+            _focus.Close();
+            DetachFocusWindow();
             _runtime.StateChanged -= OnRuntimeStateChanged;
+            _runtime.PaperUpdate.StatusChanged -= OnPaperUpdateStatusChanged;
+            _runtime.PaperUpdate.UpdateInstalled -= OnPaperUpdateInstalled;
             _sync.StatusChanged -= OnSyncStatusChanged;
             QuestionView.OptionClicked -= OnOptionClicked;
             QuestionView.AbstainClicked -= OnAbstainClicked;
@@ -131,8 +144,120 @@ public partial class ExamInProgressPage : UserControl
         }
     }
 
+    /// <summary>B06 失焦检测：窗口失焦/复焦经窗口事件驱动；复焦立即唤醒同步服务补报。</summary>
+    private void AttachFocusWindow()
+    {
+        if (_focusWindow is not null) return;
+        if (Window.GetWindow(this) is not { } window) return;
+        _focusWindow = window;
+        window.Deactivated += OnWindowDeactivated;
+        window.Activated += OnWindowActivated;
+    }
+
+    private void DetachFocusWindow()
+    {
+        if (_focusWindow is not { } window) return;
+        window.Deactivated -= OnWindowDeactivated;
+        window.Activated -= OnWindowActivated;
+        _focusWindow = null;
+    }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e)
+    {
+        if (_lifetime.IsCancellationRequested) return;
+        if (_focus.OnFocusLost()) _ = KickSyncAfterRefocusAsync();
+        RefreshFocusStatus();
+    }
+
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (_lifetime.IsCancellationRequested) return;
+        if (_focus.OnFocusRegained())
+        {
+            // 失焦补报：重新获得焦点立即触发一个同步回合，不等 60 秒周期。
+            _ = KickSyncAfterRefocusAsync();
+        }
+        RefreshFocusStatus();
+    }
+
+    private async Task KickSyncAfterRefocusAsync()
+    {
+        try { await _sync.KickAsync(_lifetime.Token); }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception) { /* 补报失败由同步服务自身状态行呈现并按周期重试 */ }
+        finally { RefreshStatus(); }
+    }
+
+    private void RefreshFocusStatus()
+    {
+        var count = _focus.FocusLostCount;
+        FocusStatusText.Text = count > 0
+            ? $"累计失焦 {count} 次（约 {Math.Round(_focus.TotalUnfocusedDuration.TotalSeconds)} 秒），仅为本机会话记录，尚无服务器留痕回执"
+            : string.Empty;
+    }
+
+    /// <summary>B06 在线更新：状态横幅按阶段着色。</summary>
+    private void OnPaperUpdateStatusChanged(object? sender, PaperUpdateStatusChangedEventArgs e)
+    {
+        if (_lifetime.IsCancellationRequested) { return; }
+        PaperUpdateBanner.IsOpen = e.Phase != PaperUpdatePhase.None && !string.IsNullOrEmpty(e.Message);
+        PaperUpdateBanner.Message = e.Message ?? string.Empty;
+        PaperUpdateBanner.Level = e.Phase switch
+        {
+            PaperUpdatePhase.Applied => StatusLevel.Success,
+            PaperUpdatePhase.Failed => StatusLevel.Danger,
+            PaperUpdatePhase.Pending or PaperUpdatePhase.Syncing => StatusLevel.Warning,
+            _ => StatusLevel.Warning,
+        };
+    }
+
+    /// <summary>先允许考生阅读修订内容，再由按钮明确确认，不用挡住题目的弹窗代替复核。</summary>
+    private void OnPaperUpdateInstalled(object? sender, (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt) e)
+    {
+        if (_lifetime.IsCancellationRequested) return;
+        _runtime.RecordInstalledPaperUpdate(e.Version, e.ReceivedAt, e.InstalledAt);
+        RefreshStatus();
+    }
+
+    private async void OnConfirmReview(object sender, RoutedEventArgs e)
+    {
+        if (_reviewSaving || !_reviewPending || _lifetime.IsCancellationRequested ||
+            _runtime.PendingReviewVersion is not { } version) return;
+        _reviewSaving = true;
+        ReviewUpdateButton.IsEnabled = false;
+        try
+        {
+            var result = await _runtime.ConfirmPaperUpdateReviewAsync(version, _lifetime.Token);
+            if (_lifetime.IsCancellationRequested) return;
+            PaperBanner.Level = result is { Succeeded: true } ? StatusLevel.Info : StatusLevel.Warning;
+            PaperBanner.Message = result is { Succeeded: true }
+                ? $"版本 {version} 的复核确认已保存在本机。"
+                : "复核确认尚未保存或版本已变化，请查看当前试题后重试。";
+            PaperBanner.IsOpen = true;
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        finally
+        {
+            _reviewSaving = false;
+            if (!_lifetime.IsCancellationRequested) RefreshStatus();
+        }
+    }
+
+    /// <summary>B06 设备裁决：本设备被撤销后返回选择考试（本机已有答案已保留）。</summary>
+    private async void OnRevokedBack(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is not { } window) { return; }
+        var confirmed = await ConfirmDialog.ShowAsync(
+            window, "返回选择考试", "确定返回选择考试页面吗？本机已停止作答并保留已有记录；服务器仅保留此前确认同步的进度。",
+            "返回", "留在本页", isDanger: false);
+        if (!confirmed) { return; }
+        _lifetime.Cancel();
+        await App.Services.Session.ReleaseExamAsync();
+        _navigation.GoToExamSelection();
+    }
+
     private bool CanAnswer =>
-        !_lifetime.IsCancellationRequested && !_submitting && !_rendering &&
+        !_lifetime.IsCancellationRequested && !_submitting && !_rendering && !_runtime.IsPaperUpdateInProgress &&
         _sync.Phase is not (SubmissionSyncPhase.Blocked or SubmissionSyncPhase.Confirmed) &&
         _runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked &&
         ReferenceEquals(_loadedPaper, _runtime.Paper) && QuestionView.HasQuestion &&
@@ -526,6 +651,11 @@ public partial class ExamInProgressPage : UserControl
             QuestionView.UpdateAnswer(currentAnswers.Answers.TryGetValue(question.QuestionId, out var saved)
                 ? saved : AnswerValue.Empty());
 
+        // B06 设备裁决：授权撤销后全页遮蔽，只保留返回入口。
+        var revoked = _runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked ||
+                      _runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied;
+        RevokedOverlay.Visibility = revoked ? Visibility.Visible : Visibility.Collapsed;
+
         if (_regionError is not null)
         {
             PaperBanner.Level = StatusLevel.Danger;
@@ -560,6 +690,11 @@ public partial class ExamInProgressPage : UserControl
         RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave ? Visibility.Visible : Visibility.Collapsed;
         RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
         SyncStatusText.Text = _sync.StatusText;
+        RefreshFocusStatus();
+        _reviewPending = _runtime.PendingReviewVersion is not null && !revoked && !_runtime.HasFixedSubmission && !_runtime.Manager.ExamEnded;
+        ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;
+        ReviewUpdateButton.IsEnabled = _reviewPending && !_reviewSaving && !_runtime.IsPaperUpdateInProgress;
+        if (_reviewPending) ReviewUpdateButton.Content = $"已复核版本 {_runtime.PendingReviewVersion} 的修订试题";
     }
 
     private static string QuestionTypeTitle(string questionType) => questionType switch

@@ -55,7 +55,23 @@ public sealed class WindowsServiceBusinessHostTests
     }
 
     private static WindowsServiceBusinessHost CreateHost(FakeControl control, string name = "ExamBusiness") =>
-        new(name, control, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(1));
+        new(name, control, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(1), new PollingTimeProvider());
+
+    [Fact]
+    public async Task Start_UsesConfiguredDeadlineWithInjectedMonotonicTime()
+    {
+        var host = new WindowsServiceBusinessHost("ExamBusiness", new FakeControl(ManagedWindowsServiceState.Stopped),
+            TimeSpan.FromMilliseconds(2), TimeSpan.FromMilliseconds(1), new PollingTimeProvider());
+        await Assert.ThrowsAsync<TimeoutException>(() => host.StartAsync(CancellationToken.None));
+    }
+
+    // 逻辑轮询每次推进 1ms；线程池争用不替代本测试所模拟的服务状态或时间。
+    private sealed class PollingTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+        public override long TimestampFrequency => 1000;
+        public override long GetTimestamp() => Interlocked.Increment(ref _timestamp);
+    }
 
     private sealed class FakeControl(params ManagedWindowsServiceState[] states) : IWindowsServiceControl
     {

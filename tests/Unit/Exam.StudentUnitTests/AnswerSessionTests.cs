@@ -167,6 +167,34 @@ public sealed class FakeLocalStateStore : ILocalStateStore
         }
     }
 
+    private readonly Dictionary<LocalStateKey, List<PaperUpdateReviewRecord>> _reviews = new();
+
+    public Task<StoreWriteResult> SavePaperUpdateReviewAsync(
+        LocalStateKey key, PaperUpdateReviewRecord record, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _reviews.TryGetValue(key, out var existing) ? existing : _reviews[key] = [];
+            if (list.All(item => item.PaperVersion != record.PaperVersion))
+            {
+                list.Add(record);
+            }
+            return Task.FromResult(StoreWriteResult.Ok());
+        }
+    }
+
+    public Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(
+        LocalStateKey key, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _reviews.TryGetValue(key, out var existing)
+                ? existing.OrderBy(item => item.PaperVersion).ToList()
+                : [];
+            return Task.FromResult<IReadOnlyList<PaperUpdateReviewRecord>>(list);
+        }
+    }
+
     public Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default)
     {
         lock (_gate)
