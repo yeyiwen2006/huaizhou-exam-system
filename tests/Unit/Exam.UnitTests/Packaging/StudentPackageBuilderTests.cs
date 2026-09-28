@@ -339,6 +339,54 @@ public sealed class StudentPackageBuilderTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("duplicate-option", false)]
+    [InlineData("duplicate-option", true)]
+    [InlineData("null-questions", false)]
+    [InlineData("null-questions", true)]
+    [InlineData("null-question", false)]
+    [InlineData("null-question", true)]
+    [InlineData("null-options", false)]
+    [InlineData("null-options", true)]
+    [InlineData("null-option", false)]
+    [InlineData("null-option", true)]
+    [InlineData("negative-page", false)]
+    [InlineData("negative-page", true)]
+    [InlineData("out-of-bounds", false)]
+    [InlineData("out-of-bounds", true)]
+    [InlineData("non-finite", false)]
+    [InlineData("non-finite", true)]
+    public async Task Build_InvalidCoordinates_ReportCoordinateFailureWithoutPublishing(string defect, bool encrypted)
+    {
+        var valid = OptionRegions();
+        var question = valid.Questions[0];
+        var options = question.Options.ToArray();
+        var invalid = defect switch
+        {
+            "duplicate-option" => OptionRegions(["A", "A", "C", "D"]),
+            "null-questions" => valid with { Questions = null! },
+            "null-question" => valid with { Questions = [null!] },
+            "null-options" => valid with { Questions = [question with { Options = null! }] },
+            "null-option" => valid with { Questions = [question with { Options = [null!, options[1], options[2], options[3]] }] },
+            "negative-page" => valid with { Questions = [question with { Options = [options[0] with { PageIndex = -1 }, options[1], options[2], options[3]] }] },
+            "out-of-bounds" => valid with { Questions = [question with { Options = [options[0] with { X = 0.99, Width = 0.2 }, options[1], options[2], options[3]] }] },
+            "non-finite" => valid with { Questions = [question with { Options = [options[0] with { X = double.NaN }, options[1], options[2], options[3]] }] },
+            _ => throw new ArgumentOutOfRangeException(nameof(defect))
+        };
+        var encryptedPath = _studentDirectory + ".epkg";
+
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(
+            Request() with { OptionRegions = invalid, EncryptedPackagePath = encrypted ? encryptedPath : null });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Issues, issue => issue.Code == StudentPackageIssueCode.OptionRegionInvalid);
+        Assert.Null(result.Envelope);
+        Assert.Null(result.EncryptedPackagePath);
+        Assert.False(File.Exists(encryptedPath));
+        Assert.False(Directory.Exists(_studentDirectory) &&
+            Directory.EnumerateFiles(_studentDirectory, "*", SearchOption.AllDirectories).Any());
+    }
+
     private int PackagedSchemaVersion()
     {
         var text = File.ReadAllText(Path.Combine(_studentDirectory, StudentPaperPackage.ManifestPath));
