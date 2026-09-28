@@ -12,6 +12,7 @@ using Exam.Admin.ViewModels;
 
 namespace Exam.AdminUnitTests;
 
+[Collection("Admin WPF")]
 public sealed class WpfBindingSmokeTests
 {
     [Fact]

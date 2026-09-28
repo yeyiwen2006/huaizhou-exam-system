@@ -1,0 +1,29 @@
+<UserControl x:Class="Exam.Admin.Reporting.ReportTableView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinHeight="180">
+    <Grid>
+        <TextBlock x:Name="UnavailableText" Text="报表尚未开放" TextAlignment="Center"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Style="{DynamicResource CaptionText}" />
+        <ScrollViewer x:Name="HorizontalScroller" Visibility="Collapsed"
+                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+            <Grid x:Name="TableBody">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DataGrid x:Name="RowsGrid" Grid.Row="0" AutoGenerateColumns="False" BorderThickness="0"
+                          IsReadOnly="True" CanUserSortColumns="False" CanUserReorderColumns="False"
+                          CanUserResizeColumns="False" CanUserAddRows="False"
+                          CanUserDeleteRows="False" HeadersVisibility="Column"
+                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                          SelectionUnit="CellOrRowHeader" ClipboardCopyMode="IncludeHeader" />
+                <Border x:Name="FooterBorder" Grid.Row="1" Style="{DynamicResource TableFooterRow}"
+                        Padding="0" BorderThickness="0,1,0,0" Visibility="Collapsed">
+                    <Grid x:Name="FooterGrid" />
+                </Border>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
