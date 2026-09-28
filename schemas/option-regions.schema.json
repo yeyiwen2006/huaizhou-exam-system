@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huaizhou.example/schemas/option-regions.schema.json",
+  "title": "Per-question option regions",
+  "description": "D03 输出的学生包根目录 option-regions.json：每题每选项的页索引与归一化标签矩形。坐标规范由 anchorScheme 固定，页索引为题内从 0 开始。跨字段约束（x + width <= 1、y + height <= 1、重复标识、重复 JSON 字段）无法用纯 JSON Schema 表达，由读取实现 OptionRegionArtifactJson.Deserialize 执行；实现是权威，本 schema 是对外契约。契约见 docs/d03-option-region-contract.md 第 4.4 节。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactVersion", "anchorScheme", "examId", "paperVersion", "questions"],
+  "properties": {
+    "artifactVersion": {
+      "const": 1,
+      "description": "坐标产物版本。与学生清单的 schemaVersion 是两个独立版本字段。"
+    },
+    "anchorScheme": {
+      "const": "pageTopLeftNormalizedV1",
+      "description": "坐标规范名称：原点在显示页面左上角，x 向右、y 向下，按该页旋转后的显示尺寸归一化到 [0,1]。D03 产出的区域与 B03 的控件绑定共用此名称，任何一方不得自造。"
+    },
+    "examId": { "$ref": "#/$defs/text" },
+    "paperVersion": { "type": "integer", "minimum": 1 },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "按学生清单的题目顺序排列。",
+      "items": { "$ref": "#/$defs/question" }
+    }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "options"],
+      "properties": {
+        "questionId": { "$ref": "#/$defs/text" },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "description": "按学生清单该题的选项顺序排列；B03 按标识核对，不按顺序绑定答案。",
+          "items": { "$ref": "#/$defs/option" }
+        }
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionId", "pageIndex", "x", "y", "width", "height"],
+      "properties": {
+        "optionId": { "$ref": "#/$defs/text" },
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "题内从 0 开始的页索引，相对于该题逐题 PDF 的第一页。"
+        },
+        "x": { "$ref": "#/$defs/unit" },
+        "y": { "$ref": "#/$defs/unit" },
+        "width": { "$ref": "#/$defs/positiveUnit" },
+        "height": { "$ref": "#/$defs/positiveUnit" }
+      }
+    },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "positiveUnit": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+  }
+}

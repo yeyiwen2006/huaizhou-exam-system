@@ -6,6 +6,7 @@ using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
 using Exam.Domain.Importing;
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Compilation;
 using Exam.Infrastructure.Security;
 using Exam.Infrastructure.ServiceManagement;
 
@@ -29,6 +30,13 @@ public sealed record StudentPackageRequest(
     /// 省略时读取调用方准备的平铺 PDF 目录；调用方须保证仅含本次已验收产物。
     /// </summary>
     public IReadOnlyDictionary<string, TeXCompileResult>? CompiledQuestions { get; init; }
+
+    /// <summary>
+    /// 本次组包的选项坐标产物。传入即产出学生清单 v2（必须附带根目录 option-regions.json）；
+    /// 不传维持 v1（学生端不猜测点击位置）。产物必须与清单的题目及选项逐一对应，
+    /// 由调用方用 OptionRegionExtractor 从本次已验收的编译产物抽取。
+    /// </summary>
+    public OptionRegionArtifact? OptionRegions { get; init; }
 }
 
 public sealed record StudentPackageResult(
@@ -110,7 +118,10 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             examId = manifest.ExamId;
             // 学生清单仅包含显示和作答所需字段，不携带导入源路径及计分规则。
             var structure = ImportedGradingRules.BuildStructure(manifest);
-            var studentManifest = new StudentPaperManifest(1, examId, manifest.ExamName, request.PaperVersion,
+            var schemaVersion = request.OptionRegions is null
+                ? StudentPaperPackage.LegacySchemaVersion
+                : StudentPaperPackage.OptionRegionSchemaVersion;
+            var studentManifest = new StudentPaperManifest(schemaVersion, examId, manifest.ExamName, request.PaperVersion,
                 manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name)).ToArray(),
                 manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order)).ToArray(),
                 manifest.Questions.Select((q, i) => new StudentPaperQuestion(structure.Questions[i],
@@ -154,6 +165,76 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 totalBytes += bytes.Length;
                 files.Add(relative, bytes);
             }
+            void AddOptionRegions(OptionRegionArtifact artifact)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string json;
+                try
+                {
+                    // The canonical writer validates original geometry, unique identifiers and null collections.
+                    // Validate before enumerating or quantizing; invalid coordinates are not an encryption error.
+                    json = OptionRegionArtifactJson.Serialize(artifact);
+                }
+                catch (ArgumentException)
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标原始产物无效，未发布预览或加密产物。", OptionRegionArtifact.FileName));
+                    return;
+                }
+                if (!string.Equals(artifact.ExamId, examId, StringComparison.Ordinal) ||
+                    artifact.PaperVersion != request.PaperVersion)
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标的考试或试卷版本与本次组包不一致。", OptionRegionArtifact.FileName));
+                    return;
+                }
+                if (artifact.ArtifactVersion != OptionRegionArtifact.CurrentArtifactVersion ||
+                    !string.Equals(artifact.AnchorScheme, OptionRegionArtifact.AnchorSchemeName, StringComparison.Ordinal))
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标的版本或坐标规范不受支持。", OptionRegionArtifact.FileName));
+                    return;
+                }
+
+                // 必须与清单的题目及选项逐一对应：多一个、少一个都不发布。
+                var expected = structure.Questions.ToDictionary(
+                    question => question.QuestionId,
+                    question => question.OptionIds.ToHashSet(StringComparer.Ordinal),
+                    StringComparer.Ordinal);
+                foreach (var question in artifact.Questions)
+                {
+                    if (!expected.TryGetValue(question.QuestionId, out var optionIds) ||
+                        question.Options.Count != optionIds.Count ||
+                        question.Options.Any(option => !optionIds.Contains(option.OptionId)))
+                    {
+                        issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                            $"选项坐标与清单题目 {question.QuestionId} 的选项不一致。", OptionRegionArtifact.FileName));
+                        return;
+                    }
+
+                    expected.Remove(question.QuestionId);
+                }
+
+                if (expected.Count != 0)
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标缺少清单中的题目。", OptionRegionArtifact.FileName));
+                    return;
+                }
+
+                var bytes = Encoding.UTF8.GetBytes(json);
+                if (bytes.Length > MaxMetadataBytes || totalBytes + bytes.Length > MaxPackageBytes ||
+                    files.Count >= StudentPackageLayout.MaxEntryCount)
+                {
+                    issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,
+                        "选项坐标文件超出容量限制。", OptionRegionArtifact.FileName));
+                    return;
+                }
+
+                totalBytes += bytes.Length;
+                files.Add(OptionRegionArtifact.FileName, bytes);
+            }
+
             if (request.CompiledQuestions is { } compiled &&
                 (compiled.Count != manifest.Questions.Count || compiled.Keys.Any(id => !manifest.Questions.Any(q => q.QuestionId == id))))
                 issues.Add(new(StudentPackageIssueCode.QuestionPdfMissing, "编译结果必须与清单中的题目逐一对应。"));
@@ -180,6 +261,11 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                 }
                 AddFile(destination, source);
             }
+            if (request.OptionRegions is { } optionRegions)
+            {
+                AddOptionRegions(optionRegions);
+            }
+
             var resourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var root in manifest.ResourceRoots)
             {
@@ -229,7 +315,10 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             if (issues.Count != 0) return Fail();
             var finalMetadata = JsonSerializer.SerializeToUtf8Bytes(studentManifest with
             {
+                // 坐标文件是专用元数据，不是显示资源：混进 displayResources 会被当成普通显示文件校验，
+                // 学生端也会把它当资源遍历。契约 4.4 明确不允许这样加进旧包。
                 DisplayResources = files.Keys.Where(path => path != StudentPackagePlan.MetadataFileName &&
+                    path != OptionRegionArtifact.FileName &&
                     !path.StartsWith("questions/", StringComparison.Ordinal)).ToArray()
             }, ImportJson.Create());
             if (files.Count > StudentPackageLayout.MaxEntryCount || finalMetadata.Length > MaxMetadataBytes || totalBytes - metadata.Length + finalMetadata.Length > MaxPackageBytes)

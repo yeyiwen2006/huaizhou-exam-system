@@ -1,6 +1,7 @@
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Common;
+using Exam.Contracts.Versioning;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -165,6 +166,116 @@ public sealed class ExamConfigurationViewModelTests
 
         Assert.Contains("VERSION_CONFLICT", status, StringComparison.Ordinal);
         Assert.DoesNotContain("计划已保存", status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SaveReply_DoesNotClaimEditsMadeWhileWaitingWereSaved()
+    {
+        using var handler = new DeferredSaveHandler();
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        var viewModel = CreateFixedScheduleDraft(api);
+        var completed = WaitForStatus(viewModel, "先前的计划已保存");
+
+        viewModel.SaveScheduleCommand.Execute(null);
+        await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        viewModel.ScheduledEndText = "2026-10-01 13:00 +08:00";
+        handler.Complete(Snapshot(new ScheduleWindow(
+            new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8)),
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))));
+
+        var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("当前时间仍是未保存草稿", status, StringComparison.Ordinal);
+        Assert.Equal("2026-10-01 13:00 +08:00", viewModel.ScheduledEndText);
+        Assert.Contains("计划版本 1", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SaveReply_MatchingScheduleShowsOnlySupportedFieldsAsSaved()
+    {
+        using var handler = new DeferredSaveHandler();
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        var viewModel = CreateFixedScheduleDraft(api);
+        var completed = WaitForStatus(viewModel, "计划已保存");
+
+        viewModel.SaveScheduleCommand.Execute(null);
+        await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        handler.Complete(Snapshot(new ScheduleWindow(
+            new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8)),
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))));
+
+        var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("scheduleVersion=1", status, StringComparison.Ordinal);
+        Assert.Contains("仍为本地草稿", status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SaveReply_RejectsDifferentScheduleInsteadOfShowingSuccess()
+    {
+        using var handler = new DeferredSaveHandler();
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        var viewModel = CreateFixedScheduleDraft(api);
+        var completed = WaitForStatus(viewModel, "保存失败");
+
+        viewModel.SaveScheduleCommand.Execute(null);
+        await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        handler.Complete(Snapshot(new ScheduleWindow(
+            new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8)),
+            new DateTimeOffset(2026, 10, 1, 13, 0, 0, TimeSpan.FromHours(8)))));
+
+        var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("回执", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("计划已保存", status, StringComparison.Ordinal);
+        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+    }
+
+    private static ExamConfigurationViewModel CreateFixedScheduleDraft(AdminApiClient api) => new(api)
+    {
+        ExamId = "synthetic-exam",
+        ScheduledStartText = "2026-10-01 10:00 +08:00",
+        ScheduledEndText = "2026-10-01 12:00 +08:00"
+    };
+
+    private static ExamVersionSnapshot Snapshot(ScheduleWindow schedule) => new(
+        "synthetic-exam", new VersionVector(1, 0, 0), schedule,
+        ExamLifecycle.Scheduled, null, null, null, null,
+        new Dictionary<string, ParticipantVersionStatus>());
+
+    private static Task<string> WaitForStatus(ExamConfigurationViewModel viewModel, string prefix)
+    {
+        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(viewModel.Status) && viewModel.Status.StartsWith(prefix, StringComparison.Ordinal))
+                completion.TrySetResult(viewModel.Status);
+        };
+        return completion.Task;
+    }
+
+    private sealed class DeferredSaveHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<HttpResponseMessage> _reply =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+
+        public void Complete(ExamVersionSnapshot snapshot) => _reply.TrySetResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new ApiEnvelope<ExamVersionSnapshot>(
+                "synthetic-server", "synthetic-node", 1, "test", snapshot, null),
+                options: JsonDefaults.Create())
+        });
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _started.TrySetResult();
+            return _reply.Task;
+        }
     }
 
     private sealed class ConflictHandler : HttpMessageHandler

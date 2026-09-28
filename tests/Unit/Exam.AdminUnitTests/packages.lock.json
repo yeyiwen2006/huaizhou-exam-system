@@ -144,7 +144,8 @@
         "dependencies": {
           "ClosedXML": "[0.105.1, )",
           "Exam.Contracts": "[1.0.0, )",
-          "Exam.Desktop.Shared": "[1.0.0, )"
+          "Exam.Desktop.Shared": "[1.0.0, )",
+          "Exam.Domain": "[1.0.0, )"
         }
       },
       "exam.contracts": {
@@ -152,6 +153,12 @@
       },
       "exam.desktop.shared": {
         "type": "Project"
+      },
+      "exam.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Contracts": "[1.0.0, )"
+        }
       }
     }
   }

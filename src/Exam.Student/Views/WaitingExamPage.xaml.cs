@@ -23,6 +23,8 @@ public partial class WaitingExamPage : UserControl
     private bool _loaded;
     private bool _navigated;
     private string? _lastRuntimeError;
+    private int _arbitrationRetryCountdown;
+    private bool _updateRefreshQueued;
 
     public string ExamName => _exam.Name;
 
@@ -57,7 +59,7 @@ public partial class WaitingExamPage : UserControl
 
     private async Task PrepareAndDownloadAsync()
     {
-        if (_busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
+        if (_lifetime.IsCancellationRequested || _busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
         {
             return;
         }
@@ -108,7 +110,7 @@ public partial class WaitingExamPage : UserControl
             }
             if (_runtime.HasFixedSubmission)
             {
-                ErrorBanner.Show("本机已有固定答卷，原记录已保留。当前版本尚未接入原回执核对和补传，请联系考务人员；不能重新开始作答。");
+                ErrorBanner.Show("本机已有固定答卷，原记录已保留。正在转入原答卷补传和回执核对，不能重新开始作答。");
                 return;
             }
 
@@ -306,7 +308,37 @@ public partial class WaitingExamPage : UserControl
         RefreshState();
     }
 
-    private void OnRuntimeStateChanged(object? sender, EventArgs e) => RefreshState();
+    private void OnRuntimeStateChanged(object? sender, EventArgs e)
+    {
+        RefreshState();
+        MaybeAutoRefreshForUpdate();
+    }
+
+    /// <summary>B06：等待/已下载阶段收到试卷更新事件后自动重新获取新版资料。</summary>
+    private async void MaybeAutoRefreshForUpdate()
+    {
+        if (_lifetime.IsCancellationRequested || _busy || _navigated || _updateRefreshQueued ||
+            _runtime?.Manager is not { } manager || manager.DeviceDecisionPending)
+        {
+            return;
+        }
+        var descriptor = manager.Descriptor;
+        if (manager.CurrentPhase is not (ExamPackageManager.Phase.ConfirmedWaiting or
+            ExamPackageManager.Phase.Downloaded) ||
+            manager.NewestPaperVersion <= (descriptor?.PaperVersion ?? 0))
+        {
+            return;
+        }
+        _updateRefreshQueued = true;
+        try
+        {
+            await PrepareAndDownloadAsync();
+        }
+        finally
+        {
+            _updateRefreshQueued = false;
+        }
+    }
 
     private void SetBusy(bool busy, string message = "")
     {
@@ -325,6 +357,12 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
+        if (!_busy && _runtime?.HasFixedSubmission == true)
+        {
+            _navigated = true;
+            _navigation.GoToExamInProgress(_exam, _runtime);
+            return;
+        }
         var manager = _runtime?.Manager;
         InstructionList.ItemsSource = manager?.Instructions?.Lines.Select(line => InstructionTextRenderer.Create(line, (Style)FindResource("BodyText"))).ToArray();
         DownloadPill.Text = manager?.HasPackage == true ? "试题包已保存（加密）" : "试题包尚未完整获取";
@@ -356,6 +394,8 @@ public partial class WaitingExamPage : UserControl
             ExamPackageManager.Phase.Downloaded when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
                 ("资料齐备，待核对原参试", StatusLevel.Success, "原参试登记继续保留。请核对并恢复原参试，服务器将返回当前授权与考试状态。"),
             ExamPackageManager.Phase.Downloaded => ("资料齐备，尚未参试", StatusLevel.Success, "请阅读考试说明，再确认参试。确认时服务器将再次核对准入条件。"),
+            _ when manager?.DeviceDecisionPending == true =>
+                ("设备冲突待裁决", StatusLevel.Warning, "同一账号在另一设备登录本场考试，正在等待考务人员裁决。本设备暂不能进入该考试，确认后将自动继续。"),
             _ when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
                 ("正在恢复原参试", StatusLevel.Warning, "原参试登记继续保留，资料准备或状态核对尚未完成，请重试。"),
             _ => ("尚未确认参试", StatusLevel.Info, "试题包与考试说明全部取得后才能确认参试。"),
@@ -395,6 +435,24 @@ public partial class WaitingExamPage : UserControl
         var remain = _exam.ScheduledStart - App.Services.Clock.UtcNow;
         CountdownText.Text = remain > TimeSpan.Zero ? $"距计划开考 {remain:hh\\:mm\\:ss}" : "计划开始时间已到，请等待服务器确认";
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
+        MaybeRetryArbitration();
+    }
+
+    /// <summary>B06 设备裁决：待裁决状态每 15 秒自动重试准备，裁决通过后自动继续。</summary>
+    private void MaybeRetryArbitration()
+    {
+        if (_lifetime.IsCancellationRequested || _navigated || _busy || _runtime?.Manager is not { DeviceDecisionPending: true })
+        {
+            _arbitrationRetryCountdown = 0;
+            return;
+        }
+        if (_arbitrationRetryCountdown > 0)
+        {
+            _arbitrationRetryCountdown--;
+            return;
+        }
+        _arbitrationRetryCountdown = 15;
+        _ = PrepareAndDownloadAsync();
     }
 
     private static bool IsRecoverable(Exception error) => error is IOException or HttpRequestException or InvalidOperationException

@@ -23,6 +23,7 @@ public sealed class OptionRegionExtractionTests : IDisposable
     private readonly string _root;
     private readonly string _packageRoot;
     private readonly string _outputDirectory;
+    private string? _lastPdfPath;
 
     public OptionRegionExtractionTests()
     {
@@ -69,6 +70,25 @@ public sealed class OptionRegionExtractionTests : IDisposable
         Assert.True(lefts.Max() - lefts.Min() < 0.01, "同一题的选项标签应处于同一列");
         for (var index = 1; index < question.Options.Count; index++)
             Assert.True(question.Options[index].Y > question.Options[index - 1].Y, "选项应按纵向递增排列");
+
+        ExportForB03(result.Artifact!);
+    }
+
+    /// <summary>
+    /// 可选验收输出：导出这道合成题的 PDF 与坐标产物，供 B03 按同一格式接入并核对点击位置。
+    /// 与真实材料无关，全部为合成内容。
+    /// </summary>
+    private void ExportForB03(OptionRegionArtifact artifact)
+    {
+        var artifacts = Environment.GetEnvironmentVariable("EXAM_TEST_TEX_ARTIFACTS");
+        if (string.IsNullOrWhiteSpace(artifacts) || _lastPdfPath is null) return;
+
+        Directory.CreateDirectory(artifacts);
+        File.Copy(_lastPdfPath, Path.Combine(artifacts, "synthetic-question.pdf"), overwrite: true);
+        File.WriteAllText(
+            Path.Combine(artifacts, OptionRegionArtifact.FileName),
+            OptionRegionArtifactJson.Serialize(artifact),
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
     [Fact]
@@ -285,8 +305,8 @@ public sealed class OptionRegionExtractionTests : IDisposable
     private async Task<OptionRegionExtractionResult> ExtractAsync(string body, string? pageAttribute)
     {
         BuildPackage(body, pageAttribute);
-        var pdfPath = await CompileAsync();
-        return Extract(pdfPath);
+        _lastPdfPath = await CompileAsync();
+        return Extract(_lastPdfPath);
     }
 
     private static OptionRegionExtractionResult Extract(string pdfPath) =>

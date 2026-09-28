@@ -19,6 +19,7 @@ public sealed class ContractSchemaAlignmentTests
     private static readonly JsonDocument AnswerKeyDocument = ReadSchema("answer-key.schema.json");
     private static readonly JsonDocument ScoringDocument = ReadSchema("scoring-rules.schema.json");
     private static readonly JsonDocument DisplayDocument = ReadSchema("display-metadata.schema.json");
+    private static readonly JsonDocument OptionRegionDocument = ReadSchema("option-regions.schema.json");
 
     private static JsonElement ManifestSchema => ManifestDocument.RootElement;
 
@@ -122,12 +123,49 @@ public sealed class ContractSchemaAlignmentTests
     }
 
     [Fact]
+    public void OptionRegionShapes_MatchContracts()
+    {
+        var root = OptionRegionDocument.RootElement;
+        var definitions = root.GetProperty("$defs");
+
+        // 根字段即全部必填字段：产物没有可选字段，缺一不可。
+        Assert.Equal(PropertyNamesOf<OptionRegionArtifact>(), RequiredOf(root));
+        Assert.Equal(PropertyNamesOf<OptionRegionQuestion>(), PropertyNamesOf(definitions.GetProperty("question")));
+        Assert.Equal(PropertyNamesOf<OptionRegion>(), PropertyNamesOf(definitions.GetProperty("option")));
+    }
+
+    [Fact]
+    public void OptionRegionConstants_MatchContractConstants()
+    {
+        var root = OptionRegionDocument.RootElement;
+        var option = root.GetProperty("$defs").GetProperty("option").GetProperty("properties");
+
+        Assert.Equal(
+            OptionRegionArtifact.CurrentArtifactVersion,
+            root.GetProperty("properties").GetProperty("artifactVersion").GetProperty("const").GetInt32());
+        Assert.Equal(
+            OptionRegionArtifact.AnchorSchemeName,
+            root.GetProperty("properties").GetProperty("anchorScheme").GetProperty("const").GetString());
+
+        // 页索引为题内从 0 开始；宽高必须为正，坐标取值不超过 1。
+        Assert.Equal(0, option.GetProperty("pageIndex").GetProperty("minimum").GetInt32());
+        foreach (var name in new[] { "width", "height" })
+        {
+            var bounds = root.GetProperty("$defs").GetProperty(
+                option.GetProperty(name).GetProperty("$ref").GetString()!.Split('/')[^1]);
+            Assert.Equal(0, bounds.GetProperty("exclusiveMinimum").GetInt32());
+            Assert.Equal(1, bounds.GetProperty("maximum").GetInt32());
+        }
+    }
+
+    [Fact]
     public void EveryObjectSchema_ForbidsAdditionalProperties()
     {
         var missing = new List<string>();
         Walk(ManifestSchema, "#", missing);
         Walk(ScoringDocument.RootElement, "#", missing);
         Walk(DisplayDocument.RootElement, "#", missing);
+        Walk(OptionRegionDocument.RootElement, "#", missing);
         Walk(AnswerKeyDocument.RootElement, "#", missing);
 
         Assert.True(missing.Count == 0, $"以下对象 schema 未禁止未定义字段：{string.Join(", ", missing)}");

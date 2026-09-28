@@ -224,11 +224,11 @@ public sealed class StudentExamRuntimeTests
 
         await Task.WhenAll(recovery, terminal).WaitAsync(TimeSpan.FromSeconds(10));
         var recovered = Assert.IsType<AnswerSession>(runtime.Answers);
-        Assert.Equal(revoked ? AnswerSessionStatus.PermissionDenied : AnswerSessionStatus.Suspended, recovered.Status);
+        Assert.Equal(revoked ? AnswerSessionStatus.PermissionDenied : AnswerSessionStatus.Fixed, recovered.Status);
         Assert.False((await recovered.SetAnswerAsync("q1", new(AnswerKind.Selected, ["B"]))).Succeeded);
-        Assert.Null(await fixture.Store.LoadFixedSubmissionAsync(fixture.Key));
-        Assert.False(runtime.HasFixedSubmission);
-        Assert.Null(recovered.FixedSubmissionId);
+        Assert.Equal(!revoked, await fixture.Store.LoadFixedSubmissionAsync(fixture.Key) is not null);
+        Assert.Equal(!revoked, runtime.HasFixedSubmission);
+        Assert.Equal(!revoked, recovered.FixedSubmissionId is not null);
         Assert.False(runtime.CanRetryLocalSave);
     }
 
@@ -385,6 +385,8 @@ public sealed class StudentExamRuntimeTests
         public Task<FixedSubmissionRecord?> LoadFixedSubmissionAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadFixedSubmissionAsync(key, ct);
         public Task<StoreWriteResult> SavePreparationAsync(LocalStateKey key, PreparationRecord record, CancellationToken ct = default) => inner.SavePreparationAsync(key, record, ct);
         public Task<PreparationRecord?> LoadPreparationAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadPreparationAsync(key, ct);
+        public Task<StoreWriteResult> SavePaperUpdateReviewAsync(LocalStateKey key, PaperUpdateReviewRecord record, CancellationToken ct = default) => inner.SavePaperUpdateReviewAsync(key, record, ct);
+        public Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(LocalStateKey key, CancellationToken ct = default) => inner.LoadPaperUpdateReviewsAsync(key, ct);
         public Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default) => inner.DeleteAsync(key, ct);
         public void Dispose() { } // The fixture owns the underlying store.
     }

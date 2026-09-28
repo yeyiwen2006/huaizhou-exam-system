@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
+using Exam.Infrastructure.Compilation;
 
 namespace Exam.StudentUnitTests;
 
@@ -23,6 +24,9 @@ public sealed class StudentPaperPackageBoundaryTests
     [InlineData("unsupported-schema")]
     [InlineData("invalid-json")]
     [InlineData("invalid-utf8")]
+    [InlineData("v2-without-option-regions")]
+    [InlineData("v1-with-option-regions")]
+    [InlineData("v2-invalid-option-regions")]
     public void InvalidPackagesAreRejectedBeforeCatalogConstruction(string problem)
     {
         var files = Files();
@@ -41,6 +45,17 @@ public sealed class StudentPaperPackageBoundaryTests
                 StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 99 }, ImportJson.Create())); break;
             case "invalid-json": files[0] = (files[0].Path, "{"u8.ToArray()); break;
             case "invalid-utf8": files[0] = (files[0].Path, new byte[] { 255, 254, 255 }); break;
+            // 声明 v2 就必须在、声明 v1 就不许夹带：否则同一份清单会有两种解释。
+            case "v2-without-option-regions":
+                files = Files(StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 2 });
+                break;
+            case "v1-with-option-regions":
+                files.Add((OptionRegionArtifact.FileName, ValidOptionRegions()));
+                break;
+            case "v2-invalid-option-regions":
+                files = Files(StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 2 });
+                files.Add((OptionRegionArtifact.FileName, "{"u8.ToArray()));
+                break;
             default: throw new ArgumentOutOfRangeException(nameof(problem));
         }
         AssertRejected(Zip(files));
@@ -161,6 +176,37 @@ public sealed class StudentPaperPackageBoundaryTests
         cancellation.Cancel();
         Assert.Throws<OperationCanceledException>(() => StudentPaperPackage.ReadQuestionPdf(
             payload, manifest, "q1", cancellation.Token));
+    }
+
+    [Fact]
+    public void V2PackageWithValidOptionRegions_IsAccepted()
+    {
+        // 两个独立定义的坐标文件名必须一致：组包/契约侧与 B03 读取侧。
+        Assert.Equal(Exam.Student.Core.OptionRegionMap.EntryPath, OptionRegionArtifact.FileName);
+
+        var files = Files(StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 2 });
+        files.Add((OptionRegionArtifact.FileName, ValidOptionRegions()));
+
+        var manifest = StudentPaperPackage.ReadManifest(Zip(files), "exam", 1);
+
+        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, manifest.SchemaVersion);
+    }
+
+    private static byte[] ValidOptionRegions()
+    {
+        var studentManifest = StudentPaperFixture.CreateStudentManifest();
+        var artifact = new OptionRegionArtifact(
+            OptionRegionArtifact.CurrentArtifactVersion,
+            OptionRegionArtifact.AnchorSchemeName,
+            studentManifest.ExamId,
+            studentManifest.PaperVersion,
+            studentManifest.Questions.Select(question => new OptionRegionQuestion(
+                question.Structure.QuestionId,
+                question.Structure.OptionIds
+                    .Select(optionId => new Exam.Contracts.Importing.OptionRegion(optionId, 0, 0.1, 0.1, 0.02, 0.02))
+                    .ToList()))
+                .ToList());
+        return Encoding.UTF8.GetBytes(OptionRegionArtifactJson.Serialize(artifact));
     }
 
     private static void AssertRejected(byte[] payload)

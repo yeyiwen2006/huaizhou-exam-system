@@ -35,12 +35,14 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
     private readonly IWindowsServiceControl _control;
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _pollInterval;
+    private readonly TimeProvider _timeProvider;
 
     public WindowsServiceBusinessHost(
         string serviceName,
         IWindowsServiceControl? control = null,
         TimeSpan? timeout = null,
-        TimeSpan? pollInterval = null)
+        TimeSpan? pollInterval = null,
+        TimeProvider? timeProvider = null)
     {
         if (string.IsNullOrWhiteSpace(serviceName) || serviceName.Length > 80 ||
             serviceName.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-' and not '.'))
@@ -48,6 +50,7 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
             throw new ArgumentException("受控 Windows 服务名称无效。", nameof(serviceName));
         }
 
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _serviceName = serviceName;
         _control = control ?? new ScmWindowsServiceControl();
         _timeout = timeout ?? TimeSpan.FromSeconds(60);
@@ -123,7 +126,7 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
 
     private async Task WaitForAsync(ManagedWindowsServiceState target, CancellationToken cancellationToken)
     {
-        var elapsed = Stopwatch.StartNew();
+        var started = _timeProvider.GetTimestamp();
         var sawTransition = false;
         while (true)
         {
@@ -142,13 +145,13 @@ public sealed class WindowsServiceBusinessHost : IManagedBusinessHost
                 throw new InvalidOperationException("业务服务在等待期间退出或进入意外状态。");
             }
 
-            var remaining = _timeout - elapsed.Elapsed;
+            var remaining = _timeout - _timeProvider.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
                 throw new TimeoutException("等待业务服务状态超时，须核对实际服务状态。");
             }
 
-            await Task.Delay(remaining < _pollInterval ? remaining : _pollInterval, cancellationToken);
+            await Task.Delay(remaining < _pollInterval ? remaining : _pollInterval, _timeProvider, cancellationToken);
         }
     }
 }
