@@ -130,7 +130,13 @@ public sealed class ActivationRoomViewModel : BindableBase
             return;
         }
 
-        var result = await _api.ApproveActivationAsync(ActivationRequestId.Trim(), ApprovalRoomGroupId);
+        if (!string.IsNullOrWhiteSpace(ApprovalRoomGroupId))
+        {
+            Status = "当前没有权威试场组查询和校验接口，不能按本地草稿或手填 ID 指定试场；请清空试场组 ID 后审批为未分组。";
+            return;
+        }
+
+        var result = await _api.ApproveActivationAsync(ActivationRequestId.Trim(), null);
         Upsert(result.DeviceId, result.ClientNumber, result.Status.ToString(), result.RoomGroupId);
         Status = $"审批成功：设备 {result.DeviceId}，客户端编号 {result.ClientNumber}。编号由 A02 服务生成。";
     }
