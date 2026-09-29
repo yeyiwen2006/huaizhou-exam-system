@@ -64,9 +64,47 @@ public sealed class HttpStudentApiTests
         using var api = new HttpStudentApi(new AsyncHandler(_ => response.Task));
         api.ConfigureConnection(Device());
         var pending = api.GetServerTimeAsync();
-        api.ConfigureConnection(Device() with { Host = "127.0.0.2", ServerId = "server-2" });
+        api.ConfigureConnection(Device() with { Host = "127.0.0.2" });
         response.SetResult(TimeResponse());
         await Assert.ThrowsAsync<HttpRequestException>(() => pending);
+    }
+
+    [Fact]
+    public async Task SwitchingAddress_CannotReplaceTrustedServerIdentity()
+    {
+        using var api = new HttpStudentApi(new Handler(_ => TimeResponse()));
+        api.ConfigureConnection(Device() with { ServerEpoch = 3 });
+
+        Assert.Throws<InvalidOperationException>(() => api.ConfigureConnection(
+            Device() with { Host = "127.0.0.2", ServerId = "other-server", ServerEpoch = 4 }));
+        Assert.Throws<InvalidOperationException>(() => api.ConfigureConnection(
+            Device() with { Host = "127.0.0.2", ServerId = null, ServerEpoch = 4 }));
+        await Assert.ThrowsAsync<HttpRequestException>(() => api.GetServerTimeAsync());
+    }
+
+    [Fact]
+    public async Task SwitchingAddress_AcceptsSameServerWithNewerEpoch()
+    {
+        using var api = new HttpStudentApi(new Handler(request =>
+        {
+            Assert.Equal("127.0.0.2", request.RequestUri!.Host);
+            return TimeResponse("server", 4);
+        }));
+        api.ConfigureConnection(Device() with { ServerEpoch = 3 });
+        api.ConfigureConnection(Device() with { Host = "127.0.0.2", ServerEpoch = 1 });
+
+        var result = await api.GetServerTimeAsync();
+        Assert.Equal(4, result.ServerEpoch);
+    }
+
+    [Fact]
+    public async Task SwitchingAddress_CannotLowerVerifiedEpoch()
+    {
+        using var api = new HttpStudentApi(new Handler(_ => TimeResponse("server", 2)));
+        api.ConfigureConnection(Device() with { ServerEpoch = 3 });
+        api.ConfigureConnection(Device() with { Host = "127.0.0.2", ServerEpoch = 1 });
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => api.GetServerTimeAsync());
     }
 
     [Fact]
@@ -85,6 +123,20 @@ public sealed class HttpStudentApiTests
         }));
         malformed.ConfigureConnection(Device());
         await Assert.ThrowsAsync<HttpRequestException>(() => malformed.GetServerTimeAsync());
+    }
+
+    [Theory]
+    [InlineData("other-server", 2)]
+    [InlineData("server", 1)]
+    public async Task BusinessErrorFromWrongServerOrOldEpoch_IsRejected(string serverId, long epoch)
+    {
+        using var api = new HttpStudentApi(new Handler(_ => new(HttpStatusCode.Forbidden)
+        {
+            Content = JsonContent.Create(new ApiEnvelope<ServerTimeSnapshot>(serverId, "node", epoch, "request",
+                null, new(ErrorCodes.NotActivated, "设备未激活。")), options: JsonDefaults.Create())
+        }));
+        api.ConfigureConnection(Device() with { ServerEpoch = 2 });
+        await Assert.ThrowsAsync<HttpRequestException>(() => api.GetServerTimeAsync());
     }
 
     [Fact]

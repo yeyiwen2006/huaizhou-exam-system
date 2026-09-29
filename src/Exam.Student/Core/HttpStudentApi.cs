@@ -45,20 +45,30 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         var server = new UriBuilder(Uri.UriSchemeHttps, device.Host, device.Port).Uri;
         lock (_connectionGate)
         {
-            if (_server != server || _device?.DeviceId != device.DeviceId || _device?.Credential != device.Credential)
+            var sameDevice = _device?.DeviceId == device.DeviceId && _device?.Credential == device.Credential;
+            if (sameDevice && _trustedServerId is not null && device.ServerId is not null &&
+                !string.Equals(_trustedServerId, device.ServerId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("服务器身份与已验证连接不一致。");
+            }
+            if (sameDevice && _server != server && _trustedServerId is not null && device.ServerId is null)
+            {
+                throw new InvalidOperationException("切换服务器地址需要已绑定的逻辑服务器身份。");
+            }
+
+            if (_server != server || !sameDevice)
             {
                 _connectionGeneration++;
-                _serverEpoch = device.ServerEpoch;
-                _trustedServerId = device.ServerId;
+            }
+            if (sameDevice)
+            {
+                _serverEpoch = Math.Max(_serverEpoch, device.ServerEpoch);
+                _trustedServerId ??= device.ServerId;
             }
             else
             {
-                if (_trustedServerId is not null && device.ServerId is not null && _trustedServerId != device.ServerId)
-                {
-                    throw new InvalidOperationException("服务器身份与已验证连接不一致。");
-                }
-                _serverEpoch = Math.Max(_serverEpoch, device.ServerEpoch);
-                _trustedServerId ??= device.ServerId;
+                _serverEpoch = device.ServerEpoch;
+                _trustedServerId = device.ServerId;
             }
 
             _device = device;
@@ -185,9 +195,12 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
             {
                 throw new HttpRequestException("连接已切换，已忽略旧连接的响应。");
             }
-            if (envelope.IsSuccess)
+            if (envelope.IsSuccess || _trustedServerId is not null)
             {
                 ValidateServer(envelope.ServerId, envelope.ServerEpoch);
+            }
+            if (envelope.IsSuccess)
+            {
                 if (string.IsNullOrWhiteSpace(envelope.NodeId) || envelope.Result is null)
                 {
                     throw new HttpRequestException("服务器没有返回有效业务结果。");
