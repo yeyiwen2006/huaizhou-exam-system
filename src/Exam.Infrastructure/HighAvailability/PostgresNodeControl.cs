@@ -33,6 +33,7 @@ public sealed class PostgresNodeHealthProbe(
                 SELECT pg_is_in_recovery(),
                        CASE
                            WHEN pg_is_in_recovery() AND
+                                NOT pg_is_wal_replay_paused() AND
                                 EXISTS
                                 (
                                     SELECT 1
@@ -101,6 +102,7 @@ public sealed class PostgresFailoverPlatform(
         await using (var recoveryCommand = new NpgsqlCommand(
                          """
                          SELECT pg_is_in_recovery() AND
+                                NOT pg_is_wal_replay_paused() AND
                                 pg_last_wal_receive_lsn() IS NOT NULL AND
                                 pg_last_wal_replay_lsn() IS NOT NULL AND
                                 pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() AND
@@ -151,7 +153,15 @@ public sealed class StagedPostgresNodeRebuilder(
         string sourceNodeId,
         CancellationToken cancellationToken)
     {
-        if (!options.Nodes.TryGetValue(sourceNodeId, out var source))
+        if (string.Equals(nodeId, sourceNodeId, StringComparison.Ordinal) ||
+            !options.Nodes.TryGetValue(nodeId, out var targetNode) ||
+            !string.Equals(targetNode.NodeId, nodeId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("重建目标必须是已配置且不同于当前主节点的节点。", nameof(nodeId));
+        }
+
+        if (!options.Nodes.TryGetValue(sourceNodeId, out var source) ||
+            !string.Equals(source.NodeId, sourceNodeId, StringComparison.Ordinal))
         {
             throw new KeyNotFoundException($"未配置重建源节点：{sourceNodeId}");
         }
