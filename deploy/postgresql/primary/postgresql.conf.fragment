@@ -11,7 +11,7 @@ synchronous_commit = remote_apply
 
 archive_mode = on
 archive_timeout = '60s'
-archive_command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{DEPLOY_ROOT}}/scripts/Invoke-WalArchive.ps1" "%p" "%f" "{{ARCHIVE_ROOT}}"'
+archive_command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{DEPLOY_ROOT}}/scripts/Invoke-WalArchiveCommand.ps1" "%p" "%f" "{{ARCHIVE_ROOT}}"'
 
 password_encryption = scram-sha-256
 ssl = on

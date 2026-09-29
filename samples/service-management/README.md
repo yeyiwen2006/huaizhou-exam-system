@@ -48,7 +48,7 @@
 
 `pg_verifybackup` 成功、清单摘要相符或归档目录中存在 WAL 文件，均不证明备份已包含故障前最新已确认业务状态。`Invoke-WalArchive.ps1` 只复制 PostgreSQL 交给它的已完成文件，不提供与业务成功回执绑定的恢复位置；`archive_timeout=60s` 也不保证当前 WAL 段已经归档。原库离线恢复还需绑定故障前已确认状态对应的可靠恢复位置，同时核对资源和密钥版本；不能从备份自身、归档最后文件或恢复库自行生成“最新”证据。当前仍要求启用前与原库完整比对，原库无法比较时保持阻断，保留原件与恢复副本。归档行为见 [PostgreSQL 连续归档与恢复](https://www.postgresql.org/docs/18/continuous-archiving.html)。
 
-`deploy/postgresql` 的 Windows 归档与恢复命令使用 `powershell.exe` 的进程级 `-ExecutionPolicy Bypass` 运行固定脚本；部署时必须把脚本放在受保护目录，只允许管理员修改、相应 PostgreSQL 服务账户读取，不把脚本路径或归档目标交给管理请求。该参数不更改机器或用户的执行策略。
+`deploy/postgresql` 的 Windows 归档与恢复命令使用 `powershell.exe` 的进程级 `-ExecutionPolicy Bypass` 运行固定脚本。主库 `archive_command` 调用 `Invoke-WalArchiveCommand.ps1`，由它调用同目录的 `Invoke-WalArchive.ps1`，再次核对源 WAL 与归档目标的 SHA-256，确认后才向 PostgreSQL 返回成功；脚本缺失、复制失败或内容不一致均返回失败，PostgreSQL 保留未归档段等待重试。部署时须将两个归档脚本和恢复脚本放在受保护目录，只允许管理员修改、相应 PostgreSQL 服务账户读取，不把脚本路径或归档目标交给管理请求。该参数不更改机器或用户的执行策略。
 
 可选归档重放须同时提供 `Recovery:WalArchiveDirectory`（仓库外受保护绝对目录）、`WalSystemIdentifier`（十进制集群标识）、`WalTimeline`（当前只接受原始时间线 `1`）和 `WalTargetLsn`（规范大写十六进制，如合成位置 `0/300028`）。四项均未配置时保留原基础备份恢复路径；部分缺失或无效时拒绝归档恢复，但不阻断管理认证和状态。必须配置受控 `PostgresServiceName`，不接受请求传入目录、目标或命令。目标须大于基础备份 WAL 结束位置；这是固定重放位置，**不是最新已确认状态证明**。
 
