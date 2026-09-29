@@ -7,11 +7,18 @@ using Exam.Contracts.Submissions;
 
 namespace Exam.Admin.ViewModels;
 
-public sealed class MonitoringViewModel : BindableBase
+public sealed class MonitoringViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
+    private readonly TimeSpan _collectionPollInterval;
+    private CancellationTokenSource? _collectionPolling;
+    private bool _isPageActive;
+    private bool _connectionReady;
+    private bool _disposed;
     private readonly Dictionary<string, long> _collectionCursors = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _seenCollectionEventIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _seenCollectionEventVersions = new(StringComparer.Ordinal);
+    // Keep reminder history across exam switches and reconnects, but isolate different logical servers.
+    private readonly Dictionary<(string ServerId, string ExamId), CollectionEventHistory> _remindedCollectionEvents = [];
     private string _examId = string.Empty;
     private long _contextVersion;
     private long _loadVersion;
@@ -43,19 +50,20 @@ public sealed class MonitoringViewModel : BindableBase
 
     private void ResetContext()
     {
+        StopCollectionPolling();
         _contextVersion++;
         _decisionRequestVersion++;
         _resendRequestVersion++;
         Rows.Clear();
         CollectionEvents.Clear();
         _collectionCursors.Clear();
-        _seenCollectionEventIds.Clear();
+        _seenCollectionEventVersions.Clear();
         SelectedRow = null;
         ParticipationId = SelectedDeviceId = ExpectedVersionText = DecisionReason = string.Empty;
         EventId = ResendParticipationId = ResendDeviceId = EntryVersionText = AuthorizationVersionText = string.Empty;
         OnPropertyChanged(nameof(FilteredRows));
         Status = "考试或连接已变更；请重新从服务器刷新参与状态。";
-        CollectionStatus = "请重新查询该考试的收齐事件；历史收齐事件不代表当前名单仍已收齐。";
+        CollectionStatus = "请查询该考试的收齐事件；连接且打开本页后定期补取，历史事件不代表当前名单仍已收齐。";
     }
     private string _filterText = string.Empty;
     private bool _onlySubmitted;
@@ -71,19 +79,34 @@ public sealed class MonitoringViewModel : BindableBase
     private string _status = "考生业务状态来自正式参与接口；连接状态、当前题号和交卷采集详情等待 A/B API。";
     private string _collectionStatus = "尚未查询收齐事件；事件只对应其名单版本，不代表成绩已开放。";
 
-    public MonitoringViewModel(AdminApiClient api)
+    public MonitoringViewModel(AdminApiClient api, TimeSpan? collectionPollInterval = null)
     {
         _api = api;
-        _api.ConfigurationChanged += (_, _) => ResetContext();
+        _collectionPollInterval = collectionPollInterval ?? TimeSpan.FromSeconds(20);
+        if (_collectionPollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(collectionPollInterval));
+        _api.ConfigurationChanged += OnConfigurationChanged;
         LoadCommand = new AsyncRelayCommand(LoadAsync, onError: SetError);
         DecideDeviceCommand = new AsyncRelayCommand(DecideDeviceAsync, onError: SetError);
         ResendCommand = new AsyncRelayCommand(ResendAsync, onError: SetError);
-        RefreshCollectionEventsCommand = new AsyncRelayCommand(RefreshCollectionEventsAsync, onError: SetCollectionError);
+        RefreshCollectionEventsCommand = new AsyncRelayCommand(() => RefreshCollectionEventsAsync(), onError: SetCollectionError);
     }
 
     public ObservableCollection<MonitoringRow> Rows { get; } = [];
     public ObservableCollection<CollectionCompletedNotification> CollectionEvents { get; } = [];
     public IEnumerable<MonitoringRow> FilteredRows => Rows.Where(MatchesFilter);
+
+    public bool IsPageActive
+    {
+        get => _isPageActive;
+        set { if (SetProperty(ref _isPageActive, value)) UpdateCollectionPolling(); }
+    }
+
+    public bool ConnectionReady
+    {
+        get => _connectionReady;
+        set { if (SetProperty(ref _connectionReady, value)) UpdateCollectionPolling(); }
+    }
 
     public string ExamId
     {
@@ -93,6 +116,7 @@ public sealed class MonitoringViewModel : BindableBase
             if (SetProperty(ref _examId, value))
             {
                 ResetContext();
+                UpdateCollectionPolling();
             }
         }
     }
@@ -123,7 +147,7 @@ public sealed class MonitoringViewModel : BindableBase
     public AsyncRelayCommand ResendCommand { get; }
     public AsyncRelayCommand RefreshCollectionEventsCommand { get; }
 
-    public async Task RefreshCollectionEventsAsync()
+    public async Task RefreshCollectionEventsAsync(CancellationToken cancellationToken = default)
     {
         var examId = ExamId.Trim();
         if (examId.Length == 0) { CollectionStatus = "请先填写考试 ID。"; return; }
@@ -138,27 +162,36 @@ public sealed class MonitoringViewModel : BindableBase
             for (var page = 0; page < 10; page++)
             {
                 var previousCursor = cursor;
-                var events = await _api.ListCollectionEventsAsync(examId, cursor);
+                var events = await _api.ListCollectionEventsAsync(examId, cursor, cancellationToken);
                 if (context != _contextVersion || operation != _collectionRequestVersion) return;
+                var serverId = _api.ServerId ?? throw new InvalidOperationException("收齐事件响应缺少服务器身份。");
+                var reminderKey = (serverId, examId);
+                if (!_remindedCollectionEvents.TryGetValue(reminderKey, out var reminded))
+                {
+                    reminded = new CollectionEventHistory();
+                    _remindedCollectionEvents.Add(reminderKey, reminded);
+                }
                 // Validate the whole page before advancing the cursor or displaying any row.
-                if (events.Any(item => !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
-                    string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 || item.ParticipantCount < 0) ||
-                    events.Select(item => item.RosterVersion).Distinct().Count() != events.Count ||
-                    events.Select(item => item.EventId).Distinct(StringComparer.Ordinal).Count() != events.Count)
+                if (events.Any(item => item is null || !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
+                    string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 ||
+                    item.ParticipantCount <= 0 || item.CompletedAt == default) ||
+                    events.GroupBy(item => item.RosterVersion).Any(group => group.Distinct().Count() != 1) ||
+                    events.GroupBy(item => item.EventId, StringComparer.Ordinal).Any(group => group.Distinct().Count() != 1) ||
+                    events.Any(item => _seenCollectionEventVersions.TryGetValue(item.EventId, out var seenVersion) &&
+                        seenVersion != item.RosterVersion) ||
+                    events.Any(reminded.Conflicts))
                     throw new InvalidOperationException("收齐事件的考试、标识或名单版本无效，未应用该页结果。");
-                foreach (var item in events.OrderBy(item => item.RosterVersion))
+                foreach (var item in events.Distinct().OrderBy(item => item.RosterVersion))
                 {
                     if (item.RosterVersion <= cursor) continue;
-                    if (_seenCollectionEventIds.Add(item.EventId))
+                    if (_seenCollectionEventVersions.TryAdd(item.EventId, item.RosterVersion))
                     {
                         CollectionEvents.Add(item);
-                        newest = item;
+                        if (reminded.Remember(item)) newest = item;
                         added++;
                         if (CollectionEvents.Count > 500)
                         {
-                            var oldest = CollectionEvents[0];
                             CollectionEvents.RemoveAt(0);
-                            _seenCollectionEventIds.Remove(oldest.EventId);
                         }
                     }
                     cursor = item.RosterVersion;
@@ -166,16 +199,15 @@ public sealed class MonitoringViewModel : BindableBase
                 }
                 if (events.Count < 100)
                 {
-                    CollectionStatus = $"本次读取 {added} 条收齐事件，至名单版本 {cursor}；历史事件不保证当前名单收齐，也不代表成绩已开放。";
+                    CollectionStatus = $"本次读取 {added} 条收齐事件，至名单版本 {cursor}；页面仅保留最近 500 条。历史事件不保证当前名单收齐，也不代表成绩已开放。";
                     return;
                 }
                 if (cursor == previousCursor)
                 {
-                    CollectionStatus = "收齐事件分页未推进，已停止自动补取；请核对服务器返回的名单版本。";
-                    return;
+                    throw new InvalidOperationException("收齐事件分页未推进；请核对服务器返回的名单版本。");
                 }
             }
-            CollectionStatus = $"本次读取 {added} 条收齐事件；仍可能有后续分页，请再次查询。";
+            CollectionStatus = $"本次读取 {added} 条收齐事件；仍可能有后续分页，请再次查询或等待下次轮询。";
         }
         catch when (context != _contextVersion || operation != _collectionRequestVersion)
         {
@@ -186,6 +218,89 @@ public sealed class MonitoringViewModel : BindableBase
             if (newest is not null && context == _contextVersion && operation == _collectionRequestVersion)
                 CollectionCompleted?.Invoke(newest);
         }
+    }
+
+    private sealed class CollectionEventHistory
+    {
+        private readonly Dictionary<string, CollectionCompletedNotification> _byId = new(StringComparer.Ordinal);
+        private readonly Dictionary<long, string> _idByVersion = [];
+
+        public bool Conflicts(CollectionCompletedNotification item) =>
+            (_byId.TryGetValue(item.EventId, out var previous) && previous != item) ||
+            (_idByVersion.TryGetValue(item.RosterVersion, out var id) &&
+                !StringComparer.Ordinal.Equals(id, item.EventId));
+
+        public bool Remember(CollectionCompletedNotification item)
+        {
+            if (!_byId.TryAdd(item.EventId, item)) return false;
+            _idByVersion.Add(item.RosterVersion, item.EventId);
+            return true;
+        }
+    }
+
+    private void OnConfigurationChanged(object? sender, EventArgs e)
+    {
+        ConnectionReady = false;
+        ResetContext();
+    }
+
+    private void UpdateCollectionPolling()
+    {
+        StopCollectionPolling();
+        if (_disposed || !IsPageActive || !ConnectionReady || string.IsNullOrWhiteSpace(ExamId)) return;
+        var source = new CancellationTokenSource();
+        _collectionPolling = source;
+        _ = PollCollectionEventsAsync(source);
+    }
+
+    private void StopCollectionPolling()
+    {
+        var source = _collectionPolling;
+        _collectionPolling = null;
+        _collectionRequestVersion++;
+        source?.Cancel();
+    }
+
+    private async Task PollCollectionEventsAsync(CancellationTokenSource source)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_collectionPollInterval);
+            do
+            {
+                try
+                {
+                    await RefreshCollectionEventsAsync(source.Token);
+                }
+                catch (OperationCanceledException) when (source.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    if (!source.IsCancellationRequested && ReferenceEquals(_collectionPolling, source))
+                        SetCollectionError(exception);
+                }
+            }
+            while (await timer.WaitForNextTickAsync(source.Token));
+        }
+        catch (OperationCanceledException) when (source.IsCancellationRequested)
+        {
+            // Leaving the page, changing exams/connections and closing the window stop this loop.
+        }
+        finally
+        {
+            if (ReferenceEquals(_collectionPolling, source)) _collectionPolling = null;
+            source.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        StopCollectionPolling();
+        _api.ConfigurationChanged -= OnConfigurationChanged;
     }
 
     public async Task LoadAsync()

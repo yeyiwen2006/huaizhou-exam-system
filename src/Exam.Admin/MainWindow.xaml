@@ -226,7 +226,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="C04 监控与处置">
+            <TabItem Header="C04 监控与处置" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14">
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12">
@@ -251,7 +251,7 @@
                         </Border>
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                             <StackPanel>
-                                <TextBlock Text="服务器收齐事件（手动查询）" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="服务器收齐历史事件（本页连接后每 20 秒定期补取，非实时推送）" Style="{StaticResource SectionTitle}"/>
                                 <Button Content="查询收齐事件" Style="{StaticResource ActionButton}" Command="{Binding Monitoring.RefreshCollectionEventsCommand}" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{Binding Monitoring.CollectionStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,8"/>
                                 <DataGrid ItemsSource="{Binding Monitoring.CollectionEvents}" Height="145">
@@ -297,7 +297,7 @@
                     <StackPanel Margin="14">
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                             <StackPanel>
-                                <TextBlock Text="D01 manifest.json 静态预检" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
+                                <TextBlock Text="D01 导入源 manifest.json 静态预检（非 D03 学生包清单）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
                                 <TextBlock Text="当前考试 ID" Style="{StaticResource FormLabel}"/>
                                 <TextBox Text="{Binding ManifestPreflight.ExamId, UpdateSourceTrigger=PropertyChanged}"
                                          ToolTip="必须与清单 examId 完全一致" Margin="0,0,0,10"/>

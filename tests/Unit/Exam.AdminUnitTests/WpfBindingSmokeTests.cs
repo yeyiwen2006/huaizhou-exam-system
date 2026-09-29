@@ -12,6 +12,7 @@ using Exam.Admin.ViewModels;
 
 namespace Exam.AdminUnitTests;
 
+[Collection("Admin WPF")]
 public sealed class WpfBindingSmokeTests
 {
     [Fact]
@@ -78,7 +79,29 @@ public sealed class WpfBindingSmokeTests
                     if ((string)tab.Header == "C03 激活与房间组")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名草稿") && button.Command is not null);
                     if ((string)tab.Header == "C04 监控与处置")
+                    {
+                        Assert.True(viewModel.Monitoring.IsPageActive);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
+                        var screenshotPath = Environment.GetEnvironmentVariable("EXAM_C04_SCREENSHOT_PATH");
+                        if (!string.IsNullOrWhiteSpace(screenshotPath))
+                        {
+                            viewModel.Monitoring.ExamId = "synthetic-exam";
+                            viewModel.Monitoring.CollectionEvents.Add(new Exam.Contracts.Submissions.CollectionCompletedNotification(
+                                "synthetic-event-1", "synthetic-exam", 1, 3, DateTimeOffset.UtcNow));
+                            window.Width = 1200;
+                            window.Height = 900;
+                            window.UpdateLayout();
+                            var bitmap = new RenderTargetBitmap(
+                                (int)Math.Ceiling(window.ActualWidth), (int)Math.Ceiling(window.ActualHeight),
+                                96, 96, PixelFormats.Pbgra32);
+                            bitmap.Render(window);
+                            var encoder = new PngBitmapEncoder();
+                            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                            using var file = File.Create(screenshotPath);
+                            encoder.Save(file);
+                        }
+                    }
+                    else Assert.False(viewModel.Monitoring.IsPageActive);
                     if ((string)tab.Header == "C05 清单静态预检")
                     {
                         Assert.Contains(Descendants<Button>(window), button =>
