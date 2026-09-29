@@ -2,10 +2,15 @@ param(
     [Parameter(Mandatory = $true)][string]$PsqlPath,
     [Parameter(Mandatory = $true)][string]$PrimaryConnectionUri,
     [Parameter(Mandatory = $true)][string]$StandbyConnectionUri,
-    [string]$StandbyApplicationName = 'exam_standby'
+    [string]$StandbyApplicationName = 'exam_standby',
+    [ValidatePattern('^[a-z0-9_]+$')][string]$ReplicationSlot = 'exam_standby',
+    [Parameter(Mandatory = $true)][long]$MinimumSafeWalBytes
 )
 
 $ErrorActionPreference = 'Stop'
+if ($MinimumSafeWalBytes -le 0) {
+    throw 'MinimumSafeWalBytes must be a positive capacity reserve.'
+}
 $psql = [System.IO.Path]::GetFullPath($PsqlPath)
 if (-not [System.IO.File]::Exists($psql)) {
     throw "psql.exe not found: $psql"
@@ -16,6 +21,13 @@ SELECT json_build_object(
   'inRecovery', pg_is_in_recovery(),
   'synchronousCommit', current_setting('synchronous_commit'),
   'synchronousStandbyNames', current_setting('synchronous_standby_names'),
+  'maxSlotWalKeepSizeMb', (SELECT setting::bigint FROM pg_settings WHERE name = 'max_slot_wal_keep_size'),
+  'slots', COALESCE((SELECT json_agg(json_build_object(
+      'slotName', slot_name,
+      'slotType', slot_type,
+      'active', active,
+      'walStatus', wal_status,
+      'safeWalSize', safe_wal_size)) FROM pg_replication_slots), '[]'::json),
   'standbys', COALESCE((SELECT json_agg(json_build_object(
       'applicationName', application_name,
       'state', state,
@@ -57,6 +69,18 @@ $matchingStandbys = @($primary.standbys) | Where-Object {
 }
 if ($matchingStandbys.Count -ne 1) {
     $errors.Add('Primary does not report exactly one streaming synchronous standby with a replay LSN.')
+}
+if ($null -eq $primary.maxSlotWalKeepSizeMb -or [long]$primary.maxSlotWalKeepSizeMb -le 0) {
+    $errors.Add('Primary max_slot_wal_keep_size must be a positive finite value.')
+}
+$matchingSlots = @($primary.slots) | Where-Object { $_.slotName -eq $ReplicationSlot }
+if ($matchingSlots.Count -ne 1 -or $matchingSlots[0].slotType -ne 'physical' -or
+    -not $matchingSlots[0].active) {
+    $errors.Add('Primary does not report one active physical replication slot for the standby.')
+}
+elseif ($matchingSlots[0].walStatus -notin @('reserved', 'extended') -or
+    $null -eq $matchingSlots[0].safeWalSize -or [long]$matchingSlots[0].safeWalSize -le $MinimumSafeWalBytes) {
+    $errors.Add('Standby replication slot has lost WAL or has insufficient safe WAL headroom.')
 }
 if (-not $standby.inRecovery) { $errors.Add('The configured standby is not in recovery.') }
 if ($standby.replayPaused) { $errors.Add('Standby WAL replay is paused.') }

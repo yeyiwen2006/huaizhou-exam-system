@@ -4,6 +4,8 @@ wal_level = replica
 max_wal_senders = 10
 max_replication_slots = 10
 wal_keep_size = '4096MB'
+# Size this finite slot limit against measured WAL rate and free disk capacity.
+max_slot_wal_keep_size = '{{MAX_SLOT_WAL_KEEP_SIZE}}'
 
 # A transaction is acknowledged only after the named standby has replayed it.
 synchronous_standby_names = 'FIRST 1 (exam_standby)'
