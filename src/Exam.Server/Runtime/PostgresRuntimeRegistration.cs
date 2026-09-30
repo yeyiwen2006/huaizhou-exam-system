@@ -32,7 +32,8 @@ public static class PostgresRuntimeRegistration
         ServerIdentityOptions identity,
         bool allowUninitializedFailoverState)
     {
-        var connectionString = configuration.GetConnectionString("Exam");
+        var connectionString = FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key],
+            identity.ServerId, identity.NodeId, identity.ServerEpoch);
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
@@ -72,6 +73,8 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(dataSource);
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
+        services.AddSingleton<BusinessRecoveryGuard>();
+        services.AddHostedService<BusinessRecoveryWorker>();
         services.AddSingleton(new ActiveNodeGuard(dataSource, identity, allowUninitializedFailoverState));
         services.AddSingleton<PostgresFailoverStateStore>();
 
@@ -108,10 +111,12 @@ public static class PostgresRuntimeRegistration
             accessReader: provider.GetRequiredService<IParticipationAccessReader>(),
             paperReader: examId => provider.GetRequiredService<IExamVersioningService>().GetExam(examId).Value?.Paper?.Structure));
         services.AddSingleton<CollectionCompletionService>();
-        services.AddHostedService<CollectionCompletionWorker>();
+        services.AddSingleton<CollectionCompletionWorker>();
+        services.AddHostedService<RecoveryGatedWorker<CollectionCompletionWorker>>();
         services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();
         services.AddSingleton<PostgresScheduleProcessor>();
-        services.AddHostedService<PostgresScheduleWorker>();
+        services.AddSingleton<PostgresScheduleWorker>();
+        services.AddHostedService<RecoveryGatedWorker<PostgresScheduleWorker>>();
         var requiredNodeIds = configuration.GetSection("HighAvailability:RequiredNodeIds").Get<string[]>()
             ?? [identity.NodeId];
         if (requiredNodeIds.Any(string.IsNullOrWhiteSpace) ||
@@ -166,7 +171,8 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton(new RealtimeDispatchOptions(maxConnections, maxConcurrentDispatches));
         services.AddSingleton<RealtimeDeviceAuthorizer>();
         services.AddSingleton<RealtimeConnectionRegistry>();
-        services.AddHostedService<ReliableCommandDispatcher>();
+        services.AddSingleton<ReliableCommandDispatcher>();
+        services.AddHostedService<RecoveryGatedWorker<ReliableCommandDispatcher>>();
         return dataSource;
     }
 

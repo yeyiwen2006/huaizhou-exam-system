@@ -153,7 +153,7 @@ internal sealed class PackageControlStore : IDisposable
 
             if (File.Exists(_statePath))
             {
-                File.Replace(temporary, _statePath, _statePath + ".bak");
+                ReplaceState(temporary);
             }
             else
             {
@@ -165,6 +165,29 @@ internal sealed class PackageControlStore : IDisposable
             if (File.Exists(temporary))
             {
                 File.Delete(temporary);
+            }
+        }
+    }
+
+    private void ReplaceState(string temporary)
+    {
+        for (var retry = 0; ; retry++)
+        {
+            try
+            {
+                File.Replace(temporary, _statePath, _statePath + ".bak");
+                return;
+            }
+            catch (IOException error) when (retry < 4 && error.HResult is
+                       unchecked((int)0x80070020) or // ERROR_SHARING_VIOLATION
+                       unchecked((int)0x80070021) or // ERROR_LOCK_VIOLATION
+                       unchecked((int)0x80070497))   // ERROR_UNABLE_TO_REMOVE_REPLACED
+            {
+                // ReplaceFile preserves both names for these errors, so retry the same
+                // durable candidate. In particular, a reader may temporarily hold .bak.
+                // Do not retry 1177: the current file may already have moved to the backup.
+                // Four waits total 750 ms; persistent faults still reach the caller.
+                Thread.Sleep(50 << retry);
             }
         }
     }

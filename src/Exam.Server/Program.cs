@@ -6,7 +6,18 @@ using Exam.Server.Realtime;
 using Exam.Server.Runtime;
 using Exam.Server.Diagnostics;
 
-var builder = WebApplication.CreateBuilder(args);
+// SCM starts with system32 as its working directory; service configuration lives beside this executable.
+var serviceMode = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService();
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{ Args = args, ContentRootPath = serviceMode ? AppContext.BaseDirectory : null });
+if (serviceMode)
+{
+    var name = builder.Configuration["ExamServer:WindowsServiceName"];
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 256 || name.IndexOfAny(['/', '\\']) >= 0)
+        throw new InvalidOperationException("缺少有效的业务 Windows 服务名称。");
+    builder.Services.AddWindowsService(options => options.ServiceName = name);
+}
+var managedServiceConfiguration = await BusinessServiceConfiguration.LoadAndApplyAsync(builder);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSignalR().AddJsonProtocol(options =>
@@ -28,7 +39,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var identity = builder.Configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
     ?? new ServerIdentityOptions();
-var databaseConfigured = !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Exam"));
+var databaseConfigured = !string.IsNullOrWhiteSpace(Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveConnection(
+    key => builder.Configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch));
 if (databaseConfigured)
 {
     builder.Services.AddPostgresExamRuntime(
@@ -80,13 +92,20 @@ app.MapGet("/health/ready", async (
 
     var readiness = await app.Services.GetRequiredService<PostgresReadinessProbe>()
         .CheckAsync(cancellationToken);
+    var recovery = app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
+    if (!recovery.Ready)
+        return Results.Json(new { status = "recovering", reason = "启动恢复核对尚未通过。" }, statusCode: 503);
+    if (managedServiceConfiguration is not null &&
+        !(await managedServiceConfiguration.CheckProtectionAsync(app.Services.GetRequiredService<Npgsql.NpgsqlDataSource>(), cancellationToken)).Passed)
+        return Results.Json(new { status = "recovering", reason = "当前权威保护状态不满足本机服务配置。" }, statusCode: 503);
     return readiness.Ready
         ? Results.Ok(new
         {
             status = "ready",
             configuredIdentity.ServerId,
             configuredIdentity.NodeId,
-            configuredIdentity.ServerEpoch
+            configuredIdentity.ServerEpoch,
+            serviceConfiguration = managedServiceConfiguration?.Value
         })
         : Results.Json(new { status = "recovering", reason = readiness.Reason }, statusCode: 503);
 });

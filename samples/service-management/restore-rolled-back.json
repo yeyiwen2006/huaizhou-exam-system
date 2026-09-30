@@ -1,0 +1,44 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": {
+    "requestId": "synthetic-restore",
+    "serverId": "synthetic-server",
+    "nodeId": "synthetic-node",
+    "actorId": "synthetic-operator",
+    "kind": "restore",
+    "contentHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "phase": "staged",
+    "acceptedAt": "2026-09-27T00:00:00+00:00",
+    "updatedAt": "2026-09-27T00:01:00+00:00",
+    "status": null,
+    "configuration": null,
+    "checks": [
+      {
+        "name": "recovery-target",
+        "passed": true,
+        "message": "合成恢复目标核对并启用，业务 HTTPS 就绪已确认。",
+        "blocksWrites": true
+      }
+    ],
+    "backup": null,
+    "restore": {
+      "backupId": "synthetic-backup",
+      "isolationStaged": true,
+      "recoveryVerified": true,
+      "businessReady": false
+    },
+    "error": {
+      "code": "SERVICE_RECOVERING",
+      "message": "合成业务启动失败；已确认业务停止且无新增业务状态，回退原连接引用，原库没有自动启动。",
+      "retryable": false
+    },
+    "recoveryWorkingDirectory": "C:\\ExamSynthetic\\recovery-work\\slot",
+    "recoveryActivation": "rolledBack"
+  },
+  "error": null
+}

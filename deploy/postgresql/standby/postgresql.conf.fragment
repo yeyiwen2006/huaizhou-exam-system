@@ -2,5 +2,5 @@
 hot_standby = on
 primary_conninfo = 'host={{PRIMARY_ADDRESS}} port=5432 user={{REPLICATION_USER}} application_name=exam_standby sslmode=verify-full sslrootcert={{CA_CERTIFICATE_PATH}}'
 primary_slot_name = 'exam_standby'
-restore_command = 'powershell.exe -NoProfile -NonInteractive -File "{{DEPLOY_ROOT}}/scripts/Restore-WalArchive.ps1" "%f" "%p" "{{ARCHIVE_ROOT}}"'
+restore_command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{DEPLOY_ROOT}}/scripts/Restore-WalArchive.ps1" "%f" "%p" "{{ARCHIVE_ROOT}}"'
 recovery_target_timeline = 'latest'
