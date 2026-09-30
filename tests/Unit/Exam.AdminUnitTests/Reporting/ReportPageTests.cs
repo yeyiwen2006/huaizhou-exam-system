@@ -33,7 +33,7 @@ public sealed partial class ReportViewReviewTests
         Assert.False(page.Session.HasTables); Assert.False(page.ExportCommand.CanExecute(null));
         await page.RefreshAsync(); Assert.True(page.Session.HasTables);
         denied=true; await page.PollAsync(); Assert.False(page.Session.HasTables);
-        denied=false; status=status with { State=ReportState.Collecting,SnapshotId=null,CollectedCount=0,
+        denied=false; status=status with { State=ReportState.Collecting,SnapshotId=null,CollectedCount=0,GradedCount=0,
             MissingParticipants=[new("synthetic-candidate","0001","合成考生","01")] };
         await page.RefreshAsync(); Assert.Single(page.MissingParticipants); Assert.False(page.Session.HasTables);
         status=ReadyStatus(); await page.RefreshAsync(); Assert.True(page.Session.HasTables);

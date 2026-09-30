@@ -19,7 +19,7 @@ public sealed partial class ReportWorkbookWriterTests
         var json=File.ReadAllText(Path.Combine(root.FullName,"docs","samples","g-reporting","published-report.synthetic.json"));
         var published=System.Text.Json.JsonSerializer.Deserialize<PublishedReport>(json,JsonDefaults.Create())!;
         Assert.Equal(1,published.SchemaVersion); Assert.Equal(ReportState.Ready,published.Status.State);
-        var report=ReportJson.Read(published.Result);
+        var report=ReportJson.Read(published);
         using var workbook=new ClosedXML.Excel.XLWorkbook(new MemoryStream(new Exam.Infrastructure.Reporting.ReportWorkbookWriter().Write(report)));
         Assert.Equal(5,workbook.Worksheets.Count); Assert.Equal(3d,workbook.Worksheet(1).Cell(2,5).GetDouble());
         Assert.Equal("0001",workbook.Worksheet(1).Cell(2,2).GetString());
@@ -37,7 +37,8 @@ public sealed partial class ReportWorkbookWriterTests
     {
         var input = TwoParticipantInput();
         var source = new SequenceReportSource(new(Status("first"), input),
-            new(Status("first") with { State=ReportState.Collecting, SnapshotId=null }, null));
+            new(Status("first") with { State=ReportState.Collecting, SnapshotId=null, CollectedCount=1, GradedCount=1,
+                MissingParticipants=[new("synthetic-missing","0001","合成考生","01")] }, null));
         Assert.Equal(ErrorCodes.ReportNotReady, (await Assert.ThrowsAsync<DomainRuleException>(() =>
             new ReportPublicationService(source).ReadAsync(input.ExamId))).Code);
     }

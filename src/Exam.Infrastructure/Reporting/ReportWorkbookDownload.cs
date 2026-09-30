@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.IO;
 using System.Security.Cryptography;
+using System.IO.Compression;
 
 namespace Exam.Reporting;
 
@@ -14,8 +15,15 @@ public static class ReportWorkbookDownload
         CancellationToken cancellationToken = default)
     {
         response.EnsureSuccessStatusCode();
-        string Header(string name) => response.Headers.TryGetValues(name, out var values) ?
-            values.Single() : throw new InvalidDataException("工作簿响应缺少校验信息。");
+        string Header(string name)
+        {
+            if (!response.Headers.TryGetValues(name, out var values))
+                throw new InvalidDataException("工作簿响应缺少校验信息。");
+            var items = values.Take(2).ToArray();
+            if (items.Length != 1 || string.IsNullOrWhiteSpace(items[0]))
+                throw new InvalidDataException("工作簿响应校验信息不唯一或为空。");
+            return items[0];
+        }
         var server = Header("X-Exam-Server-Id"); var node = Header("X-Exam-Node-Id");
         if (!long.TryParse(Header("X-Exam-Server-Epoch"), out var epoch) || epoch < 1 ||
             string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(node) ||
@@ -37,6 +45,13 @@ public static class ReportWorkbookDownload
             response.Content.Headers.ContentLength is { } length && length != bytes.Length ||
             !string.Equals(Header("X-Exam-Workbook-Sha256"), Convert.ToHexString(SHA256.HashData(bytes)), StringComparison.Ordinal))
             throw new InvalidDataException("工作簿传输不完整或内容校验失败。");
+        using (var archive = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read))
+        {
+            foreach (var part in new[] { "[Content_Types].xml", "_rels/.rels", "xl/workbook.xml" })
+                if (archive.Entries.Count(entry => entry.FullName == part && entry.Length > 0) != 1 ||
+                    archive.Entries.Count(entry => entry.FullName == part) != 1)
+                    throw new InvalidDataException("工作簿容器缺少完整且唯一的必需部件。");
+        }
         return new(bytes, server, node, epoch, expectedSnapshot);
     }
 

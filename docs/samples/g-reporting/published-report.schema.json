@@ -588,7 +588,8 @@
             "$ref": "#/$defs/Participant"
           }
         }
-      }
+      },
+      "description": "Counts must satisfy graded <= collected <= participants. Missing members are unique and equal participants minus collected. Ready requires positive participants, equal counts, positive paper/grading versions and a nonempty snapshot; other states have no snapshot. Published result row count equals participants. Consumers enforce these relationships in code."
     }
   }
 }

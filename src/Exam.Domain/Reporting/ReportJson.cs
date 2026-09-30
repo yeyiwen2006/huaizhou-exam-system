@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Exam.Contracts.Common;
+using Exam.Contracts.Reporting;
 using Exam.Domain.Importing;
 using Exam.Domain.Scoring;
 
@@ -10,6 +11,17 @@ namespace Exam.Domain.Reporting;
 
 public static class ReportJson
 {
+    public static ReportCalculationResult Read(PublishedReport published)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        ReportStatusValidator.Validate(published.Status);
+        if (published.SchemaVersion != 1 || published.Status.State != ReportState.Ready)
+            throw new ArgumentException("报表协议版本或开放状态无效。");
+        var result = Read(published.Result);
+        if (result.StudentTotals.Count != published.Status.ParticipantCount)
+            throw new ArgumentException("报表人数与权威进度不一致。");
+        return result;
+    }
     public static JsonSerializerOptions Create()
     {
         var options = JsonDefaults.Create();

@@ -10,6 +10,10 @@ internal static partial class ExamCli
 {
     private static async Task<int> RunReportAsync(string action, string examId, string[] arguments, CancellationToken cancellationToken)
     {
+        var userCancellation = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromMinutes(5));
+        cancellationToken = deadline.Token;
         if (action is not ("status" or "show" or "export")) return 2;
         var destination = action == "export" && arguments.Length > 0 ? arguments[0] : null;
         if (action == "export" && (destination is null || destination.StartsWith("--", StringComparison.Ordinal))) return 2;
@@ -39,6 +43,7 @@ internal static partial class ExamCli
             var root = "/api/v1/reports/" + Uri.EscapeDataString(examId);
             var initial = await Get<ReportStatus>(root + "/status");
             if (initial.Result!.ExamId != examId) throw new InvalidDataException("报表考试不一致。");
+            ReportStatusValidator.Validate(initial.Result);
             if (action == "status") { Console.WriteLine(JsonSerializer.Serialize(initial, JsonDefaults.Create())); return 0; }
             if (initial.Result.State != ReportState.Ready || initial.Result.SnapshotId is null)
             { Console.Error.WriteLine(initial.Result.Reason); return 4; }
@@ -50,7 +55,7 @@ internal static partial class ExamCli
                     result.ServerEpoch == initial.ServerEpoch && result.NodeId != initial.NodeId ||
                     result.Result!.SchemaVersion != 1 || result.Result.Status.SnapshotId != snapshot || result.Result.Status.ExamId != examId)
                     throw new InvalidDataException("报表版本或服务器不一致。");
-                ReportJson.Read(result.Result.Result);
+                ReportJson.Read(result.Result);
                 Console.WriteLine(JsonSerializer.Serialize(result, JsonDefaults.Create())); return 0;
             }
             using var download = new HttpRequestMessage(HttpMethod.Get, root + "/xlsx?snapshotId=" + Uri.EscapeDataString(snapshot));
@@ -64,6 +69,7 @@ internal static partial class ExamCli
             await ReportWorkbookDownload.SaveAsync(workbook, destination!, async () =>
             {
                 var current = await Get<ReportStatus>(root + "/status");
+                ReportStatusValidator.Validate(current.Result!);
                 if (current.ServerId != workbook.ServerId || current.ServerEpoch < workbook.ServerEpoch ||
                     current.ServerEpoch == workbook.ServerEpoch && current.NodeId != workbook.NodeId ||
                     current.Result!.ExamId != examId ||
@@ -77,6 +83,11 @@ internal static partial class ExamCli
             Console.Error.WriteLine($"报表请求被拒绝：HTTP {(int)error.Status}。");
             return error.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden ? 3 :
                 (int)error.Status >= 500 ? 6 : 4;
+        }
+        catch (OperationCanceledException) when (!userCancellation.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("NETWORK_UNAVAILABLE: 报表请求或下载超时。");
+            return 5;
         }
     }
     private sealed class ReportCliException(HttpStatusCode status) : Exception { public HttpStatusCode Status { get; } = status; }

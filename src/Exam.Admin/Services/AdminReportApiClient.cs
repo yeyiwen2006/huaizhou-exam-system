@@ -14,6 +14,7 @@ public sealed partial class AdminApiClient
         var status = await SendAsync<ReportStatus>(HttpMethod.Get,
             $"api/v1/reports/{Uri.EscapeDataString(examId)}/status", null, cancellationToken);
         if (status.ExamId != examId) throw new InvalidDataException("报表状态的考试不一致。");
+        ReportStatusValidator.Validate(status);
         return status;
     }
 
@@ -23,7 +24,7 @@ public sealed partial class AdminApiClient
             $"api/v1/reports/{Uri.EscapeDataString(examId)}?snapshotId={Uri.EscapeDataString(snapshotId)}", null, cancellationToken);
         if (report.SchemaVersion != 1 || report.Status.ExamId != examId || report.Status.State != ReportState.Ready ||
             report.Status.SnapshotId != snapshotId) throw new InvalidDataException("报表结果版本或考试不一致。");
-        ReportJson.Read(report.Result);
+        ReportJson.Read(report);
         return report;
     }
 
@@ -31,6 +32,9 @@ public sealed partial class AdminApiClient
         CancellationToken cancellationToken = default)
     {
         EnsureConfigured();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromMinutes(5));
+        cancellationToken = deadline.Token;
         var generation = Generation;
         var client = _httpClient;
         using var response = await client.GetAsync(

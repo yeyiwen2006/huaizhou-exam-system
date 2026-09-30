@@ -12,7 +12,7 @@
 | G02，#32 | 受控下载、真实导出命令、失败安全保存 | 同快照 xlsx API、CLI export、身份/长度/哈希核验、临时文件与最终复核 |
 | G03，#22 | 考务正式导航、真实加载和导出、失效处理 | 现有考务端 G03 页、缺卷提示、五表切换、固定均分行、取消及失效清空 |
 
-PR #65、#75、#76、#77 的成果已在当前 main。本次还包含未合并 PR #85 的消费端形状校验和 PR #86 的完整文件保存候选，并补强其算术一致性验证。A 可按最新差异统一审查，决定旧候选的收尾；不要求先合并这两条分支，不自行关闭它们。
+PR #65、#75、#76、#77 的成果已在当前 main。PR #87 包含 #85 的消费端形状校验和 #86 的完整文件保存，并补强算术、状态与文件容器校验；按用户要求将三个候选统一到 #87 审查，旧候选保留分支历史。任务卡在 A 审查合并后关闭。
 
 没有数据库迁移或新 NuGet 包。`Exam.Contracts/Reporting` 为新增 schema 1；业务入口扩展现有 `/api/v1` 和 E01 CLI，不建立第二个报表程序。C/F 原页面及功能保留。报表读取 D 的当前持久化成绩和已发布题目结构，G 不重算答案判定或题目分数。
 
@@ -38,7 +38,7 @@ PR #65、#75、#76、#77 的成果已在当前 main。本次还包含未合并 P
 | `/api/v1/reports/{examId}?snapshotId=...` | `ApiEnvelope<PublishedReport>`；snapshotId 可省略，消费端提供可防止加载时换版 |
 | `/api/v1/reports/{examId}/xlsx?snapshotId=...` | 指定快照的完整 OpenXML 文件；snapshotId 必填 |
 
-schema 1 的 `Result` 是 `ReportCalculationResult` 五表投影，以 camelCase 编码；精确分数为有限小数字符串或 `n/d`，不用浮点数传输。均分字段含 `exact`、`sampleCount`、`display`。公开 DTO 用 `JsonElement` 承载稳定 schema，不让 Contracts 反向依赖 Domain；客户端必须经过 `ReportJson.Read` 完整校验。字段 schema 见 `samples/g-reporting/published-report.schema.json`，可加载合成样例见 `samples/g-reporting/published-report.synthetic.json`。schema 只描述形状，算术、开放条件和身份另由代码校验。
+schema 1 的 `Result` 是 `ReportCalculationResult` 五表投影，以 camelCase 编码；精确分数为有限小数字符串或 `n/d`，不用浮点数传输。均分字段含 `exact`、`sampleCount`、`display`。公开 DTO 用 `JsonElement` 承载稳定 schema，不让 Contracts 反向依赖 Domain；客户端必须经过 `ReportJson.Read(PublishedReport)` 完整校验。状态须满足已计分≤已回收≤实际参试，缺卷唯一且数量等于差额；ready 须人数为正、三个计数相等、版本有效且有快照，结果人数也须相等。字段 schema 见 `samples/g-reporting/published-report.schema.json`，可加载合成样例见 `samples/g-reporting/published-report.synthetic.json`。schema 描述形状及约束说明，算术、开放条件和身份由代码校验。
 
 未开放或输入无效返回现有 `REPORT_NOT_READY`，过期指定快照返回 `VERSION_CONFLICT`；身份失败沿用 401/403。成功文件响应含 `X-Exam-Server-Id`、`X-Exam-Node-Id`、`X-Exam-Server-Epoch`、`X-Exam-Report-Snapshot` 和 `X-Exam-Workbook-Sha256`。同代次更换节点、服务身份变化或代次倒退均拒绝。文件长度上限 128 MiB，服务器最多同时生成两个工作簿。
 
@@ -56,9 +56,9 @@ dotnet run --project src/Exam.Cli --configuration Release -- reports export synt
 
 以上标识与目标为合成示例。默认仅 HTTPS；显式开发配置才允许数字回环 HTTP，不跟随重定向。CLI 返回 0 成功、2 参数错误、3 身份拒绝、4 未开放/版本拒绝、5 网络不可达、6 服务端或文件错误、130 用户取消。Ctrl+C 取消同一请求及保存流程。
 
-考务端每秒在活动页面检查状态；考试、连接、身份、页面或版本变化清空旧表并取消旧任务，迟到响应不会回填。该轮询有一次检查周期的显示延迟，服务端每次查询/导出独立校验。取消文件选择保留当前表格；传输失败或版本失效使导出失败并隐藏旧结果。
+考务端每秒在活动页面检查状态；考试、连接、身份、页面或版本变化清空旧表并取消旧任务，包括尚未完成的首次加载和自动加载。状态查询超过五秒即隐藏旧表，即使传输忽略取消也不回填迟到响应。轮询有一次检查周期的显示延迟，服务端每次查询/导出独立校验。手动取消后停止自动加载，须手动刷新；取消文件选择保留当前表格，保存对话框期间的上下文变化禁止开始下载。传输失败或版本失效使导出失败并隐藏旧结果。
 
-客户端先验证文件类型、长度、ZIP 标识、身份、快照和 SHA-256，再写目标目录唯一临时文件，刷新到磁盘，最终核验状态后替换目标。取消、断网、损坏响应、文件占用或快照失效保留原目标并清理临时文件。已成功提交的文件不能追溯撤回；服务端或客户端进程强制终止可能留下唯一 `.partial` 文件，重新导出不使用它，可按文件名人工清理。生成 XLSX 的第三方库调用不支持内部取消，取消在调用前后观察，后台生成期间界面仍可操作。
+客户端先验证文件类型、长度、身份、快照、SHA-256 及 ZIP 中唯一非空的类型声明、根关系和工作簿部件，拒绝截断容器、普通 ZIP、重复/空部件及歧义响应头。该检查不代替完整 OpenXML 语义验证。通过后写目标目录唯一临时文件，刷新到磁盘，最终核验状态后替换目标；考务端和 CLI 导出均有覆盖响应体与保存的五分钟总期限。取消、断网、损坏响应、文件占用或快照失效保留原目标并清理临时文件。已成功提交的文件不能追溯撤回；进程强制终止可能留下唯一 `.partial` 文件，重新导出不使用它，可人工清理。第三方 XLSX 生成调用不支持内部取消，边界观察取消，后台生成期间界面仍可操作。
 
 回退为撤回本 PR 代码并重建上一版本，无迁移需回滚。原始交卷和计分存储不改变。公共契约、WAL 提交边界、轮询和下载最终复核由 A 审计，不能以本次单机测试宣称生产主备、断电、300 真实终端或 T01/T02/T03 已验收。
 
@@ -72,7 +72,7 @@ dotnet build Huaizhou.ExamSystem.sln --no-restore --configuration Release
 dotnet test Huaizhou.ExamSystem.sln --no-build --configuration Release --filter "Category!=Latex"
 ```
 
-已配置隔离 `EXAM_TEST_POSTGRES` 并实际执行数据库测试。锁定还原通过，Release 0 警告/0 错误；本轮全量 2112 项通过、0 失败、3 跳过。随后 SQL 改为原生位置参数并将短事务内两条锁定语句分开执行，重新构建和复测 7 项真实报表接线。3 个跳过项为已有物理恢复测试，专用物理备份/WAL 回放环境未配置；XeLaTeX 未安装，Latex 类别未执行，报表功能不调用 TeX。CI 状态以 PR 最新记录为准。
+已配置隔离 `EXAM_TEST_POSTGRES` 并实际执行数据库测试。锁定还原通过，Release 0 警告/0 错误。新增状态/迟到响应/取消/容器回归后，报表单元 91 项、WPF 报表 27 项通过。全量非 Latex 首轮 2134 通过、1 失败、3 跳过；失败为已有 C 组轮询测试读取瞬时提示，完整考务测试项目复测 180 项全部通过，合并各项目最近结果为 2135 通过、0 失败、3 跳过。保留首轮记录，不修改该无关测试。3 个跳过项为已有物理恢复测试，专用环境未配置；XeLaTeX 未安装，Latex 类别未执行，报表功能不调用 TeX。CI 状态以 PR 最新记录为准。
 
 覆盖：300 合成参与者排名与 Excel 回读；错置列、矛盾均值及显示、原始成绩、颜色、精度；真实数据库结束/缺卷/补交/规则变更与重算；服务重建一致性；实际授权 API、Kestrel/CLI、工作簿回读、服务停止后文件保留；8 并发导出与交卷；下载哈希/类型/身份/长度异常、取消、文件占用；正式 WPF 页加载/失效/授权失败/恢复/切考/迟到结果，以及 100%、125%、150% 等效布局。截图 `g-reporting-images/report-page-100.png` 等由合成数据离屏渲染并人工查看，未替代真实显示器 DPI 或真实 Excel 人工验收。
 

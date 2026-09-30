@@ -54,7 +54,7 @@ public sealed class ReportExportService(ReportPublicationService reports) : IDis
         try
         {
             var published = await reports.ReadAsync(examId, snapshotId, cancellationToken);
-            var result = ReportJson.Read(published.Result);
+            var result = ReportJson.Read(published);
             var bytes = await Task.Run(() => new ReportWorkbookWriter().Write(result), cancellationToken);
             if (bytes.Length > Exam.Reporting.ReportWorkbookDownload.MaximumBytes)
                 throw new InvalidOperationException("工作簿超过下载上限。");

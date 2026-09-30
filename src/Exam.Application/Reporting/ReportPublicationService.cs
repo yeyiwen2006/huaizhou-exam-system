@@ -16,12 +16,19 @@ public interface IReportSource
 // overwrite a newer publication. All five tables switch as one document.
 public sealed class ReportPublicationService(IReportSource source)
 {
-    public async Task<ReportStatus> StatusAsync(string examId, CancellationToken cancellationToken = default) =>
-        (await source.ReadAsync(examId, cancellationToken)).Status;
+    public async Task<ReportStatus> StatusAsync(string examId, CancellationToken cancellationToken = default)
+    {
+        var status = (await source.ReadAsync(examId, cancellationToken)).Status;
+        ReportStatusValidator.Validate(status);
+        if (status.ExamId != examId) throw new ArgumentException("报表源考试不一致。");
+        return status;
+    }
     public async Task<PublishedReport> ReadAsync(string examId, string? expectedSnapshot = null,
         CancellationToken cancellationToken = default)
     {
         var snapshot = await source.ReadAsync(examId, cancellationToken);
+        if (snapshot.Status.ExamId != examId || snapshot.Input is { } input && input.ExamId != examId)
+            throw new ArgumentException("报表源考试不一致。");
         EnsureReady(snapshot.Status, expectedSnapshot);
         if (snapshot.Input is null) throw new DomainRuleException(ErrorCodes.ReportNotReady, "报表缺少权威输入。");
         var result = await Task.Run(() => ReportCalculator.Calculate(snapshot.Input), cancellationToken);
@@ -30,9 +37,10 @@ public sealed class ReportPublicationService(IReportSource source)
         return new(1, snapshot.Status, JsonSerializer.SerializeToElement(result, ReportJson.Create()));
     }
     public async Task ValidateAsync(string examId, string expectedSnapshot, CancellationToken cancellationToken = default) =>
-        EnsureReady((await source.ReadAsync(examId, cancellationToken)).Status, expectedSnapshot);
+        EnsureReady(await StatusAsync(examId, cancellationToken), expectedSnapshot);
     private static void EnsureReady(ReportStatus status, string? expectedSnapshot)
     {
+        ReportStatusValidator.Validate(status);
         if (status.State != ReportState.Ready || string.IsNullOrWhiteSpace(status.SnapshotId))
             throw new DomainRuleException(ErrorCodes.ReportNotReady, status.Reason, retryable: true);
         if (expectedSnapshot is not null && !string.Equals(expectedSnapshot, status.SnapshotId, StringComparison.Ordinal))
