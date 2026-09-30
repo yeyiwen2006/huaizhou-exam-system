@@ -1,11 +1,13 @@
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Postgres.HighAvailability;
 using Npgsql;
 using NpgsqlTypes;
 
 namespace Exam.Infrastructure.Postgres.Scoring;
 
 /// <summary>A05 outbox 的租约消费者；领取代次用于拒绝已经过期并被重领的消费者回写。</summary>
-public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGradingTaskSource
+public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource,
+    PostgresActiveNodeWriteGuard? writeGuard = null) : IGradingTaskSource
 {
     public const int MaxErrorLength = PendingGradingTask.MaxErrorLength;
     private readonly NpgsqlDataSource _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
@@ -34,15 +36,19 @@ public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGr
             RETURNING target.submission_id, target.grading_version, target.attempt_count;
             """;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(sql, connection);
+        await using var transaction = writeGuard is null ? null : await writeGuard.BeginAsync(connection, cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("lease_cutoff", NpgsqlDbType.TimestampTz, (now - lease).ToUniversalTime());
         command.Parameters.AddWithValue("now", NpgsqlDbType.TimestampTz, now.ToUniversalTime());
         command.Parameters.AddWithValue("max_count", NpgsqlDbType.Integer, maxCount);
         command.Parameters.AddWithValue("expires_at", NpgsqlDbType.TimestampTz, (now + lease).ToUniversalTime());
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var tasks = new List<PendingGradingTask>();
-        while (await reader.ReadAsync(cancellationToken))
-            tasks.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2)));
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                tasks.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2)));
+        }
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return tasks;
     }
 
@@ -65,12 +71,15 @@ public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource) : IGr
                AND attempt_count = @attempt_count AND claimed_at IS NOT NULL AND completed_at IS NULL;
             """;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(sql, connection);
+        await using var transaction = writeGuard is null ? null : await writeGuard.BeginAsync(connection, cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("submission_id", NpgsqlDbType.Text, task.SubmissionId);
         command.Parameters.AddWithValue("grading_version", NpgsqlDbType.Bigint, task.GradingVersion);
         command.Parameters.AddWithValue("attempt_count", NpgsqlDbType.Integer, task.AttemptCount);
         command.Parameters.AddWithValue("complete", NpgsqlDbType.Boolean, complete);
         command.Parameters.AddWithValue("error", NpgsqlDbType.Text, error ?? (object)DBNull.Value);
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        var changed = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return changed;
     }
 }

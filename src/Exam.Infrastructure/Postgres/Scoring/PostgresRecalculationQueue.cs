@@ -1,11 +1,13 @@
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Postgres.HighAvailability;
 using Npgsql;
 using NpgsqlTypes;
 
 namespace Exam.Infrastructure.Postgres.Scoring;
 
 /// <summary>缺失/旧成绩的幂等重算入队；不触碰 A05 原答案、回执和普通提交去重逻辑。</summary>
-public sealed class PostgresRecalculationQueue(NpgsqlDataSource dataSource, TimeProvider? timeProvider = null) : IRecalculationQueue
+public sealed class PostgresRecalculationQueue(NpgsqlDataSource dataSource, TimeProvider? timeProvider = null,
+    PostgresActiveNodeWriteGuard? writeGuard = null) : IRecalculationQueue
 {
     private readonly NpgsqlDataSource _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -34,11 +36,14 @@ public sealed class PostgresRecalculationQueue(NpgsqlDataSource dataSource, Time
         // 一个语句原子判断并入队/重开。保留 attempt_count，不能让领取代次倒退。
         // 正常的未完成/领取中任务冲突时不更新，避免调度器抢走消费者的租约。
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(sql, connection);
+        await using var transaction = writeGuard is null ? null : await writeGuard.BeginAsync(connection, cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("exam_id", NpgsqlDbType.Text, examId);
         command.Parameters.AddWithValue("submission_id", NpgsqlDbType.Text, submissionId);
         command.Parameters.AddWithValue("target_version", NpgsqlDbType.Bigint, targetVersion);
         command.Parameters.AddWithValue("now", NpgsqlDbType.TimestampTz, _timeProvider.GetUtcNow().ToUniversalTime());
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        var changed = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return changed;
     }
 }

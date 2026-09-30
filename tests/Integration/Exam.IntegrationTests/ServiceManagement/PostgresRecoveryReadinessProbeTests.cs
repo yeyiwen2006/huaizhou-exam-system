@@ -283,7 +283,7 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         await using var app = builder.Build();
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
         Assert.Contains(hosted, service => service is BusinessRecoveryWorker);
-        Assert.Equal(3, hosted.Count(service => service.GetType().IsGenericType &&
+        Assert.Equal(5, hosted.Count(service => service.GetType().IsGenericType &&
             service.GetType().GetGenericTypeDefinition() == typeof(RecoveryGatedWorker<>)));
         var guard = app.Services.GetRequiredService<BusinessRecoveryGuard>();
         Assert.False(guard.Snapshot.Ready);
