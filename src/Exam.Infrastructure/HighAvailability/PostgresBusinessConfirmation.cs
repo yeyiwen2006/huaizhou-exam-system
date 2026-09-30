@@ -29,6 +29,12 @@ public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string s
     }
     private async Task<T?> SendAsync<T>(HttpMethod method, DurableConfirmation? record, CancellationToken token)
     {
+        // ResponseHeadersRead ends HttpClient.Timeout at the headers. Bound the entire exchange,
+        // including a stalled body, so one peer cannot indefinitely hold the confirmation gate.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var maximum = TimeSpan.FromSeconds(30);
+        deadline.CancelAfter(http.Timeout == Timeout.InfiniteTimeSpan || http.Timeout > maximum ? maximum : http.Timeout);
+        token = deadline.Token;
         using var request = new HttpRequestMessage(method, Address());
         var secret = credential();
         if (string.IsNullOrWhiteSpace(secret) || secret.Length < 32) throw new IOException("备节点确认凭据未配置。");
@@ -68,7 +74,10 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             await using var connection = await source.OpenConnectionAsync(token);
             await using (var transaction = await connection.BeginTransactionAsync(token))
             {
-                await using var durability = new NpgsqlCommand("SET LOCAL synchronous_commit=on", connection, transaction);
+                // This fence must flush locally even if the configured synchronous standby is absent.
+                // Dual-node success still requires the independent replay/resource acknowledgement below;
+                // only an already-authorized emergency mode can finish without that peer.
+                await using var durability = new NpgsqlCommand("SET LOCAL synchronous_commit=local", connection, transaction);
                 await durability.ExecuteNonQueryAsync(token);
                 await using var fence = new NpgsqlCommand("""
                     UPDATE exam.server_state SET updated_at=updated_at
