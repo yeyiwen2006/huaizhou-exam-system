@@ -215,12 +215,15 @@ public sealed class ManagementRuntime(
                     verified.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != verified.Count)
                     throw new IOException("恢复目标探针结果无效。");
                 checks.AddRange(verified);
+                if (activateRecovery is not null && !checks.Any(c => c.Name == "recovery-confirmed-state"))
+                    checks.Add(new("recovery-confirmed-state", false,
+                        "恢复激活缺少最新已确认状态证明，禁止开放业务。", true));
                 if (checks.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != checks.Count)
                     throw new IOException("恢复检查名称重复。");
                 if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("恢复核对期间业务进程状态发生变化。");
                 staged = staged with { Restore = new(request.BackupId, true,
-                    verified.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) &&
-                    verified.All(c => c.Passed || !c.BlocksWrites), false) };
+                    checks.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) &&
+                    checks.All(c => c.Passed || !c.BlocksWrites), false) };
             }
             staged = staged with { Checks = checks.AsReadOnly() };
             if (checks.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites))

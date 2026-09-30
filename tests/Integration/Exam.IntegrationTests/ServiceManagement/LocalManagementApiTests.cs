@@ -373,7 +373,10 @@ public sealed class LocalManagementApiTests : IDisposable
                 RecoveryActivation = RecoveryActivationPhase.BusinessReady, Restore = op.Restore! with { BusinessReady = true }, Error = null });
         }
         Task<IReadOnlyList<StartupCheckResult>> Verify(RestoreRequest _, ServiceConfiguration __, CancellationToken ___) =>
-            Task.FromResult<IReadOnlyList<StartupCheckResult>>([new("recovery-target", true, "合成目标", true)]);
+            Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成目标", true),
+                new("recovery-confirmed-state", true, "合成最新确认状态", true)
+            ]);
         await using (var first = await AppAsync(failCompletion: loseTerminal, failOnlyTerminal: true, prepareWorkingCopy: (_, _) => Task.CompletedTask,
             verifyTarget: Verify, workingDirectory: () => _directory, activateRecovery: true))
         {
@@ -525,6 +528,24 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.False(result.Restore.BusinessReady);
         Assert.Equal(1, _backups.RestoreCalls); // Bound staging is not repeated.
         Assert.Equal(2, preparations);
+    }
+
+    [Fact]
+    public async Task MissingConfirmationCheckCannotActivateRecovery()
+    {
+        await using var app = await AppAsync(prepareWorkingCopy: (_, _) => Task.CompletedTask,
+            verifyTarget: (_, _, _) => Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成目标可读", true)
+            ]), workingDirectory: () => _directory, activateRecovery: true);
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/restores",
+            new RestoreRequest("missing-confirmation-check", "synthetic-backup", _directory, "operator"), _json.Options);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var operation = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, operation.Phase);
+        Assert.False(operation.Restore!.RecoveryVerified);
+        Assert.Contains(operation.Checks!, check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites);
+        Assert.Equal(0, _host.StartCalls);
     }
 
     [Fact]
