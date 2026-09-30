@@ -15,7 +15,7 @@ using Exam.Contracts.Versioning;
 
 namespace Exam.Admin.Services;
 
-public sealed class AdminApiClient : IDisposable
+public sealed partial class AdminApiClient : IDisposable
 {
     private readonly HttpMessageHandler? _messageHandler;
     private HttpClient _httpClient;

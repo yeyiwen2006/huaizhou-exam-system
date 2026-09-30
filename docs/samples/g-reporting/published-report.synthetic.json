@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "status": {
+    "examId": "synthetic-exam",
+    "state": "ready",
+    "reason": "合成报表已开放（非真实考生）",
+    "participantCount": 1,
+    "collectedCount": 1,
+    "gradedCount": 1,
+    "rosterVersion": 1,
+    "paperVersion": 1,
+    "gradingVersion": 1,
+    "snapshotId": "synthetic-snapshot",
+    "missingParticipants": []
+  },
+  "result": {
+    "studentTotals": [
+      {
+        "participant": {
+          "candidateId": "synthetic-candidate",
+          "examNumber": "0001",
+          "displayName": "合成考生（非真实考生）",
+          "classNumber": "01"
+        },
+        "totalScore": "3",
+        "totalRank": 1,
+        "subjects": [
+          {
+            "subjectId": "synthetic-subject",
+            "score": "3",
+            "rank": 1
+          }
+        ]
+      }
+    ],
+    "subjects": [
+      {
+        "subject": {
+          "subjectId": "synthetic-subject",
+          "displayName": "合成科目",
+          "order": 1,
+          "maximumScore": "3",
+          "questions": [
+            {
+              "questionId": "synthetic-q",
+              "questionNo": 1,
+              "maximumScore": "3"
+            }
+          ]
+        },
+        "scores": [
+          {
+            "participant": {
+              "candidateId": "synthetic-candidate",
+              "examNumber": "0001",
+              "displayName": "合成考生（非真实考生）",
+              "classNumber": "01"
+            },
+            "score": "3",
+            "rank": 1
+          }
+        ],
+        "answers": [
+          {
+            "participant": {
+              "candidateId": "synthetic-candidate",
+              "examNumber": "0001",
+              "displayName": "合成考生（非真实考生）",
+              "classNumber": "01"
+            },
+            "rank": 1,
+            "answers": [
+              {
+                "questionId": "synthetic-q",
+                "text": "A",
+                "isCompletelyCorrect": true
+              }
+            ],
+            "score": "3"
+          }
+        ],
+        "questionScores": [
+          {
+            "participant": {
+              "candidateId": "synthetic-candidate",
+              "examNumber": "0001",
+              "displayName": "合成考生（非真实考生）",
+              "classNumber": "01"
+            },
+            "rank": 1,
+            "questions": [
+              {
+                "questionId": "synthetic-q",
+                "score": "3",
+                "isFullScore": true
+              }
+            ],
+            "score": "3"
+          }
+        ],
+        "subjectMean": {
+          "exact": "3",
+          "sampleCount": 1,
+          "display": "3.00"
+        },
+        "questionMeans": [
+          {
+            "questionId": "synthetic-q",
+            "mean": {
+              "exact": "3",
+              "sampleCount": 1,
+              "display": "3.00"
+            }
+          }
+        ]
+      }
+    ],
+    "classAverages": [
+      {
+        "classNumber": "01",
+        "sampleCount": 1,
+        "subjects": [
+          {
+            "subjectId": "synthetic-subject",
+            "mean": {
+              "exact": "3",
+              "sampleCount": 1,
+              "display": "3.00"
+            },
+            "rank": 1
+          }
+        ],
+        "totalMean": {
+          "exact": "3",
+          "sampleCount": 1,
+          "display": "3.00"
+        },
+        "totalRank": 1
+      }
+    ],
+    "totalMaximumScore": "3",
+    "totalMean": {
+      "exact": "3",
+      "sampleCount": 1,
+      "display": "3.00"
+    },
+    "commonSampleCount": 1
+  }
+}

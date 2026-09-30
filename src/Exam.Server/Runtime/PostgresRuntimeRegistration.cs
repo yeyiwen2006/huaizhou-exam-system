@@ -113,6 +113,9 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<IGradingResultStore>(provider => new PostgresGradingResultStore(
             provider.GetRequiredService<NpgsqlDataSource>(), provider.GetRequiredService<PostgresActiveNodeWriteGuard>()));
         services.AddSingleton<IGradingInputs, PostgresGradingInputs>();
+        services.AddSingleton<Exam.Application.Reporting.IReportSource, Exam.Infrastructure.Postgres.Reporting.PostgresReportSource>();
+        services.AddSingleton<Exam.Application.Reporting.ReportPublicationService>();
+        services.AddSingleton<Exam.Server.Api.ReportExportService>();
         services.AddSingleton<IGradingScope, PostgresGradingScope>();
         services.AddSingleton<IRecalculationQueue>(provider => new PostgresRecalculationQueue(
             provider.GetRequiredService<NpgsqlDataSource>(), provider.GetRequiredService<TimeProvider>(),

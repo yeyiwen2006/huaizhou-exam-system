@@ -64,4 +64,28 @@ public sealed partial class ReportCalculatorTests
         Assert.Equal(display, result.Subjects[0].SubjectMean!.Display);
     }
 
+    [Theory]
+    [InlineData(-201,200,"-1.01")]
+    [InlineData(-1,200,"-0.01")]
+    [InlineData(-1,1000,"0.00")]
+    public void Review_NegativeQuestionMeanRoundsAwayFromZeroWithoutNegativeZero(int numerator,int denominator,string display)
+    {
+        var input=CreateInput([("synthetic-review","1","01",R(1),R(1))]);
+        var negative=ExactRational.Create(numerator,denominator); var final=negative+R(2);
+        var submission=input.Submissions[0]; var subject=submission.Subjects[0];
+        input=input with
+        {
+            Subjects=[input.Subjects[0] with { Questions=[new("q-a",1,R(15)),new("q-a-positive",2,R(15))] },input.Subjects[1]],
+            Submissions=[submission with { TotalScore=final+R(1),Subjects=[subject with
+            {
+                FinalScore=final,Questions=[new("q-a","B",AnswerOutcome.Wrong,negative),
+                    new("q-a-positive","A",AnswerOutcome.PartialCorrect,R(2))]
+            },submission.Subjects[1]] }]
+        };
+        var report=ReportCalculator.Calculate(input);
+        Assert.Equal(negative,report.Subjects[0].QuestionMeans[0].Mean!.Exact);
+        Assert.Equal(display,report.Subjects[0].QuestionMeans[0].Mean!.Display);
+        ReportResultShapeValidator.Validate(report);
+    }
+
 }

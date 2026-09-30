@@ -1,6 +1,7 @@
 <Window x:Class="Exam.Admin.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:reporting="clr-namespace:Exam.Admin.Reporting"
         Title="淮州考试系统 · 考务端" Width="1360" Height="860"
         MinWidth="1120" MinHeight="720"
         Background="{DynamicResource Brush.Background}"
@@ -325,6 +326,9 @@
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+            <TabItem Header="G03 成绩报表" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
+                <reporting:ReportPageView DataContext="{Binding Reports}" />
             </TabItem>
             <TabItem Header="C05–C07 依赖状态">
                 <Border Style="{StaticResource Card}" Margin="14">

@@ -11,6 +11,12 @@ namespace Exam.Domain.Reporting;
 /// </summary>
 public static class ReportCalculator
 {
+    public static void Validate(ReportCalculationInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        _ = ValidateAndSnapshot(input);
+    }
+
     public static ReportCalculationResult Calculate(ReportCalculationInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -266,9 +272,8 @@ public static class ReportCalculator
         return new(exact, values.Count, FormatTwoPlaces(exact));
     }
 
-    // Provisional symmetric interpretation of 四舍五入. C05/C06 must confirm
-    // negative midpoint handling before this formatter is used in production.
-    private static string FormatTwoPlaces(ExactRational value)
+    // Two decimal places, midpoint away from zero; exact values remain authoritative.
+    internal static string FormatTwoPlaces(ExactRational value)
     {
         var quotient = BigInteger.DivRem(BigInteger.Abs(value.Numerator) * 100,
             value.Denominator, out var remainder);

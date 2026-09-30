@@ -18,6 +18,7 @@ public sealed class MainViewModel : IDisposable
         Connection.PropertyChanged += OnConnectionPropertyChanged;
         Dependencies = new DependencyStatusViewModel();
         ManifestPreflight = new ManifestPreflightViewModel(_api);
+        Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
     }
 
     public ConnectionViewModel Connection { get; }
@@ -27,17 +28,22 @@ public sealed class MainViewModel : IDisposable
     public MonitoringViewModel Monitoring { get; }
     public DependencyStatusViewModel Dependencies { get; }
     public ManifestPreflightViewModel ManifestPreflight { get; }
+    public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
 
     private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ConnectionViewModel.IsConnected))
+        {
             Monitoring.ConnectionReady = Connection.IsConnected;
+            Reports.ConnectionReady = Connection.IsConnected;
+        }
     }
 
     public void Dispose()
     {
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         Monitoring.Dispose();
+        Reports.Dispose();
         _api.Dispose();
     }
 }

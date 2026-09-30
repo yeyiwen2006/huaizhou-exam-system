@@ -5,9 +5,11 @@ using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Common;
 
-return await ExamCli.RunAsync(args, CancellationToken.None);
+using var cancellation = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+return await ExamCli.RunAsync(args, cancellation.Token);
 
-internal static class ExamCli
+internal static partial class ExamCli
 {
     private const string ServerEnvironment = "EXAM_SERVER_URL";
     private const string OperatorTokenEnvironment = "EXAM_OPERATOR_TOKEN";
@@ -26,6 +28,7 @@ internal static class ExamCli
                 [] or ["help"] or ["--help"] or ["-h"] => PrintHelp(),
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
                 ["time", .. var options] => await SendAsync(HttpMethod.Get, "/api/v1/commands/time", options, cancellationToken),
+                ["reports", var action, var examId, .. var options] => await RunReportAsync(action, examId, options, cancellationToken),
                 ["api", var method, var path, .. var options] => await SendAsync(
                     new HttpMethod(method.ToUpperInvariant()),
                     path,
@@ -83,6 +86,8 @@ internal static class ExamCli
         Console.WriteLine("  health [--server URL]                 检查业务服务及数据库是否就绪");
         Console.WriteLine("  time [--server URL]                   获取带服务身份的服务器时间");
         Console.WriteLine("  api METHOD PATH [选项]                调用任意正式 HTTP API");
+        Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
+        Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");
         Console.WriteLine();
