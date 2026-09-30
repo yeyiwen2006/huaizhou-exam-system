@@ -5,7 +5,10 @@ using Npgsql;
 
 namespace Exam.IntegrationTests.ServiceManagement;
 
+// These fixtures create/drop databases and cluster roles; use the same serialized collection as
+// physical recovery, rather than competing with unrelated compilation/load tests for connections.
 [Trait("Category", "Postgres")]
+[Collection(PostgresCollection.Name)]
 public sealed class PostgresRecoveryStateComparisonTests : IAsyncLifetime
 {
     private readonly PostgresDatabaseFixture _original = new();
