@@ -28,6 +28,7 @@ public sealed class NativeEmergencyConfirmationTests(PostgresDatabaseFixture dat
         await control.OpenAsync();
         await ExecuteAsync("SET synchronous_commit=local");
         var originalStandbys = await SettingAsync();
+        var originalOverride = await HasAutomaticOverrideAsync();
         try
         {
             await using (var transaction = await control.BeginTransactionAsync())
@@ -76,7 +77,10 @@ public sealed class NativeEmergencyConfirmationTests(PostgresDatabaseFixture dat
         }
         finally
         {
-            await ConfigureAsync(originalStandbys);
+            // Restoring an empty value is not equivalent to removing an ALTER SYSTEM override:
+            // physical recovery correctly rejects inherited non-comment auto-configuration.
+            await ConfigureAsync(originalStandbys, reset: !originalOverride);
+            Assert.Equal(originalOverride, await HasAutomaticOverrideAsync());
             await using var cleanup = new NpgsqlCommand("DELETE FROM exam.server_state WHERE server_id=$1", control);
             cleanup.Parameters.AddWithValue(serverId);
             await cleanup.ExecuteNonQueryAsync();
@@ -93,9 +97,18 @@ public sealed class NativeEmergencyConfirmationTests(PostgresDatabaseFixture dat
             await using var command = new NpgsqlCommand("SHOW synchronous_standby_names", control);
             return (string)(await command.ExecuteScalarAsync())!;
         }
-        async Task ConfigureAsync(string value)
+        async Task<bool> HasAutomaticOverrideAsync()
         {
-            await ExecuteAsync("ALTER SYSTEM SET synchronous_standby_names = '" + value.Replace("'", "''", StringComparison.Ordinal) + "'");
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM pg_file_settings
+                  WHERE name='synchronous_standby_names' AND sourcefile LIKE '%postgresql.auto.conf')
+                """, control);
+            return (bool)(await command.ExecuteScalarAsync())!;
+        }
+        async Task ConfigureAsync(string value, bool reset = false)
+        {
+            await ExecuteAsync(reset ? "ALTER SYSTEM RESET synchronous_standby_names" :
+                "ALTER SYSTEM SET synchronous_standby_names = '" + value.Replace("'", "''", StringComparison.Ordinal) + "'");
             await ExecuteAsync("SELECT pg_reload_conf()");
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (await SettingAsync() != value) await Task.Delay(20, deadline.Token);
