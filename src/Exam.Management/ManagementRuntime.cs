@@ -36,6 +36,9 @@ public sealed class ManagementRuntime(
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)
     {
+        if (operation.Kind == ManagementOperationKind.Restore && operation.Phase == ManagementOperationPhase.NeedsVerification &&
+            operation.Checks?.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites) == true)
+            return null; // Read-only queries cannot replace a missing confirmation with mere staging evidence.
         if (operation.Kind == ManagementOperationKind.Restore && operation.RecoveryActivation is not null)
             return observeRecoveryActivation is null ? null : await observeRecoveryActivation(operation, token);
         if (operation.Kind == ManagementOperationKind.Stop && process.Status == BusinessServiceStatus.Stopped)
@@ -192,7 +195,7 @@ public sealed class ManagementRuntime(
             if (operation.RecoveryWorkingDirectory is not null &&
                 !string.Equals(operation.RecoveryWorkingDirectory, targetDirectory, pathComparison))
                 throw new IOException("恢复部署目标已改变，原请求不能切换到另一工作槽。");
-            if (operation.Phase != ManagementOperationPhase.Staged)
+            if (operation.Restore?.IsolationStaged != true)
                 await backups().RestoreAsync(request with { ActorId = actor }, token);
             if (process.Status != BusinessServiceStatus.Stopped) throw new IOException("隔离暂存期间业务进程状态发生变化。");
             var staged = operation with { Phase = ManagementOperationPhase.Staged,
@@ -220,6 +223,10 @@ public sealed class ManagementRuntime(
                     verified.All(c => c.Passed || !c.BlocksWrites), false) };
             }
             staged = staged with { Checks = checks.AsReadOnly() };
+            if (checks.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites))
+                staged = staged with { Phase = ManagementOperationPhase.NeedsVerification,
+                    Error = new(ErrorCodes.ServiceRecovering,
+                        "原库与恢复副本的最新已确认状态未能核实；须经 F02 已同步备节点的持久确认记录核对，不得开放业务。") };
             await journal.SaveAsync(staged, token);
             return staged.Restore is { RecoveryVerified: true } && activateRecovery is not null
                 ? await activateRecovery(staged, token) : staged;

@@ -485,6 +485,49 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingLatestConfirmationStaysNeedsVerification_AndOriginalRequestCanRecheckAfterF02Evidence()
+    {
+        var confirmed = false;
+        var preparations = 0;
+        Task Prepare(RestoreRequest _, CancellationToken __) { preparations++; return Task.CompletedTask; }
+        Task<IReadOnlyList<StartupCheckResult>> Verify(RestoreRequest _, ServiceConfiguration __, CancellationToken ___) =>
+            Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成恢复目标可读", true),
+                new("recovery-confirmed-state", confirmed, "合成备节点确认记录", true)
+            ]);
+        var request = new RestoreRequest("offline-confirmation", "synthetic-backup", "synthetic-source", "operator");
+        await using var app = await AppAsync(prepareWorkingCopy: Prepare, verifyTarget: Verify);
+        using var client = Client(app);
+        var first = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, first.StatusCode);
+        var pending = (await first.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, pending.Phase);
+        Assert.True(pending.Restore!.IsolationStaged);
+        Assert.False(pending.Restore.RecoveryVerified);
+        Assert.False(pending.Restore.BusinessReady);
+        Assert.Equal(0, _host.StartCalls);
+        Assert.Equal(1, _backups.RestoreCalls);
+        Assert.Equal(1, preparations);
+
+        var query = await client.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>(
+            "/management/v1/operations/offline-confirmation", _json.Options);
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, query!.Result!.Phase);
+        Assert.Equal(1, preparations); // Query never retries the recovery side effect.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsJsonAsync("/management/v1/service/start",
+            new ManagementServiceRequest("bypass", "server", "node"), _json.Options)).StatusCode);
+
+        confirmed = true;
+        var retry = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        var result = (await retry.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Staged, result.Phase);
+        Assert.True(result.Restore!.RecoveryVerified);
+        Assert.False(result.Restore.BusinessReady);
+        Assert.Equal(1, _backups.RestoreCalls); // Bound staging is not repeated.
+        Assert.Equal(2, preparations);
+    }
+
+    [Fact]
     public async Task DeploymentTargetChangeCannotRedirectAnExistingRestore()
     {
         var target = Path.Combine(_directory, "first-slot");
