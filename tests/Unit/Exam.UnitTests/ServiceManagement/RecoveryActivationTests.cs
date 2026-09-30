@@ -13,7 +13,8 @@ public sealed class RecoveryActivationTests : IDisposable
     private FileRecoveryDeploymentSelection Selection() => new(Path.Combine(_directory, "selection"));
     private ManagementOperation Operation() => new("request", "server", "node", "operator", ManagementOperationKind.Restore,
         new string('A', 64), ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
-        Restore: new("backup", true, true, false), RecoveryWorkingDirectory: _directory);
+        Restore: new("backup", true, true, false), RecoveryWorkingDirectory: _directory,
+        Checks: [new("recovery-confirmed-state", true, "合成最新状态证明", true)]);
 
     [Fact]
     public async Task SelectionSurvivesRestart_BindsIdentityAndRejectsOverwriteOrWrongRollback()
@@ -105,7 +106,9 @@ public sealed class RecoveryActivationTests : IDisposable
         var operations = new ManagementOperationRunner("server", "node", journal, new SystemClock());
         var result = await operations.ExecuteAsync("request", "operator", ManagementOperationKind.Restore, "payload", async (accepted, token) =>
         {
-            var staged = accepted with { Phase = ManagementOperationPhase.Staged, Restore = new("backup", true, true, false), RecoveryWorkingDirectory = _directory };
+            var staged = accepted with { Phase = ManagementOperationPhase.Staged, Restore = new("backup", true, true, false),
+                RecoveryWorkingDirectory = _directory,
+                Checks = [new("recovery-confirmed-state", true, "合成最新状态证明", true)] };
             await journal.SaveAsync(staged, token);
             return await new RecoveryActivationRunner(host, () => host, new FileRecoveryDeploymentSwitch(Selection(), 3), journal).ActivateAsync(staged, token);
         });
@@ -135,6 +138,17 @@ public sealed class RecoveryActivationTests : IDisposable
     public async Task UnverifiedRestoreCannotSelectOrStart()
     {
         var operation = Operation() with { Restore = new("backup", true, false, false) };
+        var host = new Host();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new RecoveryActivationRunner(host, () => host,
+            new FileRecoveryDeploymentSwitch(Selection(), 3), Journal()).ActivateAsync(operation, default));
+        Assert.Null(Selection().Read());
+        Assert.Equal(0, host.Starts);
+    }
+
+    [Fact]
+    public async Task MissingConfirmedStateCannotSelectOrStartEvenIfRestoreFlagIsTrue()
+    {
+        var operation = Operation() with { Checks = [] };
         var host = new Host();
         await Assert.ThrowsAsync<InvalidOperationException>(() => new RecoveryActivationRunner(host, () => host,
             new FileRecoveryDeploymentSwitch(Selection(), 3), Journal()).ActivateAsync(operation, default));
