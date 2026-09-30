@@ -3,6 +3,7 @@ using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.Grading;
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Postgres.HighAvailability;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -18,10 +19,12 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
     private static readonly JsonSerializerOptions JsonOptions = JsonDefaults.Create();
 
     private readonly NpgsqlDataSource _dataSource;
+    private readonly PostgresActiveNodeWriteGuard? _writeGuard;
 
-    public PostgresGradingResultStore(NpgsqlDataSource dataSource)
+    public PostgresGradingResultStore(NpgsqlDataSource dataSource, PostgresActiveNodeWriteGuard? writeGuard = null)
     {
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
+        _writeGuard = writeGuard;
     }
 
     public async ValueTask SaveAsync(StoredGradingResult result, CancellationToken cancellationToken = default)
@@ -57,7 +60,8 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
             """;
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand(sql, connection);
+        await using var transaction = _writeGuard is null ? null : await _writeGuard.BeginAsync(connection, cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("submission_id", NpgsqlDbType.Text, result.Grade.SubmissionId);
         command.Parameters.AddWithValue("exam_id", NpgsqlDbType.Text, result.Grade.ExamId);
         command.Parameters.AddWithValue("candidate_id", NpgsqlDbType.Text, result.Grade.CandidateId);
@@ -74,6 +78,7 @@ public sealed class PostgresGradingResultStore : IGradingResultStore
         command.Parameters.AddWithValue("graded_at", NpgsqlDbType.TimestampTz, result.GradedAt);
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new InvalidOperationException("计分结果归属、版本或同版本内容冲突；原结果未被覆盖。");
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
 
     public async ValueTask<StoredGradingResult?> FindAsync(

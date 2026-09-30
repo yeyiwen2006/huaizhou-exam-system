@@ -15,13 +15,13 @@ public sealed class GradingProcessor(
     ILogger<GradingProcessor> logger)
 {
     /// <summary>
-    /// 执行一批。返回本次**领取**的任务数；本机不是活动主节点时返回 0 且不触碰任何任务。
+    /// 执行一批并返回领取、成功和失败数；本机不是活动主节点时不触碰任何任务。
     /// </summary>
-    public async Task<int> RunOnceAsync(CancellationToken cancellationToken = default)
+    public async Task<GradingBatchReport> RunOnceAsync(CancellationToken cancellationToken = default)
     {
         if (!(await activeNode.CheckAsync(cancellationToken)).Allowed)
         {
-            return 0;
+            return GradingBatchReport.Empty;
         }
 
         var report = await coordinator.RunOnceAsync(cancellationToken);
@@ -32,6 +32,6 @@ public sealed class GradingProcessor(
                 report.Claimed, report.Failed);
         }
 
-        return report.Claimed;
+        return report;
     }
 }

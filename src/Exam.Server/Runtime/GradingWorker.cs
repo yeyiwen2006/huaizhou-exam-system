@@ -8,7 +8,8 @@ namespace Exam.Server.Runtime;
 public sealed class GradingWorker(
     GradingProcessor processor,
     GradingBackgroundOptions options,
-    ILogger<GradingWorker> logger) : BackgroundService
+    ILogger<GradingWorker> logger,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -16,8 +17,10 @@ public sealed class GradingWorker(
         {
             try
             {
-                var claimed = await processor.RunOnceAsync(stoppingToken);
-                await Task.Delay(claimed > 0 ? options.BusyDelay : options.IdleDelay, stoppingToken);
+                var report = await processor.RunOnceAsync(stoppingToken);
+                var delay = report.Failed > 0 ? options.ErrorDelay
+                    : report.Claimed > 0 ? options.BusyDelay : options.IdleDelay;
+                await Task.Delay(delay, timeProvider ?? TimeProvider.System, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -26,7 +29,7 @@ public sealed class GradingWorker(
             catch (Exception exception)
             {
                 logger.LogError(exception, "计分后台批次失败；持久任务保留待重试。");
-                await Task.Delay(options.ErrorDelay, stoppingToken);
+                await Task.Delay(options.ErrorDelay, timeProvider ?? TimeProvider.System, stoppingToken);
             }
         }
     }

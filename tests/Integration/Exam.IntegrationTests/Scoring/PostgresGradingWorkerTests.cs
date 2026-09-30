@@ -79,7 +79,7 @@ public sealed partial class PostgresGradingPersistenceTests
         await SeedAsync();
         var processor = GradingProcessor(Gate("node-a", allowUninitialized: true));
 
-        Assert.Equal(1, await processor.RunOnceAsync());
+        Assert.Equal(1, (await processor.RunOnceAsync()).Graded);
 
         // 任务的目标版本是 1，但计分采用当前已发布版本 3，成绩按实际版本落库。
         var results = await new PostgresGradingResultStore(fixture.DataSource).ListAsync(ExamId, 3);
@@ -95,7 +95,7 @@ public sealed partial class PostgresGradingPersistenceTests
         {
             var processor = GradingProcessor(Gate("node-a", allowUninitialized: false));
 
-            Assert.Equal(0, await processor.RunOnceAsync());
+            Assert.Equal(0, (await processor.RunOnceAsync()).Claimed);
             Assert.Empty(await new PostgresGradingResultStore(fixture.DataSource).ListAsync(ExamId, 3));
 
             // 备库节点既没有消费也没有删除任务：活动节点仍能领到它。
@@ -109,9 +109,9 @@ public sealed partial class PostgresGradingPersistenceTests
         }
     }
 
-    private ActiveNodeGuard Gate(string nodeId, bool allowUninitialized) =>
+    private ActiveNodeGuard Gate(string nodeId, bool allowUninitialized, long epoch = 1) =>
         new(fixture.DataSource,
-            new ServerIdentityOptions { ServerId = ServerId, NodeId = nodeId, ServerEpoch = 1 },
+            new ServerIdentityOptions { ServerId = ServerId, NodeId = nodeId, ServerEpoch = epoch },
             allowUninitialized);
 
     private GradingProcessor GradingProcessor(ActiveNodeGuard gate) =>
