@@ -97,6 +97,26 @@ public sealed class ReportTableSessionTests
         Assert.True(session.HasTables);
     }
 
+    [Fact]
+    public void InvalidPublishedResult_IsNotShownAndNextLoadCanRecover()
+    {
+        using var session = new ReportTableSessionViewModel();
+        var report = Result(1);
+        var subject = report.Subjects[0];
+        var invalid = report with
+        {
+            Subjects = [subject with { Scores = [subject.Scores[0] with { Score = R(4) }] }]
+        };
+
+        Assert.False(session.TryAcceptPublished(session.BeginLoad("synthetic-exam"), invalid));
+        Assert.False(session.HasTables);
+        Assert.Null(session.SelectedTable);
+        Assert.Equal("报表结果无效", session.UnavailableReason);
+
+        Assert.True(session.TryAcceptPublished(session.BeginLoad("synthetic-exam"), report));
+        Assert.True(session.HasTables);
+    }
+
     private static ReportCalculationResult Result(int subjectCount)
     {
         var participant = new ReportParticipant("synthetic-candidate", "0001", "Synthetic candidate", "01");
