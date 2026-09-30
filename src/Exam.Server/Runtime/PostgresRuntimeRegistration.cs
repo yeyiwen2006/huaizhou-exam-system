@@ -74,6 +74,7 @@ public static class PostgresRuntimeRegistration
         services.AddExamCapacity(configuration, capacity);
         var dataSource = connectionOptions.CreateDataSource();
         services.AddSingleton(dataSource);
+        services.AddBusinessConfirmation(configuration, identity, allowUninitializedFailoverState);
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
         services.AddSingleton<BusinessRecoveryGuard>();

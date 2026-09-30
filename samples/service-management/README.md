@@ -66,11 +66,24 @@
 
 可选 `Recovery:SelectionPath` 启用恢复后的业务连接切换，须为仓库外、预建受保护目录中的绝对文件路径。管理和业务两套受保护配置必须设置同一路径、Exam/ExamRecovery 连接及服务器/节点/预期代次，并使用包含本接线的业务版本；文件缺失表示原连接，损坏、身份不符或已选恢复连接缺失时拒绝回退。选择文件只保存原请求身份、工作槽及连接引用，不保存秘密；不要放在操作 JSON 目录或备份材料源中。业务运行时不要手工改选库文件或自动启动原库。
 
-启用前业务须停止，自检及恢复目标检查通过，并只读比对原库与恢复库的全部 exam 业务表、列定义和序列（排除备份/恢复操作审计表）。必须已存在匹配节点和代次的 EmergencySingleNode 权威状态；本操作不启用应急模式、不提升节点、不改代次。原库不可读、状态不同或仍需重建双机保护时保持阻断，不把旧备份当作最新状态；离线原库的完整性证明及 F02 主备重新接线仍不在本路径内。
+启用前业务须停止，自检及实际恢复目标检查通过，并核对全部 exam 业务表、列定义和序列（排除备份/恢复操作审计表）。权威保护模式必须与持久服务配置一致，活动节点及代次须匹配；本操作不启用应急模式、不提升节点、不改代次。原库无法核实时，必须使用下述双侧最新持久确认及实际备节点证据，任一证据缺失仍保持阻断。双机保护尚未重建时，恢复业务 `/health/ready` 的实际确认继续失败，不把旧备份当作最新状态。
 
 状态比对的两条连接均在只读事务内设置 `row_security=off`。该设置不绕过 RLS、不授予权限；查询会受行级策略影响时 PostgreSQL 报错，核对失败并阻止启用或自动回退。数据库账户必须实际能读取完整业务表和序列；不能通过授予超级用户或 `BYPASSRLS` 来自动修复部署。表所有者也需考虑 `FORCE ROW LEVEL SECURITY`。设置只在诊断事务中有效，不改变业务连接的安全策略。语义见 [PostgreSQL 行级安全](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)。
 
-`pg_verifybackup` 成功、清单摘要相符或归档目录中存在 WAL 文件，均不证明备份已包含故障前最新已确认业务状态。`Invoke-WalArchive.ps1` 只复制 PostgreSQL 交给它的已完成文件，不提供与业务成功回执绑定的恢复位置；`archive_timeout=60s` 也不保证当前 WAL 段已经归档。原库离线恢复还需绑定故障前已确认状态对应的可靠恢复位置，同时核对资源和密钥版本；不能从备份自身、归档最后文件或恢复库自行生成“最新”证据。当前仍要求启用前与原库完整比对，原库无法比较时保持阻断，保留原件与恢复副本。归档行为见 [PostgreSQL 连续归档与恢复](https://www.postgresql.org/docs/18/continuous-archiving.html)。
+`pg_verifybackup` 成功、清单摘要相符或归档目录中存在 WAL 文件，均不证明备份已包含故障前最新已确认业务状态。`Invoke-WalArchive.ps1` 只复制 PostgreSQL 交给它的已完成文件，不提供与业务成功回执绑定的恢复位置；`archive_timeout=60s` 也不保证当前 WAL 段已经归档。原库离线恢复还需绑定故障前已确认状态对应的可靠恢复位置，同时核对资源和密钥版本；不能从备份自身、归档最后文件或恢复库自行生成“最新”证据。保留原件与恢复副本。归档行为见 [PostgreSQL 连续归档与恢复](https://www.postgresql.org/docs/18/continuous-archiving.html)。
+
+生产业务现在在 HTTP 成功响应、SignalR 返回/可靠推送及 `/health/ready` 前完成独立持久确认。
+两侧业务进程设置 `Confirmation:Directory` 为分别预建的受保护独立目录，不能用备份中的旧日志
+覆盖当前日志；主侧设置 `StandbyNodeId`、可信 HTTPS 根地址 `StandbyHttpsUrl`，备侧设置
+`PrimaryNodeId` 并使用其真实节点身份和包解锁证书。两侧资源目录通过
+`Backup:VersionedResourcesDirectory` 配置，内容不一致、不能持久冲刷或解锁失败时拒绝成功。
+双方 `Confirmation:PeerToken`（至少 32 字符）由受保护配置/环境提供，模板不含令牌。
+管理宿主读取与本机业务相同的确认目录，并配置备节点地址、身份、令牌和受保护的
+`ConnectionStrings:ExamStandby`。要求实际备库仍在回放、未暂停，接收落盘及回放均覆盖
+动态确认位置；全量状态和恢复资源相符后才允许继续。本机独立日志和备节点记录必须都可读；
+仅有旧备份、待确认头、旧备节点记录或单机应急记录仍保持 `NeedsVerification`。
+数据库权限和节点密钥须按部署基线预配；不得用健康布尔值、静态 LSN 或关闭 TLS 代替。
+完整调用链和边界见[恢复运行说明](../../docs/backup-and-failover-runbook.md)。
 
 `deploy/postgresql` 的 Windows 归档与恢复命令使用 `powershell.exe` 的进程级 `-ExecutionPolicy Bypass` 运行固定脚本。主库 `archive_command` 调用 `Invoke-WalArchiveCommand.ps1`，由它调用同目录的 `Invoke-WalArchive.ps1`，再次核对源 WAL 与归档目标的 SHA-256，确认后才向 PostgreSQL 返回成功；脚本缺失、复制失败或内容不一致均返回失败，PostgreSQL 保留未归档段等待重试。部署时须将两个归档脚本和恢复脚本放在受保护目录，只允许管理员修改、相应 PostgreSQL 服务账户读取，不把脚本路径或归档目标交给管理请求。该参数不更改机器或用户的执行策略。
 

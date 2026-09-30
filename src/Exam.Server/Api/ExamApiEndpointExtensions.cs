@@ -122,7 +122,7 @@ public static class ExamApiEndpointExtensions
                 "application/vnd.huaizhou.exam-package",
                 fileDownloadName: $"{resource.ResourceId}.epkg",
                 enableRangeProcessing: false);
-        });
+        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
         return group;
     }
 

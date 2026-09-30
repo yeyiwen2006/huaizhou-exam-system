@@ -69,6 +69,7 @@ app.UseHttpsRedirection();
 if (databaseConfigured)
 {
     app.UseMiddleware<ExamApiAccessMiddleware>();
+    app.UseMiddleware<BusinessConfirmationMiddleware>();
 }
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
@@ -100,6 +101,12 @@ app.MapGet("/health/ready", async (
     if (managedServiceConfiguration is not null &&
         !(await managedServiceConfiguration.CheckProtectionAsync(app.Services.GetRequiredService<Npgsql.NpgsqlDataSource>(), cancellationToken)).Passed)
         return Results.Json(new { status = "recovering", reason = "当前权威保护状态不满足本机服务配置。" }, statusCode: 503);
+    if (readiness.Ready)
+    {
+        try { await app.Services.GetRequiredService<Exam.Application.HighAvailability.IBusinessConfirmation>().ConfirmAsync(cancellationToken); }
+        catch (Exam.Domain.Common.DomainRuleException)
+        { return Results.Json(new { status = "recovering", reason = "本机及备节点持久确认尚未完成。" }, statusCode: 503); }
+    }
     return readiness.Ready
         ? Results.Ok(new
         {
@@ -127,6 +134,7 @@ app.MapGet("/api/system/time", (IConfiguration configuration, TimeProvider timeP
 if (databaseConfigured)
 {
     app.MapExamApi();
+    app.MapStandbyConfirmation();
     app.MapExamDiagnostics();
     app.MapHub<ExamEventHub>("/hubs/exam-events");
     if (builder.Configuration.GetValue("Backup:Enabled", false))

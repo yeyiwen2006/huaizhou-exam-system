@@ -19,18 +19,18 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
             var after = await SnapshotAsync(recovery, configuration, token);
             var equal = CryptographicOperations.FixedTimeEquals(before, after);
             return new("recovery-confirmed-state", equal, equal
-                ? "停止业务后的原库与恢复库业务状态一致；保留既有单机应急授权，未提升节点或改变代次。"
+                ? "停止业务后的原库与恢复库业务状态一致；保留既有保护授权，未提升节点或改变代次。"
                 : "原库与恢复库业务状态不同，不能证明已确认数据完整，禁止开放业务。", true);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             return new("recovery-confirmed-state", false,
-                "无法只读核实原库及恢复库的完整业务状态或既有单机应急授权；禁止开放业务。", true);
+                "无法只读核实原库及恢复库的完整业务状态或既有保护授权；禁止开放业务。", true);
         }
     }
 
-    private async Task<byte[]> SnapshotAsync(NpgsqlDataSource source, ServiceConfiguration configuration, CancellationToken token)
+    public async Task<byte[]> SnapshotAsync(NpgsqlDataSource source, ServiceConfiguration configuration, CancellationToken token)
     {
         await using var connection = await source.OpenConnectionAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
@@ -43,7 +43,7 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
             authority.Parameters.AddWithValue("server", configuration.ServerId);
             await using var row = await authority.ExecuteReaderAsync(token);
             if (!await row.ReadAsync(token) || row.GetString(0) != configuration.NodeId || row.GetInt64(1) != epoch ||
-                row.GetString(2) != "EmergencySingleNode" || await row.ReadAsync(token))
+                row.GetString(2) != (configuration.HighAvailabilityEnabled ? "SynchronousDualNode" : "EmergencySingleNode") || await row.ReadAsync(token))
                 throw new InvalidDataException("恢复不能自行更改原主备授权。");
         }
         using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);

@@ -1,0 +1,172 @@
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using Exam.Application.HighAvailability;
+using Exam.Contracts.Common;
+using Exam.Contracts.HighAvailability;
+using Exam.Contracts.ServiceManagement;
+using Exam.Domain.Common;
+using Exam.Infrastructure.Postgres.Resources;
+using Exam.Infrastructure.ServiceManagement;
+using Npgsql;
+
+namespace Exam.Infrastructure.HighAvailability;
+
+public interface IDurableConfirmationPeer
+{
+    Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token);
+    Task<ConfirmationHead?> ReadAsync(CancellationToken token);
+}
+
+public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string serverId, string standbyNodeId,
+    Func<string?> credential) : IDurableConfirmationPeer
+{
+    private Uri Address()
+    {
+        if (endpoint.Scheme != "https" || !string.IsNullOrEmpty(endpoint.UserInfo) ||
+            !string.IsNullOrEmpty(endpoint.Query) || !string.IsNullOrEmpty(endpoint.Fragment) || endpoint.AbsolutePath != "/")
+            throw new InvalidOperationException("备节点确认必须使用固定 HTTPS 根地址。");
+        return new(endpoint, "replication/v1/confirmation");
+    }
+    private async Task<T?> SendAsync<T>(HttpMethod method, DurableConfirmation? record, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(method, Address());
+        var secret = credential();
+        if (string.IsNullOrWhiteSpace(secret) || secret.Length < 32) throw new IOException("备节点确认凭据未配置。");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+        request.Headers.Add("X-Exam-Server-Id", serverId); request.Headers.Add("X-Exam-Node-Id", standbyNodeId);
+        if (record is not null) request.Content = JsonContent.Create(record, options: JsonDefaults.Create());
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384)
+            throw new IOException("备节点确认不可用。");
+        await using var body = await response.Content.ReadAsStreamAsync(token);
+        using var buffer = new MemoryStream();
+        var bytes = new byte[4096]; int count;
+        while ((count = await body.ReadAsync(bytes, token)) > 0)
+        { if (buffer.Length + count > 16384) throw new IOException("备节点确认响应超限。"); buffer.Write(bytes, 0, count); }
+        return System.Text.Json.JsonSerializer.Deserialize<T>(buffer.ToArray(), JsonDefaults.Create());
+    }
+    public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token) =>
+        await SendAsync<DurableConfirmation>(HttpMethod.Post, record, token) ?? throw new IOException("备节点未返回确认。");
+    public Task<ConfirmationHead?> ReadAsync(CancellationToken token) => SendAsync<ConfirmationHead>(HttpMethod.Get, null, token);
+}
+
+/// <summary>The WAL-producing fence flushes all earlier local commits. The independent peer must replay
+/// this actual fence and persist its acknowledgement before primary confirmation or transport success.</summary>
+public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
+    string serverId, string primaryNodeId, string standbyNodeId, long epoch, string resourcesDirectory,
+    IDurableConfirmationPeer peer) : IBusinessConfirmation
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    public async Task ConfirmAsync(CancellationToken token)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            using var locked = store.Lock();
+            var resources = FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true);
+            await using var connection = await source.OpenConnectionAsync(token);
+            await using (var transaction = await connection.BeginTransactionAsync(token))
+            {
+                await using var durability = new NpgsqlCommand("SET LOCAL synchronous_commit=on", connection, transaction);
+                await durability.ExecuteNonQueryAsync(token);
+                await using var fence = new NpgsqlCommand("""
+                    UPDATE exam.server_state SET updated_at=updated_at
+                    WHERE server_id=$1 AND active_node_id=$2 AND server_epoch=$3
+                      AND protection_mode IN ('SynchronousDualNode','EmergencySingleNode');
+                    """, connection, transaction);
+                fence.Parameters.AddWithValue(serverId); fence.Parameters.AddWithValue(primaryNodeId); fence.Parameters.AddWithValue(epoch);
+                if (await fence.ExecuteNonQueryAsync(token) != 1) throw new IOException("确认时权威活动节点不匹配。");
+                await transaction.CommitAsync(token);
+            }
+            await using var command = new NpgsqlCommand("""
+                SELECT s.protection_mode,s.state_version,c.system_identifier::text,p.timeline_id,
+                       pg_current_wal_flush_lsn()::text,pg_is_in_recovery(),current_database()
+                FROM exam.server_state s CROSS JOIN pg_control_system() c CROSS JOIN pg_control_checkpoint() p
+                WHERE s.server_id=$1 AND s.active_node_id=$2 AND s.server_epoch=$3
+                """, connection);
+            command.Parameters.AddWithValue(serverId); command.Parameters.AddWithValue(primaryNodeId); command.Parameters.AddWithValue(epoch);
+            DurableConfirmation record;
+            await using (var row = await command.ExecuteReaderAsync(token))
+            {
+                if (!await row.ReadAsync(token) || row.GetBoolean(5)) throw new IOException("确认源不是活动主库。");
+                record = new(Guid.NewGuid().ToString("N"), serverId, primaryNodeId, standbyNodeId, epoch,
+                    row.GetInt64(1), Enum.Parse<ProtectionMode>(row.GetString(0)), row.GetString(2), row.GetString(6), row.GetInt32(3), row.GetString(4), resources);
+            }
+            await store.SaveAsync(new(record, false), token);
+            if (record.Mode == ProtectionMode.SynchronousDualNode && await peer.ConfirmAsync(record, token) != record)
+                throw new IOException("备节点确认边界与原请求不同。");
+            // Emergency success is local only. Its different primary head prevents an older standby
+            // confirmation from later claiming coverage of emergency writes.
+            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != resources)
+                throw new IOException("确认期间资源发生变化。");
+            await store.SaveAsync(new(record, true), token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认尚未完成，保留原请求重试。", retryable: true); }
+        finally { _gate.Release(); }
+    }
+}
+
+/// <summary>Runs on the standby's business listener but never writes its PostgreSQL database.</summary>
+public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
+    string serverId, string standbyNodeId, string primaryNodeId, long epoch, string resourcesDirectory,
+    IPackageKeyUnwrapper unwrapper)
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
+    {
+        FileConfirmationStore.Validate(record);
+        if (record.ServerId != serverId || record.PrimaryNodeId != primaryNodeId || record.StandbyNodeId != standbyNodeId ||
+            record.Epoch != epoch || record.Mode != ProtectionMode.SynchronousDualNode)
+            throw new IOException("确认的服务器、节点、代次或保护模式不同。");
+        await _gate.WaitAsync(token);
+        try
+        {
+            using var locked = store.Lock();
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (true)
+            {
+                try { await VerifyPositionAsync(source, record, standbyNodeId, token); break; }
+                catch (IOException) when (DateTime.UtcNow < deadline) { await Task.Delay(50, token); }
+            }
+            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
+                throw new IOException("备节点资源尚未持久追平。");
+            var config = new ServiceConfiguration(serverId, standbyNodeId, "127.0.0.1", 1, resourcesDirectory, true, 1);
+            var checks = await new PostgresRecoveryReadinessProbe(source, unwrapper).RunAsync(config, token);
+            if (checks.Count == 0 || checks.Any(c => c.BlocksWrites && !c.Passed))
+                throw new IOException("备节点资源、解锁或持久数据核对失败。");
+            await VerifyPositionAsync(source, record, standbyNodeId, token);
+            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
+                throw new IOException("备节点资源在确认期间改变。");
+            await store.SaveAsync(new(record, true), token);
+            return record;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public ConfirmationHead? Read() => store.Read();
+
+    public static async Task VerifyPositionAsync(NpgsqlDataSource source, DurableConfirmation record,
+        string standbyNodeId, CancellationToken token)
+    {
+        await using var connection = await source.OpenConnectionAsync(token);
+        await using var command = new NpgsqlCommand("""
+            SELECT pg_is_in_recovery(),pg_is_wal_replay_paused(),pg_last_wal_replay_lsn()::text,
+                   c.system_identifier::text,p.timeline_id,s.active_node_id,s.server_epoch,s.protection_mode,s.state_version,
+                   n.node_role,current_database(),pg_last_wal_receive_lsn()::text
+            FROM exam.server_state s CROSS JOIN pg_control_system() c CROSS JOIN pg_control_checkpoint() p
+              JOIN exam.server_nodes n ON n.server_id=s.server_id AND n.node_id=$2
+            WHERE s.server_id=$1
+            """, connection);
+        command.Parameters.AddWithValue(record.ServerId); command.Parameters.AddWithValue(standbyNodeId);
+        await using var row = await command.ExecuteReaderAsync(token);
+        if (!await row.ReadAsync(token) || !row.GetBoolean(0) || row.GetBoolean(1) || row.IsDBNull(2) ||
+            FileConfirmationStore.Lsn(row.GetString(2)) < FileConfirmationStore.Lsn(record.FlushLsn) ||
+            row.GetString(3) != record.SystemIdentifier || row.GetInt32(4) != record.Timeline ||
+            row.GetString(5) != record.PrimaryNodeId || row.GetInt64(6) != record.Epoch ||
+            row.GetString(7) != "SynchronousDualNode" || row.GetInt64(8) != record.StateVersion || row.GetString(9) != "Standby" ||
+            row.GetString(10) != record.DatabaseName || row.IsDBNull(11) ||
+            FileConfirmationStore.Lsn(row.GetString(11)) < FileConfirmationStore.Lsn(record.FlushLsn))
+            throw new IOException("实际备库未覆盖确认边界或身份不匹配。");
+    }
+}

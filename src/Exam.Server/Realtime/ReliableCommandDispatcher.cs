@@ -13,7 +13,8 @@ public sealed class ReliableCommandDispatcher(
     RealtimeDeviceAuthorizer authorizer,
     RealtimeDispatchOptions options,
     IHubContext<ExamEventHub> hub,
-    ILogger<ReliableCommandDispatcher> logger) : BackgroundService
+    ILogger<ReliableCommandDispatcher> logger,
+    Exam.Application.HighAvailability.IBusinessConfirmation? confirmation = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -69,6 +70,7 @@ public sealed class ReliableCommandDispatcher(
 
             foreach (var delivery in result.Value ?? [])
             {
+                if (confirmation is not null) await confirmation.ConfirmAsync(cancellationToken);
                 await hub.Clients.Client(connection.ConnectionId)
                     .SendAsync("Command", delivery, cancellationToken);
             }

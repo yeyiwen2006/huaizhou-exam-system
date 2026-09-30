@@ -6,6 +6,7 @@ using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
+using Exam.Infrastructure.HighAvailability;
 
 namespace Exam.Management;
 
@@ -73,16 +74,33 @@ public static class ManagementEntryPoint
                 return new(options);
             }
             var backups = new DeferredBackupCoordinator(CreateBackups);
-            var preflight = new CompositeStartupReadinessProbe([
+            IStartupReadinessProbe Preflight(string? target = null) => new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
                 new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
-                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(SelectedConnection(), epoch)),
-                new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(SelectedConnection(), configuration["PackageSecurity:CertificateThumbprint"] ?? "")),
+                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), epoch)),
+                new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(target ?? SelectedConnection(), configuration["PackageSecurity:CertificateThumbprint"] ?? "")),
                 new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
                     TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()),
                     configuration["Backup:StartupVerificationDirectory"], configuration["Backup:StartupVerificationBackupId"])
             ]);
+            var preflight = Preflight();
+            async Task<StartupCheckResult> ConfirmedState(ServiceConfiguration expected, RecoveryWorkingCopy working, CancellationToken token)
+            {
+                var original = await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
+                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(expected, token);
+                if (original.Passed || string.IsNullOrWhiteSpace(configuration["Confirmation:Directory"])) return original;
+                try
+                {
+                    return await new PostgresConfirmedRecoveryEvidence(new FileConfirmationStore(Required("Confirmation:Directory")),
+                        new HttpConfirmationPeer(http, new Uri(Required("Confirmation:StandbyHttpsUrl")), serverId,
+                            Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]),
+                        Required("ConnectionStrings:ExamStandby"), Required("ConnectionStrings:ExamRecovery"), epoch)
+                        .RunAsync(expected, Path.Combine(working.WorkingDirectory, "resources"), token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception) { return original; }
+            }
             return new ManagementRuntime(serverId, nodeId, store, process,
                 ReadyHost,
                 preflight, () => backups, journal, new SystemClock(), port,
@@ -116,9 +134,8 @@ public static class ManagementEntryPoint
                             checks.Add(await replay.VerifyReplayedAsync(working, request, Required("ConnectionStrings:ExamRecovery"), token));
                         if (!string.IsNullOrWhiteSpace(configuration["Recovery:SelectionPath"]))
                         {
-                            checks.Add(await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
-                                Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(serviceConfiguration, token));
-                            checks.AddRange((await preflight.RunAsync(serviceConfiguration, token))
+                            checks.Add(await ConfirmedState(serviceConfiguration, working, token));
+                            checks.AddRange((await Preflight(Required("ConnectionStrings:ExamRecovery")).RunAsync(serviceConfiguration, token))
                                 .Select(check => check with { Name = "activation-" + check.Name }));
                         }
                         return checks;
