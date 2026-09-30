@@ -488,8 +488,9 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingLatestConfirmationStaysNeedsVerification_AndOriginalRequestCanRecheckAfterF02Evidence()
+    public async Task MissingLatestConfirmationStaysNeedsVerification_AndOriginalRequestCanRecheckSyntheticProbe()
     {
+        // This tests orchestration only. The boolean is not a production F02 confirmation record.
         var confirmed = false;
         var preparations = 0;
         Task Prepare(RestoreRequest _, CancellationToken __) { preparations++; return Task.CompletedTask; }

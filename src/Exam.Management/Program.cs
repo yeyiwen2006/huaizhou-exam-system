@@ -135,7 +135,9 @@ public static class ManagementEntryPoint
                 {
                     // Query observes existing evidence only; it never copies, selects, rolls back or starts a service.
                     if (operation.RequestJson is null || operation.Restore is not { RecoveryVerified: true, BusinessReady: false } ||
-                        operation.Checks?.Any(c => c.Name == "recovery-confirmed-state" && c.Passed && c.BlocksWrites) != true)
+                        operation.Checks?.Any(c => c.Name == "recovery-confirmed-state" && c.Passed && c.BlocksWrites) != true ||
+                        operation.Checks?.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) != true ||
+                        operation.Checks?.All(c => c.Passed || !c.BlocksWrites) != true)
                         return null;
                     var selected = Deployment();
                     if (process.Status == BusinessServiceStatus.Stopped &&

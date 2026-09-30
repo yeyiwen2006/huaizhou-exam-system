@@ -159,6 +159,24 @@ public sealed class RecoveryActivationTests : IDisposable
     }
 
     [Theory]
+    [InlineData("missing")]
+    [InlineData("failed")]
+    [InlineData("nonblocking")]
+    [InlineData("other-failure")]
+    public async Task DeploymentAdapterRejectsDirectSelectionWithoutCompleteChecks(string scenario)
+    {
+        var checks = Operation().Checks!.ToList();
+        if (scenario == "missing") checks.RemoveAt(1);
+        if (scenario == "failed") checks[1] = checks[1] with { Passed = false };
+        if (scenario == "nonblocking") checks[1] = checks[1] with { BlocksWrites = false };
+        if (scenario == "other-failure") checks.Add(new("recovery-resources", false, "合成资源失败", true));
+        var deployment = new FileRecoveryDeploymentSwitch(Selection(), 3);
+        var operation = Operation() with { Checks = checks };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => deployment.SelectAsync(operation, default));
+        Assert.Null(Selection().Read());
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task MissingTargetOrAnotherBlockingFailureCannotActivate(bool missingTarget)

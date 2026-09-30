@@ -185,7 +185,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         await new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(selectionPath), 1).SelectAsync(
             new("synthetic-enable", "server", "node", "operator", ManagementOperationKind.Restore, new string('A', 64),
                 ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
-                Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory), default);
+                Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory,
+                Checks: [.. targetChecks, completeState]), default);
         await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString,
             selectionPath, expectReady: !OperatingSystem.IsWindows() || tools.IsNative))
         {

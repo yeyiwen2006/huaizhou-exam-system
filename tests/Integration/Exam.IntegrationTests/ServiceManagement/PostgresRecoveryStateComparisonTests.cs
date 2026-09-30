@@ -104,6 +104,22 @@ public sealed class PostgresRecoveryStateComparisonTests : IAsyncLifetime
         Assert.False((await CompareAsync()).Passed);
     }
 
+    [Fact]
+    public async Task ReadableRecoveryCannotReplaceUnavailableOriginalConfirmation()
+    {
+        // The recovery is a real, readable and otherwise equal database. Port 1 is deliberately
+        // unavailable; never connect to the default PostgreSQL port to simulate the missing source.
+        var unavailable = new NpgsqlConnectionStringBuilder(_original.ConnectionString)
+        { Host = "127.0.0.1", Port = 1, Pooling = false }.ConnectionString;
+        var check = await new PostgresRecoveryStateComparison(unavailable, _recovery.ConnectionString, 1)
+            .RunAsync(Configuration, default);
+        Assert.Equal("recovery-confirmed-state", check.Name);
+        Assert.False(check.Passed);
+        Assert.True(check.BlocksWrites);
+        Assert.DoesNotContain(_original.ConnectionString, check.Message);
+        Assert.True((await CompareAsync()).Passed);
+    }
+
     private string AsReader(PostgresDatabaseFixture database)
         => new NpgsqlConnectionStringBuilder(database.ConnectionString) { Options = "-c role=" + _role }.ConnectionString;
 
