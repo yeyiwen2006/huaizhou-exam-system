@@ -216,6 +216,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
                 var replay = await client.PostAsJsonAsync("/api/v1/submissions/final", remaining, Json);
                 Assert.Equal(saved.Result, (await replay.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json))!.Result);
             }
+            // Join the production workers before inspecting durable work left by this host.
+            await app.StopAsync();
         }
         // Recreate the store after host shutdown; persisted pending collection is sufficient to finish.
         var collection = new PostgresCollectionCompletionStore(recovered);
@@ -226,12 +228,19 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         var sourceStore = new PostgresSubmissionStore(_source.DataSource);
         Assert.Equal(original, (await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-1"))!.Receipt);
         Assert.Null(await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
-        // Recreate the coordinator after the recovered API exits; remaining tasks and exact results are durable.
+        // The production worker may already have graded the remaining receipt. Resume only durable
+        // unfinished work, including a lease left if shutdown interrupted a claimed task.
+        await using var pending = recovered.CreateCommand(
+            "SELECT count(*)::integer FROM exam.grading_outbox WHERE completed_at IS NULL;");
+        var pendingBeforeRestart = (int)(await pending.ExecuteScalarAsync())!;
+        Assert.InRange(pendingBeforeRestart, 0, 1);
         var afterRestart = new GradingCoordinator(new PostgresGradingTaskSource(recovered), new PostgresGradingResultStore(recovered),
-            new PostgresGradingInputs(recovered));
+            new PostgresGradingInputs(recovered), timeProvider: new FixedTimeProvider(DateTimeOffset.UtcNow.AddHours(1)));
         var remainingGrading = await afterRestart.RunOnceAsync();
-        Assert.Equal(1, remainingGrading.Graded);
+        Assert.Equal(pendingBeforeRestart, remainingGrading.Claimed);
+        Assert.Equal(pendingBeforeRestart, remainingGrading.Graded);
         Assert.Equal(0, remainingGrading.Failed);
+        Assert.Equal(0, (int)(await pending.ExecuteScalarAsync())!);
         var grades = await new PostgresGradingResultStore(recovered).ListAsync("synthetic-exam", 1);
         Assert.Equal(2, grades.Count);
         Assert.All(grades, grade => Assert.Equal("3", grade.Grade.ExactTotalScore));
