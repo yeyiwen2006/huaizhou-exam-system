@@ -9,6 +9,10 @@ namespace Exam.Infrastructure.Reporting;
 /// </summary>
 public sealed class ReportWorkbookFileWriter
 {
+    // Only serialize the final rename, across writer instances. Workbook generation and durable
+    // temporary-file writes remain concurrent; no destination-key cache or unbounded locks remain.
+    private static readonly Lock CommitGate = new();
+
     public async Task WriteAsync(ReportCalculationResult report, string destinationPath,
         CancellationToken cancellationToken = default)
     {
@@ -36,8 +40,11 @@ public sealed class ReportWorkbookFileWriter
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
                 output.Flush(flushToDisk: true);
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporary, destination, overwrite: true);
+            lock (CommitGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporary, destination, overwrite: true);
+            }
         }
         finally
         {
