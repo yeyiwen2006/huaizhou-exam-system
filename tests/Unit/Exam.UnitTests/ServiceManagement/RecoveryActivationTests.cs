@@ -14,7 +14,8 @@ public sealed class RecoveryActivationTests : IDisposable
     private ManagementOperation Operation() => new("request", "server", "node", "operator", ManagementOperationKind.Restore,
         new string('A', 64), ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
         Restore: new("backup", true, true, false), RecoveryWorkingDirectory: _directory,
-        Checks: [new("recovery-confirmed-state", true, "合成最新状态证明", true)]);
+        Checks: [new("recovery-target", true, "合成恢复目标", true),
+            new("recovery-confirmed-state", true, "合成最新状态证明", true)]);
 
     [Fact]
     public async Task SelectionSurvivesRestart_BindsIdentityAndRejectsOverwriteOrWrongRollback()
@@ -108,7 +109,8 @@ public sealed class RecoveryActivationTests : IDisposable
         {
             var staged = accepted with { Phase = ManagementOperationPhase.Staged, Restore = new("backup", true, true, false),
                 RecoveryWorkingDirectory = _directory,
-                Checks = [new("recovery-confirmed-state", true, "合成最新状态证明", true)] };
+                Checks = [new("recovery-target", true, "合成恢复目标", true),
+                    new("recovery-confirmed-state", true, "合成最新状态证明", true)] };
             await journal.SaveAsync(staged, token);
             return await new RecoveryActivationRunner(host, () => host, new FileRecoveryDeploymentSwitch(Selection(), 3), journal).ActivateAsync(staged, token);
         });
@@ -152,6 +154,23 @@ public sealed class RecoveryActivationTests : IDisposable
         var host = new Host();
         await Assert.ThrowsAsync<InvalidOperationException>(() => new RecoveryActivationRunner(host, () => host,
             new FileRecoveryDeploymentSwitch(Selection(), 3), Journal()).ActivateAsync(operation, default));
+        Assert.Null(Selection().Read());
+        Assert.Equal(0, host.Starts);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MissingTargetOrAnotherBlockingFailureCannotActivate(bool missingTarget)
+    {
+        var checks = missingTarget
+            ? new[] { new StartupCheckResult("recovery-confirmed-state", true, "合成最新状态证明", true) }
+            : new[] { new StartupCheckResult("recovery-target", true, "合成恢复目标", true),
+                new StartupCheckResult("recovery-confirmed-state", true, "合成最新状态证明", true),
+                new StartupCheckResult("recovery-resources", false, "合成资源失败", true) };
+        var host = new Host();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new RecoveryActivationRunner(host, () => host,
+            new FileRecoveryDeploymentSwitch(Selection(), 3), Journal()).ActivateAsync(Operation() with { Checks = checks }, default));
         Assert.Null(Selection().Read());
         Assert.Equal(0, host.Starts);
     }
