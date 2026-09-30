@@ -1,0 +1,147 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Exam.Application.ServiceManagement;
+using Exam.Contracts.Common;
+using Exam.Contracts.ServiceManagement;
+
+namespace Exam.Infrastructure.ServiceManagement;
+
+/// <summary>Local journal in a pre-provisioned directory protected by the deployment account.</summary>
+public sealed class FileManagementOperationStore : IManagementOperationStore
+{
+    private const int MaximumBytes = 1024 * 1024;
+    private readonly string _directory;
+    private readonly JsonSerializerOptions _json = JsonDefaults.Create();
+
+    public FileManagementOperationStore(string directory)
+    {
+        if (!Path.IsPathFullyQualified(directory)) throw new ArgumentException("操作记录目录必须是绝对路径。");
+        _directory = Path.GetFullPath(directory);
+        _json.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+        _json.NumberHandling = JsonNumberHandling.Strict;
+        Check(_directory);
+    }
+
+    public async Task<IAsyncDisposable> AcquireAsync(CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_directory, ".management.lock");
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Check(path);
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(5))
+            { await Task.Delay(25, cancellationToken); }
+        }
+    }
+
+    public async Task<ManagementOperation?> FindAsync(string requestId, CancellationToken cancellationToken)
+    {
+        var path = Resolve(requestId);
+        Check(path);
+        FileStream input;
+        try { input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete); }
+        catch (FileNotFoundException) { return null; }
+        await using (input)
+        {
+            if (input.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            var payload = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(payload, cancellationToken);
+            var operation = JsonSerializer.Deserialize<ManagementOperation>(payload, _json)
+                ?? throw new InvalidDataException("操作记录不完整。");
+            Validate(operation);
+            // Canonical byte equality detects missing, duplicate, unknown fields and invalid enum spellings.
+            if (operation.RequestId != requestId || !payload.AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(operation, _json)))
+                throw new InvalidDataException("操作记录内容或标识不一致，须人工核对。");
+            return operation;
+        }
+    }
+
+    public async Task SaveAsync(ManagementOperation operation, CancellationToken cancellationToken)
+    {
+        Validate(operation);
+        var path = Resolve(operation.RequestId);
+        Check(path);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(operation, _json);
+        if (bytes.Length > MaximumBytes) throw new InvalidDataException("操作结果超过记录容量限制。");
+        var temporary = Path.Combine(_directory, $".{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                await output.WriteAsync(bytes, cancellationToken);
+                await output.FlushAsync(cancellationToken);
+                output.Flush(flushToDisk: true);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            Check(path);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    public async Task<bool> HasUnverifiedOperationsAsync(CancellationToken cancellationToken)
+    {
+        Check(_directory);
+        foreach (var path in Directory.EnumerateFiles(_directory, "*.json"))
+        {
+            Check(path);
+            // FindAsync also verifies the canonical filename and the complete persisted record.
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            if (input.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            var bytes = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(bytes, cancellationToken);
+            using var document = JsonDocument.Parse(bytes);
+            if (!document.RootElement.TryGetProperty("requestId", out var requestId) || requestId.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("操作记录缺少请求标识。");
+            var id = requestId.GetString() ?? throw new InvalidDataException("操作记录缺少请求标识。");
+            if (Resolve(id) != path) throw new InvalidDataException("操作记录文件名与请求标识不符。");
+            var record = await FindAsync(id, cancellationToken) ?? throw new InvalidDataException("操作记录消失。");
+            // Self-checks never mutate service/configuration/recovery state. An interrupted diagnostic
+            // (including a lost final journal write) must not prevent a later repaired startup.
+            if (record.Kind != ManagementOperationKind.Checks &&
+                record.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification or ManagementOperationPhase.Staged)
+                return true;
+        }
+        return false;
+    }
+
+    private string Resolve(string requestId)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200)
+            throw new ArgumentException("requestId 必须有效且不超过 200 字符。");
+        return Path.Combine(_directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestId))) + ".json");
+    }
+
+    private void Check(string path)
+    {
+        if (!Directory.Exists(_directory)) throw new DirectoryNotFoundException("受保护操作记录目录不存在。");
+        PathBoundary.RejectExistingReparsePoints(_directory, path);
+    }
+
+    private static void Validate(ManagementOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (operation.RecoveryActivation is { } activation &&
+            (!Enum.IsDefined(activation) || operation.Kind != ManagementOperationKind.Restore ||
+             operation.RecoveryWorkingDirectory is null || operation.Restore is not { IsolationStaged: true, RecoveryVerified: true } ||
+             (activation == RecoveryActivationPhase.BusinessReady) != operation.Restore.BusinessReady))
+            throw new InvalidDataException("恢复启用阶段与核对结果不一致。");
+        if (operation.RecoveryWorkingDirectory is not null &&
+            (operation.Kind != ManagementOperationKind.Restore || !Path.IsPathFullyQualified(operation.RecoveryWorkingDirectory)))
+            throw new InvalidDataException("恢复工作目标必须为本机绝对路径并绑定恢复操作。");
+        if (string.IsNullOrWhiteSpace(operation.RequestId) || string.IsNullOrWhiteSpace(operation.ServerId) ||
+            string.IsNullOrWhiteSpace(operation.NodeId) || string.IsNullOrWhiteSpace(operation.ActorId) ||
+            operation.ContentHash is null || operation.ContentHash.Length != 64 || !operation.ContentHash.All(char.IsAsciiHexDigit) ||
+            !Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
+            operation.AcceptedAt == default || operation.UpdatedAt < operation.AcceptedAt)
+            throw new InvalidDataException("操作记录缺少有效的身份、内容绑定或阶段。");
+        if (operation.RequestJson is not null && Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operation.RequestJson))) != operation.ContentHash)
+            throw new InvalidDataException("操作记录的原请求内容与绑定摘要不一致。");
+    }
+}

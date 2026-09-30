@@ -1,0 +1,71 @@
+using Exam.Contracts.ServiceManagement;
+using Exam.Infrastructure.ServiceManagement;
+using Exam.IntegrationTests.Postgres;
+using Exam.Server.Runtime;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace Exam.IntegrationTests.ServiceManagement;
+
+[Trait("Category", "Postgres")]
+[Collection(PostgresCollection.Name)]
+public sealed class ManagedProtectionReadinessTests : IAsyncLifetime
+{
+    private readonly PostgresDatabaseFixture _database = new();
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "managed-protection-" + Guid.NewGuid().ToString("N"));
+    public async Task InitializeAsync()
+    {
+        Directory.CreateDirectory(_directory);
+        await _database.InitializeAsync();
+    }
+
+    [Fact]
+    public async Task EveryReadinessObservationUsesCurrentProtectionAndNeverChangesAuthority()
+    {
+        await using (var create = _database.DataSource.CreateCommand("""
+            BEGIN;
+            INSERT INTO exam.server_state VALUES ('server', 'node', 1, 'EmergencySingleNode', 1, clock_timestamp());
+            INSERT INTO exam.server_nodes VALUES ('server', 'node', 'Primary', true, false, 0, true, true, clock_timestamp());
+            COMMIT;
+            """)) await create.ExecuteNonQueryAsync();
+        var protectedHost = await ConfigureAsync(true, "dual.json");
+        var unrestrictedHost = await ConfigureAsync(false, "existing-mode.json");
+
+        Assert.False((await protectedHost.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        Assert.True((await unrestrictedHost.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var read = _database.DataSource.CreateCommand("SELECT protection_mode FROM exam.server_state WHERE server_id='server'"))
+            Assert.Equal("EmergencySingleNode", await read.ExecuteScalarAsync());
+
+        await using (var update = _database.DataSource.CreateCommand("UPDATE exam.server_state SET protection_mode='SynchronousDualNode' WHERE server_id='server'"))
+            await update.ExecuteNonQueryAsync();
+        Assert.True((await protectedHost.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var update = _database.DataSource.CreateCommand("UPDATE exam.server_state SET protection_mode='EmergencySingleNode' WHERE server_id='server'"))
+            await update.ExecuteNonQueryAsync();
+        Assert.False((await protectedHost.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var read = _database.DataSource.CreateCommand("SELECT protection_mode FROM exam.server_state WHERE server_id='server'"))
+            Assert.Equal("EmergencySingleNode", await read.ExecuteScalarAsync());
+    }
+
+    private async Task<BusinessServiceConfiguration> ConfigureAsync(bool requireDual, string filename)
+    {
+        var path = Path.Combine(_directory, filename);
+        await new FileServiceConfigurationStore(path).SaveAsync(new ServiceConfiguration("server", "node", "127.0.0.1", 8443,
+            _directory, requireDual, 1), 0);
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1",
+            ["Management:ServiceConfigurationPath"] = path, ["Management:MinimumAvailableBytes"] = "1"
+        });
+        return (await BusinessServiceConfiguration.LoadAndApplyAsync(builder))!;
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _database.DisposeAsync();
+        Directory.Delete(_directory, recursive: true);
+    }
+}

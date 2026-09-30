@@ -1,0 +1,16 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": null,
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "requestId 已绑定不同的节点、操作者或操作内容。",
+    "field": null,
+    "location": null,
+    "retryable": false
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": {
+    "requestId": "synthetic-restore",
+    "serverId": "synthetic-server",
+    "nodeId": "synthetic-node",
+    "actorId": "synthetic-operator",
+    "kind": "restore",
+    "contentHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "phase": "completed",
+    "acceptedAt": "2026-09-27T00:00:00+00:00",
+    "updatedAt": "2026-09-27T00:01:00+00:00",
+    "status": null,
+    "configuration": null,
+    "checks": [
+      {
+        "name": "recovery-target",
+        "passed": true,
+        "message": "合成恢复目标核对并启用，业务 HTTPS 就绪已确认。",
+        "blocksWrites": true
+      }
+    ],
+    "backup": null,
+    "restore": {
+      "backupId": "synthetic-backup",
+      "isolationStaged": true,
+      "recoveryVerified": true,
+      "businessReady": true
+    },
+    "error": null,
+    "recoveryWorkingDirectory": "C:\\ExamSynthetic\\recovery-work\\slot",
+    "recoveryActivation": "businessReady"
+  },
+  "error": null
+}

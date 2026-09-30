@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -243,6 +244,92 @@ public sealed class ExamPackageManagerTests
         Assert.False(manager.CanConfirmParticipation);
     }
 
+    [Theory]
+    [InlineData(false, 32)]
+    [InlineData(true, 1175)]
+    public async Task ControlSaveRetriesTransientFileOccupancy_AndConfirmationSurvivesRestart(bool holdBackup, int win32Error)
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using (var manager = fixture.Manager())
+        {
+            Assert.True(await manager.PrepareAndDownloadAsync());
+            var statePath = Directory.GetFiles(fixture.Root, "control.protected", SearchOption.AllDirectories).Single();
+            FileStream? held = null;
+            var savingThreadId = 0;
+            var observedFailures = 0;
+            var expectedHResult = unchecked((int)0x80070000) | win32Error;
+            fixture.Api.BeforeConfirmResponse = () =>
+            {
+                savingThreadId = Environment.CurrentManagedThreadId;
+                held = new FileStream(holdBackup ? statePath + ".bak" : statePath,
+                    FileMode.Open, FileAccess.Read, FileShare.Read);
+            };
+            // Release only after the real replacement fails on this writer thread.
+            // This avoids timing sleeps and proves that a retry, not the first attempt, succeeds.
+            EventHandler<FirstChanceExceptionEventArgs> releaseAfterFailure = (_, args) =>
+            {
+                if (held is not null && Environment.CurrentManagedThreadId == savingThreadId &&
+                    args.Exception is IOException error && error.HResult == expectedHResult)
+                {
+                    observedFailures++;
+                    held.Dispose();
+                    held = null;
+                }
+            };
+            AppDomain.CurrentDomain.FirstChanceException += releaseAfterFailure;
+            try
+            {
+                Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
+                Assert.Equal(1, observedFailures);
+                Assert.Single(fixture.Api.Confirms);
+                Assert.NotNull(manager.Participation);
+                Assert.False(manager.HasPendingConfirmation);
+            }
+            finally
+            {
+                AppDomain.CurrentDomain.FirstChanceException -= releaseAfterFailure;
+                held?.Dispose();
+            }
+        }
+
+        using var restored = fixture.Manager();
+        Assert.Equal("participation", restored.ParticipationId);
+        Assert.Equal(ExamPackageManager.Phase.ConfirmedWaiting, restored.CurrentPhase);
+        Assert.False(restored.HasPendingConfirmation);
+    }
+
+    [Theory]
+    [InlineData(false, 32)]
+    [InlineData(true, 1175)]
+    public async Task ControlSavePersistentFileOccupancyFails_WithoutChangingStateOrBackup(bool holdBackup, int win32Error)
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        var statePath = Directory.GetFiles(fixture.Root, "control.protected", SearchOption.AllDirectories).Single();
+        var state = File.ReadAllBytes(statePath);
+        var backup = File.ReadAllBytes(statePath + ".bak");
+        using (new FileStream(holdBackup ? statePath + ".bak" : statePath,
+                   FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var error = await Assert.ThrowsAsync<IOException>(() => manager.ConfirmParticipationAsync());
+            Assert.Equal(unchecked((int)0x80070000) | win32Error, error.HResult);
+            Assert.Empty(fixture.Api.Confirms);
+            Assert.False(manager.HasPendingConfirmation);
+            Assert.Null(manager.Participation);
+            Assert.Equal(state, File.ReadAllBytes(statePath));
+            Assert.Equal(backup, File.ReadAllBytes(statePath + ".bak"));
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(statePath)!, "control-*.tmp"));
+        }
+
+        Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.Single(fixture.Api.Confirms);
+        manager.Dispose();
+        using var restored = fixture.Manager();
+        Assert.Equal("participation", restored.ParticipationId);
+        Assert.False(restored.HasPendingConfirmation);
+    }
+
     [Fact]
     public async Task AuthorizationLossClearsVisiblePlaintextEvenWhenItsJournalCannotBeSaved()
     {
@@ -390,6 +477,7 @@ public sealed class ExamPackageManagerTests
         public byte[]? LastKey { get; private set; }
         public TaskCompletionSource? UnlockEntered { get; set; }
         public TaskCompletionSource? ContinueUnlock { get; set; }
+        public Action? BeforeConfirmResponse { get; set; }
         public List<PrepareExamEntryRequest> Prepares { get; } = [];
         public List<ConfirmParticipationRequest> Confirms { get; } = [];
         public List<WithdrawParticipationRequest> Withdrawals { get; } = [];
@@ -430,6 +518,7 @@ public sealed class ExamPackageManagerTests
                 _confirmations[request.RequestId] = result = new("participation", ExamId, "candidate", BusinessState,
                     "device", 1, 1, 7, BusinessState == ParticipationBusinessState.Answering ? "resource-envelope:package" : null,
                     Lifecycle: Lifecycle);
+            BeforeConfirmResponse?.Invoke();
             if (DropConfirm) { DropConfirm = false; throw new HttpRequestException("Synthetic lost confirmation response."); }
             return Task.FromResult(Ok(result));
         }

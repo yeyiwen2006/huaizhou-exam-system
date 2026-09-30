@@ -1,5 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
+using Exam.Application.Security;
 using System.Text.Json;
 using Exam.Application.Activation;
 using Exam.Contracts.Commands;
@@ -18,7 +17,7 @@ public sealed record ExamApiSecurityOptions(string OperatorToken, string Operato
 /// participation/session checks. Secrets are accepted only in headers and are never included in
 /// route values or log messages.
 /// </summary>
-public sealed class ExamApiAccessMiddleware(RequestDelegate next)
+public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecoveryGuard? recovery = null)
 {
     private const string DeviceIdHeader = "X-Exam-Device-Id";
     private const string DeviceCredentialHeader = "X-Exam-Device-Credential";
@@ -32,7 +31,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         ActiveNodeGuard activeNode,
         ServerNodeEnvelope server)
     {
-        if (!context.Request.Path.StartsWithSegments("/api/v1", out var remainder))
+        var realtime = context.Request.Path.StartsWithSegments("/hubs/exam-events");
+        if (!context.Request.Path.StartsWithSegments("/api/v1", out var remainder) && !realtime)
         {
             await next(context);
             return;
@@ -45,6 +45,16 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             await RejectNodeAsync(context, node, server);
             return;
         }
+
+        if (recovery is not null && !recovery.Snapshot.Ready)
+        {
+            await RejectAsync(context, server, StatusCodes.Status503ServiceUnavailable,
+                ErrorCodes.ServiceRecovering, "启动恢复核对尚未通过，业务写入保持关闭。", retryable: true);
+            return;
+        }
+
+        // SignalR validates device identity in its existing authorizer after the common node/recovery gates.
+        if (realtime) { await next(context); return; }
 
         if (IsPublic(context.Request.Method, route))
         {
@@ -66,12 +76,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
             return;
         }
 
-        var authorization = context.Request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        var supplied = authorization.StartsWith(prefix, StringComparison.Ordinal)
-            ? authorization[prefix.Length..]
-            : string.Empty;
-        if (!FixedTimeEquals(supplied, security.OperatorToken))
+        if (!OperatorIdentityValidator.Authenticate(context.Request.Headers.Authorization.ToString(),
+                security.OperatorToken, security.OperatorId))
         {
             await RejectAsync(context, server, StatusCodes.Status401Unauthorized,
                 "UNAUTHORIZED", "缺少有效的考务操作令牌。");
@@ -151,17 +157,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
                 return false;
             }
 
-            foreach (var propertyName in new[] { "operator", "operatorId", "actorId" })
-            {
-                if (document.RootElement.TryGetProperty(propertyName, out var actor) &&
-                    (actor.ValueKind != JsonValueKind.String ||
-                     !string.Equals(actor.GetString(), operatorId, StringComparison.Ordinal)))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return OperatorIdentityValidator.HasMatchingActor(document.RootElement, operatorId);
         }
         catch (JsonException)
         {
@@ -219,13 +215,6 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next)
         }
 
         return deviceId;
-    }
-
-    private static bool FixedTimeEquals(string supplied, string expected)
-    {
-        var left = Encoding.UTF8.GetBytes(supplied);
-        var right = Encoding.UTF8.GetBytes(expected);
-        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
     }
 
     private static Task RejectAsync(

@@ -5,10 +5,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ([System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
+if ($WalFileName -in @('.', '..') -or [System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
     throw 'WAL file name must not contain a directory component.'
 }
 
+$pathRoot = [System.IO.Path]::GetPathRoot($ArchiveRoot)
+if (-not [System.IO.Path]::IsPathRooted($ArchiveRoot) -or
+    [string]::IsNullOrEmpty($pathRoot) -or $pathRoot.Length -lt 2 -or
+    -not ($pathRoot.EndsWith('\') -or $pathRoot.EndsWith('/'))) {
+    throw 'WAL archive root must be an absolute path.'
+}
 $root = [System.IO.Path]::GetFullPath($ArchiveRoot)
 if (-not [System.IO.Directory]::Exists($root)) {
     exit 1
@@ -18,8 +24,8 @@ if (([System.IO.File]::GetAttributes($root) -band [System.IO.FileAttributes]::Re
 }
 
 $source = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($root, $WalFileName))
-$relative = [System.IO.Path]::GetRelativePath($root, $source)
-if ($relative -eq '..' -or $relative.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)")) {
+$prefix = $root.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $source.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'WAL restore source escapes the configured archive root.'
 }
 if (-not [System.IO.File]::Exists($source)) {

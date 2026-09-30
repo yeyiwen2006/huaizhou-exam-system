@@ -17,14 +17,137 @@ public sealed record PostgresBackupOptions(
     string ProtectedConfigurationDirectory,
     TimeSpan ToolTimeout);
 
+public sealed record RecoveryWorkingCopy(string RequestId, string ActorId, string BackupId,
+    string SourceDirectory, string WorkingDirectory, DateTimeOffset PreparedAt);
+
 public sealed class PostgresBackupCoordinator(
     PostgresBackupOptions options,
     IExternalProcessRunner processRunner,
     TimeProvider? timeProvider = null,
-    NpgsqlDataSource? dataSource = null) : IBackupCoordinator
+    NpgsqlDataSource? dataSource = null) : IBackupCoordinator, IBackupOperationEvidence
 {
     private const int ManifestFormatVersion = 2;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    /// <summary>Observes an existing bound copy without locks, copying, repair or starting a database.</summary>
+    public async Task<RecoveryWorkingCopy?> FindPreparedRecoveryWorkingCopyAsync(RestoreRequest request, string workingRoot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions(requireSourceDirectories: false);
+        if (!Path.IsPathFullyQualified(workingRoot) || !Directory.Exists(workingRoot))
+            throw new DirectoryNotFoundException("恢复工作根目录不存在。");
+        workingRoot = Path.GetFullPath(workingRoot);
+        PathBoundary.RejectExistingReparsePoints(workingRoot, workingRoot);
+        var working = ResolveChild(workingRoot, "slot");
+        if (!Directory.Exists(working)) return null;
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        await ValidateCompletedRestoreAsync(ResolveChild(options.RestoreStagingRoot, request.BackupId), request, source, cancellationToken);
+        var previous = await ReadStrictJsonAsync<RecoveryWorkingCopy>(ResolveChild(working, "working-copy.json"), 16 * 1024,
+            value => RequireExactProperties(value, ["requestId", "actorId", "backupId", "sourceDirectory", "workingDirectory", "preparedAt"]), cancellationToken);
+        if (previous.RequestId != request.RequestId || previous.ActorId != request.ActorId || previous.BackupId != request.BackupId ||
+            previous.SourceDirectory != source || previous.WorkingDirectory != working || previous.PreparedAt == default)
+            throw new InvalidDataException("恢复工作副本与原请求绑定不一致。");
+        return previous;
+    }
+
+    /// <summary>Creates an independently mutable recovery target; never starts PostgreSQL or overwrites a partial target.</summary>
+    public async Task<RecoveryWorkingCopy> PrepareRecoveryWorkingCopyAsync(RestoreRequest request, string workingRoot,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions(requireSourceDirectories: false);
+        if (!Path.IsPathFullyQualified(workingRoot) || !Directory.Exists(workingRoot))
+            throw new DirectoryNotFoundException("恢复工作根目录必须由部署预先创建并保护。");
+        workingRoot = Path.GetFullPath(workingRoot);
+        PathBoundary.RejectExistingReparsePoints(workingRoot, workingRoot);
+        foreach (var other in new[] { options.AllowedBackupRoot, options.RestoreStagingRoot,
+            options.VersionedResourcesDirectory, options.ProtectedConfigurationDirectory })
+            if (ContainsOrEquals(workingRoot, other) || ContainsOrEquals(other, workingRoot))
+                throw new InvalidOperationException("恢复工作目录不能覆盖或包含备份、暂存或原材料目录。");
+        var working = ResolveChild(workingRoot, "slot");
+        if (Path.GetDirectoryName(working) != workingRoot)
+            throw new ArgumentException("备份标识必须为单个目录名。");
+        var lockPath = Path.Combine(workingRoot, ".recovery-copy.lock");
+        PathBoundary.RejectExistingReparsePoints(workingRoot, lockPath);
+        await using var guard = new FileStream(lockPath,
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        var staging = ResolveChild(options.RestoreStagingRoot, request.BackupId);
+        await ValidateCompletedRestoreAsync(staging, request, source, cancellationToken);
+        var markerPath = ResolveChild(working, "working-copy.json");
+        if (Directory.Exists(working))
+        {
+            var previous = await ReadStrictJsonAsync<RecoveryWorkingCopy>(markerPath, 16 * 1024,
+                value => RequireExactProperties(value, ["requestId", "actorId", "backupId", "sourceDirectory", "workingDirectory", "preparedAt"]), cancellationToken);
+            if (previous.RequestId != request.RequestId || previous.ActorId != request.ActorId ||
+                previous.BackupId != request.BackupId || previous.SourceDirectory != source ||
+                previous.WorkingDirectory != working || previous.PreparedAt == default)
+                throw new InvalidDataException("恢复工作副本与原请求绑定不一致。");
+            // PostgreSQL can legitimately modify this target after preparation; replay must not recopy old files.
+            return previous;
+        }
+        var manifest = await ReadManifestAsync(staging, cancellationToken);
+        Directory.CreateDirectory(working);
+        await CopyDirectoryFixedAsync(ResolveChild(staging, "database"), ResolveChild(working, "database"), cancellationToken);
+        await CopySnapshotAsync(ResolveChild(staging, "resources"), ResolveChild(working, "resources"), manifest.ResourceFiles, cancellationToken);
+        await CopySnapshotAsync(ResolveChild(staging, "protected-configuration"), ResolveChild(working, "protected-configuration"),
+            manifest.ProtectedConfigurationFiles, cancellationToken);
+        await ValidateBackupContentsAsync(ResolveChild(working, "database"), ResolveChild(working, "resources"),
+            ResolveChild(working, "protected-configuration"), manifest, true, cancellationToken);
+        var result = new RecoveryWorkingCopy(request.RequestId, request.ActorId, request.BackupId, source, working, _timeProvider.GetUtcNow());
+        var temporary = ResolveChild(working, ".working-copy.tmp");
+        await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        {
+            await JsonSerializer.SerializeAsync(output, result, JsonDefaults.Create(), cancellationToken);
+            await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        File.Move(temporary, markerPath, overwrite: false);
+        return result;
+    }
+
+    /// <summary>Read-only integrity check of an explicitly selected backup; no live database access.</summary>
+    public async Task<BackupResult> VerifyAvailableBackupAsync(string directory, string expectedBackupId, CancellationToken cancellationToken)
+    {
+        if (!Path.IsPathFullyQualified(options.PostgresBinDirectory) ||
+            !Path.IsPathFullyQualified(options.AllowedBackupRoot) || string.IsNullOrWhiteSpace(expectedBackupId))
+            throw new InvalidOperationException("备份核验工具、根目录和备份标识必须明确配置。");
+        var destination = ResolveWithinRoot(options.AllowedBackupRoot, directory);
+        var manifest = await ReadManifestAsync(destination, cancellationToken);
+        if (!string.Equals(manifest.BackupId, expectedBackupId, StringComparison.Ordinal))
+            throw new InvalidDataException("指定备份标识与清单不匹配。");
+        await ValidateBackupContentsAsync(ResolveChild(destination, manifest.DatabaseDirectory),
+            ResolveChild(destination, manifest.ResourcesDirectory),
+            ResolveChild(destination, manifest.ProtectedConfigurationDirectory), manifest, true, cancellationToken);
+        return ToResult(destination, manifest);
+    }
+
+    public Task<BackupResult?> FindCompletedBackupAsync(BackupRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions();
+        var destination = ResolveWithinRoot(options.AllowedBackupRoot, request.DestinationDirectory);
+        // Observe the complete file manifest, not a possibly stale database backup record. No database access or repair.
+        return TryRecoverCompletedBackupAsync(request, destination, cancellationToken);
+    }
+
+    public async Task<bool> FindStagedRestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        RequireRequest(request.RequestId, request.ActorId);
+        ValidateOptions(requireSourceDirectories: false);
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        var stagingRoot = Path.GetFullPath(options.RestoreStagingRoot);
+        var staging = ResolveWithinRoot(stagingRoot, Path.Combine(stagingRoot, request.BackupId));
+        if (!Directory.Exists(staging)) return false;
+        await ValidateCompletedRestoreAsync(staging, request, source, cancellationToken);
+        return true;
+    }
 
     public async Task<BackupResult> CreateAsync(BackupRequest request, CancellationToken cancellationToken)
     {
@@ -128,9 +251,9 @@ public sealed class PostgresBackupCoordinator(
             "protected-configuration",
             expectedResources,
             expectedProtected);
-        await File.WriteAllTextAsync(
+        await WriteDurableJsonAsync(
             Path.Combine(destination, "exam-backup.json"),
-            JsonSerializer.Serialize(manifest, JsonDefaults.Create()),
+            manifest,
             cancellationToken);
 
         var result = ToResult(destination, manifest);
@@ -146,7 +269,7 @@ public sealed class PostgresBackupCoordinator(
     {
         ArgumentNullException.ThrowIfNull(request);
         RequireRequest(request.RequestId, request.ActorId);
-        ValidateOptions();
+        ValidateOptions(requireSourceDirectories: false);
         var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
         var stagingRoot = Path.GetFullPath(options.RestoreStagingRoot);
         Directory.CreateDirectory(stagingRoot);
@@ -206,20 +329,15 @@ public sealed class PostgresBackupCoordinator(
             manifest,
             verifyDatabase: true,
             cancellationToken);
-        File.Copy(
-            Path.Combine(source, "exam-backup.json"),
-            Path.Combine(staging, "exam-backup.json"),
-            overwrite: false);
-        await File.WriteAllTextAsync(
+        await WriteDurableJsonAsync(Path.Combine(staging, "exam-backup.json"), manifest, cancellationToken);
+        await WriteDurableJsonAsync(
             Path.Combine(staging, "restore-verified.json"),
-            JsonSerializer.Serialize(
-                new RestoreMarker(
-                    request.RequestId,
-                    request.ActorId,
-                    request.BackupId,
-                    source,
-                    _timeProvider.GetUtcNow().ToUniversalTime()),
-                JsonDefaults.Create()),
+            new RestoreMarker(
+                request.RequestId,
+                request.ActorId,
+                request.BackupId,
+                source,
+                _timeProvider.GetUtcNow().ToUniversalTime()),
             cancellationToken);
         if (dataSource is not null)
         {
@@ -227,20 +345,23 @@ public sealed class PostgresBackupCoordinator(
         }
     }
 
-    private void ValidateOptions()
+    private void ValidateOptions(bool requireSourceDirectories = true)
     {
         if (!Path.IsPathFullyQualified(options.PostgresBinDirectory) ||
             !Path.IsPathFullyQualified(options.AllowedBackupRoot) ||
             !Path.IsPathFullyQualified(options.RestoreStagingRoot) ||
             !Path.IsPathFullyQualified(options.VersionedResourcesDirectory) ||
             !Path.IsPathFullyQualified(options.ProtectedConfigurationDirectory) ||
-            string.IsNullOrWhiteSpace(options.ConnectionString))
+            requireSourceDirectories && string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             throw new InvalidOperationException("备份工具的目录和数据库连接必须使用完整配置。");
         }
 
-        RequireNonEmptyDirectory(options.VersionedResourcesDirectory, "版本化资源源目录");
-        RequireNonEmptyDirectory(options.ProtectedConfigurationDirectory, "受保护配置源目录");
+        if (requireSourceDirectories)
+        {
+            RequireNonEmptyDirectory(options.VersionedResourcesDirectory, "版本化资源源目录");
+            RequireNonEmptyDirectory(options.ProtectedConfigurationDirectory, "受保护配置源目录");
+        }
         var roots = new[]
         {
             options.AllowedBackupRoot,
@@ -296,9 +417,8 @@ public sealed class PostgresBackupCoordinator(
             throw new InvalidDataException("备份缺少 exam-backup.json 清单。");
         }
 
-        var manifest = JsonSerializer.Deserialize<BackupManifest>(
-            await File.ReadAllTextAsync(path, cancellationToken),
-            JsonDefaults.Create()) ?? throw new InvalidDataException("备份清单无法解析。");
+        var manifest = await ReadStrictJsonAsync<BackupManifest>(
+            path, 32 * 1024 * 1024, ValidateManifestShape, cancellationToken);
         if (manifest.FormatVersion != ManifestFormatVersion ||
             string.IsNullOrWhiteSpace(manifest.BackupId) ||
             string.IsNullOrWhiteSpace(manifest.RequestId) ||
@@ -428,9 +548,8 @@ public sealed class PostgresBackupCoordinator(
             throw new IOException("恢复暂存目录已经存在但尚未完成校验，不会覆盖或当作成功恢复。");
         }
 
-        var marker = JsonSerializer.Deserialize<RestoreMarker>(
-            await File.ReadAllTextAsync(markerPath, cancellationToken),
-            JsonDefaults.Create()) ?? throw new InvalidDataException("恢复校验标记无法解析。");
+        var marker = await ReadStrictJsonAsync<RestoreMarker>(
+            markerPath, 16 * 1024, ValidateRestoreMarkerShape, cancellationToken);
         var pathComparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
@@ -510,6 +629,26 @@ public sealed class PostgresBackupCoordinator(
         {
             throw new DBConcurrencyException("requestId 的恢复结果已被另一并发操作占用。");
         }
+    }
+
+    private static async Task WriteDurableJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var temporary = ResolveChild(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(output, value, JsonDefaults.Create(), cancellationToken);
+                await output.FlushAsync(cancellationToken);
+                output.Flush(flushToDisk: true);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            PathBoundary.RejectExistingReparsePoints(directory, path);
+            File.Move(temporary, path, overwrite: false);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     private static IReadOnlyDictionary<string, string> BuildPostgresEnvironment(
@@ -608,6 +747,7 @@ public sealed class PostgresBackupCoordinator(
                 FileOptions.Asynchronous | FileOptions.WriteThrough);
             await input.CopyToAsync(output, cancellationToken);
             await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
         }
     }
 
@@ -617,8 +757,18 @@ public sealed class PostgresBackupCoordinator(
         CancellationToken cancellationToken)
     {
         RequireNonEmptyDirectory(source, "复制源目录");
-        var files = EnumerateFilesWithoutLinks(Path.GetFullPath(source));
+        var fullSource = Path.GetFullPath(source);
+        var directories = new List<string>();
+        var files = EnumerateFilesWithoutLinks(fullSource, directories);
         Directory.CreateDirectory(destination);
+        // pg_verifybackup authenticates files, but PostgreSQL also requires empty runtime directories at startup.
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(fullSource, directory);
+            PathBoundary.RejectExistingReparsePoints(fullSource, directory);
+            Directory.CreateDirectory(ResolveChild(destination, relative));
+        }
         foreach (var sourceFile in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -626,13 +776,15 @@ public sealed class PostgresBackupCoordinator(
             var target = ResolveChild(destination, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             await using var input = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read);
-            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                128 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
             await input.CopyToAsync(output, cancellationToken);
             await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
         }
     }
 
-    private static List<string> EnumerateFilesWithoutLinks(string root)
+    private static List<string> EnumerateFilesWithoutLinks(string root, List<string>? directories = null)
     {
         var files = new List<string>();
         var pending = new Stack<string>();
@@ -649,6 +801,7 @@ public sealed class PostgresBackupCoordinator(
 
                 if (Directory.Exists(entry))
                 {
+                    directories?.Add(entry);
                     pending.Push(entry);
                 }
                 else
@@ -671,10 +824,8 @@ public sealed class PostgresBackupCoordinator(
             return;
         }
 
-        var error = string.IsNullOrWhiteSpace(result.StandardError)
-            ? "外部工具未提供错误信息。"
-            : result.StandardError.Trim();
-        throw new IOException($"{operation}失败：{error}");
+        // 工具输出可能包含连接信息或受保护路径，不进入异常和上层日志。
+        throw new IOException($"{operation}失败（退出码 {result.ExitCode}）。请检查 PostgreSQL 工具和部署环境。");
     }
 
     private static BackupResult ToResult(string destination, BackupManifest manifest) =>
@@ -712,6 +863,67 @@ public sealed class PostgresBackupCoordinator(
 
     private static string NormalizeRelative(string relative) =>
         relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+
+    private static async Task<T> ReadStrictJsonAsync<T>(
+        string path,
+        int maximumBytes,
+        Action<JsonElement> validateShape,
+        CancellationToken cancellationToken)
+    {
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (input.Length is <= 0 || input.Length > maximumBytes)
+            throw new InvalidDataException("备份元数据超过允许大小。");
+        var bytes = new byte[checked((int)input.Length)];
+        await input.ReadExactlyAsync(bytes, cancellationToken);
+
+        try
+        {
+            using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 16 });
+            validateShape(document.RootElement);
+            return document.RootElement.Deserialize<T>(JsonDefaults.Create())
+                ?? throw new InvalidDataException("备份元数据无法解析。");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("备份元数据不是有效的 JSON。", exception);
+        }
+    }
+
+    private static void ValidateManifestShape(JsonElement root)
+    {
+        RequireExactProperties(root,
+            ["formatVersion", "backupId", "requestId", "completedAt", "actorId",
+             "databaseDirectory", "resourcesDirectory", "protectedConfigurationDirectory",
+             "resourceFiles", "protectedConfigurationFiles"]);
+        foreach (var name in new[] { "resourceFiles", "protectedConfigurationFiles" })
+        {
+            var entries = root.GetProperty(name);
+            if (entries.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("备份清单文件列表格式无效。");
+            foreach (var entry in entries.EnumerateArray())
+                RequireExactProperties(entry, ["relativePath", "length", "sha256"]);
+        }
+    }
+
+    private static void ValidateRestoreMarkerShape(JsonElement root) =>
+        RequireExactProperties(root,
+            ["requestId", "actorId", "backupId", "sourceDirectory", "verifiedAt"]);
+
+    private static void RequireExactProperties(JsonElement value, IReadOnlyCollection<string> expected)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("备份元数据对象格式无效。");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!expected.Contains(property.Name) || !seen.Add(property.Name))
+                throw new InvalidDataException("备份元数据包含重复或未知字段。");
+        }
+
+        if (seen.Count != expected.Count)
+            throw new InvalidDataException("备份元数据缺少必需字段。");
+    }
 
     private static void RequireNonEmptyDirectory(string path, string description)
     {
