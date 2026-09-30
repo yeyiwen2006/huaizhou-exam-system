@@ -9,10 +9,10 @@ namespace Exam.Management;
 /// <summary>Dependencies are loaded per operation, so a broken business configuration permits status and stop.</summary>
 public sealed class ManagementRuntime(
     string serverId, string nodeId, IServiceConfigurationStore configurations,
-    IManagedBusinessHost process, Func<IManagedBusinessHost> readyHost,
+    IManagedBusinessHost process, Func<ServiceConfiguration, IManagedBusinessHost> readyHost,
     IStartupReadinessProbe preflight, Func<IBackupCoordinator> backups,
     IManagementOperationStore journal, IClock clock, int managementPort = 0,
-    Func<CancellationToken, Task<bool>>? observeBusinessReady = null,
+    Func<ServiceConfiguration, CancellationToken, Task<bool>>? observeBusinessReady = null,
     Func<RestoreRequest, CancellationToken, Task>? prepareRecoveryWorkingCopy = null,
     Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyRecoveryTarget = null,
     Func<string>? recoveryWorkingDirectory = null,
@@ -47,7 +47,7 @@ public sealed class ManagementRuntime(
         {
             var configuration = await GetConfigurationAsync(token);
             var checks = await preflight.RunAsync(configuration, token);
-            if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites) && await observeBusinessReady(token) &&
+            if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites) && await observeBusinessReady(configuration, token) &&
                 process.Status == BusinessServiceStatus.Running)
                 return operation with { Phase = ManagementOperationPhase.Completed, Error = null,
                     Status = new(process.Status, BusinessReadiness.Ready, configuration, checks) };
@@ -128,7 +128,23 @@ public sealed class ManagementRuntime(
                 return operation with { Phase = ManagementOperationPhase.Completed, Checks = checks };
             }
             if (kind != ManagementOperationKind.Start) throw new ArgumentException("操作类型无效。");
-            var service = new ServiceManagementService(configuration, readyHost(), preflight, backups(), clock, configurations);
+            if (process.Status == BusinessServiceStatus.Running)
+            {
+                // A fresh readiness wrapper deliberately reports Recovering until it has observed
+                // HTTPS readiness. Repeated starts must observe the existing process, not try SCM again.
+                try
+                {
+                    if (await ReconcileAsync(operation, token) is { } running) return running;
+                }
+                catch (Exception)
+                {
+                    throw new DomainRuleException(ErrorCodes.ServiceRecovering,
+                        "现有业务进程未能完成就绪核对，未重复执行启动；请检查当前状态。", retryable: true);
+                }
+                throw new DomainRuleException(ErrorCodes.ServiceRecovering,
+                    "现有业务进程尚未通过就绪核对，未重复执行启动；请检查当前状态。", retryable: true);
+            }
+            var service = new ServiceManagementService(configuration, readyHost(configuration), preflight, backups(), clock, configurations);
             var result = await service.StartAsync(token);
             return operation with { Phase = ManagementOperationPhase.Completed,
                 Status = new(process.Status, BusinessReadiness.Ready, result.Configuration, result.Checks) };

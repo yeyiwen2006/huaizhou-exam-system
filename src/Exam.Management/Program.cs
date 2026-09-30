@@ -54,8 +54,8 @@ public static class ManagementEntryPoint
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
             var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
             string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId, epoch);
-            IManagedBusinessHost ReadyHost() => new ReadyCheckedBusinessHost(process, http,
-                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch);
+            ReadyCheckedBusinessHost ReadyHost(ServiceConfiguration expected) => new(process, http,
+                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch, expectedConfiguration: expected);
             FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), epoch,
                 async (_, token) => (await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
                     Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(await store.LoadAsync(token), token)).Passed,
@@ -86,8 +86,7 @@ public static class ManagementEntryPoint
             return new ManagementRuntime(serverId, nodeId, store, process,
                 ReadyHost,
                 preflight, () => backups, journal, new SystemClock(), port,
-                token => new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
-                    .ObserveReadyAsync(token),
+                (expected, token) => ReadyHost(expected).ObserveReadyAsync(token),
                 prepareRecoveryWorkingCopy: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
                     async (request, token) =>
                     {
@@ -127,7 +126,11 @@ public static class ManagementEntryPoint
                 recoveryWorkingDirectory: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
                     () => Path.GetFullPath(Path.Combine(Required("Recovery:WorkingRoot"), "slot")),
                 activateRecovery: string.IsNullOrWhiteSpace(configuration["Recovery:SelectionPath"]) ? null :
-                    (operation, token) => new RecoveryActivationRunner(process, ReadyHost, Deployment(), journal).ActivateAsync(operation, token),
+                    async (operation, token) =>
+                    {
+                        var expected = await store.LoadAsync(token);
+                        return await new RecoveryActivationRunner(process, () => ReadyHost(expected), Deployment(), journal).ActivateAsync(operation, token);
+                    },
                 observeRecoveryActivation: async (operation, token) =>
                 {
                     // Query observes existing evidence only; it never copies, selects, rolls back or starts a service.
@@ -149,14 +152,15 @@ public static class ManagementEntryPoint
                     if (replay is null &&
                         (File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery-plan.json")) ||
                          File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery.json")))) return null;
+                    var expected = await store.LoadAsync(token);
                     var checks = await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
                         Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
-                        .RunAsync(await store.LoadAsync(token), working, token);
+                        .RunAsync(expected, working, token);
                     if (!checks.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) ||
                         checks.Any(c => !c.Passed && c.BlocksWrites) ||
                         replay is not null && !(await replay.VerifyReplayedAsync(working, request, Required("ConnectionStrings:ExamRecovery"), token)).Passed ||
-                        !await new ReadyCheckedBusinessHost(process, http, new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch)
-                            .ObserveReadyAsync(token) || process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
+                        !await ReadyHost(expected).ObserveReadyAsync(token) ||
+                        process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
                     return operation with { Phase = ManagementOperationPhase.Completed, RecoveryActivation = RecoveryActivationPhase.BusinessReady,
                         Restore = operation.Restore with { BusinessReady = true }, Error = null };
                 });

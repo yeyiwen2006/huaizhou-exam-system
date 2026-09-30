@@ -36,16 +36,17 @@ public sealed class PhysicalPostgresFactAttribute : FactAttribute
 {
     public PhysicalPostgresFactAttribute()
     {
-        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EXAM_TEST_PHYSICAL_SOURCE_CONTAINER")) ||
-            string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EXAM_TEST_DOCKER_EXECUTABLE")))
-            Skip = "真实物理恢复演练需要显式配置专用合成 PostgreSQL 容器和 Docker 可执行路径；普通数据库测试不替代此检查。";
+        if (!NativePhysicalPostgresTools.Enabled &&
+            (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EXAM_TEST_PHYSICAL_SOURCE_CONTAINER")) ||
+             string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EXAM_TEST_DOCKER_EXECUTABLE"))))
+            Skip = "真实物理恢复演练需要显式配置专用合成 PostgreSQL 容器或受限本机临时实例；普通数据库测试不替代此检查。";
     }
 }
 
 [Trait("Category", "Postgres")]
 [Trait("Category", "PostgresPhysical")]
 [Collection(PostgresCollection.Name)] // Source suspension must not interrupt another PostgreSQL test's connections.
-public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
+public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collectionSource) : IAsyncLifetime
 {
     private readonly PostgresDatabaseFixture _source = new();
     private readonly string _root = Path.Combine(Path.GetTempPath(), "f01-physical-" + Guid.NewGuid().ToString("N"));
@@ -54,6 +55,8 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
     public async Task InitializeAsync()
     {
+        if (NativePhysicalPostgresTools.Enabled)
+            await NativePhysicalPostgresTools.ValidateConfiguredSourceAsync();
         Directory.CreateDirectory(_root);
         _certificate = new CertificateRequest("CN=Synthetic-F01-Physical-Restore", _key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
             .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
@@ -62,10 +65,16 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _source.DisposeAsync();
-        _certificate.Dispose();
+        _certificate?.Dispose();
         _key.Dispose();
+        // Native PostgreSQL must not traverse links; Docker's existing macOS temp parent may be /var.
+        PhysicalPostgresTestPaths.RequireWorkingRoot(_root, rejectReparsePoints: NativePhysicalPostgresTools.Enabled);
         if (Directory.Exists(_root)) Directory.Delete(_root, true);
     }
+
+    private IPhysicalPostgresTools CreateTools() => NativePhysicalPostgresTools.Enabled
+        ? new NativePhysicalPostgresTools(_source.ConnectionString, _root, _source.DataSource, collectionSource.DataSource)
+        : new DockerPostgresTools();
 
     [PhysicalPostgresFact]
     public async Task RealPhysicalBackupRestoresOriginalReceiptAndRemainingCollection_WithoutChangingSource()
@@ -84,8 +93,8 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         try { await File.WriteAllBytesAsync(Path.Combine(protectedConfiguration, "synthetic-node.pk8"), keyBytes); }
         finally { CryptographicOperations.ZeroMemory(keyBytes); }
         await File.WriteAllBytesAsync(Path.Combine(protectedConfiguration, "synthetic-node.cer"), _certificate.RawData);
-        await using var tools = new DockerPostgresTools();
-        var options = new PostgresBackupOptions(_root, _source.ConnectionString, Path.Combine(_root, "backups"),
+        await using var tools = CreateTools();
+        var options = new PostgresBackupOptions(tools.NativeBinDirectory ?? _root, _source.ConnectionString, Path.Combine(_root, "backups"),
             Path.Combine(_root, "staging"), resources, protectedConfiguration, TimeSpan.FromMinutes(2));
         var coordinator = new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource);
         var backupRequest = new BackupRequest("physical-backup", Path.Combine(options.AllowedBackupRoot, "snapshot"), "operator");
@@ -117,11 +126,11 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         using var restoredPublic = X509CertificateLoader.LoadCertificate(await File.ReadAllBytesAsync(Path.Combine(staged, "protected-configuration", "synthetic-node.cer")));
         using var restoredKey = restoredPublic.CopyWithPrivateKey(restoredRsa);
 
-        // Real isolated PostgreSQL startup through the production orchestration; SCM is a test adapter on macOS.
+        // Real isolated PostgreSQL startup through production orchestration; service control is a test adapter.
         var protectedRecoveryConfiguration = Path.Combine(_root, "recovery.conf");
         await File.WriteAllTextAsync(protectedRecoveryConfiguration, "# synthetic protected recovery configuration\n");
         var recoveryConnection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Host = "127.0.0.1", Port = tools.RestoredPort };
-        var controlledService = new DockerRecoveryService(tools, Path.Combine(workingCopy.WorkingDirectory, "database"),
+        var controlledService = new PhysicalRecoveryService(tools, Path.Combine(workingCopy.WorkingDirectory, "database"),
             ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecoveryPG", options.PostgresBinDirectory, workingRoot,
                 protectedRecoveryConfiguration, tools.RestoredPort));
         var controlledDatabase = new ControlledRecoveryDatabase("SyntheticRecoveryPG", "SyntheticOriginalPG", "SyntheticBusiness", "SyntheticManagement",
@@ -140,9 +149,9 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.All(recoveredChecks, c => Assert.True(c.Passed, c.Name));
         var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey))).RunAsync(configuration, workingCopy, default);
-        // Docker copies the Windows working directory into a Linux path. The production probe must reject
-        // that different data_directory; Windows SCM coverage checks the matching native path separately.
-        if (OperatingSystem.IsWindows()) Assert.False(Assert.Single(targetChecks).Passed);
+        // Docker copies a Windows working directory into a Linux path, which must be rejected.
+        // Native execution exercises the successful path and real HTTP recovery on the original Windows path.
+        if (OperatingSystem.IsWindows() && !tools.IsNative) Assert.False(Assert.Single(targetChecks).Passed);
         else Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
         var wrongBusinessSource = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, connection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(restoredKey)), _source.DataSource)
@@ -178,9 +187,9 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
                 ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
                 Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory), default);
         await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString,
-            selectionPath, expectReady: !OperatingSystem.IsWindows()))
+            selectionPath, expectReady: !OperatingSystem.IsWindows() || tools.IsNative))
         {
-            if (OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows() && !tools.IsNative)
             {
                 // A Linux Docker data_directory cannot match the Windows host working path.
                 Assert.Contains(app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot.Checks,
@@ -247,8 +256,8 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Directory.CreateDirectory(protectedConfiguration);
         await File.WriteAllTextAsync(Path.Combine(resources, "synthetic.txt"), "synthetic-resource");
         await File.WriteAllTextAsync(Path.Combine(protectedConfiguration, "synthetic.txt"), "synthetic-configuration");
-        await using var tools = new DockerPostgresTools();
-        var options = new PostgresBackupOptions(_root, _source.ConnectionString, Path.Combine(_root, "backups"),
+        await using var tools = CreateTools();
+        var options = new PostgresBackupOptions(tools.NativeBinDirectory ?? _root, _source.ConnectionString, Path.Combine(_root, "backups"),
             Path.Combine(_root, "staging"), resources, protectedConfiguration, TimeSpan.FromMinutes(2));
         var coordinator = new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource);
         var backup = await coordinator.CreateAsync(new("stale-backup", Path.Combine(options.AllowedBackupRoot, "snapshot"), "operator"), default);
@@ -283,7 +292,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         await tools.PauseSourceAsync();
         try
         {
-            // The actual original container is unavailable; no invented unreachable connection substitutes for it.
+            // The dedicated original instance is unavailable; no invented unreachable connection substitutes for it.
             Assert.False((await comparison.RunAsync(configuration, default)).Passed);
             Assert.Null(await recoveredStore.FindSubmissionAsync("synthetic-exam", "candidate-2"));
         }
@@ -301,8 +310,8 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Directory.CreateDirectory(resources); Directory.CreateDirectory(protectedConfiguration);
         await File.WriteAllTextAsync(Path.Combine(resources, "synthetic.txt"), "synthetic-resource");
         await File.WriteAllTextAsync(Path.Combine(protectedConfiguration, "synthetic.txt"), "synthetic-configuration");
-        await using var tools = new DockerPostgresTools();
-        var options = new PostgresBackupOptions(_root, _source.ConnectionString, Path.Combine(_root, "backups"),
+        await using var tools = CreateTools();
+        var options = new PostgresBackupOptions(tools.NativeBinDirectory ?? _root, _source.ConnectionString, Path.Combine(_root, "backups"),
             Path.Combine(_root, "staging"), resources, protectedConfiguration, TimeSpan.FromMinutes(2));
         var coordinator = new PostgresBackupCoordinator(options, tools, dataSource: _source.DataSource);
         var backup = await coordinator.CreateAsync(new("wal-backup", Path.Combine(options.AllowedBackupRoot, "snapshot"), "operator"), default);
@@ -349,9 +358,9 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         var recoveryConfiguration = Path.Combine(_root, "recovery.conf");
         await File.WriteAllTextAsync(recoveryConfiguration, "# synthetic recovery configuration\n");
         var recoveredConnection = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = tools.RestoredPort };
-        var service = new DockerRecoveryService(tools, Path.Combine(workingRoot, "slot", "database"),
-            ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecoveryPG", _root, workingRoot, recoveryConfiguration, tools.RestoredPort, replay.Options), replay.Options);
-        var controlled = new ControlledRecoveryDatabase("SyntheticRecoveryPG", "SyntheticOriginalPG", "SyntheticBusiness", "SyntheticManagement", _root,
+        var service = new PhysicalRecoveryService(tools, Path.Combine(workingRoot, "slot", "database"),
+            ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecoveryPG", options.PostgresBinDirectory, workingRoot, recoveryConfiguration, tools.RestoredPort, replay.Options), replay.Options);
+        var controlled = new ControlledRecoveryDatabase("SyntheticRecoveryPG", "SyntheticOriginalPG", "SyntheticBusiness", "SyntheticManagement", options.PostgresBinDirectory,
             workingRoot, recoveryConfiguration, _source.ConnectionString, recoveredConnection.ConnectionString, service, service, replay);
         await controlled.PrepareAndStartAsync(restore,
             ct => coordinator.PrepareRecoveryWorkingCopyAsync(restore, workingRoot, ct),
@@ -379,7 +388,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         Assert.True((await comparison.RunAsync(configuration, default)).Passed);
         var targetChecks = await new PostgresWorkingCopyReadinessProbe(_source.ConnectionString, recoveredConnection.ConnectionString, "", 1,
             new PostgresRecoveryReadinessProbe(recovered, new TestUnwrapper(_certificate))).RunAsync(configuration, working, default);
-        if (OperatingSystem.IsWindows()) Assert.False(Assert.Single(targetChecks).Passed);
+        if (OperatingSystem.IsWindows() && !tools.IsNative) Assert.False(Assert.Single(targetChecks).Passed);
         else Assert.All(targetChecks, c => Assert.True(c.Passed, c.Name));
         var selectedPath = Path.Combine(_root, "archive-deployment-selection.json");
         await new FileRecoveryDeploymentSelection(selectedPath).SelectAsync(new RecoveryDeploymentSelection(
@@ -387,10 +396,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             { ArchiveRecovery = true }, default);
         Assert.True((await replay.VerifyReplayedAsync(working, restore, recovered, default)).Passed);
         await using (var selected = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
-            _source.ConnectionString, selectedPath, replay.Options, expectReady: !OperatingSystem.IsWindows()))
+            _source.ConnectionString, selectedPath, replay.Options, expectReady: !OperatingSystem.IsWindows() || tools.IsNative))
         {
             var snapshot = selected.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
-            if (OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows() && !tools.IsNative)
                 Assert.Contains(snapshot.Checks, check => check.Name == "recovery-target" && !check.Passed && check.BlocksWrites);
             else
             {
@@ -408,7 +417,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         {
             var snapshot = missingWalConfiguration.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
             Assert.False(snapshot.Ready);
-            Assert.Contains(snapshot.Checks, check => check.Name == (OperatingSystem.IsWindows() ? "recovery-target" : "recovery-wal-replay")
+            Assert.Contains(snapshot.Checks, check => check.Name == (OperatingSystem.IsWindows() && !tools.IsNative ? "recovery-target" : "recovery-wal-replay")
                 && !check.Passed && check.BlocksWrites);
         }
         await controlled.PrepareAndStartAsync(restore, _ => throw new IOException("运行中不能复制WAL"),
@@ -585,7 +594,7 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         public ValueTask<bool> IsActiveDeviceAsync(string deviceId, CancellationToken cancellationToken = default) => ValueTask.FromResult(deviceId is "device-1" or "device-2");
     }
 
-    private sealed class DockerRecoveryService(DockerPostgresTools tools, string directory, string command, PostgresArchiveRecoveryOptions? archiveReplay = null)
+    private sealed class PhysicalRecoveryService(IPhysicalPostgresTools tools, string directory, string command, PostgresArchiveRecoveryOptions? archiveReplay = null)
         : IWindowsServiceControl, IWindowsServiceDeployment
     {
         public int Starts { get; private set; }
@@ -598,10 +607,10 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
             Task.Run(() => tools.StartRestoredAsync(directory, archiveReplay)).GetAwaiter().GetResult();
             _state = ManagedWindowsServiceState.Running;
         }
-        public void Stop(string name) => throw new InvalidOperationException("本演练只在最终清理隔离容器。");
+        public void Stop(string name) => throw new InvalidOperationException("本演练只在最终清理隔离副本。");
     }
 
-    private sealed class DockerPostgresTools : IExternalProcessRunner, IAsyncDisposable
+    private sealed class DockerPostgresTools : IPhysicalPostgresTools
     {
         private readonly string _docker = Environment.GetEnvironmentVariable("EXAM_TEST_DOCKER_EXECUTABLE")!;
         private readonly string _sourceContainer = Environment.GetEnvironmentVariable("EXAM_TEST_PHYSICAL_SOURCE_CONTAINER")!;
@@ -609,6 +618,8 @@ public sealed class PostgresPhysicalRecoveryTests : IAsyncLifetime
         private readonly string _restoredContainer = "codex-f01-restored-" + Guid.NewGuid().ToString("N");
         private bool _restoredCreated;
         private bool _sourcePaused;
+        public bool IsNative => false;
+        public string? NativeBinDirectory => null;
         public int BaseBackupCalls { get; private set; }
         public int VerifyCalls { get; private set; }
         public int RestoredPort { get; } = AllocatePort();

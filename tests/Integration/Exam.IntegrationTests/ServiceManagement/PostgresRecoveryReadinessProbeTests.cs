@@ -77,6 +77,8 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     [InlineData("UPDATE exam.version_state SET snapshot = '{}'::jsonb", "version-projections")]
     [InlineData("UPDATE exam.exam_entry_access SET scheduled_start = scheduled_start + interval '1 minute'", "version-projections")]
     [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{examId}', '\"wrong\"'::jsonb)", "version-projections")]
+    [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{schedule,startsAt}', to_jsonb((payload->'schedule'->>'startsAt')::timestamptz + interval '1 minute'))", "version-projections")]
+    [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{schedule}', 'null'::jsonb)", "version-projections")]
     public async Task DamagedVersionEvidenceClosesGuard(string damage, string expected)
     {
         CreateExam();
@@ -86,6 +88,29 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         var guard = new BusinessRecoveryGuard();
         guard.Observe(checks, DateTimeOffset.UtcNow);
         Assert.False(guard.Snapshot.Ready);
+    }
+
+    [Fact]
+    public async Task ExamEventReplayAllowsCanonicalParticipantsSynchronizedOutsideVersionEvents()
+    {
+        CreateExam();
+        await ExecuteAsync("""
+            INSERT INTO exam.activation_devices VALUES
+              ('device', '20260927001', '2026-09-27', 'active', NULL, 'synthetic-verifier', 1, now(), NULL, 1);
+            INSERT INTO exam.activation_daily_sequences VALUES ('2026-09-27', 1);
+            INSERT INTO exam.candidate_roster_entries (exam_id, candidate_id, candidate_name, class_text, admission_no)
+              VALUES ('synthetic-exam', 'candidate', '合成考生', '01', '000001');
+            """);
+        await new PostgresSubmissionStore(_database.DataSource).SetAuthorizationStateAsync(new(
+            "synthetic-exam", "candidate", "participation", 1, "device", 1, ParticipationBusinessState.Waiting, 1, 1));
+        var service = new PostgresExamVersioningService(_database.DataSource);
+        var current = service.GetExam("synthetic-exam").Value!;
+        var changed = service.UpdateSchedule(new("synthetic-exam", current.Versions.ScheduleVersion,
+            new(current.Schedule.StartsAt.AddMinutes(10), current.Schedule.EndsAt.AddMinutes(10)),
+            DateTimeOffset.UtcNow, "schedule-with-participant"));
+        Assert.True(changed.Succeeded, changed.Error);
+        Assert.Contains("participation", changed.Value!.Participants.Keys);
+        Assert.All(await InspectAsync(), check => Assert.True(check.Passed, check.Name));
     }
 
     [Fact]

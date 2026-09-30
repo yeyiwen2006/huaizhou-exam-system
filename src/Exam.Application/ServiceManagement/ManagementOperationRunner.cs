@@ -80,8 +80,11 @@ public sealed class ManagementOperationRunner(
             {
                 await PreserveCheckpointAsync();
                 // Includes cancellation after acceptance. SCM/tools may have taken effect; never repeat automatically.
-                result = accepted with { Phase = ManagementOperationPhase.NeedsVerification,
-                    Error = new ApiError(ErrorCodes.ServiceRecovering, "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
+                result = accepted with { Phase = kind == ManagementOperationKind.Checks
+                        ? ManagementOperationPhase.Failed : ManagementOperationPhase.NeedsVerification,
+                    Error = new ApiError(ErrorCodes.ServiceRecovering, kind == ManagementOperationKind.Checks
+                        ? "自检未完成，可在修复依赖后用新的 requestId 再次检查。"
+                        : "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
             }
             result = result with { UpdatedAt = clock.UtcNow };
             // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.

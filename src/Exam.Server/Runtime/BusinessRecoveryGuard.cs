@@ -21,7 +21,7 @@ public sealed class BusinessRecoveryGuard
 
 public sealed class BusinessRecoveryWorker(
     NpgsqlDataSource source, IPackageKeyUnwrapper unwrapper, BusinessRecoveryGuard guard,
-    IConfiguration configuration, TimeProvider timeProvider) : BackgroundService
+    IConfiguration configuration, TimeProvider timeProvider, BusinessServiceConfiguration? managedConfiguration = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -60,6 +60,8 @@ public sealed class BusinessRecoveryWorker(
                         identity.NodeId, identity.ServerEpoch) != selection) throw new IOException("恢复部署选择发生变化。");
                 }
                 else checks = await probe.RunAsync(local, stoppingToken);
+                if (managedConfiguration is not null)
+                    checks = checks.Append(await managedConfiguration.CheckProtectionAsync(source, stoppingToken)).ToArray();
                 guard.Observe(checks, timeProvider.GetUtcNow());
                 if (guard.Snapshot.Ready) return;
                 await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);

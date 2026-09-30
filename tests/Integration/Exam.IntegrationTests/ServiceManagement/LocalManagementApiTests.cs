@@ -57,6 +57,27 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(BusinessServiceStatus.Stopped, _host.Status);
     }
 
+    [Fact]
+    public async Task FailedDiagnosticDoesNotKeepRepairedBusinessConfigurationBlocked()
+    {
+        await using var app = await AppAsync();
+        var path = Path.Combine(_directory, "configuration.json");
+        var original = await File.ReadAllTextAsync(path);
+        await File.WriteAllTextAsync(path, "{");
+        using var client = Client(app);
+        var diagnostic = await client.PostAsJsonAsync("/management/v1/service/checks",
+            new ManagementServiceRequest("failed-diagnostic", "server", "node"), _json.Options);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, diagnostic.StatusCode);
+        var failed = await diagnostic.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options);
+        Assert.Equal(ManagementOperationPhase.Failed, failed!.Result!.Phase);
+
+        await File.WriteAllTextAsync(path, original);
+        var configured = await client.PutAsJsonAsync("/management/v1/service/configuration",
+            new ManagementConfigurationRequest("repaired-configuration", "server", "node", 1, Configuration with { HttpsPort = 9444 }), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, configured.StatusCode);
+        Assert.Equal(2, (await configured.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!.Configuration!.Version);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("wrong")]
@@ -228,6 +249,23 @@ public sealed class LocalManagementApiTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task NewStartRequestForRunningServiceObservesReadinessWithoutStartingAgain(bool ready)
+    {
+        await using var app = await AppAsync(observedReady: ready);
+        var runtime = app.Services.GetRequiredService<ManagementRuntime>();
+        await runtime.ExecuteServiceAsync(new("first-start", "server", "node"), "operator", ManagementOperationKind.Start, default);
+        var repeated = await runtime.ExecuteServiceAsync(new("different-start", "server", "node"), "operator", ManagementOperationKind.Start, default);
+
+        Assert.Equal(ready ? ManagementOperationPhase.Completed : ManagementOperationPhase.Failed, repeated.Phase);
+        if (ready) Assert.Equal(BusinessReadiness.Ready, repeated.Status!.Readiness);
+        else Assert.Equal(ErrorCodes.ServiceRecovering, repeated.Error!.Code);
+        Assert.Equal(1, _host.StartCalls);
+        Assert.False(await new FileManagementOperationStore(Path.Combine(_directory, "operations")).HasUnverifiedOperationsAsync(default));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task LostRestoreResultReconcilesOnlyValidatedStaging_AndNeverClaimsBusinessRecovery(bool evidenceAvailable)
     {
         var request = new RestoreRequest("lost-restore", "synthetic-backup", "synthetic-source", "operator");
@@ -323,8 +361,8 @@ public sealed class LocalManagementApiTests : IDisposable
         { ["ExamSecurity:OperatorToken"] = credentials ? Token : null, ["ExamSecurity:OperatorId"] = credentials ? "operator" : null });
         IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
         if (failCompletion) journal = new FailCompletionStore(journal, failOnlyTerminal);
-        builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, () => _host,
-            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: _ => Task.FromResult(observedReady),
+        builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, _ => _host,
+            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: (_, _) => Task.FromResult(observedReady),
             prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory,
             activateRecovery: activateRecovery ? (op, token) => new RecoveryActivationRunner(_host, () => _host,
                 new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
@@ -534,16 +572,34 @@ public sealed class LocalManagementApiTests : IDisposable
         names.AddDnsName("localhost");
         names.AddIpAddress(IPAddress.Loopback);
         request.CertificateExtensions.Add(names.Build());
-        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(10));
+        using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(10));
+        // Schannel requires an imported key; avoid mistaking an unusable test server for client-side trust rejection.
+        using var certificate = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+            generated.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12), null);
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(certificate)));
         await using var app = builder.Build();
         var mutations = 0;
+        app.MapGet("/health/ready", () => Results.Ok(new { status = "ready" }));
         app.MapPost("/management/v1/service/stop", () => { mutations++; return Results.Ok(); });
         await app.StartAsync();
         var address = Assert.Single(app.Services.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>().Features
             .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()!.Addresses);
+        using (var trustedTransport = new HttpClientHandler
+        {
+            UseProxy = false,
+            ServerCertificateCustomValidationCallback = (_, actual, _, validationErrors) => actual is not null &&
+                (validationErrors & System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch) == 0 &&
+                actual.RawData.AsSpan().SequenceEqual(certificate.RawData)
+        })
+        using (var trustedClient = new HttpClient(trustedTransport))
+        using (var health = await trustedClient.GetAsync(new Uri(new Uri(address), "/health/ready")))
+        {
+            Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+            Assert.Equal("ready", (await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("status").GetString());
+        }
+        Assert.Equal(0, mutations);
         using var client = new LocalManagementClient(new Uri(address), "server", "node", () => Token);
         using var output = new StringWriter();
         using var errors = new StringWriter();

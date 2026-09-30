@@ -251,9 +251,9 @@ public sealed class PostgresBackupCoordinator(
             "protected-configuration",
             expectedResources,
             expectedProtected);
-        await File.WriteAllTextAsync(
+        await WriteDurableJsonAsync(
             Path.Combine(destination, "exam-backup.json"),
-            JsonSerializer.Serialize(manifest, JsonDefaults.Create()),
+            manifest,
             cancellationToken);
 
         var result = ToResult(destination, manifest);
@@ -329,20 +329,15 @@ public sealed class PostgresBackupCoordinator(
             manifest,
             verifyDatabase: true,
             cancellationToken);
-        File.Copy(
-            Path.Combine(source, "exam-backup.json"),
-            Path.Combine(staging, "exam-backup.json"),
-            overwrite: false);
-        await File.WriteAllTextAsync(
+        await WriteDurableJsonAsync(Path.Combine(staging, "exam-backup.json"), manifest, cancellationToken);
+        await WriteDurableJsonAsync(
             Path.Combine(staging, "restore-verified.json"),
-            JsonSerializer.Serialize(
-                new RestoreMarker(
-                    request.RequestId,
-                    request.ActorId,
-                    request.BackupId,
-                    source,
-                    _timeProvider.GetUtcNow().ToUniversalTime()),
-                JsonDefaults.Create()),
+            new RestoreMarker(
+                request.RequestId,
+                request.ActorId,
+                request.BackupId,
+                source,
+                _timeProvider.GetUtcNow().ToUniversalTime()),
             cancellationToken);
         if (dataSource is not null)
         {
@@ -636,6 +631,26 @@ public sealed class PostgresBackupCoordinator(
         }
     }
 
+    private static async Task WriteDurableJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var temporary = ResolveChild(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(output, value, JsonDefaults.Create(), cancellationToken);
+                await output.FlushAsync(cancellationToken);
+                output.Flush(flushToDisk: true);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            PathBoundary.RejectExistingReparsePoints(directory, path);
+            File.Move(temporary, path, overwrite: false);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
     private static IReadOnlyDictionary<string, string> BuildPostgresEnvironment(
         NpgsqlConnectionStringBuilder connection)
     {
@@ -732,6 +747,7 @@ public sealed class PostgresBackupCoordinator(
                 FileOptions.Asynchronous | FileOptions.WriteThrough);
             await input.CopyToAsync(output, cancellationToken);
             await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
         }
     }
 
@@ -760,9 +776,11 @@ public sealed class PostgresBackupCoordinator(
             var target = ResolveChild(destination, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             await using var input = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read);
-            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                128 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
             await input.CopyToAsync(output, cancellationToken);
             await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
         }
     }
 

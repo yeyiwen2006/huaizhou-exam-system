@@ -24,6 +24,12 @@
 
 业务宿主注册为原生 Windows 服务时，其受保护配置还须设置 `ExamServer:WindowsServiceName` 为实际已注册的业务服务名。业务与管理宿主均在服务模式从自身可执行文件目录读取配置并向 SCM 报告生命周期；部署工具先注册独立服务账户及证书权限，再验证原生启停。普通控制台运行不需要此项。
 
+业务配置接线示例见 `appsettings.business.example.json`。业务和管理宿主须显式配置相同的 `Management:ServiceConfigurationPath`，业务节点身份须与文件一致。业务进程每次启动读取完整文件，并实际使用其中的 `bindAddress`（IP 地址或 `localhost`）和 `httpsPort` 监听 HTTPS；TLS 证书及其密码仍由独立受保护的 `Kestrel:Certificates:Default` 配置提供，示例不含密码或连接串。托管方式拒绝同时设置 `Urls`、`HTTP_PORTS`、`HTTPS_PORTS`、`preferHostingUrls=true` 或 `Kestrel:Endpoints`，避免额外监听或旧端口覆盖文件。未配置该路径的已有业务部署保留原有启动方式，但新管理宿主不能据此确认托管启动成功。
+
+`dataDirectory` 是业务启动时实际检查路径、可用空间及持久写入的存储检查目录；修改它不会重定向 PostgreSQL、搬迁数据库或改动现有资源目录。业务侧空间下限使用自身受保护配置的 `Management:MinimumAvailableBytes`，默认 1 GiB。`highAvailabilityEnabled=true` 要求当前同节点、同代次的权威保护模式为 `SynchronousDualNode`，启动恢复门禁和每次业务就绪查询均执行检查；设为 `false` 仅取消这项附加要求，不会启用应急模式、提升节点或绕过既有写入权限。主备状态仍由已授权的主备流程管理。
+
+业务 `/health/ready` 在全部现有检查通过后返回实际加载的非秘密 `serviceConfiguration` 快照。管理端按本次期望配置逐字段、逐版本核对；旧宿主缺少该证据或字段不一致时不报告启动成功。探测保留 `Management:BusinessReadyEndpoint` 的 HTTPS 证书主机名及 `/health/ready` 路径，端口使用持久配置中的 `httpsPort`。保存配置只表示文件已持久化，启动成功还必须取得这份实际应用证据；修改配置后需按既有停机、保存和启动流程处理。
+
 模板刻意不包含 `ExamSecurity:OperatorToken`、`ExamSecurity:OperatorId` 或数据库连接串。按既有受保护部署配置/服务账户配置提供这些项，令牌至少 32 字符；不放命令行，不把填好的文件提交到仓库。证书指纹占位必须替换，证书/私钥必须实际部署并受保护，不能通过关闭 TLS 校验使用模板。缺少管理 TLS 证书时不会启动管理 HTTPS；缺少有效凭据时返回 401；缺失业务数据库/节点证书时允许管理认证和状态诊断，但对应操作或自检失败。
 
 服务配置、操作目录及备份/暂存根目录分别保护。操作目录不放其他 JSON、不经过联接点，也不放在备份材料源目录内。模板的 `version=1` 仅为合成首次配置版本，不能用于覆盖现有配置；后续保存必须读取当前版本并携带 expectedVersion。`highAvailabilityEnabled=true` 不代表已完成配对或复制，`ExamServer:ServerEpoch=1` 仅为合成部署比较值，不是当前权威代次。模板不默认启用连接切换。

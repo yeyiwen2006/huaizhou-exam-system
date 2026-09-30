@@ -373,7 +373,7 @@ public sealed class PostgresExamVersioningService : IExamVersioningService
         return service;
     }
 
-    private void ReplayEvent(InMemoryExamVersioningService service, string operation, string payload)
+    internal void ReplayEvent(InMemoryExamVersioningService service, string operation, string payload)
     {
         switch (operation)
         {

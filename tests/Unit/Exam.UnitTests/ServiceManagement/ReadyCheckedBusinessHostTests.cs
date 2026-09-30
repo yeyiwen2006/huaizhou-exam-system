@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Exam.Application.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
@@ -129,21 +130,66 @@ public sealed class ReadyCheckedBusinessHostTests
             new FakeProcessHost(), client, new Uri("https://exam.local/other"), "server-a", "node-a", 1));
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("version")]
+    [InlineData("address")]
+    [InlineData("port")]
+    [InlineData("directory")]
+    [InlineData("protection")]
+    public async Task ManagedStartRejectsMissingOrDifferentAppliedConfiguration(string difference)
+    {
+        var expected = new ServiceConfiguration("server-a", "node-a", "127.0.0.1", 9444,
+            Path.Combine(Path.GetTempPath(), "synthetic-storage"), true, 2);
+        var applied = difference switch
+        {
+            "version" => expected with { Version = 1 },
+            "address" => expected with { BindAddress = "0.0.0.0" },
+            "port" => expected with { HttpsPort = 8443 },
+            "directory" => expected with { DataDirectory = expected.DataDirectory + "-old" },
+            "protection" => expected with { HighAvailabilityEnabled = false },
+            _ => null
+        };
+        using var client = Client(() => Response(HttpStatusCode.OK, JsonSerializer.Serialize(new
+        { status = "ready", serverId = "server-a", nodeId = "node-a", serverEpoch = 1, serviceConfiguration = applied }, JsonDefaults.Create())),
+            new Uri("https://exam.local:9444/health/ready"));
+        var host = new ReadyCheckedBusinessHost(new FakeProcessHost(), client, ReadyUri, "server-a", "node-a", 1,
+            expectedConfiguration: expected);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(default));
+        Assert.Equal(BusinessServiceStatus.Recovering, host.Status);
+    }
+
+    [Fact]
+    public async Task ManagedStartUsesSavedPortAndRequiresExactAppliedConfiguration()
+    {
+        var expected = new ServiceConfiguration("server-a", "node-a", "127.0.0.1", 9444,
+            Path.Combine(Path.GetTempPath(), "synthetic-storage"), false, 2);
+        using var client = Client(() => Response(HttpStatusCode.OK, JsonSerializer.Serialize(new
+        { status = "ready", serverId = "server-a", nodeId = "node-a", serverEpoch = 1, serviceConfiguration = expected }, JsonDefaults.Create())),
+            new Uri("https://exam.local:9444/health/ready"));
+        var host = new ReadyCheckedBusinessHost(new FakeProcessHost(), client, ReadyUri, "server-a", "node-a", 1,
+            expectedConfiguration: expected);
+
+        await host.StartAsync(default);
+        Assert.Equal(BusinessServiceStatus.Running, host.Status);
+    }
+
     private static string Ready(string serverId, string nodeId, long epoch = 1) =>
         $"{{\"status\":\"ready\",\"serverId\":\"{serverId}\",\"nodeId\":\"{nodeId}\",\"serverEpoch\":{epoch}}}";
 
     private static HttpResponseMessage Response(HttpStatusCode status, string json) =>
         new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
-    private static HttpClient Client(Func<HttpResponseMessage> respond) =>
-        new(new FakeHandler(respond));
+    private static HttpClient Client(Func<HttpResponseMessage> respond, Uri? expectedEndpoint = null) =>
+        new(new FakeHandler(respond, expectedEndpoint ?? ReadyUri));
 
-    private sealed class FakeHandler(Func<HttpResponseMessage> respond) : HttpMessageHandler
+    private sealed class FakeHandler(Func<HttpResponseMessage> respond, Uri expectedEndpoint) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            Assert.Equal(ReadyUri, request.RequestUri);
+            Assert.Equal(expectedEndpoint, request.RequestUri);
             return Task.FromResult(respond());
         }
     }

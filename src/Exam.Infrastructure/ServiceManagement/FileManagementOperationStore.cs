@@ -102,7 +102,10 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
             var id = requestId.GetString() ?? throw new InvalidDataException("操作记录缺少请求标识。");
             if (Resolve(id) != path) throw new InvalidDataException("操作记录文件名与请求标识不符。");
             var record = await FindAsync(id, cancellationToken) ?? throw new InvalidDataException("操作记录消失。");
-            if (record.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification or ManagementOperationPhase.Staged)
+            // Self-checks never mutate service/configuration/recovery state. An interrupted diagnostic
+            // (including a lost final journal write) must not prevent a later repaired startup.
+            if (record.Kind != ManagementOperationKind.Checks &&
+                record.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification or ManagementOperationPhase.Staged)
                 return true;
         }
         return false;

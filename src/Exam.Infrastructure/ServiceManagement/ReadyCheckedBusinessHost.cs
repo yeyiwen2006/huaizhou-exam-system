@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using Exam.Application.ServiceManagement;
+using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 
 namespace Exam.Infrastructure.ServiceManagement;
@@ -20,6 +21,7 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
     private readonly long _serverEpoch;
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _pollInterval;
+    private readonly ServiceConfiguration? _expectedConfiguration;
     private volatile bool _ready;
 
     public ReadyCheckedBusinessHost(
@@ -30,7 +32,8 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
         string nodeId,
         long serverEpoch,
         TimeSpan? timeout = null,
-        TimeSpan? pollInterval = null)
+        TimeSpan? pollInterval = null,
+        ServiceConfiguration? expectedConfiguration = null)
     {
         _processHost = processHost ?? throw new ArgumentNullException(nameof(processHost));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -46,7 +49,14 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId) || serverEpoch < 1)
             throw new ArgumentException("业务服务身份必须完整。");
 
-        _readyEndpoint = readyEndpoint;
+        if (expectedConfiguration is not null && (expectedConfiguration.ServerId != serverId ||
+            expectedConfiguration.NodeId != nodeId || expectedConfiguration.Version < 1 ||
+            expectedConfiguration.HttpsPort is < 1 or > 65535))
+            throw new ArgumentException("期望业务配置必须绑定同一节点且包含有效端口与版本。", nameof(expectedConfiguration));
+        _expectedConfiguration = expectedConfiguration;
+        // Preserve the deployment's certificate DNS name; the managed port follows the saved configuration.
+        _readyEndpoint = expectedConfiguration is null ? readyEndpoint :
+            new UriBuilder(readyEndpoint) { Port = expectedConfiguration.HttpsPort }.Uri;
         _serverId = serverId;
         _nodeId = nodeId;
         _serverEpoch = serverEpoch;
@@ -150,6 +160,18 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
                 !epoch.TryGetInt64(out var serverEpoch) || serverEpoch != _serverEpoch)
             {
                 throw new InvalidOperationException("业务就绪响应身份或状态不匹配。");
+            }
+
+            if (_expectedConfiguration is not null)
+            {
+                if (!root.TryGetProperty("serviceConfiguration", out var applied) || applied.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException("业务宿主未提供实际加载的服务配置，不能确认新配置生效。");
+                var fields = new HashSet<string>(StringComparer.Ordinal)
+                    { "serverId", "nodeId", "bindAddress", "httpsPort", "dataDirectory", "highAvailabilityEnabled", "version" };
+                foreach (var field in applied.EnumerateObject())
+                    if (!fields.Remove(field.Name)) throw new InvalidOperationException("业务配置证据字段无效或重复。");
+                if (fields.Count != 0 || applied.Deserialize<ServiceConfiguration>(JsonDefaults.Create()) != _expectedConfiguration)
+                    throw new InvalidOperationException("业务实际配置与本次期望配置或版本不一致。");
             }
 
             return true;

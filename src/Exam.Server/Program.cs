@@ -17,6 +17,7 @@ if (serviceMode)
         throw new InvalidOperationException("缺少有效的业务 Windows 服务名称。");
     builder.Services.AddWindowsService(options => options.ServiceName = name);
 }
+var managedServiceConfiguration = await BusinessServiceConfiguration.LoadAndApplyAsync(builder);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSignalR().AddJsonProtocol(options =>
@@ -94,13 +95,17 @@ app.MapGet("/health/ready", async (
     var recovery = app.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
     if (!recovery.Ready)
         return Results.Json(new { status = "recovering", reason = "启动恢复核对尚未通过。" }, statusCode: 503);
+    if (managedServiceConfiguration is not null &&
+        !(await managedServiceConfiguration.CheckProtectionAsync(app.Services.GetRequiredService<Npgsql.NpgsqlDataSource>(), cancellationToken)).Passed)
+        return Results.Json(new { status = "recovering", reason = "当前权威保护状态不满足本机服务配置。" }, statusCode: 503);
     return readiness.Ready
         ? Results.Ok(new
         {
             status = "ready",
             configuredIdentity.ServerId,
             configuredIdentity.NodeId,
-            configuredIdentity.ServerEpoch
+            configuredIdentity.ServerEpoch,
+            serviceConfiguration = managedServiceConfiguration?.Value
         })
         : Results.Json(new { status = "recovering", reason = readiness.Reason }, statusCode: 503);
 });

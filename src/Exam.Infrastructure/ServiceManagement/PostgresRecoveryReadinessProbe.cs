@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Exam.Application.ServiceManagement;
+using Exam.Application.Versioning;
 using Exam.Contracts.Common;
 using Exam.Contracts.Resources;
 using Exam.Contracts.ServiceManagement;
@@ -10,6 +11,7 @@ using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Submissions;
 using Exam.Infrastructure.Postgres.Resources;
+using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
 using Npgsql;
 
@@ -73,7 +75,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
         }
     }
 
-    private static async Task<bool> CheckVersionsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
+    private async Task<bool> CheckVersionsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
     {
         if (!await NoRowsAsync("""
             SELECT 1 FROM exam.version_streams s LEFT JOIN exam.version_state v USING (exam_id)
@@ -90,6 +92,19 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
              WHERE a.exam_id IS NULL OR a.scheduled_start <> v.starts_at OR a.scheduled_end <> v.ends_at
                 OR a.lifecycle <> lower(v.lifecycle)
             """, connection, transaction, token)) return false;
+        // Rebuild exam-level state with the same event interpreter used by business mutations.
+        // Checking only counts and operation names would accept a valid but altered old event,
+        // which the next mutation would replay over the currently correct query projection.
+        var replay = new InMemoryExamVersioningService();
+        var interpreter = new PostgresExamVersioningService(source);
+        await using (var events = new NpgsqlCommand("""
+            SELECT operation_type, payload::text FROM exam.version_events
+              WHERE operation_type IN ('exam.create', 'schedule.update', 'schedule.trigger', 'paper.publish', 'grading.publish')
+              ORDER BY exam_id COLLATE "C", stream_revision
+            """, connection, transaction))
+        await using (var rows = await events.ExecuteReaderAsync(token))
+            while (await rows.ReadAsync(token))
+                interpreter.ReplayEvent(replay, rows.GetString(0), rows.GetString(1));
         await using var command = new NpgsqlCommand("""
             SELECT exam_id, schedule_version, paper_version, grading_version, starts_at, ends_at, lifecycle, snapshot::text
               FROM exam.version_state
@@ -105,6 +120,13 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                 snapshot.LifecycleState.ToString() != reader.GetString(6) ||
                 (snapshot.Versions.PaperVersion > 0 && (snapshot.Paper is null || snapshot.Paper.Version != snapshot.Versions.PaperVersion)) ||
                 (snapshot.Versions.GradingVersion > 0 && (snapshot.Grading is null || snapshot.Grading.Version != snapshot.Versions.GradingVersion))) return false;
+            var rebuilt = replay.GetExam(snapshot.ExamId);
+            // Participation is separately authoritative in A03/A05 and may be synchronized into
+            // the projection between version events; it is not an exam-level replay invariant.
+            if (!rebuilt.Succeeded || rebuilt.Value is null || !JsonNode.DeepEquals(
+                JsonSerializer.SerializeToNode(snapshot with { Participants = new Dictionary<string, ParticipantVersionStatus>() }, Json),
+                JsonSerializer.SerializeToNode(rebuilt.Value with { Participants = new Dictionary<string, ParticipantVersionStatus>() }, Json)))
+                return false;
         }
         return true;
     }

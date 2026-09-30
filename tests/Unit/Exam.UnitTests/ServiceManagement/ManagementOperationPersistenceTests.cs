@@ -117,6 +117,24 @@ public sealed class ManagementOperationPersistenceTests : IDisposable
         Assert.Equal(result, replay);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptedReadOnlyCheckDoesNotPermanentlyBlockRepairedStartup(bool loseFinalRecord)
+    {
+        var checks = new ManagementOperationRunner("server", "node",
+            loseFinalRecord ? new FailCompletionStore(Store()) : Store(), new SystemClock());
+        var task = checks.ExecuteAsync("interrupted-checks", "operator", ManagementOperationKind.Checks, "payload",
+            (operation, token) => throw new IOException("synthetic temporary diagnostic failure"));
+        if (loseFinalRecord) await Assert.ThrowsAsync<IOException>(() => task);
+        else Assert.Equal(ManagementOperationPhase.Failed, (await task).Phase);
+
+        var result = await Runner().ExecuteAsync("repaired-start", "operator", ManagementOperationKind.Start, "payload",
+            (operation, token) => Task.FromResult(operation with { Phase = ManagementOperationPhase.Completed }));
+        Assert.Equal(ManagementOperationPhase.Completed, result.Phase);
+        Assert.NotNull(await Store().FindAsync("interrupted-checks", default));
+    }
+
     [Fact]
     public async Task QueryDistinguishesExecutingRequestFromInterruptedAcceptance()
     {
