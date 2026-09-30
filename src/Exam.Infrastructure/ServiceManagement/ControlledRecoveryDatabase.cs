@@ -1,4 +1,6 @@
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.Common;
+using System.Text.Json;
 using Npgsql;
 
 namespace Exam.Infrastructure.ServiceManagement;
@@ -62,6 +64,7 @@ public sealed class ControlledRecoveryDatabase
         {
             options += BuildArchiveReplayOptions(archiveRecovery);
         }
+        else options += BuildStandaloneReplayOptions();
         // First the pg_ctl CRT parses -o, then the service passes these options to postgres's CRT.
         // Escape quotes for the first layer; PostgreSQL paths use forward slashes so no trailing slash escapes arise.
         var quotedOptions = '\"' + options.Replace("\"", "\\\"", StringComparison.Ordinal) + '\"';
@@ -79,6 +82,12 @@ public sealed class ControlledRecoveryDatabase
             $" -c recovery_target_lsn={archiveRecovery.TargetLsn} -c recovery_target_timeline={archiveRecovery.Timeline}" +
             " -c recovery_target_inclusive=on -c recovery_target_action=promote";
     }
+
+    public static string BuildStandaloneReplayOptions() =>
+        " -c restore_command=\"exit 1\" -c archive_cleanup_command=\"\" -c recovery_end_command=\"\"" +
+        " -c primary_conninfo=\"\" -c primary_slot_name=\"\"" +
+        " -c recovery_target=\"\" -c recovery_target_name=\"\" -c recovery_target_time=\"\" -c recovery_target_xid=\"\"" +
+        " -c recovery_target_lsn=\"\" -c recovery_target_timeline=current -c recovery_target_action=promote";
 
     private static string Absolute(string path)
     {
@@ -106,6 +115,8 @@ public sealed class ControlledRecoveryDatabase
             working = await observe(token) ?? throw new IOException("运行中的恢复实例没有原请求的完整工作副本证据。");
             Bind(working, request);
             _archiveRecovery?.ReadBinding(working, request);
+            if (_archiveRecovery is null && !HasTimelineBinding(working))
+                throw new IOException("运行副本缺少独立恢复时间线绑定，不能认作已受控恢复。");
             CheckDeployment();
             if (_host.Status != BusinessServiceStatus.Running) throw new IOException("恢复实例状态改变。");
             return working;
@@ -124,7 +135,8 @@ public sealed class ControlledRecoveryDatabase
         {
             var file = Path.Combine(database, name);
             PathBoundary.RejectExistingReparsePoints(_workingRoot, file);
-            if (File.Exists(file) && !(name == "recovery.signal" && _archiveRecovery is not null))
+            if (File.Exists(file) && !(name == "recovery.signal" && (_archiveRecovery is not null || HasTimelineBinding(working)) &&
+                new FileInfo(file).Length == 0))
                 throw new IOException("恢复副本含运行或复制/归档恢复信号，保留原件并阻止启动。");
         }
         var automatic = Path.Combine(database, "postgresql.auto.conf");
@@ -139,11 +151,51 @@ public sealed class ControlledRecoveryDatabase
                     throw new IOException("恢复副本含继承自动配置，不能自动执行；保留文件供部署核对。");
         }
         CheckDeployment();
+        if (_archiveRecovery is null) await PrepareStandaloneTimelineAsync(working, token);
         await _host.StartAsync(token);
         if (_host.Status != BusinessServiceStatus.Running) throw new IOException("恢复服务启动未确认。");
         CheckDeployment();
         // Running is only process evidence. The caller must still perform actual SQL target and domain checks.
         return working;
+    }
+
+    private bool HasTimelineBinding(RecoveryWorkingCopy working)
+    {
+        var path = Path.Combine(working.WorkingDirectory, "timeline-recovery.json");
+        PathBoundary.RejectExistingReparsePoints(_workingRoot, path);
+        if (!File.Exists(path)) return false;
+        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (input.Length is <= 0 or > 16384) throw new IOException("恢复时间线绑定记录无效。");
+        var bytes = new byte[(int)input.Length]; input.ReadExactly(bytes);
+        var bound = JsonSerializer.Deserialize<RecoveryWorkingCopy>(bytes, JsonDefaults.Create());
+        if (bound is null || bound.RequestId != working.RequestId || bound.ActorId != working.ActorId ||
+            bound.BackupId != working.BackupId || bound.SourceDirectory != working.SourceDirectory ||
+            bound.WorkingDirectory != working.WorkingDirectory ||
+            !bytes.AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(bound, JsonDefaults.Create())))
+            throw new IOException("恢复时间线绑定与原请求不同。");
+        return true;
+    }
+
+    private async Task PrepareStandaloneTimelineAsync(RecoveryWorkingCopy working, CancellationToken token)
+    {
+        var database = Path.Combine(working.WorkingDirectory, "database");
+        var signal = Path.Combine(database, "recovery.signal");
+        var label = Path.Combine(database, "backup_label");
+        PathBoundary.RejectExistingReparsePoints(_workingRoot, label);
+        if (!HasTimelineBinding(working))
+        {
+            if (!File.Exists(label)) throw new IOException("恢复副本缺少实际基础备份标签，不能建立恢复时间线。");
+            var marker = Path.Combine(working.WorkingDirectory, "timeline-recovery.json");
+            await using var output = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+            await JsonSerializer.SerializeAsync(output, working, JsonDefaults.Create(), token);
+            await output.FlushAsync(token); output.Flush(true);
+        }
+        // PostgreSQL consumes backup_label and recovery.signal after the first real recovery.
+        // A stopped restart must retain that recovered timeline, not request a second recovery.
+        if (File.Exists(signal) || !File.Exists(label)) return;
+        token.ThrowIfCancellationRequested();
+        await using var flag = new FileStream(signal, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+        flag.Flush(true);
     }
 
     private void Bind(RecoveryWorkingCopy working, RestoreRequest request)
@@ -152,6 +204,8 @@ public sealed class ControlledRecoveryDatabase
             working.WorkingDirectory != Path.Combine(_workingRoot, "slot"))
             throw new IOException("恢复服务目标与原请求工作槽不匹配。");
         PathBoundary.RejectExistingReparsePoints(_workingRoot, Path.Combine(working.WorkingDirectory, "database"));
+        if (_archiveRecovery is not null && File.Exists(Path.Combine(working.WorkingDirectory, "timeline-recovery.json")))
+            throw new IOException("原请求已绑定基础备份恢复，不能更改为另一归档恢复方式。");
         foreach (var name in new[] { "wal-recovery.json", "wal-recovery-plan.json" })
         {
             var archiveMarker = Path.Combine(working.WorkingDirectory, name);

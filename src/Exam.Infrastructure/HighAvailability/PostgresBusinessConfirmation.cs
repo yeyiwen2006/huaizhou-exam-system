@@ -54,7 +54,7 @@ public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string s
 /// this actual fence and persist its acknowledgement before primary confirmation or transport success.</summary>
 public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
     string serverId, string primaryNodeId, string standbyNodeId, long epoch, string resourcesDirectory,
-    IDurableConfirmationPeer peer) : IBusinessConfirmation
+    IDurableConfirmationPeer peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     public async Task ConfirmAsync(CancellationToken token)
@@ -63,6 +63,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         try
         {
             using var locked = store.Lock();
+            var previous = store.Read();
             var resources = FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true);
             await using var connection = await source.OpenConnectionAsync(token);
             await using (var transaction = await connection.BeginTransactionAsync(token))
@@ -92,7 +93,9 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
                 record = new(Guid.NewGuid().ToString("N"), serverId, primaryNodeId, standbyNodeId, epoch,
                     row.GetInt64(1), Enum.Parse<ProtectionMode>(row.GetString(0)), row.GetString(2), row.GetString(6), row.GetInt32(3), row.GetString(4), resources);
             }
-            await store.SaveAsync(new(record, false), token);
+            var continuation = previous is not null && previous.Record.Timeline != record.Timeline
+                ? await VerifiedTimelineContinuation.ReadAsync(source, previous.Record, record.Timeline, timelineConnection, postgresBinDirectory, token) : null;
+            await store.SaveAsync(new(record, false), token, continuation);
             if (record.Mode == ProtectionMode.SynchronousDualNode && await peer.ConfirmAsync(record, token) != record)
                 throw new IOException("备节点确认边界与原请求不同。");
             // Emergency success is local only. Its different primary head prevents an older standby
@@ -110,7 +113,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
 /// <summary>Runs on the standby's business listener but never writes its PostgreSQL database.</summary>
 public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
     string serverId, string standbyNodeId, string primaryNodeId, long epoch, string resourcesDirectory,
-    IPackageKeyUnwrapper unwrapper)
+    IPackageKeyUnwrapper unwrapper, string? timelineConnection = null, string? postgresBinDirectory = null)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
@@ -123,6 +126,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
         try
         {
             using var locked = store.Lock();
+            var previous = store.Read();
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (true)
             {
@@ -138,7 +142,9 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             await VerifyPositionAsync(source, record, standbyNodeId, token);
             if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
                 throw new IOException("备节点资源在确认期间改变。");
-            await store.SaveAsync(new(record, true), token);
+            var continuation = previous is not null && previous.Record.Timeline != record.Timeline
+                ? await VerifiedTimelineContinuation.ReadAsync(source, previous.Record, record.Timeline, timelineConnection, postgresBinDirectory, token) : null;
+            await store.SaveAsync(new(record, true), token, continuation);
             return record;
         }
         finally { _gate.Release(); }
@@ -147,7 +153,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
     public ConfirmationHead? Read() => store.Read();
 
     public static async Task VerifyPositionAsync(NpgsqlDataSource source, DurableConfirmation record,
-        string standbyNodeId, CancellationToken token)
+        string standbyNodeId, CancellationToken token, string? timelineConnection = null, string? postgresBinDirectory = null)
     {
         await using var connection = await source.OpenConnectionAsync(token);
         await using var command = new NpgsqlCommand("""
@@ -162,11 +168,15 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
         await using var row = await command.ExecuteReaderAsync(token);
         if (!await row.ReadAsync(token) || !row.GetBoolean(0) || row.GetBoolean(1) || row.IsDBNull(2) ||
             FileConfirmationStore.Lsn(row.GetString(2)) < FileConfirmationStore.Lsn(record.FlushLsn) ||
-            row.GetString(3) != record.SystemIdentifier || row.GetInt32(4) != record.Timeline ||
+            row.GetString(3) != record.SystemIdentifier ||
             row.GetString(5) != record.PrimaryNodeId || row.GetInt64(6) != record.Epoch ||
             row.GetString(7) != "SynchronousDualNode" || row.GetInt64(8) != record.StateVersion || row.GetString(9) != "Standby" ||
             row.GetString(10) != record.DatabaseName || row.IsDBNull(11) ||
             FileConfirmationStore.Lsn(row.GetString(11)) < FileConfirmationStore.Lsn(record.FlushLsn))
             throw new IOException("实际备库未覆盖确认边界或身份不匹配。");
+        var timeline = row.GetInt32(4);
+        await row.DisposeAsync();
+        if (timeline != record.Timeline)
+            _ = await VerifiedTimelineContinuation.ReadAsync(source, record, timeline, timelineConnection, postgresBinDirectory, token);
     }
 }

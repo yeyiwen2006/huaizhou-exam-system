@@ -48,13 +48,17 @@ public sealed class FileConfirmationStore(string directory)
     }
 
     // Caller holds Lock throughout the primary/standby handshake, preventing crossed heads.
-    public async Task SaveAsync(ConfirmationHead head, CancellationToken token)
+    public Task SaveAsync(ConfirmationHead head, CancellationToken token) => SaveAsync(head, token, null);
+
+    internal async Task SaveAsync(ConfirmationHead head, CancellationToken token, VerifiedTimelineContinuation? continuation)
     {
         Check(); Validate(head.Record);
         var previous = Read();
         if (previous is not null && (previous.Record.ServerId != head.Record.ServerId ||
             previous.Record.PrimaryNodeId != head.Record.PrimaryNodeId || previous.Record.Epoch != head.Record.Epoch ||
-            previous.Record.SystemIdentifier != head.Record.SystemIdentifier || previous.Record.Timeline != head.Record.Timeline ||
+            previous.Record.SystemIdentifier != head.Record.SystemIdentifier ||
+            previous.Record.Timeline != head.Record.Timeline &&
+                !(continuation is { } verified && verified.Previous == previous.Record && verified.Timeline == head.Record.Timeline) ||
             previous.Record.DatabaseName != head.Record.DatabaseName || previous.Record.StandbyNodeId != head.Record.StandbyNodeId ||
             head.Record.StateVersion < previous.Record.StateVersion || Lsn(head.Record.FlushLsn) < Lsn(previous.Record.FlushLsn)))
             throw new InvalidDataException("确认记录身份变化或位置回退，须独立维护核对。");

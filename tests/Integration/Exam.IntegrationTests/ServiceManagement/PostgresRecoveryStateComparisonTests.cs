@@ -53,6 +53,33 @@ public sealed class PostgresRecoveryStateComparisonTests : IAsyncLifetime
     public async Task CompleteReaderWithoutRowPoliciesCanVerifyEqualState()
         => Assert.True((await CompareAsync()).Passed);
 
+    [Fact]
+    public async Task MissingOriginalDatabaseCanOnlyRequestIndependentEvidence()
+    {
+        var missing = new NpgsqlConnectionStringBuilder(_original.ConnectionString)
+        { Database = "exam_test_missing_" + Guid.NewGuid().ToString("N"), Pooling = false };
+        var result = await new PostgresRecoveryStateComparison(missing.ConnectionString, _recovery.ConnectionString, 1)
+            .ObserveAsync(Configuration, default);
+        Assert.Equal(RecoveryComparisonStatus.OriginalUnavailable, result.Status);
+        Assert.False(result.Check.Passed);
+        Assert.True(result.Check.BlocksWrites);
+    }
+
+    [Fact]
+    public async Task KnownDifferenceAndPermissionFailureAreNotClassifiedAsOriginalUnavailable()
+    {
+        await ExecuteAsync(_recovery, "UPDATE exam.\"synthetic\"\"visibility\" SET value='different' WHERE id=2");
+        var observer = new PostgresRecoveryStateComparison(_original.ConnectionString, _recovery.ConnectionString, 1);
+        Assert.Equal(RecoveryComparisonStatus.Different, (await observer.ObserveAsync(Configuration, default)).Status);
+        await ExecuteAsync(_original, "ALTER TABLE exam.\"synthetic\"\"visibility\" ENABLE ROW LEVEL SECURITY; ALTER TABLE exam.\"synthetic\"\"visibility\" FORCE ROW LEVEL SECURITY");
+        var limited = new NpgsqlConnectionStringBuilder(_original.ConnectionString) { Options = "-c role=" + _role };
+        Assert.Equal(RecoveryComparisonStatus.Invalid, (await new PostgresRecoveryStateComparison(limited.ConnectionString,
+            _recovery.ConnectionString, 1).ObserveAsync(Configuration, default)).Status);
+        Assert.Equal(RecoveryComparisonStatus.OriginalUnavailable, (await new PostgresRecoveryStateComparison(
+            "Host=127.0.0.1;Port=1;Database=synthetic;Username=postgres;SSL Mode=Disable", _recovery.ConnectionString, 1)
+            .ObserveAsync(Configuration, default)).Status);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]

@@ -83,14 +83,19 @@ public static class BusinessConfirmationRegistration
             ? new DevelopmentConfirmation()
             : new ConfiguredConfirmation(() => new PostgresBusinessConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
                 new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
-                Required("Confirmation:StandbyNodeId"), identity.ServerEpoch, Required("Backup:VersionedResourcesDirectory"),
+                Required("Confirmation:StandbyNodeId"), identity.ServerEpoch, Resources(),
                 new HttpConfirmationPeer(provider.GetRequiredService<HttpClient>(), new Uri(Required("Confirmation:StandbyHttpsUrl")),
-                    identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]))));
+                    identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]), TimelineConnection(), configuration["Backup:PostgresBinDirectory"])));
         services.AddSingleton(provider => new PostgresStandbyConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
             new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
-            Required("Confirmation:PrimaryNodeId"), identity.ServerEpoch, Required("Backup:VersionedResourcesDirectory"),
-            provider.GetRequiredService<IPackageKeyUnwrapper>()));
+            Required("Confirmation:PrimaryNodeId"), identity.ServerEpoch, Resources(),
+            provider.GetRequiredService<IPackageKeyUnwrapper>(), TimelineConnection(), configuration["Backup:PostgresBinDirectory"]));
         services.AddSignalR(options => options.AddFilter<ConfirmationHubFilter>());
+        string Resources() => Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveResources(
+            key => configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch)
+            ?? throw new InvalidOperationException("持久确认缺少受保护资源配置。");
+        string? TimelineConnection() => Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveTimelineConnection(
+            key => configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch);
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
             ? throw new InvalidOperationException("持久确认缺少受保护配置。") : configuration[key]!;
     }

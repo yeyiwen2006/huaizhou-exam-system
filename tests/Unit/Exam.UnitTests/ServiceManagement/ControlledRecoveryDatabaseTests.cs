@@ -25,6 +25,7 @@ public sealed class ControlledRecoveryDatabaseTests : IDisposable
     {
         _copies++;
         Directory.CreateDirectory(Path.Combine(Working, "slot", "database"));
+        File.WriteAllText(Path.Combine(Working, "slot", "database", "backup_label"), "synthetic backup label");
         return Task.FromResult(Copy());
     }
     private Task<RecoveryWorkingCopy?> Observe(CancellationToken token) => Task.FromResult<RecoveryWorkingCopy?>(Copy());
@@ -36,6 +37,8 @@ public sealed class ControlledRecoveryDatabaseTests : IDisposable
         Assert.Equal(1, _copies);
         Assert.Equal(1, _service.Starts);
         Assert.Equal("RecoveryPG", _service.StartedName);
+        Assert.True(File.Exists(Path.Combine(Working, "slot", "database", "recovery.signal")));
+        Assert.True(File.Exists(Path.Combine(Working, "slot", "timeline-recovery.json")));
         await Controller().PrepareAndStartAsync(_request, _ => throw new IOException("不能重新复制"), Observe, default);
         Assert.Equal(1, _service.Starts);
         Assert.Equal(0, _service.Stops);
@@ -73,6 +76,20 @@ public sealed class ControlledRecoveryDatabaseTests : IDisposable
         await Assert.ThrowsAnyAsync<IOException>(() => Controller().PrepareAndStartAsync(_request, _ => Task.FromResult(Copy()), Observe, default));
         Assert.Equal(content, await File.ReadAllTextAsync(path));
         Assert.Equal(0, _service.Starts);
+    }
+
+    [Fact]
+    public async Task StoppedRestartKeepsConsumedRecoverySignalsAndDoesNotRequestAnotherFork()
+    {
+        await Controller().PrepareAndStartAsync(_request, Prepare, Observe, default);
+        var database = Path.Combine(Working, "slot", "database");
+        File.Delete(Path.Combine(database, "recovery.signal"));
+        File.Delete(Path.Combine(database, "backup_label"));
+        _service.State = ManagedWindowsServiceState.Stopped;
+        await Controller().PrepareAndStartAsync(_request, _ => Task.FromResult(Copy()), Observe, default);
+        Assert.Equal(2, _service.Starts);
+        Assert.Equal(1, _copies);
+        Assert.False(File.Exists(Path.Combine(database, "recovery.signal")));
     }
 
     [Fact]

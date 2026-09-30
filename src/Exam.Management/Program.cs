@@ -63,7 +63,9 @@ public static class ManagementEntryPoint
                 ArchiveReplay() is not null);
             PostgresBackupCoordinator CreateBackups() => new(new PostgresBackupOptions(
                 Required("Backup:PostgresBinDirectory"), SelectedConnection() ?? "", Required("Backup:AllowedBackupRoot"),
-                Required("Backup:RestoreStagingRoot"), Required("Backup:VersionedResourcesDirectory"), Required("Backup:ProtectedConfigurationDirectory"),
+                Required("Backup:RestoreStagingRoot"),
+                FileRecoveryDeploymentSelection.ResolveResources(key => configuration[key], serverId, nodeId, epoch)
+                    ?? throw new InvalidOperationException("备份资源未配置。"), Required("Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
             PostgresArchiveRecovery? ArchiveReplay()
             {
@@ -88,18 +90,21 @@ public static class ManagementEntryPoint
             async Task<StartupCheckResult> ConfirmedState(ServiceConfiguration expected, RecoveryWorkingCopy working, CancellationToken token)
             {
                 var original = await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
-                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(expected, token);
-                if (original.Passed || string.IsNullOrWhiteSpace(configuration["Confirmation:Directory"])) return original;
+                    Required("ConnectionStrings:ExamRecovery"), epoch).ObserveAsync(expected, token);
+                if (original.Status != RecoveryComparisonStatus.OriginalUnavailable ||
+                    string.IsNullOrWhiteSpace(configuration["Confirmation:Directory"])) return original.Check;
                 try
                 {
                     return await new PostgresConfirmedRecoveryEvidence(new FileConfirmationStore(Required("Confirmation:Directory")),
                         new HttpConfirmationPeer(http, new Uri(Required("Confirmation:StandbyHttpsUrl")), serverId,
                             Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]),
-                        Required("ConnectionStrings:ExamStandby"), Required("ConnectionStrings:ExamRecovery"), epoch)
+                        Required("ConnectionStrings:ExamStandby"), Required("ConnectionStrings:ExamRecovery"), epoch,
+                        configuration.GetConnectionString("ExamRecoveryTimeline") ?? Required("ConnectionStrings:ExamRecovery"),
+                        configuration["Backup:PostgresBinDirectory"], configuration.GetConnectionString("ExamStandbyTimeline"))
                         .RunAsync(expected, Path.Combine(working.WorkingDirectory, "resources"), token);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (Exception) { return original; }
+                catch (Exception) { return original.Check; }
             }
             return new ManagementRuntime(serverId, nodeId, store, process,
                 ReadyHost,
