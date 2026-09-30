@@ -163,7 +163,9 @@ public static class ManagementEntryPoint
                         process.Status != BusinessServiceStatus.Running || !selected.IsSelected(operation)) return null;
                     return operation with { Phase = ManagementOperationPhase.Completed, RecoveryActivation = RecoveryActivationPhase.BusinessReady,
                         Restore = operation.Restore with { BusinessReady = true }, Error = null };
-                });
+                },
+                readAudit: (limit, token) => new FileManagementOperationStore(Required("Management:OperationDirectory"))
+                    .ReadAuditAsync(limit, token));
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

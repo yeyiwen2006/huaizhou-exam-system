@@ -17,6 +17,7 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
             {
                 "status" when inputJson is null && requestId is null => await WriteAsync(await client.GetStatusAsync(token), output, errors),
                 "configuration" when inputJson is null && requestId is null => await WriteAsync(await client.GetConfigurationAsync(token), output, errors),
+                "logs" when inputJson is null && requestId is null => await WriteAsync(await client.GetLogsAsync(50, token), output, errors),
                 "operation" when inputJson is null && requestId is not null => await WriteAsync(await client.GetOperationAsync(requestId, token), output, errors),
                 "start" or "stop" or "checks" or "configure" or "backup" or "restore" when inputJson is not null && requestId is null =>
                     await WriteAsync(await client.ExecuteAsync(Kind(command), inputJson, token), output, errors),

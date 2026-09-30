@@ -85,8 +85,26 @@ public sealed class LocalManagementApiTests : IDisposable
     {
         await using var app = await AppAsync();
         using var client = Client(app, token);
-        foreach (var path in new[] { "/service/status", "/service/configuration", "/operations/id" })
+        foreach (var path in new[] { "/service/status", "/service/configuration", "/service/logs?limit=10", "/operations/id" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/management/v1" + path)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ProtectedOperationLogShowsOnlyBoundedNonSensitiveSummary()
+    {
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/stop",
+            new ManagementServiceRequest("synthetic-log-request", "server", "node"), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var logs = await client.GetAsync("/management/v1/service/logs?limit=10");
+        Assert.Equal(HttpStatusCode.OK, logs.StatusCode);
+        var text = await logs.Content.ReadAsStringAsync();
+        Assert.Contains("synthetic-log-request", text);
+        Assert.DoesNotContain("requestJson", text);
+        Assert.DoesNotContain("contentHash", text);
+        Assert.DoesNotContain("recoveryWorkingDirectory", text);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/management/v1/service/logs?limit=101")).StatusCode);
     }
 
     [Fact]
@@ -366,7 +384,9 @@ public sealed class LocalManagementApiTests : IDisposable
             prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory,
             activateRecovery: activateRecovery ? (op, token) => new RecoveryActivationRunner(_host, () => _host,
                 new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
-                .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery));
+                .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery,
+            readAudit: (limit, token) => new FileManagementOperationStore(Path.Combine(_directory, "operations"))
+                .ReadAuditAsync(limit, token)));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();

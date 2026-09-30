@@ -111,6 +111,33 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
         return false;
     }
 
+    public async Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken cancellationToken)
+    {
+        if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
+        Check(_directory);
+        var entries = new List<ManagementAuditEntry>();
+        var scanned = 0;
+        foreach (var path in Directory.EnumerateFiles(_directory, "*.json"))
+        {
+            if (++scanned > 10000) throw new InvalidDataException("操作记录过多，须通过受保护维护流程归档后查询。");
+            Check(path);
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            if (input.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            var bytes = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(bytes, cancellationToken);
+            using var document = JsonDocument.Parse(bytes);
+            if (!document.RootElement.TryGetProperty("requestId", out var id) || id.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("操作记录缺少请求标识。");
+            var requestId = id.GetString() ?? throw new InvalidDataException("操作记录缺少请求标识。");
+            if (Resolve(requestId) != path) throw new InvalidDataException("操作记录文件名与请求标识不符。");
+            var operation = await FindAsync(requestId, cancellationToken) ?? throw new InvalidDataException("操作记录消失。");
+            entries.Add(new(operation.RequestId, operation.Kind, operation.Phase,
+                operation.AcceptedAt, operation.UpdatedAt, operation.Error?.Code));
+        }
+        return entries.OrderByDescending(entry => entry.UpdatedAt).ThenBy(entry => entry.RequestId, StringComparer.Ordinal)
+            .Take(limit).ToArray();
+    }
+
     private string Resolve(string requestId)
     {
         if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200)

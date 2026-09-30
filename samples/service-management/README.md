@@ -11,6 +11,18 @@
 - `checks-blocked.json`：自检操作完成，但资源核对失败并阻断业务启动；Completed 不表示所有检查通过。
 - `stop-reconciled.json`：原停机结果落盘中断后，从实际已停止状态确认原请求，未再次执行 SCM 停机。
 - `restore-needs-verification.json`：原恢复结果中断且暂存证据缺失或损坏，继续等待核对，不重复恢复或开放业务。
+- `logs-summary.json`：受保护操作记录的合成摘要，不含原请求内容或本机路径。
+
+正式 CLI 使用 `exam-cli management status --management-url https://localhost:9443 --server-id synthetic-server --node-id synthetic-node`；
+`configuration`、`logs` 和 `operation --request-id ID` 为只读命令。`start`、`stop`、`checks`、`configure`、`backup`、`restore`
+须附 `--input FILE|-`，请求 JSON 内携带稳定 requestId，超时后用原标识查询，不重新生成请求。
+上述地址和身份也可由 `EXAM_MANAGEMENT_URL`、`EXAM_SERVER_ID`、`EXAM_NODE_ID` 提供；令牌只从
+`EXAM_OPERATOR_TOKEN` 读取。CLI 保持系统证书验证，不支持管理 HTTP 降级。
+
+`GET /management/v1/service/logs?limit=1..100` 仅返回受保护本机操作记录的审计摘要：请求标识、类型、阶段、
+受理/更新时间和错误码。它不读取任意文件，也不返回原请求 JSON、内容摘要、恢复路径或业务日志正文；
+部署账户须保护 `Management:OperationDirectory`，缺失或损坏记录导致查询失败，不以不完整列表冒充成功。
+当前此接口是管理操作审计日志，不覆盖业务进程运行日志；业务日志的受保护采集及访问仍需另行接线。
 
 写请求必须附 `Authorization: Bearer …`、`X-Exam-Server-Id` 与 `X-Exam-Node-Id`；后两个值是预期目标节点，不是操作者身份。启停、自检请求体为 `{ "requestId": "synthetic-stop", "serverId": "synthetic-server", "nodeId": "synthetic-node" }`。保存配置另外附 `expectedVersion` 与完整 `configuration`；备份/恢复请求体复用既有 `BackupRequest`/`RestoreRequest`。
 

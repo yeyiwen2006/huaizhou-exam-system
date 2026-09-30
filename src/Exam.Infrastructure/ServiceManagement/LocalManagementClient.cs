@@ -45,6 +45,14 @@ public sealed class LocalManagementClient : IDisposable
     public Task<ManagementClientResponse<ServiceConfiguration>> GetConfigurationAsync(CancellationToken token = default) =>
         SendAsync<ServiceConfiguration>(HttpMethod.Get, "service/configuration", null, token);
 
+    public Task<ManagementClientResponse<IReadOnlyList<ManagementAuditEntry>>> GetLogsAsync(int limit,
+        CancellationToken token = default)
+    {
+        if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
+        return SendAsync<IReadOnlyList<ManagementAuditEntry>>(HttpMethod.Get,
+            "service/logs?limit=" + limit.ToString(System.Globalization.CultureInfo.InvariantCulture), null, token);
+    }
+
     public async Task<ManagementClientResponse<ManagementOperation>> GetOperationAsync(string requestId, CancellationToken token = default)
     {
         RequireRequestId(requestId);
