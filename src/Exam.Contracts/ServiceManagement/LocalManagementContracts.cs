@@ -34,6 +34,9 @@ public sealed record ManagementRestoreOutcome(
 public sealed record ManagementAuditEntry(string RequestId, ManagementOperationKind Kind,
     ManagementOperationPhase Phase, DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, string? ErrorCode);
 
+public sealed record ProtectedRuntimeLogEntry(DateTimeOffset Timestamp, string Source, string Level,
+    string Category, int EventId);
+
 public sealed record ManagementOperation(
     string RequestId, string ServerId, string NodeId, string ActorId,
     ManagementOperationKind Kind, string ContentHash, ManagementOperationPhase Phase,

@@ -34,7 +34,7 @@ public static class ManagementCli
             if (string.IsNullOrWhiteSpace(endpoint) || !Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||
                 string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId))
                 throw new ArgumentException("须指定本机 HTTPS 管理地址、预期服务器和节点。");
-            var reads = command is "status" or "configuration" or "logs" or "operation";
+            var reads = command is "status" or "configuration" or "logs" or "runtime-logs" or "operation";
             var writes = command is "start" or "stop" or "checks" or "configure" or "backup" or "restore";
             if (!reads && !writes || reads && inputPath is not null || writes && (inputPath is null || requestId is not null) ||
                 command == "operation" != (requestId is not null))

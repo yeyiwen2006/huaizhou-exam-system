@@ -10,6 +10,8 @@ using Exam.Server.Diagnostics;
 var serviceMode = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService();
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 { Args = args, ContentRootPath = serviceMode ? AppContext.BaseDirectory : null });
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Management:ProtectedBusinessLogPath"]))
+    builder.Logging.AddProvider(new ProtectedRuntimeLogProvider(builder.Configuration["Management:ProtectedBusinessLogPath"]!));
 if (serviceMode)
 {
     var name = builder.Configuration["ExamServer:WindowsServiceName"];

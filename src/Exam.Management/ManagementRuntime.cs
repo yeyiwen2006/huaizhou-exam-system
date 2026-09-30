@@ -18,12 +18,15 @@ public sealed class ManagementRuntime(
     Func<string>? recoveryWorkingDirectory = null,
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation>>? activateRecovery = null,
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecoveryActivation = null,
-    Func<int, CancellationToken, Task<IReadOnlyList<ManagementAuditEntry>>>? readAudit = null)
+    Func<int, CancellationToken, Task<IReadOnlyList<ManagementAuditEntry>>>? readAudit = null,
+    Func<int, CancellationToken, Task<IReadOnlyList<ProtectedRuntimeLogEntry>>>? readRuntimeLogs = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
     public Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token) =>
         readAudit is null ? throw new InvalidOperationException("受保护操作日志未配置。") : readAudit(limit, token);
+    public Task<IReadOnlyList<ProtectedRuntimeLogEntry>> ReadRuntimeLogsAsync(int limit, CancellationToken token) =>
+        readRuntimeLogs is null ? throw new InvalidOperationException("受保护运行日志未配置。") : readRuntimeLogs(limit, token);
     private readonly object _operationsGate = new();
     private ManagementOperationRunner? _operations;
     public ManagementOperationRunner Operations

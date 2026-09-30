@@ -84,7 +84,7 @@ internal static class ExamCli
         Console.WriteLine("  health [--server URL]                 检查业务服务及数据库是否就绪");
         Console.WriteLine("  time [--server URL]                   获取带服务身份的服务器时间");
         Console.WriteLine("  api METHOD PATH [选项]                调用任意正式 HTTP API");
-        Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/configuration/logs/operation/start/stop/checks/configure/backup/restore）");
+        Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");
         Console.WriteLine();

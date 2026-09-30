@@ -52,6 +52,23 @@ public sealed class ManagementCliRegistrationTests
     }
 
     [Fact]
+    public async Task RegisteredRuntimeLogsReadUsesManagementRoute()
+    {
+        using var transport = new ResponseTransport(request =>
+        {
+            Assert.Equal("/management/v1/service/runtime-logs?limit=50", request.RequestUri!.PathAndQuery);
+            return Json(new ManagementEnvelope<IReadOnlyList<ProtectedRuntimeLogEntry>>("server", "node", null,
+                false, null, "correlation", [new(DateTimeOffset.UtcNow, "business", "Error", "Exam.Server.Runtime.GradingWorker", 1)], null));
+        });
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        Assert.Equal(0, await ManagementCli.RunAsync("runtime-logs", Target, default,
+            (uri, server, node) => new LocalManagementClient(uri, server, node, () => "synthetic-token", transport), output, errors));
+        Assert.Contains("GradingWorker", output.ToString());
+        Assert.Equal("", errors.ToString());
+    }
+
+    [Fact]
     public async Task RegisteredWritePreservesOriginalRequestIdAndPendingResult()
     {
         var path = Path.Combine(Path.GetTempPath(), "synthetic-management-" + Guid.NewGuid().ToString("N") + ".json");

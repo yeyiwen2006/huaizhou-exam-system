@@ -165,7 +165,9 @@ public static class ManagementEntryPoint
                         Restore = operation.Restore with { BusinessReady = true }, Error = null };
                 },
                 readAudit: (limit, token) => new FileManagementOperationStore(Required("Management:OperationDirectory"))
-                    .ReadAuditAsync(limit, token));
+                    .ReadAuditAsync(limit, token),
+                readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
+                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token));
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

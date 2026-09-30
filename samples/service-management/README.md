@@ -12,9 +12,10 @@
 - `stop-reconciled.json`：原停机结果落盘中断后，从实际已停止状态确认原请求，未再次执行 SCM 停机。
 - `restore-needs-verification.json`：原恢复结果中断且暂存证据缺失或损坏，继续等待核对，不重复恢复或开放业务。
 - `logs-summary.json`：受保护操作记录的合成摘要，不含原请求内容或本机路径。
+- `runtime-logs-summary.json`：业务运行故障的合成元数据，不含异常正文、参数或个人数据。
 
 正式 CLI 使用 `exam-cli management status --management-url https://localhost:9443 --server-id synthetic-server --node-id synthetic-node`；
-`configuration`、`logs` 和 `operation --request-id ID` 为只读命令。`start`、`stop`、`checks`、`configure`、`backup`、`restore`
+`configuration`、`logs`、`runtime-logs` 和 `operation --request-id ID` 为只读命令。`start`、`stop`、`checks`、`configure`、`backup`、`restore`
 须附 `--input FILE|-`，请求 JSON 内携带稳定 requestId，超时后用原标识查询，不重新生成请求。
 上述地址和身份也可由 `EXAM_MANAGEMENT_URL`、`EXAM_SERVER_ID`、`EXAM_NODE_ID` 提供；令牌只从
 `EXAM_OPERATOR_TOKEN` 读取。CLI 保持系统证书验证，不支持管理 HTTP 降级。
@@ -22,7 +23,12 @@
 `GET /management/v1/service/logs?limit=1..100` 仅返回受保护本机操作记录的审计摘要：请求标识、类型、阶段、
 受理/更新时间和错误码。它不读取任意文件，也不返回原请求 JSON、内容摘要、恢复路径或业务日志正文；
 部署账户须保护 `Management:OperationDirectory`，缺失或损坏记录导致查询失败，不以不完整列表冒充成功。
-当前此接口是管理操作审计日志，不覆盖业务进程运行日志；业务日志的受保护采集及访问仍需另行接线。
+`GET /management/v1/service/runtime-logs?limit=1..100` 读取业务宿主在受保护固定路径写入的结构化运行事件。
+业务宿主须配置 `Management:ProtectedBusinessLogPath`，管理宿主须配置相同路径；目录由部署人员预建并只授权
+对应服务账户。日志仅写警告及以上级别的时间、来源、组件名和事件编号，绝不调用消息格式化器，也不写异常、
+参数或请求正文。达到 8 MiB 时轮换为固定 `.previous` 文件；读取最多返回 100 条，拒绝符号链接和损坏记录。
+未配置或不可读时返回依赖不可用，不把空列表当成功；管理宿主的状态和停止入口仍可使用。
+当前 `runtime-logs` 只展示业务来源。真实 Windows 服务账户和目录 ACL 须在部署环境核对。
 
 写请求必须附 `Authorization: Bearer …`、`X-Exam-Server-Id` 与 `X-Exam-Node-Id`；后两个值是预期目标节点，不是操作者身份。启停、自检请求体为 `{ "requestId": "synthetic-stop", "serverId": "synthetic-server", "nodeId": "synthetic-node" }`。保存配置另外附 `expectedVersion` 与完整 `configuration`；备份/恢复请求体复用既有 `BackupRequest`/`RestoreRequest`。
 

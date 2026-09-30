@@ -7,6 +7,7 @@ using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.Management;
+using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -85,8 +86,38 @@ public sealed class LocalManagementApiTests : IDisposable
     {
         await using var app = await AppAsync();
         using var client = Client(app, token);
-        foreach (var path in new[] { "/service/status", "/service/configuration", "/service/logs?limit=10", "/operations/id" })
+        foreach (var path in new[] { "/service/status", "/service/configuration", "/service/logs?limit=10", "/service/runtime-logs?limit=10", "/operations/id" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/management/v1" + path)).StatusCode);
+    }
+
+    [Fact]
+    public async Task RuntimeLogContainsOnlyFixedMetadataAndRemainsAvailableWhenBusinessIsStopped()
+    {
+        var path = Path.Combine(_directory, "business-events.jsonl");
+        using (var provider = new ProtectedRuntimeLogProvider(path))
+            provider.CreateLogger("Exam.Server.Runtime.GradingWorker").LogError(
+                new IOException("synthetic-secret-in-exception"), "synthetic-secret-in-message {Password}", "synthetic-password");
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.GetAsync("/management/v1/service/runtime-logs?limit=10");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Exam.Server.Runtime.GradingWorker", body);
+        Assert.DoesNotContain("synthetic-secret", body);
+        Assert.DoesNotContain("synthetic-password", body);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/management/v1/service/runtime-logs?limit=0")).StatusCode);
+    }
+
+    [Fact]
+    public async Task CorruptRuntimeLogFailsClosedWithoutLeakingContentsOrBlockingStatus()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_directory, "business-events.jsonl"), "synthetic-private-log-content");
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.GetAsync("/management/v1/service/runtime-logs?limit=10");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.DoesNotContain("synthetic-private-log-content", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/management/v1/service/status")).StatusCode);
     }
 
     [Fact]
@@ -386,7 +417,9 @@ public sealed class LocalManagementApiTests : IDisposable
                 new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
                 .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery,
             readAudit: (limit, token) => new FileManagementOperationStore(Path.Combine(_directory, "operations"))
-                .ReadAuditAsync(limit, token)));
+                .ReadAuditAsync(limit, token),
+            readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
+                Path.Combine(_directory, "business-events.jsonl"), "business", limit, token)));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
