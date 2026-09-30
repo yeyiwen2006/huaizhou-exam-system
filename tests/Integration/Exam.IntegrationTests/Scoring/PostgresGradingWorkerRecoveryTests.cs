@@ -236,7 +236,9 @@ public sealed partial class PostgresGradingPersistenceTests
             ["Grading:LeaseSeconds"] = ((int)BoundaryLease.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture)
         }).Build();
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
         services.AddLogging();
+        services.AddSignalR();
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(now ?? BoundaryNow));
         var source = services.AddPostgresExamRuntime(configuration,
             new ServerIdentityOptions { ServerId = ServerId, NodeId = "node-a", ServerEpoch = epoch },

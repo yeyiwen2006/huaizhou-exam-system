@@ -143,8 +143,10 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<CollectionCompletionService>();
         services.AddSingleton<CollectionCompletionWorker>();
         services.AddHostedService<RecoveryGatedWorker<CollectionCompletionWorker>>();
-        services.AddHostedService<GradingWorker>();
-        services.AddHostedService<RecalculationWorker>();
+        services.AddSingleton<GradingWorker>();
+        services.AddHostedService<RecoveryGatedWorker<GradingWorker>>();
+        services.AddSingleton<RecalculationWorker>();
+        services.AddHostedService<RecoveryGatedWorker<RecalculationWorker>>();
         services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();
         services.AddSingleton<PostgresScheduleProcessor>();
         services.AddSingleton<PostgresScheduleWorker>();
