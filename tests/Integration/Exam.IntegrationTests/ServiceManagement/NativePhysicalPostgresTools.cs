@@ -47,7 +47,7 @@ internal sealed class NativePhysicalPostgresTools : IPhysicalPostgresTools
         var bin = Required("EXAM_TEST_NATIVE_POSTGRES_BIN");
         if (!Path.IsPathFullyQualified(bin)) throw new InvalidOperationException("PostgreSQL 工具目录必须为绝对路径。");
         _binDirectory = Path.GetFullPath(bin);
-        if (new[] { "pg_ctl.exe", "pg_basebackup.exe", "pg_verifybackup.exe" }
+        if (new[] { "pg_ctl.exe", "pg_basebackup.exe", "pg_verifybackup.exe", "psql.exe" }
             .Any(name => !File.Exists(Path.Combine(_binDirectory, name))))
             throw new InvalidOperationException("本机物理恢复测试需要明确的 PostgreSQL 工具目录。");
         _connectionString = connectionString;
@@ -171,11 +171,51 @@ internal sealed class NativePhysicalPostgresTools : IPhysicalPostgresTools
             StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(directory, "postmaster.pid")))
             throw new InvalidOperationException("恢复实例只能在本测试准备的独立数据库槽中启动一次。");
         _restoredDirectory = directory; // Retain cleanup responsibility if pg_ctl starts but cannot report success.
-        var replay = archiveReplay is null ? "" : ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay);
+        var standalone = archiveReplay is null && !File.Exists(Path.Combine(directory, "standby.signal"));
+        if (standalone && !File.Exists(Path.Combine(directory, "recovery.signal")))
+            File.WriteAllText(Path.Combine(directory, "recovery.signal"), "");
+        var replay = archiveReplay is not null ? ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay)
+            : standalone ? ControlledRecoveryDatabase.BuildStandaloneReplayOptions() : "";
         var options = $"-p {RestoredPort} -h 127.0.0.1 -c archive_mode=off -c shared_preload_libraries=\"\" " +
             "-c session_preload_libraries=\"\" -c local_preload_libraries=\"\"" + replay;
         await ControlAsync(["-D", directory, "-l", OwnPath(Path.Combine(_root, "restored-postgres.log")),
             "-o", options, "-w", "-t", "60", "start"]);
+    }
+
+    // Models the documented operator rebuild, never a production automatic takeover.
+    public async Task RebuildRestoredStandbyAsync(string primaryConnection, string primaryRoot, string primaryDirectory)
+    {
+        var settings = RequireSourceConnection(primaryConnection);
+        PhysicalPostgresTestPaths.RequireWorkingRoot(primaryRoot);
+        var expected = PhysicalPostgresTestPaths.RequireChild(primaryRoot, primaryDirectory);
+        await using (var connection = new NpgsqlConnection(settings.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT current_setting('data_directory'),inet_server_port(),current_setting('listen_addresses'),
+                       pg_is_in_recovery(),system_identifier::text,current_setting('server_version_num')::integer
+                  FROM pg_control_system()
+                """, connection);
+            await using var row = await command.ExecuteReaderAsync();
+            if (!await row.ReadAsync() || !string.Equals(Path.GetFullPath(row.GetString(0)), expected, StringComparison.OrdinalIgnoreCase) ||
+                row.GetInt32(1) != settings.Port || row.GetString(2) != "127.0.0.1" || row.GetBoolean(3) ||
+                row.GetString(4) != _sourceSystemIdentifier || row.GetInt32(5) / 10000 != 18)
+                throw new InvalidOperationException("重建仅限同集群、本测试的真实恢复主库。");
+        }
+        var directory = OwnPath(_restoredDirectory ?? throw new InvalidOperationException("备节点未启动。"));
+        var preserved = OwnPath(directory + "-before-rebuild");
+        if (Directory.Exists(preserved)) throw new InvalidOperationException("备机已重建过，禁止覆盖原件。");
+        await ControlAsync(["-D", directory, "-m", "fast", "-w", "-t", "60", "stop"]);
+        // Both resolved targets were checked against this test's root before moving.
+        Directory.Move(directory, preserved);
+        Directory.CreateDirectory(directory);
+        var result = await _runner.RunAsync(Path.Combine(_binDirectory, "pg_basebackup.exe"),
+            ["--pgdata", directory, "--format=plain", "--wal-method=stream", "--checkpoint=fast", "--no-password", "--write-recovery-conf"],
+            new Dictionary<string, string> { ["PGHOST"] = "127.0.0.1", ["PGPORT"] = settings.Port.ToString(CultureInfo.InvariantCulture),
+                ["PGUSER"] = "postgres", ["PGDATABASE"] = settings.Database!, ["PGSSLMODE"] = "disable" }, TimeSpan.FromMinutes(2));
+        if (result.ExitCode != 0) throw new IOException("合成备机真实基础备份失败。");
+        await ControlAsync(["-D", directory, "-l", OwnPath(Path.Combine(_root, "rebuilt-standby.log")),
+            "-o", $"-p {RestoredPort} -h 127.0.0.1 -c archive_mode=off", "-w", "-t", "60", "start"]);
     }
 
     public async Task PauseSourceAsync()

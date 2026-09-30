@@ -156,7 +156,8 @@ public sealed class RealtimeConnectionRegistry(RealtimeDispatchOptions options)
 public sealed class ExamEventHub(
     RealtimeDeviceAuthorizer authorizer,
     RealtimeConnectionRegistry connections,
-    ReliableCommandService commands) : Hub
+    ReliableCommandService commands,
+    Exam.Application.HighAvailability.IBusinessConfirmation? confirmation = null) : Hub
 {
     private const string CredentialHeader = "X-Exam-Device-Credential";
 
@@ -256,6 +257,7 @@ public sealed class ExamEventHub(
 
         foreach (var delivery in result.Value ?? [])
         {
+            if (confirmation is not null) await confirmation.ConfirmAsync(cancellationToken);
             await Clients.Caller.SendAsync("Command", delivery, cancellationToken);
         }
     }

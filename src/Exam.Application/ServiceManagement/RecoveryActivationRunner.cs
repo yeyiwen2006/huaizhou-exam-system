@@ -17,6 +17,9 @@ public sealed class RecoveryActivationRunner(IManagedBusinessHost process, Func<
     {
         if (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
             { IsolationStaged: true, RecoveryVerified: true, BusinessReady: false } ||
+            operation.Checks?.Any(check => check.Name == "recovery-target" && check.Passed && check.BlocksWrites) != true ||
+            operation.Checks?.Any(check => check.Name == "recovery-confirmed-state" && check.Passed && check.BlocksWrites) != true ||
+            operation.Checks?.All(check => check.Passed || !check.BlocksWrites) != true ||
             operation.RecoveryWorkingDirectory is null || process.Status != BusinessServiceStatus.Stopped)
             throw new InvalidOperationException("尚未具备恢复业务的核对条件。");
         var progress = operation;

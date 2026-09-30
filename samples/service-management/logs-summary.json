@@ -1,0 +1,19 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "serverEpoch": null,
+  "epochVerified": false,
+  "epochVerifiedAt": null,
+  "correlationId": "synthetic-correlation",
+  "result": [
+    {
+      "requestId": "synthetic-stop",
+      "kind": "stop",
+      "phase": "completed",
+      "acceptedAt": "2026-09-30T00:00:00Z",
+      "updatedAt": "2026-09-30T00:00:01Z",
+      "errorCode": null
+    }
+  ],
+  "error": null
+}

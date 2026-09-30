@@ -54,6 +54,20 @@ public static class ManagementApi
             await WriteAsync(context, runtime, await runtime.GetStatusAsync(context.RequestAborted)));
         app.MapGet("/management/v1/service/configuration", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetConfigurationAsync(context.RequestAborted)));
+        app.MapGet("/management/v1/service/logs", async (HttpContext context, ManagementRuntime runtime) =>
+        {
+            if (!int.TryParse(context.Request.Query["limit"], out var limit) || limit is < 1 or > 100 ||
+                context.Request.Query.Count != 1)
+                throw new ArgumentException("日志查询须指定 1 至 100 的 limit。");
+            await WriteAsync(context, runtime, await runtime.ReadAuditAsync(limit, context.RequestAborted));
+        });
+        app.MapGet("/management/v1/service/runtime-logs", async (HttpContext context, ManagementRuntime runtime) =>
+        {
+            if (!int.TryParse(context.Request.Query["limit"], out var limit) || limit is < 1 or > 100 ||
+                context.Request.Query.Count != 1)
+                throw new ArgumentException("运行日志查询须指定 1 至 100 的 limit。");
+            await WriteAsync(context, runtime, await runtime.ReadRuntimeLogsAsync(limit, context.RequestAborted));
+        });
         app.MapGet("/management/v1/operations/{requestId}", async (string requestId, HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.FindOperationAsync(requestId, Actor(context), context.RequestAborted)));
         foreach (var (route, kind) in new[] { ("start", ManagementOperationKind.Start), ("stop", ManagementOperationKind.Stop), ("checks", ManagementOperationKind.Checks) })

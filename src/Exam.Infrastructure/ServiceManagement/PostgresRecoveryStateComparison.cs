@@ -6,31 +6,44 @@ using Npgsql;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
+public enum RecoveryComparisonStatus { Equal, Different, OriginalUnavailable, Invalid }
+public sealed record RecoveryComparisonObservation(StartupCheckResult Check, RecoveryComparisonStatus Status);
+
 /// <summary>Read-only proof for a stopped business service. An unavailable original is not evidence of completeness.</summary>
 public sealed class PostgresRecoveryStateComparison(string originalConnection, string recoveryConnection, long epoch)
 {
     public async Task<StartupCheckResult> RunAsync(ServiceConfiguration configuration, CancellationToken token)
+        => (await ObserveAsync(configuration, token)).Check;
+
+    public async Task<RecoveryComparisonObservation> ObserveAsync(ServiceConfiguration configuration, CancellationToken token)
     {
         try
         {
             await using var original = ManagementProbeConnection.Create(originalConnection, 30);
             await using var recovery = ManagementProbeConnection.Create(recoveryConnection, 30);
-            var before = await SnapshotAsync(original, configuration, token);
+            byte[] before;
+            try { before = await SnapshotAsync(original, configuration, token); }
+            catch (NpgsqlException error) when (error is not PostgresException || error is PostgresException
+                { SqlState: "3D000" or "57P01" or "57P02" or "57P03" or "58030" or "58P01" or "XX001" or "XX002" })
+            // Missing original database, shutdown/startup refusal, storage I/O and declared corruption
+            // are unreadability, never positive evidence. Authentication, grants, schema and mismatch stay invalid.
+            { return new(new("recovery-confirmed-state", false, "原库连接或读取中断，须独立持久证据核对。", true), RecoveryComparisonStatus.OriginalUnavailable); }
             var after = await SnapshotAsync(recovery, configuration, token);
             var equal = CryptographicOperations.FixedTimeEquals(before, after);
-            return new("recovery-confirmed-state", equal, equal
-                ? "停止业务后的原库与恢复库业务状态一致；保留既有单机应急授权，未提升节点或改变代次。"
-                : "原库与恢复库业务状态不同，不能证明已确认数据完整，禁止开放业务。", true);
+            return new(new("recovery-confirmed-state", equal, equal
+                ? "停止业务后的原库与恢复库业务状态一致；保留既有保护授权，未提升节点或改变代次。"
+                : "原库与恢复库业务状态不同，不能证明已确认数据完整，禁止开放业务。", true),
+                equal ? RecoveryComparisonStatus.Equal : RecoveryComparisonStatus.Different);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception)
         {
-            return new("recovery-confirmed-state", false,
-                "无法只读核实原库及恢复库的完整业务状态或既有单机应急授权；禁止开放业务。", true);
+            return new(new("recovery-confirmed-state", false,
+                "无法只读核实原库及恢复库的完整业务状态或既有保护授权；禁止开放业务。", true), RecoveryComparisonStatus.Invalid);
         }
     }
 
-    private async Task<byte[]> SnapshotAsync(NpgsqlDataSource source, ServiceConfiguration configuration, CancellationToken token)
+    public async Task<byte[]> SnapshotAsync(NpgsqlDataSource source, ServiceConfiguration configuration, CancellationToken token)
     {
         await using var connection = await source.OpenConnectionAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
@@ -43,7 +56,7 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
             authority.Parameters.AddWithValue("server", configuration.ServerId);
             await using var row = await authority.ExecuteReaderAsync(token);
             if (!await row.ReadAsync(token) || row.GetString(0) != configuration.NodeId || row.GetInt64(1) != epoch ||
-                row.GetString(2) != "EmergencySingleNode" || await row.ReadAsync(token))
+                row.GetString(2) != (configuration.HighAvailabilityEnabled ? "SynchronousDualNode" : "EmergencySingleNode") || await row.ReadAsync(token))
                 throw new InvalidDataException("恢复不能自行更改原主备授权。");
         }
         using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
