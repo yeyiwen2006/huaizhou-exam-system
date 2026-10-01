@@ -121,6 +121,13 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(ErrorBanner, "操作未完成，请重试；如仍未完成，请联系监考人员。", error.Message);
         }
+        catch (HttpStudentApi.UntrustedServerException error)
+        {
+            StudentMessages.ShowWithDetail(
+                ErrorBanner,
+                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                error.Message);
+        }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
         {
             ErrorBanner.Show("无法完成登录，请检查服务器连接后重试。");
@@ -173,6 +180,13 @@ public partial class LoginPage : UserControl
         catch (Exception error) when (error is DeviceStoreException or StudentIdentityException)
         {
             StudentMessages.ShowWithDetail(ErrorBanner, "操作未完成，请重试；如仍未完成，请联系监考人员。", error.Message);
+        }
+        catch (HttpStudentApi.UntrustedServerException error)
+        {
+            StudentMessages.ShowWithDetail(
+                ErrorBanner,
+                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
         {

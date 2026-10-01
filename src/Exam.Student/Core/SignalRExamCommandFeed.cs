@@ -16,7 +16,12 @@ namespace Exam.Student.Core;
 public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelope server,
     Func<Uri, HubConnection>? connectionFactory = null, TimeSpan? catchUpInterval = null) : IExamCommandFeed
 {
-    private readonly HttpMessageInvoker _socketHttp = new(new SocketsHttpHandler { AllowAutoRedirect = false });
+    // B07：实时连接与业务请求共用 ServerTrust 信任策略（部署指纹 pin 或标准链校验）。
+    private readonly HttpMessageInvoker _socketHttp = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        SslOptions = { RemoteCertificateValidationCallback = ServerTrust.ValidateCertificate }
+    });
     private readonly SemaphoreSlim _deliveryGate = new(1, 1);
     private const int MaxPendingCommands = 16;
     private readonly object _pendingGate = new();
