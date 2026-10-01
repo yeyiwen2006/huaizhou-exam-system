@@ -71,6 +71,9 @@
                   MinWidth="{Binding ViewportWidth, ElementName=PdfScroll}"
                   MinHeight="{Binding ViewportHeight, ElementName=PdfScroll}">
                 <StackPanel x:Name="PagesHost" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12">
+                    <StackPanel.LayoutTransform>
+                        <ScaleTransform ScaleX="1.25" ScaleY="1.25" />
+                    </StackPanel.LayoutTransform>
                     <!-- 动态：每题一页（裁去空白的 Image + 圆钮 Canvas），末尾“不作答” -->
                 </StackPanel>
             </Grid>

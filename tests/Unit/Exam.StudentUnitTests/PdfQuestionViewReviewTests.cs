@@ -65,7 +65,9 @@ public sealed class PdfQuestionViewReviewTests
             window.Show();
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
             view.UpdateLayout();
-            Assert.True(pages.LayoutTransform.Value.IsIdentity);
+            var scale = Assert.IsType<ScaleTransform>(pages.LayoutTransform);
+            Assert.Equal(1.25, scale.ScaleX);
+            Assert.Equal(1.25, scale.ScaleY);
             Assert.Null(view.FindName("ZoomInButton"));
             var point = button.TransformToAncestor(view).Transform(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
             var labelPoint = image.TransformToAncestor(view).Transform(new Point(
