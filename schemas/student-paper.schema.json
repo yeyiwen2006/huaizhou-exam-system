@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huaizhou.example/schemas/student-paper.schema.json",
   "title": "Student display manifest",
-  "description": "D03 输出 ZIP 内的 manifest.json。与服务器导入清单分离，不含计分规则、答案或源文件路径。跨字段唯一性、路径、PDF 检查以及 v2 才允许附带 option-regions.json 的规则由 StudentPaperPackage 执行。",
+  "description": "D03 输出 ZIP 内的 manifest.json。与服务器导入清单分离，不含参考答案、完整计分规则或源文件路径。v2/v3 必须附带 option-regions.json；v3 增加只读导航分值文字。跨字段约束由 StudentPaperPackage 执行。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "examId", "examName", "paperVersion", "subjects", "groups", "questions", "displayResources"],
   "properties": {
     "schemaVersion": {
-      "enum": [1, 2],
-      "description": "1 为既有清单，不带选项坐标，学生端不猜测点击位置；2 表示包内根目录必须附带 option-regions.json，缺文件或坐标无效时整包失败。两个版本字段与坐标产物自身的 artifactVersion 相互独立。"
+      "enum": [1, 2, 3],
+      "description": "1 无坐标；2 必须附带有效选项坐标；3 必须附带坐标及科目满分、每题分值显示文字。旧版不允许夹带新版显示字段。"
     },
     "examId": { "$ref": "#/$defs/text" },
     "examName": { "$ref": "#/$defs/text" },
@@ -18,14 +18,14 @@
       "type": "array", "minItems": 1,
       "items": {
         "type": "object", "additionalProperties": false, "required": ["subjectId", "name"],
-        "properties": { "subjectId": { "$ref": "#/$defs/text" }, "name": { "$ref": "#/$defs/text" } }
+        "properties": { "subjectId": { "$ref": "#/$defs/text" }, "name": { "$ref": "#/$defs/text" }, "maxScoreText": { "$ref": "#/$defs/text" } }
       }
     },
     "groups": {
       "type": "array", "minItems": 1,
       "items": {
         "type": "object", "additionalProperties": false, "required": ["groupId", "subjectId", "name", "order"],
-        "properties": { "groupId": { "$ref": "#/$defs/text" }, "subjectId": { "$ref": "#/$defs/text" }, "name": { "$ref": "#/$defs/text" }, "order": { "type": "integer", "minimum": 1 } }
+        "properties": { "groupId": { "$ref": "#/$defs/text" }, "subjectId": { "$ref": "#/$defs/text" }, "name": { "$ref": "#/$defs/text" }, "order": { "type": "integer", "minimum": 1 }, "perQuestionScoreText": { "$ref": "#/$defs/text" } }
       }
     },
     "questions": {
@@ -53,5 +53,18 @@
     },
     "displayResources": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/text", "maxLength": 512 } }
   },
-  "$defs": { "text": { "type": "string", "minLength": 1 } }
+  "$defs": { "text": { "type": "string", "minLength": 1 } },
+  "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": 3 } } },
+      "then": { "properties": {
+        "subjects": { "items": { "required": ["maxScoreText"] } },
+        "groups": { "items": { "required": ["perQuestionScoreText"] } }
+      } },
+      "else": { "properties": {
+        "subjects": { "items": { "properties": { "maxScoreText": false } } },
+        "groups": { "items": { "properties": { "perQuestionScoreText": false } } }
+      } }
+    }
+  ]
 }

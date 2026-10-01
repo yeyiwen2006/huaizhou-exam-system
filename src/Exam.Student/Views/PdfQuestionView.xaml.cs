@@ -243,6 +243,15 @@ public partial class PdfQuestionView : UserControl
             Canvas.SetLeft(button, centerX - diameter / 2);
             Canvas.SetTop(button, centerY - diameter / 2);
         }
+        if (_abstainButton is not null && _optionGeometry.Count > 0)
+        {
+            var first = _optionGeometry[0].Button;
+            var canvas = (Canvas)first.Parent;
+            // 多页宽度可能不同；页面在 PagesHost 中居中，先补上该页相对最宽页的偏移。
+            var left = (_pageOverlays.Max(page => page.Width) - canvas.Width) / 2 + Canvas.GetLeft(first);
+            _abstainButton.Margin = new Thickness(left, 4, 0, 4);
+            _abstainButton.FontSize = first.FontSize + .5 * 96 / 72; // 比普通选项按钮增加 0.5 磅。
+        }
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using Exam.Contracts.Resources;
+using Exam.Contracts.Common;
 using Exam.Contracts.Submissions;
 using Exam.Student.Core;
 
@@ -32,6 +33,7 @@ public sealed class PaperNavigatorTests
 
         // 科目按清单顺序；题组按 Order（一、二）；题号数值升序（1、2 / 10）。
         Assert.Equal(new[] { "数学", "数学", "化学" }, sections.Select(s => s.SubjectName));
+        Assert.Equal(new[] { true, false, true }, sections.Select(s => s.ShowSubjectHeading));
         Assert.Equal(new[] { "一、单项选择题", "二、多项选择题", "一、不定项选择题" },
             sections.Select(s => s.GroupTitle));
         Assert.Equal(new[] { 1, 2 }, sections[0].Boxes.Select(b => b.QuestionNo));
@@ -74,5 +76,122 @@ public sealed class PaperNavigatorTests
         Assert.Equal(10, navigator.Find("q10")?.QuestionNo);
         Assert.Null(navigator.Find("missing"));
         Assert.Null(navigator.Find(""));
+    }
+
+    [Fact]
+    public void AdjacentQuestionsFollowGlobalNumbersWithoutWrapping()
+    {
+        var navigator = new PaperNavigator(CreateManifest());
+        Assert.Null(navigator.PreviousQuestion("q1"));
+        Assert.Equal("q2", navigator.NextQuestion("q1")?.QuestionId);
+        Assert.Equal("q5", navigator.NextQuestion("q2")?.QuestionId);
+        Assert.Equal("q2", navigator.PreviousQuestion("q5")?.QuestionId);
+        Assert.Equal("q5", navigator.PreviousQuestion("q10")?.QuestionId);
+        Assert.Null(navigator.NextQuestion("q10"));
+        Assert.Null(navigator.PreviousQuestion("unknown"));
+        Assert.Null(navigator.NextQuestion("unknown"));
+    }
+
+    [Fact]
+    public void UnansweredCountIncludesEmptyAndMissingButExcludesSelectionsAndAbstain()
+    {
+        var navigator = new PaperNavigator(CreateManifest());
+        Assert.Equal(4, navigator.CountUnanswered(null));
+        var answers = new Dictionary<string, AnswerValue>
+        {
+            ["q1"] = AnswerValue.Selected("A"),
+            ["q2"] = AnswerValue.Empty(),
+            ["q5"] = AnswerValue.Abstain(),
+            ["other-paper-question"] = AnswerValue.Selected("A")
+        };
+        Assert.Equal(2, navigator.CountUnanswered(answers));
+        answers["q2"] = AnswerValue.Selected("B");
+        answers["q10"] = AnswerValue.Selected("A", "B");
+        Assert.Equal(0, navigator.CountUnanswered(answers));
+        answers["q1"] = AnswerValue.Empty();
+        Assert.Equal(1, navigator.CountUnanswered(answers));
+    }
+
+    [Theory]
+    [InlineData("single", true, AnswerKind.Selected, "q2")]
+    [InlineData("single", true, AnswerKind.Empty, null)]
+    [InlineData("single", true, AnswerKind.Abstain, "q2")]
+    [InlineData("single", false, AnswerKind.Abstain, null)]
+    [InlineData("multiple", true, AnswerKind.Selected, null)]
+    [InlineData("multiple", true, AnswerKind.Abstain, "q2")]
+    [InlineData("indeterminate", true, AnswerKind.Selected, null)]
+    [InlineData("indeterminate", true, AnswerKind.Abstain, "q2")]
+    public void AutomaticAdvanceDependsOnQuestionTypeAndTheSavedSelection(string type, bool allowAbstain,
+        AnswerKind kind, string? expected)
+    {
+        var template = CreateManifest();
+        var manifest = template with
+        {
+            Questions = template.Questions.Select(q => q.Structure.QuestionId == "q1"
+                ? q with { Structure = q.Structure with { QuestionType = type, AllowAbstain = allowAbstain } } : q).ToArray()
+        };
+        var answer = kind switch
+        {
+            AnswerKind.Selected => AnswerValue.Selected("A"),
+            AnswerKind.Abstain => AnswerValue.Abstain(),
+            _ => AnswerValue.Empty()
+        };
+        Assert.Equal(expected, new PaperNavigator(manifest).NextQuestionAfterSelection("q1", answer)?.QuestionId);
+    }
+
+    [Fact]
+    public void AutomaticAdvanceUsesGlobalNumericOrderAndStopsAtTheLastQuestion()
+    {
+        var template = CreateManifest();
+        var navigator = new PaperNavigator(template with
+        {
+            Questions = template.Questions.Select(q => q.Structure.QuestionId == "q10"
+                ? q with { Structure = q.Structure with { QuestionType = "single" } } : q).ToArray()
+        });
+        Assert.Equal("q5", navigator.NextQuestionAfterSelection("q2", AnswerValue.Selected("A"))?.QuestionId);
+        Assert.Equal("q10", navigator.NextQuestionAfterSelection("q5", AnswerValue.Abstain())?.QuestionId);
+        Assert.Null(navigator.NextQuestionAfterSelection("q10", AnswerValue.Selected("A")));
+        Assert.Null(navigator.NextQuestionAfterSelection("missing", AnswerValue.Selected("A")));
+    }
+
+    [Fact]
+    public void NavigationDisplaysConfiguredScoresAndResetsGroupNumbersPerSubject()
+    {
+        var original = CreateManifest();
+        var manifest = original with
+        {
+            SchemaVersion = StudentPaperPackage.NavigationSchemaVersion,
+            Subjects = [new("math", "数学", "100"), new("chem", "化学", "40")],
+            Groups = [
+                new("g-m2", "math", "多项选择", 9, "4分"),
+                new("g-m1", "math", "三、单项选择", 2, "3分"),
+                new("g-c1", "chem", "1.不定项选择", 5, "{正确选项总数}分")]
+        };
+        var sections = new PaperNavigator(manifest).BuildSections(null, null, null);
+        Assert.Equal(new[] { "数学（100分）", "数学（100分）", "化学（40分）" }, sections.Select(s => s.SubjectName));
+        Assert.Equal(new[] { "一、单项选择题（每小题3分）", "二、多项选择题（每小题4分）",
+            "一、不定项选择题（每小题{正确选项总数}分）" }, sections.Select(s => s.GroupTitle));
+        Assert.Equal(new[] { true, false, true }, sections.Select(s => s.ShowSubjectHeading));
+    }
+
+    [Theory]
+    [InlineData(10, "十")]
+    [InlineData(11, "十一")]
+    [InlineData(20, "二十")]
+    [InlineData(101, "一百零一")]
+    [InlineData(110, "一百一十")]
+    public void GroupNumbersAreChineseOrdinalsAndCustomNamesArePreserved(int count, string expected)
+    {
+        var template = CreateManifest();
+        var manifest = template with
+        {
+            Groups = Enumerable.Range(1, count).Select(i => new StudentPaperGroup($"g{i}", "math", "实验综合题", i, "3分/4分")).ToArray(),
+            Questions = Enumerable.Range(1, count).Select(i => template.Questions[0] with
+            {
+                Structure = template.Questions[0].Structure with { QuestionId = $"q{i}", QuestionNo = i, GroupId = $"g{i}" }
+            }).ToArray()
+        };
+        Assert.Equal($"{expected}、实验综合题（每小题3分/4分）",
+            new PaperNavigator(manifest).BuildSections(null, null, null)[^1].GroupTitle);
     }
 }

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Exam.Contracts.Resources;
 using Exam.Contracts.Submissions;
@@ -42,10 +43,10 @@ public partial class ExamInProgressPage : UserControl
     private bool _reviewPending;
     private bool _reviewSaving;
 
-    /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
+    /// <summary>右下角时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
     {
-        Text = "--:--:--",
+        Text = "--:--",
         Level = StatusLevel.Info,
     };
 
@@ -154,6 +155,7 @@ public partial class ExamInProgressPage : UserControl
         _focusWindow = window;
         window.Deactivated += OnWindowDeactivated;
         window.Activated += OnWindowActivated;
+        window.PreviewKeyDown += OnNavigationKeyDown;
     }
 
     private void DetachFocusWindow()
@@ -161,6 +163,7 @@ public partial class ExamInProgressPage : UserControl
         if (_focusWindow is not { } window) return;
         window.Deactivated -= OnWindowDeactivated;
         window.Activated -= OnWindowActivated;
+        window.PreviewKeyDown -= OnNavigationKeyDown;
         _focusWindow = null;
     }
 
@@ -442,6 +445,12 @@ public partial class ExamInProgressPage : UserControl
             QuestionView.UpdateAnswer(persisted);
             RefreshNav();
             RefreshStatus();
+            // 只在本次选择已经可靠保存、页面与授权仍有效时前进；取消选择和多选普通选项留在原题。
+            if (CanAnswer && _navigator?.NextQuestionAfterSelection(question.QuestionId, persisted) is { } nextQuestion)
+            {
+                _currentQuestionId = nextQuestion.QuestionId;
+                await RenderCurrentQuestionAsync(_lifetime.Token);
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) when (IsWorkbenchError(error))
@@ -466,8 +475,23 @@ public partial class ExamInProgressPage : UserControl
 
     private async void OnNavBoxClick(object sender, RoutedEventArgs e)
     {
+        if (sender is FrameworkElement { Tag: string questionId }) await NavigateToQuestionAsync(questionId);
+    }
+
+    private async void OnNavigationKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Left or Key.Right) || Keyboard.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        if (_navigator is null || _currentQuestionId is null) return;
+        var adjacent = e.Key == Key.Right
+            ? _navigator.NextQuestion(_currentQuestionId)
+            : _navigator.PreviousQuestion(_currentQuestionId);
+        if (adjacent is not null) await NavigateToQuestionAsync(adjacent.QuestionId);
+    }
+
+    private async Task NavigateToQuestionAsync(string questionId)
+    {
         if (!_answerBusy && !_rendering && !_submitting && !_lifetime.IsCancellationRequested &&
-            sender is FrameworkElement { Tag: string questionId } &&
             !string.Equals(questionId, _currentQuestionId, StringComparison.Ordinal) &&
             _navigator?.Find(questionId) is not null)
         {
@@ -521,15 +545,15 @@ public partial class ExamInProgressPage : UserControl
         // 时间只取服务器时钟；尚未校时时显示占位，不使用本机时间。
         if (!App.Services.Clock.IsSynchronized)
         {
-            ClockPillContent.Text = "--:--:--";
+            ClockPillContent.Text = "--:--";
             return;
         }
 
         var now = App.Services.Clock.UtcNow;
-        var clock = now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        var clock = now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
         var remain = _exam.ScheduledEnd - now;
         ClockPillContent.Text = remain > TimeSpan.Zero
-            ? $"{clock} · 剩余 {remain:hh\\:mm\\:ss}"
+            ? $"{clock} · 剩余 {remain:hh\\:mm}"
             : $"{clock} · 考试时间已到";
     }
 
@@ -539,7 +563,7 @@ public partial class ExamInProgressPage : UserControl
         {
             return;
         }
-        if (_runtime.Answers is not { Status: AnswerSessionStatus.Active } answers)
+        if (_runtime.Answers is not { Status: AnswerSessionStatus.Active } answers || _navigator is not { } navigator)
         {
             PaperBanner.Level = StatusLevel.Warning;
             PaperBanner.Message = "答卷已提交或尚未就绪，当前不能交卷。";
@@ -556,7 +580,7 @@ public partial class ExamInProgressPage : UserControl
             var confirmed = await ConfirmDialog.ShowAsync(
                 window,
                 "提前交卷",
-                "确定提前交卷吗？交卷后不能修改答案。",
+                $"当前还有 {navigator.CountUnanswered(answers.Answers)} 道题目未作答。\n确定提前交卷吗？交卷后不能修改答案。",
                 "提前交卷",
                 "继续答题",
                 isDanger: true);

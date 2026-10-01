@@ -7,9 +7,9 @@
     <UserControl.Resources>
         <!-- 左侧题号方框：已作答绿色；当前题主色描边；右上角红点为私人标记。 -->
         <Style x:Key="NavBoxStyle" TargetType="Button">
-            <Setter Property="Width" Value="42" />
-            <Setter Property="Height" Value="42" />
-            <Setter Property="Margin" Value="0,0,6,6" />
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Margin" Value="0,0,3,3" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
@@ -22,10 +22,12 @@
                                     Background="{DynamicResource Brush.Surface.Alt}"
                                     BorderBrush="{DynamicResource Brush.Border}"
                                     BorderThickness="1.5">
-                                <TextBlock Text="{Binding QuestionNo, Mode=OneWay}"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           FontSize="16" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource Brush.Text.Primary}" />
+                                <Viewbox StretchDirection="DownOnly" Margin="3">
+                                    <TextBlock Text="{Binding QuestionNo, Mode=OneWay}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Brush.Text.Primary}" />
+                                </Viewbox>
                             </Border>
                             <Ellipse x:Name="MarkDot"
                                      Width="10" Height="10"
@@ -82,7 +84,7 @@
             <!-- 左侧：按科目、题组显示题号方框，点击跳题 -->
             <Border Grid.Column="0"
                     Style="{StaticResource Card}"
-                    Width="280"
+                    Width="360"
                     Padding="14,14,8,12">
                 <DockPanel>
                     <!-- 图例：颜色语义与题号方框一致 -->
@@ -117,14 +119,15 @@
                                     <StackPanel Margin="0,0,0,14">
                                         <TextBlock Style="{StaticResource SectionTitle}"
                                                    FontSize="{DynamicResource Font.Size.Body.Large}"
-                                                   Text="{Binding SubjectName, Mode=OneWay}" />
+                                                   Text="{Binding SubjectName, Mode=OneWay}" TextWrapping="Wrap"
+                                                   Visibility="{Binding ShowSubjectHeading, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
                                         <TextBlock Style="{StaticResource CaptionText}"
                                                    Text="{Binding GroupTitle, Mode=OneWay}"
-                                                   Margin="0,6,0,8" />
-                                        <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}">
+                                                   Margin="0,6,0,8" TextWrapping="Wrap" />
+                                        <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}" Width="330" HorizontalAlignment="Left">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <WrapPanel />
+                                                    <UniformGrid Columns="10" />
                                                 </ItemsPanelTemplate>
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>

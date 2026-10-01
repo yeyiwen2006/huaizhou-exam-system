@@ -41,7 +41,7 @@ public sealed class MergedPrIntegrationTests
         var plaintext = await fixture.DecryptAsStudentAsync();
         var manifest = StudentPaperPackage.ReadManifest(plaintext, "exam", 1);
 
-        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, manifest.SchemaVersion);
+        Assert.Equal(StudentPaperPackage.NavigationSchemaVersion, manifest.SchemaVersion);
         var map = OptionRegionMap.TryReadFromPackage(plaintext, manifest);
         Assert.NotNull(map);
         var first = map!.ForQuestion("q1")!;
@@ -200,7 +200,7 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
     /// <param name="candidate">可选：替换合成考生身份（CandidateId 须保持 "candidate"）。</param>
     public static async Task<StudentPaperFixture> CreateAsync(string manifestExamId = "exam", byte[]? plaintextOverride = null,
         OptionRegionArtifact? optionRegions = null, IReadOnlyDictionary<string, byte[]>? questionPdfs = null,
-        Func<DeviceRecord, DeviceRecord>? device = null, CandidateIdentity? candidate = null)
+        Func<DeviceRecord, DeviceRecord>? device = null, CandidateIdentity? candidate = null, bool? allowAbstain = null)
     {
         var fixture = new StudentPaperFixture();
         try
@@ -211,6 +211,9 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
             var certificate = new CertificateRequest("CN=synthetic-pr-integration", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             fixture._node = certificate.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
             fixture.Manifest = CreateManifest(manifestExamId);
+            if (allowAbstain is { } allowed)
+                fixture.Manifest = fixture.Manifest with
+                { Groups = fixture.Manifest.Groups.Select(group => group with { AllowAbstain = allowed }).ToArray() };
             var input = Path.Combine(fixture._root, "input");
             var compiled = Path.Combine(fixture._root, "compiled");
             Directory.CreateDirectory(input);

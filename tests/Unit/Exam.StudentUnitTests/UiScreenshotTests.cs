@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -52,9 +53,9 @@ public sealed class UiScreenshotTests
             Func<DeviceRecord, DeviceRecord> device = record => record with { ClientNumber = "A-017", Port = 9 };
             var candidate = new CandidateIdentity("candidate", "合成考生01", "01", "2027017");
             using var waitingFixture = await StudentPaperFixture.CreateAsync(optionRegions: regions, questionPdfs: pdfs,
-                device: device, candidate: candidate);
+                device: device, candidate: candidate, allowAbstain: true);
             using var answeringFixture = await StudentPaperFixture.CreateAsync(optionRegions: regions, questionPdfs: pdfs,
-                device: device, candidate: candidate);
+                device: device, candidate: candidate, allowAbstain: true);
             await OnStaAsync(() => RenderPagesAsync(directory, waitingFixture, answeringFixture, notes));
         }
         finally
@@ -178,6 +179,91 @@ public sealed class UiScreenshotTests
             if (!ready) notes.AppendLine("答题页：15 秒内题目或题号导航未出现，截图为当时状态。");
             await IdleAsync(TimeSpan.FromMilliseconds(500));
             await CaptureAsync(window, directory, "student-exam-in-progress");
+
+            ToggleButton Choice(string id) => Assert.Single(Descendants<ToggleButton>(questionView), button => Equals(button.Tag, id));
+            bool ReadyAt(string id) => answers.CurrentQuestionId == id && navList.IsEnabled && questionView.HasQuestion;
+            async Task GoToAsync(string id)
+            {
+                Assert.Single(Descendants<Button>(navList), button => Equals(button.Tag, id))
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => ReadyAt(id), TimeSpan.FromSeconds(5));
+            }
+
+            void PressArrow(Key key) => window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(window)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+
+            async Task CheckConfirmationAsync(int expected, bool capture = false)
+            {
+                var checkedDialog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)(async () =>
+                {
+                    ConfirmDialog? dialog = null;
+                    try
+                    {
+                        dialog = Assert.Single(window.OwnedWindows.OfType<ConfirmDialog>());
+                        var text = Assert.IsType<TextBlock>(((ContentControl)dialog.FindName("BodyHost")).Content).Text;
+                        Assert.StartsWith($"当前还有 {expected} 道题目未作答。", text, StringComparison.Ordinal);
+                        var before = answers.CurrentQuestionId;
+                        PressArrow(Key.Right);
+                        Assert.Equal(before, answers.CurrentQuestionId); // 确认框打开时不切题。
+                        if (capture) await CaptureAsync(dialog, directory, "student-submit-confirmation");
+                        checkedDialog.TrySetResult();
+                    }
+                    catch (Exception error) { checkedDialog.TrySetException(error); }
+                    finally { dialog?.Close(); }
+                }));
+                Assert.Single(Descendants<Button>(inProgress), button => Equals(button.Content, "提交答卷"))
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await checkedDialog.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await WaitUntilAsync(() => navList.IsEnabled, TimeSpan.FromSeconds(5));
+                Assert.False(answeringRuntime.HasFixedSubmission);
+            }
+
+            PressArrow(Key.Left);
+            Assert.True(ReadyAt("q1"));
+            PressArrow(Key.Right);
+            await WaitUntilAsync(() => ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            PressArrow(Key.Right);
+            Assert.True(ReadyAt("q2"));
+            PressArrow(Key.Left);
+            await WaitUntilAsync(() => ReadyAt("q1"), TimeSpan.FromSeconds(5));
+            await CheckConfirmationAsync(1, capture: true);
+
+            // 再点已选单选项只取消；选中另一项后，答案与下一题位置均经真实 SQLite 保存。
+            Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Empty && ReadyAt("q1"), TimeSpan.FromSeconds(5));
+            await CheckConfirmationAsync(2);
+            Choice("A").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            var saved = Assert.IsType<AnswerStateRecord>(await answeringFixture.Store.LoadAnswerStateAsync(answeringFixture.Key));
+            Assert.Equal(new[] { "A" }, saved.Answers["q1"].OptionIds);
+            Assert.Equal("q2", saved.CurrentQuestionId);
+            await GoToAsync("q1");
+
+            var abstain = Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null);
+            abstain.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Abstain && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            await GoToAsync("q1");
+            abstain = Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null);
+            Assert.True(abstain.IsChecked);
+            Assert.All(Descendants<ToggleButton>(questionView).Where(button => button.Tag is string),
+                button => Assert.False(button.IsChecked));
+            await CaptureAsync(window, directory, "student-exam-in-progress-abstain");
+            // 使用真实导航模板测量十一题：前十题同一行，第十一题回到下一行的第一列。
+            var originalSections = navList.ItemsSource;
+            navList.ItemsSource = new[] { new GroupNavSection("synthetic", "合成科目（100分）", "synthetic-group",
+                "一、单项选择题（每小题3分）", Enumerable.Range(1, 11)
+                    .Select(i => new QuestionNavBox($"layout-{i}", i, false, false, false)).ToArray()) };
+            await IdleAsync();
+            window.UpdateLayout();
+            var layoutButtons = Descendants<Button>(navList).ToArray();
+            Assert.Equal(11, layoutButtons.Length);
+            var positions = layoutButtons.Select(b => b.TransformToAncestor(navList).Transform(new Point())).ToArray();
+            Assert.All(positions.Take(10), p => Assert.Equal(positions[0].Y, p.Y, 2));
+            Assert.True(positions[10].Y > positions[0].Y);
+            Assert.Equal(positions[0].X, positions[10].X, 2);
+            navList.ItemsSource = originalSections;
+            await IdleAsync();
             if (Descendants<Button>(navList).FirstOrDefault(button => Equals(button.Tag, "q2")) is { } q2)
             {
                 q2.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
@@ -185,6 +271,27 @@ public sealed class UiScreenshotTests
                     questionView.HasQuestion, TimeSpan.FromSeconds(15), throwOnTimeout: false);
                 await IdleAsync(TimeSpan.FromMilliseconds(500));
                 await CaptureAsync(window, directory, "student-exam-in-progress-q2");
+                Choice("A").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Contains("A") && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Count == 2 && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                await CheckConfirmationAsync(0); // q1 的“不作答”不计入未答题数。
+                Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null)
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].Kind == AnswerKind.Abstain && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                Assert.False(answeringRuntime.HasFixedSubmission); // 末题不循环，也不自动交卷。
+                Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null)
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].Kind == AnswerKind.Empty && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+
+                await GoToAsync("q1");
+                // 关闭测试专用存储注入写失败，验证页面不会在答案尚未保存时前进。
+                answeringFixture.Store.Dispose();
+                Choice("C").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Status == AnswerSessionStatus.WriteBlocked, TimeSpan.FromSeconds(5));
+                Assert.Equal("q1", answers.CurrentQuestionId);
+                Assert.StartsWith("第 1 题", ((TextBlock)inProgress.FindName("CurrentQuestionText")).Text, StringComparison.Ordinal);
+                Assert.Equal(AnswerKind.Abstain, answers.Answers["q1"].Kind);
             }
             else notes.AppendLine("答题页：未找到 q2 题号按钮，未生成 q2 截图。");
             host.Content = null;
@@ -225,20 +332,28 @@ public sealed class UiScreenshotTests
         var sources = new Dictionary<string, (string File, string Body)>
         {
             ["q1"] = ("questions/衔接合成考试_1.tex", """
+                {\linespread{1}\selectfont
                 \noindent 合成示例：设 $f(x)=2x^2-x+1$，则 $f(3)$ 的值为（\quad）。
+                \par}
 
-                \noindent\optmark{q1}{A}{A.} $14$\\
-                \optmark{q1}{B}{B.} $16$\\
-                \optmark{q1}{C}{C.} $18$\\
-                \optmark{q1}{D}{D.} $20$
+                {\linespread{2}\selectfont
+                \noindent\optmark{q1}{A}{A.}\hspace{\fontdimen2\font} $14$\\
+                \optmark{q1}{B}{B.}\hspace{\fontdimen2\font} $16$\\
+                \optmark{q1}{C}{C.}\hspace{\fontdimen2\font} $18$\\
+                \optmark{q1}{D}{D.}\hspace{\fontdimen2\font} $20$
+                \par}
                 """),
             ["q2"] = ("questions/衔接合成考试_2.tex", """
+                {\linespread{1}\selectfont
                 \noindent 合成多选题：下列各数中，属于偶数的有（\quad）。
+                \par}
 
-                \noindent\optmark{q2}{A}{A.} $2$\\
-                \optmark{q2}{B}{B.} $4$\\
-                \optmark{q2}{C}{C.} $7$\\
-                \optmark{q2}{D}{D.} $9$
+                {\linespread{2}\selectfont
+                \noindent\optmark{q2}{A}{A.}\hspace{\fontdimen2\font} $2$\\
+                \optmark{q2}{B}{B.}\hspace{\fontdimen2\font} $4$\\
+                \optmark{q2}{C}{C.}\hspace{\fontdimen2\font} $7$\\
+                \optmark{q2}{D}{D.}\hspace{\fontdimen2\font} $9$
+                \par}
                 """)
         };
         var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
