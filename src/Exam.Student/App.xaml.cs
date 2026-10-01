@@ -15,11 +15,27 @@ public partial class App : Application
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "HuaizhouExam", "Student");
 
+    /// <summary>
+    /// B07 部署配置（exe 旁 server.json）。null 且 ServerConfigError 为 null 表示文件未部署；
+    /// ServerConfigError 非 null 表示文件存在但无效。任意时刻读取，线程安全只读。
+    /// </summary>
+    public static ServerEndpointConfig? ServerConfig { get; private set; }
+    public static ServerEndpointConfig.LoadError? ServerConfigError { get; private set; }
+
     public static AppServices Services { get; } = new();
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // B07：启动即读取部署的服务器地址与信任配置；TLS 指纹 pin 在握手时生效。
+        var (serverConfig, serverConfigError) = ServerEndpointConfig.Load(AppContext.BaseDirectory);
+        ServerConfig = serverConfig;
+        ServerConfigError = serverConfigError;
+        if (serverConfig?.CertificateSha256 is { } thumbprint)
+        {
+            ServerTrust.Configure(thumbprint);
+        }
 
         var shell = new MainWindow();
         MainWindow = shell;

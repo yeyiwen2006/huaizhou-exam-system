@@ -25,14 +25,52 @@ public partial class ActivationPage : UserControl
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
-        if (App.Services.Device is { } device)
-        {
-            HostInput.Text = device.Host;
-            PortInput.Text = device.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
+        ApplyServerConfigState();
 
         Unloaded += (_, _) => _lifetime.Cancel();
         UpdateRequestEnabled();
+    }
+
+    /// <summary>
+    /// B07 部署配置（server.json）：有效时预填服务器地址并提示来源；无效时给出错误提示；
+    /// 未部署时提示联系监考人员。三种情况下手动输入均保留，作为部署遗漏时的应急通道。
+    /// </summary>
+    private void ApplyServerConfigState()
+    {
+        if (App.ServerConfig is { } config)
+        {
+            HostInput.Text = config.Host;
+            PortInput.Text = config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ConfigBanner.Show(
+                "服务器地址来自本机部署配置（server.json），无需手动输入。",
+                StatusLevel.Success);
+        }
+        else if (App.ServerConfigError is { } error)
+        {
+            if (App.Services.Device is { } device)
+            {
+                HostInput.Text = device.Host;
+                PortInput.Text = device.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            ConfigBanner.Show(
+                $"服务器部署配置（{ServerEndpointConfig.FileName}）无效：{error.Message} 请联系监考人员检查后再试；"
+                + "也可先手动输入已知的服务器地址。",
+                StatusLevel.Danger);
+        }
+        else
+        {
+            if (App.Services.Device is { } device)
+            {
+                HostInput.Text = device.Host;
+                PortInput.Text = device.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            ConfigBanner.Show(
+                $"本机未找到服务器部署配置（{ServerEndpointConfig.FileName}），请联系监考人员部署；"
+                + "也可手动输入服务器地址。",
+                StatusLevel.Warning);
+        }
     }
 
     private void OnInputChanged(object? sender, EventArgs e) => UpdateRequestEnabled();
@@ -121,6 +159,15 @@ public partial class ActivationPage : UserControl
             ActivationPill.Text = "激活尚未完成";
             ActivationPill.Level = StatusLevel.Danger;
             StudentMessages.ShowWithDetail(ErrorBanner, "激活未完成，请联系监考人员。", error.Message);
+        }
+        catch (HttpStudentApi.UntrustedServerException error)
+        {
+            ActivationPill.Text = "激活尚未完成";
+            ActivationPill.Level = StatusLevel.Danger;
+            StudentMessages.ShowWithDetail(
+                ErrorBanner,
+                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException)
         {

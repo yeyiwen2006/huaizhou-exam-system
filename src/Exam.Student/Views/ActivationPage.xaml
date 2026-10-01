@@ -36,6 +36,9 @@
                     </Border>
 
                     <StackPanel Margin="28,24,28,28">
+                        <controls:Banner x:Name="ConfigBanner"
+                                         Margin="0,0,0,14" />
+
                         <controls:ValidatedInput x:Name="HostInput"
                                                  Label="服务器 IP 地址"
                                                  Watermark="例如 192.168.1.10"

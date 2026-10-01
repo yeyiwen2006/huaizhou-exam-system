@@ -22,7 +22,16 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
     private readonly object _connectionGate = new();
     private long _connectionGeneration;
 
-    public HttpStudentApi() : this(new HttpClientHandler { AllowAutoRedirect = false }) { }
+    /// <summary>
+    /// B07 部署指纹校验失败（或证书链不受信任）时抛出；继承 HttpRequestException，
+    /// 沿用各页面既有的网络异常处理路径，激活页对其给出更明确的提示。
+    /// </summary>
+    public sealed class UntrustedServerException : HttpRequestException
+    {
+        public UntrustedServerException(string message, Exception inner) : base(message, inner) { }
+    }
+
+    public HttpStudentApi() : this(CreateDefaultHandler()) { }
 
     public HttpStudentApi(HttpMessageHandler handler)
     {
@@ -32,6 +41,16 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
             MaxResponseContentBufferSize = 4 * 1024 * 1024
         };
     }
+
+    /// <summary>
+    /// TLS 校验遵循 ServerTrust：部署配置提供证书指纹时精确 pin，否则保持 Windows 标准链校验。
+    /// 回调在每次 TLS 握手时读取当前配置，应用启动完成前发出的请求同样受最终配置约束。
+    /// </summary>
+    private static SocketsHttpHandler CreateDefaultHandler() => new()
+    {
+        AllowAutoRedirect = false,
+        SslOptions = { RemoteCertificateValidationCallback = ServerTrust.ValidateCertificate }
+    };
 
     public void ConfigureConnection(DeviceRecord device)
     {
@@ -152,6 +171,31 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         return request;
     }
 
+    /// <summary>发送请求；TLS 层不受信任（指纹不匹配或链校验失败）时转成 UntrustedServerException。</summary>
+    private async Task<HttpResponseMessage> SendTrustedAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        try
+        {
+            return await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
+        }
+        catch (HttpRequestException error) when (ContainsAuthenticationError(error))
+        {
+            throw new UntrustedServerException("服务器证书校验失败，当前节点不受信任。", error);
+        }
+    }
+
+    private static bool ContainsAuthenticationError(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            if (current is System.Security.Authentication.AuthenticationException)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private async Task<ApiEnvelope<T>> SendAsync<T>(
         HttpMethod method, string path, object? body, bool authenticated, CancellationToken ct)
     {
@@ -167,7 +211,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         {
             request.Content = JsonContent.Create(body, body.GetType(), options: _json);
         }
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
+        using var response = await SendTrustedAsync(request, ct);
         if ((int)response.StatusCode is >= 300 and < 400)
         {
             throw new HttpRequestException("服务器重定向被拒绝，请核对可信服务器地址。");
