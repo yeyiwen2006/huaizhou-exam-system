@@ -15,7 +15,7 @@ public sealed class OptionRegionArtifactJsonTests
         // 逐行给出，避免把测试文件自身的行尾带进期望值。
         var expected = string.Join('\n', [
             "{",
-            "  \"artifactVersion\": 1,",
+            "  \"artifactVersion\": 2,",
             "  \"anchorScheme\": \"pageTopLeftNormalizedV1\",",
             "  \"examId\": \"synthetic-contract\",",
             "  \"paperVersion\": 3,",
@@ -107,7 +107,25 @@ public sealed class OptionRegionArtifactJsonTests
     [Fact]
     public void Deserialize_WrongArtifactVersion_IsRejected()
     {
-        AssertRejected(ValidDocument().Replace("\"artifactVersion\": 1", "\"artifactVersion\": 2", StringComparison.Ordinal),
+        AssertRejected(ValidDocument().Replace("\"artifactVersion\": 1", "\"artifactVersion\": 3", StringComparison.Ordinal),
+            OptionRegionIssueCode.RequestInvalid);
+    }
+
+    [Fact]
+    public void Overlay_RoundTrips_AndCannotBeSmuggledIntoLegacyArtifact()
+    {
+        var option = new OptionRegion("choice-one", 0, .2, .2, .04, .06,
+            new OptionLabelOverlay("A", .19, .18, .08, .1));
+        var artifact = Artifact() with { Questions = [new OptionRegionQuestion("q-001", [option])] };
+        var json = OptionRegionArtifactJson.Serialize(artifact);
+        var parsed = OptionRegionArtifactJson.Deserialize(json);
+        Assert.True(parsed.Succeeded);
+        Assert.Equal(option, Assert.Single(Assert.Single(parsed.Artifact!.Questions).Options));
+        AssertRejected(json.Replace("\"artifactVersion\": 2", "\"artifactVersion\": 1", StringComparison.Ordinal),
+            OptionRegionIssueCode.RequestInvalid);
+        AssertRejected(json.Replace("\"width\": 0.08", "\"width\": 2", StringComparison.Ordinal),
+            OptionRegionIssueCode.RequestInvalid);
+        AssertRejected(json.Replace("\"text\": \"A\"", "\"text\": \" \"", StringComparison.Ordinal),
             OptionRegionIssueCode.RequestInvalid);
     }
 

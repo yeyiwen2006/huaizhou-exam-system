@@ -188,7 +188,7 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
                         "选项坐标的考试或试卷版本与本次组包不一致。", OptionRegionArtifact.FileName));
                     return;
                 }
-                if (artifact.ArtifactVersion != OptionRegionArtifact.CurrentArtifactVersion ||
+                if (!OptionRegionArtifact.IsSupportedVersion(artifact.ArtifactVersion) ||
                     !string.Equals(artifact.AnchorScheme, OptionRegionArtifact.AnchorSchemeName, StringComparison.Ordinal))
                 {
                     issues.Add(new(StudentPackageIssueCode.OptionRegionInvalid,

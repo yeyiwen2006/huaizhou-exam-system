@@ -60,7 +60,7 @@ public sealed class OptionRegionSerializationBoundaryTests
         var question = artifact.Questions[0];
         var invalid = defect switch
         {
-            "artifact-version" => artifact with { ArtifactVersion = 2 },
+            "artifact-version" => artifact with { ArtifactVersion = OptionRegionArtifact.CurrentArtifactVersion + 1 },
             "scheme" => artifact with { AnchorScheme = "unknown" },
             "exam" => artifact with { ExamId = " \t" },
             "paper-version" => artifact with { PaperVersion = 0 },

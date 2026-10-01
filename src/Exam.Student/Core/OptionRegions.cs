@@ -11,7 +11,8 @@ namespace Exam.Student.Core;
 /// 单个选项的定位区域。坐标为左上角原点、[0,1] 归一化值，
 /// 契约 anchorScheme = pageTopLeftNormalizedV1（D03 选项定位契约 4.3）。
 /// </summary>
-public sealed record OptionRegion(int PageIndex, double X, double Y, double Width, double Height)
+public sealed record OptionRegion(int PageIndex, double X, double Y, double Width, double Height,
+    OptionLabelOverlay? Overlay = null)
 {
     public double CenterX => X + Width / 2;
     public double CenterY => Y + Height / 2;
@@ -25,7 +26,7 @@ public sealed record OptionRegion(int PageIndex, double X, double Y, double Widt
 public sealed class OptionRegionMap
 {
     public const string EntryPath = "option-regions.json";
-    public const int RequiredArtifactVersion = 1;
+    public const int RequiredArtifactVersion = OptionRegionArtifact.CurrentArtifactVersion;
     public const string RequiredAnchorScheme = "pageTopLeftNormalizedV1";
 
     private readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, OptionRegion>> _regions;
@@ -109,7 +110,7 @@ public sealed class OptionRegionMap
             throw new InvalidDataException("选项坐标 JSON 或 UTF-8 编码无效。", error);
         }
 
-        if (file.ArtifactVersion != RequiredArtifactVersion || file.AnchorScheme != RequiredAnchorScheme)
+        if (!OptionRegionArtifact.IsSupportedVersion(file.ArtifactVersion) || file.AnchorScheme != RequiredAnchorScheme)
             throw new InvalidDataException("选项坐标版本或锚点方案不受支持。");
         if (!string.Equals(file.ExamId, manifest.ExamId, StringComparison.Ordinal) ||
             file.PaperVersion != manifest.PaperVersion)
@@ -131,6 +132,8 @@ public sealed class OptionRegionMap
             {
                 if (option is null || string.IsNullOrWhiteSpace(option.OptionId))
                     throw new InvalidDataException($"题目 {question.QuestionId} 存在无效选项坐标记录。");
+                if (option.Overlay is not null && file.ArtifactVersion < 2)
+                    throw new InvalidDataException("旧版坐标不能包含新版选项显示信息。");
                 if (!options.TryAdd(option.OptionId, ValidateRegion(question.QuestionId, option)))
                     throw new InvalidDataException($"题目 {question.QuestionId} 选项 {option.OptionId} 的坐标重复出现。");
             }
@@ -171,7 +174,8 @@ public sealed class OptionRegionMap
                 !double.IsFinite(region.X) || !double.IsFinite(region.Y) ||
                 !double.IsFinite(region.Width) || !double.IsFinite(region.Height) ||
                 region.X < 0 || region.Y < 0 || region.Width <= 0 || region.Height <= 0 ||
-                region.X + region.Width > 1 || region.Y + region.Height > 1)
+                region.X + region.Width > 1 || region.Y + region.Height > 1 ||
+                region.Overlay is { } overlay && !overlay.IsValid())
                 return $"题目 {questionId} 选项 {optionId} 的页码或区域无效（该题 PDF 实际页数 {pageCount}）。";
         }
         return null;
@@ -187,7 +191,9 @@ public sealed class OptionRegionMap
         if (option.X < 0 || option.Y < 0 || option.Width <= 0 || option.Height <= 0 ||
             option.X + option.Width > 1 || option.Y + option.Height > 1)
             throw new InvalidDataException($"题目 {questionId} 选项 {option.OptionId} 的坐标越出页面范围。");
-        return new OptionRegion(option.PageIndex, option.X, option.Y, option.Width, option.Height);
+        if (option.Overlay is { } overlay && !overlay.IsValid())
+            throw new InvalidDataException($"题目 {questionId} 选项 {option.OptionId} 的显示字母或遮盖范围无效。");
+        return new OptionRegion(option.PageIndex, option.X, option.Y, option.Width, option.Height, option.Overlay);
     }
 
     private static void RejectDuplicateProperties(JsonElement node)
@@ -214,5 +220,6 @@ public sealed class OptionRegionMap
     private sealed record RegionQuestionDocument(string? QuestionId, IReadOnlyList<RegionOptionDocument>? Options);
 
     private sealed record RegionOptionDocument(
-        string? OptionId, int PageIndex, double X, double Y, double Width, double Height);
+        string? OptionId, int PageIndex, double X, double Y, double Width, double Height,
+        OptionLabelOverlay? Overlay = null);
 }

@@ -191,7 +191,7 @@ public static class StudentPaperPackage
             options.RespectRequiredConstructorParameters = true;
             var artifact = document.RootElement.Deserialize<OptionRegionArtifact>(options)
                 ?? throw new InvalidDataException("缺少选项坐标产物。");
-            if (artifact.ArtifactVersion != OptionRegionArtifact.CurrentArtifactVersion ||
+            if (!OptionRegionArtifact.IsSupportedVersion(artifact.ArtifactVersion) ||
                 artifact.AnchorScheme != OptionRegionArtifact.AnchorSchemeName ||
                 artifact.ExamId != manifest.ExamId || artifact.PaperVersion != manifest.PaperVersion ||
                 artifact.Questions is null || artifact.Questions.Count != manifest.Questions.Count)
@@ -215,6 +215,8 @@ public static class StudentPaperPackage
                         option.X < 0 || option.Y < 0 || option.Width <= 0 || option.Height <= 0 ||
                         option.X + option.Width > 1 || option.Y + option.Height > 1)
                         throw new InvalidDataException("坐标选项标识无效、重复，或区域不是有限的合法矩形。");
+                    if (option.Overlay is { } overlay && (artifact.ArtifactVersion < 2 || !overlay.IsValid()))
+                        throw new InvalidDataException("选项显示字母或遮盖范围无效。");
                 }
                 if (optionIds.Count != 0) throw new InvalidDataException("坐标缺少清单中的选项。");
             }

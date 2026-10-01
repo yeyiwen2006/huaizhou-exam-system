@@ -46,7 +46,7 @@ public sealed class StudentPackageV2SemanticTests
         {
             case "exam": root["examId"] = "other-synthetic-exam"; break;
             case "version": root["paperVersion"] = 2; break;
-            case "artifact-version": root["artifactVersion"] = 2; break;
+            case "artifact-version": root["artifactVersion"] = 3; break;
             case "scheme": root["anchorScheme"] = "unknown"; break;
             case "missing-questions": root.Remove("questions"); break;
             case "missing-coordinate": option.Remove("x"); break;
@@ -90,6 +90,52 @@ public sealed class StudentPackageV2SemanticTests
     }
 
     private static StudentPaperManifest Manifest() => StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 2 };
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("legacy")]
+    [InlineData("empty-text")]
+    [InlineData("bounds")]
+    [InlineData("missing")]
+    [InlineData("unknown")]
+    public void SolidLabelMetadata_PassesTheSameValidationInPackageAndStudent(string defect)
+    {
+        var artifact = Artifact() with
+        {
+            ArtifactVersion = OptionRegionArtifact.CurrentArtifactVersion,
+            Questions = Artifact().Questions.Select(question => question with
+            {
+                Options = question.Options.Select(option => option with
+                {
+                    Overlay = new OptionLabelOverlay("A", .09, .09, .13, .13)
+                }).ToArray()
+            }).ToArray()
+        };
+        var root = JsonNode.Parse(JsonSerializer.Serialize(artifact, ImportJson.Create()))!;
+        var overlay = root["questions"]![0]!["options"]![0]!["overlay"]!.AsObject();
+        switch (defect)
+        {
+            case "legacy": root["artifactVersion"] = 1; break;
+            case "empty-text": overlay["text"] = " "; break;
+            case "bounds": overlay["width"] = 2; break;
+            case "missing": overlay.Remove("x"); break;
+            case "unknown": overlay["unexpected"] = true; break;
+        }
+        var json = root.ToJsonString();
+        if (defect == "valid")
+        {
+            var package = Package(json);
+            var manifest = StudentPaperPackage.ReadManifest(package, "exam", 1);
+            var map = OptionRegionMap.TryReadFromPackage(package, manifest)!;
+            Assert.Equal(artifact.Questions[0].Options[0].Overlay,
+                map.ForQuestion(artifact.Questions[0].QuestionId)![artifact.Questions[0].Options[0].OptionId].Overlay);
+        }
+        else
+        {
+            Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(Package(json), "exam", 1));
+            Assert.Throws<InvalidDataException>(() => OptionRegionMap.Parse(Encoding.UTF8.GetBytes(json), Manifest()));
+        }
+    }
 
     private static OptionRegionArtifact Artifact() => new(1, OptionRegionArtifact.AnchorSchemeName, "exam", 1,
         Manifest().Questions.Select(question => new OptionRegionQuestion(question.Structure.QuestionId,

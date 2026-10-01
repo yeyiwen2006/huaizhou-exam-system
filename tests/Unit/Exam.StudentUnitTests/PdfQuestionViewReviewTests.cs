@@ -39,14 +39,17 @@ public sealed class PdfQuestionViewReviewTests
         var expected = crop ? 120d / 220 : 160d / 300;
         if (rotation is 90 or 270) expected = 1 / expected;
         Assert.InRange((double)bitmap.PixelWidth / bitmap.PixelHeight, expected - .01, expected + .01);
-        Assert.Equal(shown.SourceRect.Width, image.Width, 5);
-        Assert.Equal(shown.SourceRect.Height, image.Height, 5);
+        var originalWidth = (crop ? 120d : 160d) * 96 / 72;
+        var originalHeight = (crop ? 220d : 300d) * 96 / 72;
+        if (rotation is 90 or 270) (originalWidth, originalHeight) = (originalHeight, originalWidth);
+        Assert.Equal(shown.SourceRect.Width * originalWidth / bitmap.PixelWidth, image.Width, 3);
+        Assert.Equal(shown.SourceRect.Height * originalHeight / bitmap.PixelHeight, image.Height, 3);
         Assert.True(image.Width < bitmap.PixelWidth || image.Height < bitmap.PixelHeight, "四周空白应被裁去。");
         var overlay = Assert.IsType<Canvas>(host.Children[1]);
         var button = Assert.IsType<ToggleButton>(Assert.Single(overlay.Children.Cast<UIElement>()));
         // 圆心加上裁边偏移，必须回到原页面上的同一归一化位置。
-        Assert.Equal(x * bitmap.PixelWidth, Canvas.GetLeft(button) + button.Width / 2 + shown.SourceRect.X, 5);
-        Assert.Equal(y * bitmap.PixelHeight, Canvas.GetTop(button) + button.Height / 2 + shown.SourceRect.Y, 5);
+        Assert.Equal(x * originalWidth, Canvas.GetLeft(button) + button.Width / 2 + shown.SourceRect.X * originalWidth / bitmap.PixelWidth, 3);
+        Assert.Equal(y * originalHeight, Canvas.GetTop(button) + button.Height / 2 + shown.SourceRect.Y * originalHeight / bitmap.PixelHeight, 3);
         var pixels = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
         var color = new byte[4];
         pixels.CopyPixels(new Int32Rect((int)(x * pixels.PixelWidth), (int)(y * pixels.PixelHeight), 1, 1), color, 4, 0);
@@ -61,13 +64,18 @@ public sealed class PdfQuestionViewReviewTests
         {
             window.Show();
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
-            ((Button)view.FindName("ZoomInButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             view.UpdateLayout();
-            var zoom = Assert.IsType<ScaleTransform>(pages.LayoutTransform);
-            Assert.Equal(zoom.ScaleX, zoom.ScaleY);
-            Assert.InRange(zoom.ScaleX, .4, 3);
+            var scale = Assert.IsType<ScaleTransform>(pages.LayoutTransform);
+            Assert.Equal(1.25, scale.ScaleX);
+            Assert.Equal(1.25, scale.ScaleY);
+            Assert.Null(view.FindName("ZoomInButton"));
             var point = button.TransformToAncestor(view).Transform(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
-            var hit = view.InputHitTest(point) as DependencyObject;
+            var labelPoint = image.TransformToAncestor(view).Transform(new Point(
+                (x * bitmap.PixelWidth - shown.SourceRect.X) * image.Width / shown.SourceRect.Width,
+                (y * bitmap.PixelHeight - shown.SourceRect.Y) * image.Height / shown.SourceRect.Height));
+            Assert.Equal(labelPoint.X, point.X, 5);
+            Assert.Equal(labelPoint.Y, point.Y, 5);
+            var hit = view.InputHitTest(labelPoint) as DependencyObject;
             while (hit is not null && hit is not ToggleButton) hit = VisualTreeHelper.GetParent(hit);
             Assert.Same(button, hit);
         }
@@ -167,10 +175,10 @@ public sealed class PdfQuestionViewReviewTests
 
     [Theory]
     [Trait("Category", "Wpf")]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(2)]
-    public Task B03Review_MultiPageScrollingAndZoomRetainTheSecondPagesOptionIdentity(int zoomSteps) => OnStaAsync(async () =>
+    [InlineData(400)]
+    [InlineData(600)]
+    [InlineData(900)]
+    public Task B03Review_MultiPageScrollingRetainsTheSecondPagesOptionIdentity(int windowWidth) => OnStaAsync(async () =>
     {
         var view = new PdfQuestionView();
         var (x, y) = Anchor(0, true);
@@ -185,15 +193,13 @@ public sealed class PdfQuestionViewReviewTests
         var button = Assert.IsType<ToggleButton>(Assert.Single(((Canvas)second.Children[1]).Children.Cast<UIElement>()));
         var window = new Window
         {
-            Content = view, Width = 600, Height = 300, Left = -10000, Top = -10000,
+            Content = view, Width = windowWidth, Height = 180, Left = -10000, Top = -10000,
             ShowActivated = false, ShowInTaskbar = false, Title = "B03 synthetic multipage review"
         };
         try
         {
             window.Show();
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
-            for (var i = 0; i < zoomSteps; i++)
-                ((Button)view.FindName("ZoomInButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             view.UpdateLayout();
             button.BringIntoView();
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
@@ -217,12 +223,17 @@ public sealed class PdfQuestionViewReviewTests
 
     [Fact]
     [Trait("Category", "Wpf")]
-    public Task Display_OptionCircleKeepsReadableScreenSizeAndQuestionIsCentred() => OnStaAsync(async () =>
+    public Task Display_SolidOptionsKeepTheirSizeAndCoverageWhenWindowResizes() => OnStaAsync(async () =>
     {
         var view = new PdfQuestionView();
+        view.Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Colors.xaml")
+        });
         var (x, y) = Anchor(0, false);
+        var cover = new Exam.Contracts.Importing.OptionLabelOverlay("A", x - .015, y - .02, .055, .045);
         await view.LoadAsync("synthetic-q", Pdf(0, false), new Dictionary<string, OptionRegion>
-            { ["A"] = new(0, x - .01, y - .01, .02, .02) }, true, false);
+            { ["choice-one"] = new(0, x - .01, y - .01, .02, .02, cover) }, true, true);
         var window = new Window
         {
             Content = view, Width = 1000, Height = 700, Left = -10000, Top = -10000,
@@ -232,21 +243,55 @@ public sealed class PdfQuestionViewReviewTests
         {
             window.Show();
             await Dispatcher.Yield(DispatcherPriority.ContextIdle);
-            ((Button)view.FindName("ZoomResetButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             view.UpdateLayout();
             var pages = (StackPanel)view.FindName("PagesHost");
             var scroll = (ScrollViewer)view.FindName("PdfScroll");
             var button = (ToggleButton)((Canvas)((Grid)pages.Children[0]).Children[1]).Children[0];
-            foreach (var steps in new[] { 0, 3, 6 })
+            var image = (Image)((Grid)pages.Children[0]).Children[0];
+            var shown = (CroppedBitmap)image.Source;
+            var abstain = (ToggleButton)pages.Children[1];
+            Assert.Equal("A", button.Content);
+            Assert.Equal(Colors.White, ((SolidColorBrush)button.Foreground).Color);
+            var normalColor = ((SolidColorBrush)button.Background).Color;
+            Assert.Equal(255, normalColor.A);
+            Assert.Equal(normalColor, ((SolidColorBrush)abstain.Background).Color);
+            view.UpdateAnswer(AnswerValue.Selected("choice-one"));
+            var selectedColor = ((SolidColorBrush)button.Background).Color;
+            Assert.Equal(255, selectedColor.A);
+            Assert.True(selectedColor.R + selectedColor.G + selectedColor.B < normalColor.R + normalColor.G + normalColor.B);
+            view.UpdateAnswer(AnswerValue.Abstain());
+            Assert.Equal(normalColor, ((SolidColorBrush)button.Background).Color);
+            Assert.Equal(selectedColor, ((SolidColorBrush)abstain.Background).Color);
+            view.SetInteractionEnabled(false);
+            Assert.Equal(1, button.Opacity);
+            Assert.Equal(1, ((System.Windows.Shapes.Ellipse)button.Template.FindName("Ring", button)).Opacity);
+            Assert.Equal(255, ((SolidColorBrush)button.Background).Color.A);
+            var originalSize = new Size(image.Width, image.Height);
+            foreach (var width in new[] { 1000, 350, 680 })
             {
-                for (var i = 0; i < steps; i++)
-                    ((Button)view.FindName(steps == 6 ? "ZoomInButton" : "ZoomOutButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                window.Width = width;
                 view.UpdateLayout();
+                Assert.Equal(originalSize, new Size(image.Width, image.Height));
                 var box = button.TransformToAncestor(view).TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
-                Assert.InRange(box.Width, 29, 45);
-                Assert.InRange(box.Height, 29, 45);
+                Assert.True(box.Width > 0);
+                Assert.Equal("Arial", button.FontFamily.Source);
+                Assert.Equal(box.Width, box.Height, 5);
+                var labelPoint = image.TransformToAncestor(view).Transform(new Point(
+                    (x * shown.Source.PixelWidth - shown.SourceRect.X) * image.Width / shown.SourceRect.Width,
+                    (y * shown.Source.PixelHeight - shown.SourceRect.Y) * image.Height / shown.SourceRect.Height));
+                Assert.Equal(labelPoint.X, box.Left + box.Width / 2, 5);
+                Assert.Equal(labelPoint.Y, box.Top + box.Height / 2, 5);
+                foreach (var edgeX in new[] { cover.X, cover.X + cover.Width })
+                foreach (var edgeY in new[] { cover.Y, cover.Y + cover.Height })
+                {
+                    var edge = image.TransformToAncestor(view).Transform(new Point(
+                        (edgeX * shown.Source.PixelWidth - shown.SourceRect.X) * image.Width / shown.SourceRect.Width,
+                        (edgeY * shown.Source.PixelHeight - shown.SourceRect.Y) * image.Height / shown.SourceRect.Height));
+                    Assert.True((edge - labelPoint).Length < box.Width / 2,
+                        "原字母及点号的每个边角都必须位于不透明圆内，窗口变化后也不能露出。");
+                }
             }
-            ((Button)view.FindName("ZoomResetButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            window.Width = 1000;
             view.UpdateLayout();
             // 裁边后的短题完整显示，不需要下拉，并在可视区域居中。
             Assert.Equal(0, scroll.ScrollableHeight, 1);
@@ -255,6 +300,35 @@ public sealed class PdfQuestionViewReviewTests
             Assert.Equal(scroll.ViewportHeight / 2, bounds.Top + bounds.Height / 2, 0);
         }
         finally { window.Content = null; window.Close(); view.ClearContent(); }
+    });
+
+    [Fact]
+    [Trait("Category", "Wpf")]
+    public Task Display_HorizontalCropIsFixedAndSymmetricWhileVerticalCropFollowsContent() => OnStaAsync(async () =>
+    {
+        var sizes = new List<Size>();
+        foreach (var (contentWidth, contentHeight) in new[] { (100, 20), (450, 20), (450, 200) })
+        {
+            var view = new PdfQuestionView();
+            await view.LoadAsync("synthetic-layout", Pdf(0, false, paperWidth: 600, paperHeight: 800,
+                contentOverride: $"0 0 0 rg 80 500 {contentWidth} {contentHeight} re f\n"), null, false, false);
+            var pages = (StackPanel)view.FindName("PagesHost");
+            var image = (Image)((Grid)pages.Children[0]).Children[0];
+            var shown = (CroppedBitmap)image.Source;
+            var croppedLeft = shown.SourceRect.X;
+            Assert.Equal(croppedLeft, shown.Source.PixelWidth - shown.SourceRect.X - shown.SourceRect.Width);
+            var millimeters = croppedLeft * (600d / shown.Source.PixelWidth) * 25.4 / 72;
+            Assert.InRange(millimeters, 19.8, 20);
+            // 1 PDF point = 96/72 DIP；题干长短只改变上下裁边，不改变横向长度或字体比例。
+            Assert.InRange(image.Width, 600d * 96 / 72 - 40d * 96 / 25.4, 600d * 96 / 72 - 40d * 96 / 25.4 + 1);
+            Assert.InRange(image.Height, contentHeight * 96d / 72 + 35, contentHeight * 96d / 72 + 37);
+            sizes.Add(new Size(image.Width, image.Height));
+            view.ClearContent();
+        }
+        Assert.Equal(sizes[0].Width, sizes[1].Width);
+        Assert.Equal(sizes[1].Width, sizes[2].Width);
+        Assert.Equal(sizes[0].Height, sizes[1].Height);
+        Assert.True(sizes[2].Height > sizes[1].Height);
     });
 
     private static async Task OnStaAsync(Func<Task> test)
@@ -284,10 +358,11 @@ public sealed class PdfQuestionViewReviewTests
         return rotation switch { 90 => (v, u), 180 => (1 - u, v), 270 => (1 - v, 1 - u), _ => (u, 1 - v) };
     }
 
-    private static byte[] Pdf(int rotation, bool crop, int pageCount = 1, bool tall = false)
+    private static byte[] Pdf(int rotation, bool crop, int pageCount = 1, bool tall = false,
+        int paperWidth = 160, int paperHeight = 300, string? contentOverride = null)
     {
         // tall：在页面底部再画一块，使裁去空白后的页面仍保持较高，用于检验下拉。
-        var content = "0 0 0 rg 44 116 12 18 re f\n" + (tall ? "0 0 0 rg 100 44 12 12 re f\n" : "");
+        var content = contentOverride ?? ("0 0 0 rg 44 116 12 18 re f\n" + (tall ? "0 0 0 rg 100 44 12 12 re f\n" : ""));
         var objects = new List<string>
         {
             "<< /Type /Catalog /Pages 2 0 R >>",
@@ -295,7 +370,7 @@ public sealed class PdfQuestionViewReviewTests
         };
         for (var i = 0; i < pageCount; i++)
         {
-            objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 300] /Rotate {rotation} " +
+            objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {paperWidth} {paperHeight}] /Rotate {rotation} " +
                 (crop ? "/CropBox [20 40 140 260] " : "") + $"/Resources << >> /Contents {4 + 2 * i} 0 R >>");
             objects.Add($"<< /Length {content.Length} >>\nstream\n{content}endstream");
         }

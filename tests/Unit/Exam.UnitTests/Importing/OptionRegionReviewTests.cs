@@ -14,6 +14,67 @@ public sealed class OptionRegionReviewTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "exam-option-review-" + Guid.NewGuid().ToString("N"));
 
     [Theory]
+    [InlineData(0, false)]
+    [InlineData(90, false)]
+    [InlineData(180, false)]
+    [InlineData(270, false)]
+    [InlineData(0, true)]
+    [InlineData(90, true)]
+    [InlineData(180, true)]
+    [InlineData(270, true)]
+    public void Extract_CentresOnVisibleLetterInsteadOfPunctuationAndLinkPadding(int rotation, bool crop)
+    {
+        // Helvetica 的 A 字形框为 [14 0 654 718]/1000 em；句点和链接留白都不能参与圆心计算。
+        // 标识故意不同于可见字母，绑定仍须来自链接目标，而不能从文字推断。
+        var pdf = CreatePdf([Link("/Dest (opt:q-001:choice-one)", "[25 25 50 50]")],
+            names: "(opt:q-001:choice-one) [3 0 R /Fit]",
+            pageAttributes: crop ? "" : $"/MediaBox [0 0 200 100] /Rotate {rotation}",
+            treeAttributes: crop ? $"/MediaBox [0 0 200 100] /CropBox [10 10 190 90] /Rotate {rotation}" : "",
+            content: "BT /F1 14 Tf 30 30 Td (A.) Tj ET\n");
+        var result = Extract(pdf, ["choice-one"]);
+        Assert.True(result.Succeeded, Describe(result));
+        var option = Assert.Single(result.Artifact!.Questions[0].Options);
+        Assert.Equal("choice-one", option.OptionId);
+        Assert.Equal("A", option.Overlay!.Text);
+        Assert.True(option.Overlay.IsValid());
+        Assert.True(option.Overlay.X <= option.X && option.Overlay.Y <= option.Y);
+        Assert.True(option.Overlay.X + option.Overlay.Width >= option.X + option.Width);
+        Assert.True(option.Overlay.Y + option.Overlay.Height >= option.Y + option.Height);
+        var pageWidth = crop ? 180d : 200d;
+        var pageHeight = crop ? 80d : 100d;
+        var offset = crop ? 10d : 0d;
+        var x = (30 + 14 * .014 - offset) / pageWidth;
+        var y = 1 - (30 + 14 * .718 - offset) / pageHeight;
+        var width = 14 * (.654 - .014) / pageWidth;
+        var height = 14 * .718 / pageHeight;
+        var expected = rotation switch
+        {
+            90 => (X: 1 - y - height, Y: x, Width: height, Height: width),
+            180 => (X: 1 - x - width, Y: 1 - y - height, Width: width, Height: height),
+            270 => (X: y, Y: 1 - x - width, Width: height, Height: width),
+            _ => (X: x, Y: y, Width: width, Height: height)
+        };
+        Assert.Equal(expected.X, option.X, 6);
+        Assert.Equal(expected.Y, option.Y, 6);
+        Assert.Equal(expected.Width, option.Width, 6);
+        Assert.Equal(expected.Height, option.Height, 6);
+    }
+
+    [Theory]
+    [InlineData("BT /F1 14 Tf 30 30 Td (\\(A\\)) Tj ET\n", 34.858, 43.818)]
+    [InlineData("BT /F1 14 Tf 30 30 Td (A.) Tj ET\nBT /F1 14 Tf 39 42 Td 3 Tr (B) Tj ET\nBT /F1 14 Tf 65 30 Td (A) Tj ET\n", 30.196, 39.156)]
+    public void Extract_IgnoresBracketsInvisibleTextAndLettersOutsideTheMarker(string content, double left, double right)
+    {
+        var result = Extract(CreatePdf([Link("/Dest (opt:q-001:A)", "[25 25 55 60]")], content: content));
+        Assert.True(result.Succeeded, Describe(result));
+        var option = Assert.Single(result.Artifact!.Questions[0].Options);
+        Assert.Equal(left / 200, option.X, 6);
+        Assert.Equal((right - left) / 200, option.Width, 6);
+        Assert.Equal(.59948, option.Y, 6);
+        Assert.Equal(.10052, option.Height, 6);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
@@ -368,7 +429,8 @@ public sealed class OptionRegionReviewTests : IDisposable
         string pageAttributes = "/MediaBox [0 0 200 100]",
         string treeAttributes = "",
         string[]? extraObjects = null,
-        string? secondPageAnnotation = null)
+        string? secondPageAnnotation = null,
+        string content = "")
     {
         // 对象 1..4 为 catalog/pages/page/contents；注解从 5 起，后接测试专用间接对象。
         var references = string.Join(" ", Enumerable.Range(5, annotations.Length).Select(number => $"{number} 0 R"));
@@ -379,8 +441,8 @@ public sealed class OptionRegionReviewTests : IDisposable
         {
             $"<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [{names}] >> >> >>",
             $"<< /Type /Pages /Kids [{kids}] /Count {pageCount} {treeAttributes} >>",
-            $"<< /Type /Page /Parent 2 0 R {pageAttributes} /Resources << >> /Contents 4 0 R /Annots [{references}] >>",
-            "<< /Length 0 >>\nstream\n\nendstream"
+            $"<< /Type /Page /Parent 2 0 R {pageAttributes} /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R /Annots [{references}] >>",
+            $"<< /Length {content.Length} >>\nstream\n{content}\nendstream"
         };
         objects.AddRange(annotations);
         objects.AddRange(extraObjects ?? []);

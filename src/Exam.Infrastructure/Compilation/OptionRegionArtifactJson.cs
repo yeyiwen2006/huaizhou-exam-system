@@ -54,6 +54,16 @@ public static class OptionRegionArtifactJson
                     writer.WriteNumber("y", Round(option.Y));
                     writer.WriteNumber("width", Round(option.Width));
                     writer.WriteNumber("height", Round(option.Height));
+                    if (option.Overlay is { } overlay)
+                    {
+                        writer.WriteStartObject("overlay");
+                        writer.WriteString("text", overlay.Text);
+                        writer.WriteNumber("x", Round(overlay.X));
+                        writer.WriteNumber("y", Round(overlay.Y));
+                        writer.WriteNumber("width", Round(overlay.Width));
+                        writer.WriteNumber("height", Round(overlay.Height));
+                        writer.WriteEndObject();
+                    }
                     writer.WriteEndObject();
                 }
 
@@ -117,9 +127,9 @@ public static class OptionRegionArtifactJson
                 return Fail(OptionRegionIssueCode.RequestInvalid, $"坐标文件含未知字段 {unknown}");
 
             if (!TryInt(root, "artifactVersion", out var artifactVersion) ||
-                artifactVersion != OptionRegionArtifact.CurrentArtifactVersion)
+                !OptionRegionArtifact.IsSupportedVersion(artifactVersion))
                 return Fail(OptionRegionIssueCode.RequestInvalid,
-                    $"artifactVersion 必须为 {OptionRegionArtifact.CurrentArtifactVersion}");
+                    "artifactVersion 必须为 1 或 2");
 
             if (!TryText(root, "anchorScheme", out var anchorScheme) ||
                 !string.Equals(anchorScheme, OptionRegionArtifact.AnchorSchemeName, StringComparison.Ordinal))
@@ -141,7 +151,7 @@ public static class OptionRegionArtifactJson
 
             foreach (var question in questions.EnumerateArray())
             {
-                var parsed = ParseQuestion(question, questionIds);
+                var parsed = ParseQuestion(question, questionIds, artifactVersion);
                 if (parsed.Issue is { } issue) return OptionRegionExtractionResult.Failure([issue]);
                 result.Add(parsed.Question!);
             }
@@ -155,7 +165,7 @@ public static class OptionRegionArtifactJson
 
     private static (OptionRegionQuestion? Question, OptionRegionIssue? Issue) ParseQuestion(
         JsonElement question,
-        HashSet<string> questionIds)
+        HashSet<string> questionIds, int artifactVersion)
     {
         if (question.ValueKind != JsonValueKind.Object)
             return (null, Invalid("题目项必须是对象"));
@@ -176,7 +186,7 @@ public static class OptionRegionArtifactJson
         {
             if (option.ValueKind != JsonValueKind.Object)
                 return (null, Invalid("选项项必须是对象", questionId));
-            if (UnexpectedProperty(option, ["optionId", "pageIndex", "x", "y", "width", "height"]) is { } optionUnknown)
+            if (UnexpectedProperty(option, ["optionId", "pageIndex", "x", "y", "width", "height", "overlay"]) is { } optionUnknown)
                 return (null, Invalid($"选项项含未知字段 {optionUnknown}", questionId));
             if (!TryText(option, "optionId", out var optionId) || string.IsNullOrWhiteSpace(optionId))
                 return (null, Invalid("optionId 不能为空", questionId));
@@ -193,7 +203,19 @@ public static class OptionRegionArtifactJson
                     OptionRegionIssueCode.RegionOutOfBounds, "坐标越出 [0,1] 或宽高非正",
                     questionId, optionId, pageIndex));
 
-            parsedOptions.Add(new OptionRegion(optionId, pageIndex, x, y, width, height));
+            OptionLabelOverlay? overlay = null;
+            if (option.TryGetProperty("overlay", out var display) && display.ValueKind != JsonValueKind.Null)
+            {
+                if (artifactVersion < 2 || display.ValueKind != JsonValueKind.Object ||
+                    UnexpectedProperty(display, ["text", "x", "y", "width", "height"]) is not null ||
+                    !TryText(display, "text", out var text) || string.IsNullOrWhiteSpace(text) ||
+                    !TryNumber(display, "x", out var coverX) || !TryNumber(display, "y", out var coverY) ||
+                    !TryNumber(display, "width", out var coverWidth) || !TryNumber(display, "height", out var coverHeight) ||
+                    !IsValidRegion(coverX, coverY, coverWidth, coverHeight))
+                    return (null, Invalid("选项显示字母或遮盖范围无效", questionId, optionId));
+                overlay = new OptionLabelOverlay(text, coverX, coverY, coverWidth, coverHeight);
+            }
+            parsedOptions.Add(new OptionRegion(optionId, pageIndex, x, y, width, height, overlay));
         }
 
         return (new OptionRegionQuestion(questionId, parsedOptions), null);
@@ -208,7 +230,7 @@ public static class OptionRegionArtifactJson
     private static void ValidateArtifact(OptionRegionArtifact artifact)
     {
         ArgumentNullException.ThrowIfNull(artifact);
-        if (artifact.ArtifactVersion != OptionRegionArtifact.CurrentArtifactVersion ||
+        if (!OptionRegionArtifact.IsSupportedVersion(artifact.ArtifactVersion) ||
             artifact.AnchorScheme != OptionRegionArtifact.AnchorSchemeName || artifact.PaperVersion < 1)
             throw new ArgumentException("坐标产物版本、坐标规范或试卷版本无效。", nameof(artifact));
         RequireText(artifact.ExamId, nameof(artifact.ExamId));
@@ -230,6 +252,12 @@ public static class OptionRegionArtifactJson
                 if (!optionIds.Add(option.OptionId) || option.PageIndex < 0 ||
                     !IsValidRegion(option.X, option.Y, option.Width, option.Height))
                     throw new ArgumentException("选项标识重复、页索引无效或原始区域越界。", nameof(artifact));
+                if (option.Overlay is { } overlay)
+                {
+                    if (artifact.ArtifactVersion < 2 || !overlay.IsValid())
+                        throw new ArgumentException("选项显示字母或遮盖范围无效。", nameof(artifact));
+                    RequireText(overlay.Text, nameof(overlay.Text));
+                }
             }
         }
     }
