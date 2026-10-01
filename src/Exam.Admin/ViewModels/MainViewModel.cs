@@ -44,7 +44,14 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public ExamHomeViewModel Home { get; }
     public RelayCommand BackToHomeCommand { get; }
 
-    public int SelectedPage { get => _selectedPage; set => SetProperty(ref _selectedPage, value); }
+    public int SelectedPage
+    {
+        get => _selectedPage;
+        set { if (SetProperty(ref _selectedPage, value)) OnPropertyChanged(nameof(ShowCurrentExamBar)); }
+    }
+
+    /// <summary>进入某场考试（或新建考试）后，在除主页外的页面顶部显示当前考试。</summary>
+    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage;
 
     public ExamSummary? CurrentExam
     {
@@ -56,6 +63,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
                 OnPropertyChanged(nameof(HasCurrentExam));
                 OnPropertyChanged(nameof(CanEditSettings));
                 OnPropertyChanged(nameof(CurrentExamTitle));
+                OnPropertyChanged(nameof(ShowCurrentExamBar));
             }
         }
     }
@@ -63,8 +71,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public bool HasCurrentExam => CurrentExam is not null;
     public bool CanEditSettings => HasCurrentExam || _isCreatingExam;
 
-    /// <summary>侧栏标识下方显示当前考试名称；未进入考试时显示“考务端”。</summary>
-    public string CurrentExamTitle => CurrentExam?.Name ?? (_isCreatingExam ? "新建考试" : "考务端");
+    /// <summary>内容区顶部“当前考试”栏显示的名称；新建尚未保存时显示“新建考试”。</summary>
+    public string CurrentExamTitle => CurrentExam?.Name ?? (_isCreatingExam ? "新建考试" : string.Empty);
 
     public void OpenExam(ExamSummary exam)
     {
@@ -111,6 +119,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _isCreatingExam = value;
         OnPropertyChanged(nameof(CanEditSettings));
         OnPropertyChanged(nameof(CurrentExamTitle));
+        OnPropertyChanged(nameof(ShowCurrentExamBar));
     }
 
     public ConnectionViewModel Connection { get; }

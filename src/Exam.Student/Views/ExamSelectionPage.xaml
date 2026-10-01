@@ -77,13 +77,12 @@
                                         <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="22" Height="22" />
                                     </Border>
                                     <StackPanel Grid.Column="1">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Name}" />
-                                            <controls:StatusPill Text="{Binding StateText}"
-                                                                 Level="{Binding StateLevel}"
-                                                                 Margin="12,0,0,0"
-                                                                 VerticalAlignment="Center" />
-                                        </StackPanel>
+                                        <!-- 考试名称自动换行，完整显示；状态放在名称下方。 -->
+                                        <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Name}" TextWrapping="Wrap" />
+                                        <controls:StatusPill Text="{Binding StateText}"
+                                                             Level="{Binding StateLevel}"
+                                                             HorizontalAlignment="Left"
+                                                             Margin="0,6,0,0" />
                                         <!-- 只有旧数据另设类别且与名称不同时才显示本行。 -->
                                         <TextBlock Style="{StaticResource CaptionText}"
                                                    Text="{Binding CategoryText}"

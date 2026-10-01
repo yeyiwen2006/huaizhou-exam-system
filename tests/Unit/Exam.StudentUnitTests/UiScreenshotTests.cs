@@ -139,11 +139,11 @@ public sealed class UiScreenshotTests
             var rows = Assert.IsType<ObservableCollection<ExamSelectionPage.ExamRow>>(((ItemsControl)selection.FindName("ExamList")).ItemsSource);
             var today = DateTimeOffset.Now.Date;
             var running = new ExamOverview("exam", "合成模拟考试（第一场）", today.AddHours(9), today.AddHours(11),
-                ["合成科目A", "合成科目B"], ExamLifecycle.Running, "合成类别");
+                ["合成科目A", "合成科目B"], ExamLifecycle.Running, null);
             rows.Clear();
             rows.Add(new ExamSelectionPage.ExamRow(running));
-            rows.Add(new ExamSelectionPage.ExamRow(new ExamOverview("synthetic-exam-2", "合成模拟考试（第二场）",
-                today.AddHours(14), today.AddHours(16), ["合成科目C"], ExamLifecycle.Scheduled, "合成类别")));
+            rows.Add(new ExamSelectionPage.ExamRow(new ExamOverview("synthetic-exam-2", "2027届清华复旦交大联合模拟笔试理科综合能力测试第一场正式",
+                today.AddHours(14), today.AddHours(16), ["合成科目C"], ExamLifecycle.Scheduled, null)));
             rows.Add(new ExamSelectionPage.ExamRow(new ExamOverview("synthetic-exam-0", "合成练习考试",
                 today.AddDays(-1).AddHours(9), today.AddDays(-1).AddHours(10), [], ExamLifecycle.Ended)));
             ((Banner)selection.FindName("EntryBanner")).Hide();
