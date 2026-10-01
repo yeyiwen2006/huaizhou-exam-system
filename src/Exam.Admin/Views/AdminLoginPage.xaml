@@ -20,7 +20,7 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource BrandBand.Title}" Text="考务端登录" Margin="0,14,0,0" />
                         <TextBlock Style="{StaticResource BrandBand.Caption}"
-                                   Text="请输入服务器地址、用户名和口令登录考务账号。"
+                                   Text="请输入服务器地址、用户名和密码登录考务账号。"
                                    Margin="0,6,0,0" />
                     </StackPanel>
                 </Border>
@@ -38,8 +38,8 @@
                              Margin="0,4,0,14"
                              Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" />
 
-                    <!-- 口令 -->
-                    <TextBlock Text="口令" Style="{StaticResource FieldLabel}" />
+                    <!-- 密码 -->
+                    <TextBlock Text="密码" Style="{StaticResource FieldLabel}" />
                     <PasswordBox x:Name="PasswordInput"
                                  Margin="0,4,0,0"
                                  PasswordChanged="Password_OnPasswordChanged" />
@@ -50,7 +50,7 @@
                         <TextBlock Text="姓名" Style="{StaticResource FieldLabel}" />
                         <TextBox Margin="0,4,0,14"
                                  Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Text="再次输入口令" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="再次输入密码" Style="{StaticResource FieldLabel}" />
                         <PasswordBox x:Name="ConfirmPasswordInput"
                                      Margin="0,4,0,0"
                                      PasswordChanged="ConfirmPassword_OnPasswordChanged" />
@@ -63,7 +63,8 @@
                                TextWrapping="Wrap" />
 
                     <!-- 主操作按钮 -->
-                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0"
+                                HorizontalAlignment="Center">
                         <Button Style="{StaticResource Btn.Primary}"
                                 MinWidth="96" Padding="14,0"
                                 Height="{StaticResource Control.Height.Large}"
@@ -78,12 +79,13 @@
                     </StackPanel>
 
                     <!-- 注册 / 取消注册 切换链接 -->
-                    <Button Style="{StaticResource Btn.Ghost}"
-                            Content="{Binding ToggleRegisterText}"
-                            Margin="0,10,0,0"
-                            Padding="12,0"
-                            HorizontalAlignment="Center"
-                            Command="{Binding ToggleRegisterCommand}" />
+                    <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center">
+                        <Hyperlink Foreground="{DynamicResource Brush.Text.Secondary}"
+                                   TextDecorations="Underline"
+                                   Command="{Binding ToggleRegisterCommand}">
+                            <Run Text="{Binding ToggleRegisterText, Mode=OneWay}" />
+                        </Hyperlink>
+                    </TextBlock>
                     <Button Content="本机服务管理" Style="{StaticResource Btn.Secondary}" Margin="0,12,0,0"
                             Click="OnManagementRequested" />
                 </StackPanel>

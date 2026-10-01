@@ -198,9 +198,13 @@ public sealed class ConnectionViewModel : BindableBase
         {
             if (SetProperty(ref _isRegistering, value))
             {
-                Status = value ? "填写姓名并再次输入口令后提交注册。" : "请登录考务账号。";
+                Status = value ? "填写姓名并再次输入密码后提交注册。" : "请登录考务账号。";
                 OnPropertyChanged(nameof(ShowRegisterFields));
+                OnPropertyChanged(nameof(PrimaryActionText));
+                OnPropertyChanged(nameof(PrimaryActionCommand));
+                OnPropertyChanged(nameof(ShowSecondaryAction));
                 OnPropertyChanged(nameof(ToggleRegisterText));
+                OnPropertyChanged(nameof(ToggleRegisterCommand));
             }
         }
     }
@@ -214,6 +218,7 @@ public sealed class ConnectionViewModel : BindableBase
     public string SecondaryActionText => "取消";
     public ICommand SecondaryActionCommand => CancelRegisterCommand;
     public string ToggleRegisterText => IsRegistering ? "已有账号？返回登录" : "注册新账号";
+    public ICommand ToggleRegisterCommand => IsRegistering ? CancelRegisterCommand : ShowRegisterCommand;
 
     public bool IsConnected
     {
@@ -273,7 +278,7 @@ public sealed class ConnectionViewModel : BindableBase
         if (!string.Equals(Password, ConfirmPassword, StringComparison.Ordinal))
         {
             ClearPasswords();
-            Status = "两次输入的口令不一致，请重新输入。";
+            Status = "两次输入的密码不一致，请重新输入。";
             return;
         }
         Status = "正在提交注册…";
@@ -282,7 +287,7 @@ public sealed class ConnectionViewModel : BindableBase
         finally { ClearPasswords(); }
         IsRegistering = false;
         Status = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Active
-            ? "注册成功。这是服务器上的第一个考务账号，已设为管理员，请输入口令登录。"
+            ? "注册成功。这是服务器上的第一个考务账号，已设为管理员，请输入密码登录。"
             : "注册成功，请等待管理员批准后再登录。";
     }
 
