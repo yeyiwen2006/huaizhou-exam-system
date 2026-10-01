@@ -58,7 +58,7 @@ public sealed partial class ReportWorkbookWriterTests
         };
         using var book = new XLWorkbook(new MemoryStream(new ReportWorkbookWriter().Write(
             ReportCalculator.Calculate(input with { Submissions = [first, input.Submissions[1]] }))));
-        var cell = book.Worksheet(3).Cell(2, 5);
+        var cell = book.Worksheet(3).Cell(2, 6);
         Assert.Equal(text, cell.GetString());
         Assert.Equal(XLDataType.Text, cell.DataType);
         Assert.False(cell.HasFormula);

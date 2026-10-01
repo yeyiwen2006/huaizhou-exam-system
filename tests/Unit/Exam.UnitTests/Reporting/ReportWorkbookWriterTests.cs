@@ -36,24 +36,24 @@ public sealed partial class ReportWorkbookWriterTests
         Assert.Equal("平均分", totals.Cell(4, 1).GetString());
         Assert.Single(totals.MergedRanges, range => range.RangeAddress.FirstAddress.RowNumber == 4);
         Assert.Equal("10.00", totals.Cell(4, 5).GetFormattedString());
-        Assert.True(totals.Cell(4, 6).IsEmpty());
+        Assert.True(totals.Cell(4, 7).IsEmpty());
 
         var scores = workbook.Worksheet(2);
         Assert.Equal("平均分", scores.Cell(4, 1).GetString());
         Assert.Equal("10.00", scores.Cell(4, 5).GetFormattedString());
 
         var answers = workbook.Worksheet(3);
-        Assert.False(answers.Cell(2, 5).HasFormula);
-        Assert.Equal("=1+1", answers.Cell(2, 5).GetString());
-        Assert.Equal(XLDataType.Text, answers.Cell(2, 5).DataType);
-        Assert.Equal(XLColor.Red, answers.Cell(2, 5).Style.Font.FontColor);
-        Assert.Equal("https://example.invalid", answers.Cell(3, 5).GetString());
-        Assert.False(answers.Cell(3, 5).HasHyperlink);
+        Assert.False(answers.Cell(2, 6).HasFormula);
+        Assert.Equal("=1+1", answers.Cell(2, 6).GetString());
+        Assert.Equal(XLDataType.Text, answers.Cell(2, 6).DataType);
+        Assert.Equal(XLColor.Red, answers.Cell(2, 6).Style.Font.FontColor);
+        Assert.Equal("https://example.invalid", answers.Cell(3, 6).GetString());
+        Assert.False(answers.Cell(3, 6).HasHyperlink);
         Assert.True(answers.Cell(4, 1).IsEmpty());
 
         var questionScores = workbook.Worksheet(4);
-        Assert.Equal(XLColor.Black, questionScores.Cell(2, 5).Style.Font.FontColor);
-        Assert.Equal(XLColor.Red, questionScores.Cell(3, 5).Style.Font.FontColor);
+        Assert.Equal(XLColor.Black, questionScores.Cell(2, 6).Style.Font.FontColor);
+        Assert.Equal(XLColor.Red, questionScores.Cell(3, 6).Style.Font.FontColor);
         Assert.Equal("10.00", questionScores.Cell(4, 5).GetFormattedString());
 
         var classes = workbook.Worksheet(5);
@@ -62,6 +62,20 @@ public sealed partial class ReportWorkbookWriterTests
         Assert.Equal("10", classes.Cell(3, 1).GetString());
         Assert.Equal("无有效样本", classes.Cell(3, 2).GetString());
         Assert.True(classes.Cell(3, 3).IsEmpty());
+
+        // 列序按 requirements.md：总分 / 成绩 / 总平均分紧跟在身份列之后；全部文字居中。
+        Assert.StartsWith("总分（满分", totals.Cell(1, 5).GetString());
+        Assert.StartsWith("Synthetic", totals.Cell(1, 6).GetString());
+        Assert.StartsWith("成绩（满分", answers.Cell(1, 5).GetString());
+        Assert.StartsWith("成绩（满分", questionScores.Cell(1, 5).GetString());
+        Assert.StartsWith("总平均分（满分", classes.Cell(1, 2).GetString());
+        Assert.Equal("总平均分排名", classes.Cell(1, 3).GetString());
+        foreach (var sheet in workbook.Worksheets)
+            foreach (var cell in sheet.RangeUsed()!.Cells())
+            {
+                Assert.Equal(XLAlignmentHorizontalValues.Center, cell.Style.Alignment.Horizontal);
+                Assert.Equal(XLAlignmentVerticalValues.Center, cell.Style.Alignment.Vertical);
+            }
     }
 
     [Fact]
@@ -125,9 +139,10 @@ public sealed partial class ReportWorkbookWriterTests
             Assert.True(sheet.Name.Length <= 31);
             Assert.DoesNotContain('/', sheet.Name);
         });
-        Assert.Equal("第1题答案", workbook.Worksheet(6).Cell(1, 5).GetString());
-        Assert.Equal("第2题答案", workbook.Worksheet(6).Cell(1, 6).GetString());
-        Assert.Equal("第2题得分（满分10）", workbook.Worksheet(7).Cell(1, 6).GetString());
+        Assert.StartsWith("成绩", workbook.Worksheet(6).Cell(1, 5).GetString());
+        Assert.Equal("第1题答案", workbook.Worksheet(6).Cell(1, 6).GetString());
+        Assert.Equal("第2题答案", workbook.Worksheet(6).Cell(1, 7).GetString());
+        Assert.Equal("第2题得分（满分10）", workbook.Worksheet(7).Cell(1, 7).GetString());
     }
 
     private static ReportCalculationInput TwoParticipantInput()

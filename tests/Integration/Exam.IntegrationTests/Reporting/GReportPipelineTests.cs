@@ -64,8 +64,8 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.Equal(5, workbook.Worksheets.Count);
         Assert.Equal(calculation.StudentTotals[0].Participant.ExamNumber, workbook.Worksheet(1).Cell(2, 2).GetString());
         Assert.Equal(3d, workbook.Worksheet(1).Cell(2, 5).GetDouble());
-        Assert.Equal("A", workbook.Worksheet(3).Cell(2, 5).GetString());
-        Assert.Equal(XLColor.Black, workbook.Worksheet(3).Cell(2, 5).Style.Font.FontColor);
+        Assert.Equal("A", workbook.Worksheet(3).Cell(2, 6).GetString());
+        Assert.Equal(XLColor.Black, workbook.Worksheet(3).Cell(2, 6).Style.Font.FontColor);
         Assert.Equal(HttpStatusCode.Conflict, (await client.GetAsync(path+"/xlsx?snapshotId=stale")).StatusCode);
         var concurrent = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => reports.ReadAsync(context.ExamId)));
         Assert.All(concurrent, result => Assert.Equal(first.Status.SnapshotId, result.Status.SnapshotId));

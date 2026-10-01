@@ -35,32 +35,32 @@ public static class ReportTableProjection
     private static ReportTable StudentTotals(ReportCalculationResult result)
     {
         var columns = BaseColumns("总分排名");
+        columns.Add(new($"总分（满分 {Score(result.TotalMaximumScore)}）"));
         foreach (var subject in result.Subjects)
         {
             columns.Add(new($"{subject.Subject.DisplayName}成绩（满分 {Score(subject.Subject.MaximumScore)}）"));
             columns.Add(new($"{subject.Subject.DisplayName}排名"));
         }
-        columns.Add(new($"总分（满分 {Score(result.TotalMaximumScore)}）"));
 
         var rows = result.StudentTotals.Select(row =>
         {
             var cells = BaseCells(row.TotalRank, row.Participant);
+            cells.Add(new(Score(row.TotalScore)));
             foreach (var subject in row.Subjects)
             {
                 cells.Add(new(Score(subject.Score)));
                 cells.Add(new(subject.Rank.ToString()));
             }
-            cells.Add(new(Score(row.TotalScore)));
             return new ReportTableRow(Array.AsReadOnly(cells.ToArray()));
         }).ToArray();
 
         var footer = BaseFooter();
+        footer.Add(Mean(result.TotalMean));
         foreach (var subject in result.Subjects)
         {
             footer.Add(Mean(subject.SubjectMean));
             footer.Add(string.Empty);
         }
-        footer.Add(Mean(result.TotalMean));
         return Make(ReportTableKind.StudentTotals, "学生成绩表", null, columns, rows, footer);
     }
 
@@ -83,14 +83,14 @@ public static class ReportTableProjection
     private static ReportTable SubjectAnswers(SubjectTables subject)
     {
         var columns = BaseColumns("排名");
+        columns.Add(new($"成绩（满分 {Score(subject.Subject.MaximumScore)}）"));
         foreach (var question in subject.Subject.Questions)
             columns.Add(new($"第 {question.QuestionNo} 题", 150));
-        columns.Add(new($"成绩（满分 {Score(subject.Subject.MaximumScore)}）"));
         var rows = subject.Answers.Select(row =>
         {
             var cells = BaseCells(row.Rank, row.Participant);
-            cells.AddRange(row.Answers.Select(answer => new ReportTableCell(answer.Text, !answer.IsCompletelyCorrect)));
             cells.Add(new(Score(row.Score)));
+            cells.AddRange(row.Answers.Select(answer => new ReportTableCell(answer.Text, !answer.IsCompletelyCorrect)));
             return new ReportTableRow(Array.AsReadOnly(cells.ToArray()));
         }).ToArray();
         return Make(ReportTableKind.SubjectAnswers, $"{subject.Subject.DisplayName}学生答案表",
@@ -100,19 +100,19 @@ public static class ReportTableProjection
     private static ReportTable QuestionScores(SubjectTables subject)
     {
         var columns = BaseColumns("排名");
+        columns.Add(new($"成绩（满分 {Score(subject.Subject.MaximumScore)}）"));
         foreach (var question in subject.Subject.Questions)
             columns.Add(new($"第 {question.QuestionNo} 题（满分 {Score(question.MaximumScore)}）"));
-        columns.Add(new($"成绩（满分 {Score(subject.Subject.MaximumScore)}）"));
         var rows = subject.QuestionScores.Select(row =>
         {
             var cells = BaseCells(row.Rank, row.Participant);
-            cells.AddRange(row.Questions.Select(question => new ReportTableCell(Score(question.Score), !question.IsFullScore)));
             cells.Add(new(Score(row.Score)));
+            cells.AddRange(row.Questions.Select(question => new ReportTableCell(Score(question.Score), !question.IsFullScore)));
             return new ReportTableRow(Array.AsReadOnly(cells.ToArray()));
         }).ToArray();
         var footer = BaseFooter();
-        footer.AddRange(subject.QuestionMeans.Select(question => Mean(question.Mean)));
         footer.Add(Mean(subject.SubjectMean));
+        footer.AddRange(subject.QuestionMeans.Select(question => Mean(question.Mean)));
         return Make(ReportTableKind.QuestionScores, $"{subject.Subject.DisplayName}学生小题得分表",
             subject.Subject.SubjectId, columns, rows, footer);
     }
@@ -120,23 +120,23 @@ public static class ReportTableProjection
     private static ReportTable ClassAverages(ReportCalculationResult result)
     {
         var columns = new List<ReportTableColumn> { new("班级") };
+        columns.Add(new($"总平均分（满分 {Score(result.TotalMaximumScore)}）"));
+        columns.Add(new("总平均分排名"));
         foreach (var subject in result.Subjects)
         {
             columns.Add(new($"{subject.Subject.DisplayName}平均分（满分 {Score(subject.Subject.MaximumScore)}）"));
             columns.Add(new($"{subject.Subject.DisplayName}排名"));
         }
-        columns.Add(new($"总平均分（满分 {Score(result.TotalMaximumScore)}）"));
-        columns.Add(new("总平均分排名"));
         var rows = result.ClassAverages.Select(row =>
         {
             var cells = new List<ReportTableCell> { new(row.ClassNumber) };
+            cells.Add(new(Mean(row.TotalMean)));
+            cells.Add(new(row.TotalRank?.ToString() ?? string.Empty));
             foreach (var subject in row.Subjects)
             {
                 cells.Add(new(Mean(subject.Mean)));
                 cells.Add(new(subject.Rank?.ToString() ?? string.Empty));
             }
-            cells.Add(new(Mean(row.TotalMean)));
-            cells.Add(new(row.TotalRank?.ToString() ?? string.Empty));
             return new ReportTableRow(Array.AsReadOnly(cells.ToArray()));
         }).ToArray();
         return Make(ReportTableKind.ClassAverages, "班级平均分表", null, columns, rows, null);
