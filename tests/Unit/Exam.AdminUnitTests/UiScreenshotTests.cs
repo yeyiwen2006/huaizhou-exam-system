@@ -194,9 +194,6 @@ public sealed class UiScreenshotTests
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-1", "synthetic-exam", 1, 3, completedAt));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-2", "synthetic-exam", 2, 4, completedAt.AddMinutes(6)));
 
-        viewModel.ManifestPreflight.ExamId = "synthetic-minimal";
-        viewModel.ManifestPreflight.ValidateManifestJson(File.ReadAllText(
-            Path.Combine(RepositoryRoot(), "samples", "synthetic", "minimal", "manifest.json")));
     }
 
     private static void PopulateReport(MainViewModel viewModel)
@@ -244,15 +241,6 @@ public sealed class UiScreenshotTests
     }
 
     private static ExactRational R(int value) => ExactRational.FromInteger(value);
-
-    private static string RepositoryRoot()
-    {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "samples", "synthetic")))
-            root = root.Parent;
-        Assert.NotNull(root);
-        return root.FullName;
-    }
 
     /// <summary>标签页标题仅保留 ASCII 字母数字；非字符串标题只用序号。</summary>
     private static string Slug(string? header)

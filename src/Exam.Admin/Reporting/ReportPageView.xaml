@@ -28,7 +28,7 @@
                     <Path Data="{DynamicResource Icon.Chart}" Style="{DynamicResource IconTile.Glyph}" Width="20" Height="20" />
                 </Border>
                 <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="成绩报表" Style="{DynamicResource PageTitle}" />
+                    <TextBlock Text="成绩统计" Style="{DynamicResource PageTitle}" />
                     <TextBlock Text="同一快照呈现排名、作答与班级表现；Excel 导出与表格同源。" Style="{DynamicResource PageSubtitle}" Margin="0,2,0,0" />
                 </StackPanel>
             </DockPanel>

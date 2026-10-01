@@ -105,10 +105,10 @@
             </Border>
         </controls:NavShell.TopBar>
 
-        <TabItem Header="考试配置" Tag="{StaticResource Icon.Calendar}">
+        <TabItem Header="考试设置" Tag="{StaticResource Icon.Calendar}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考试配置" Tag="{StaticResource Icon.Calendar}"
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考试设置" Tag="{StaticResource Icon.Calendar}"
                                     Content="维护考试名称、起止时间、科目与题组计分规则，确认后保存到服务器。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -210,10 +210,10 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="考生名册" Tag="{StaticResource Icon.Users}">
+        <TabItem Header="考生名单" Tag="{StaticResource Icon.Users}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考生名册" Tag="{StaticResource Icon.Users}"
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考生名单" Tag="{StaticResource Icon.Users}"
                                     Content="手工录入或从 Excel 整体导入考生；任一行有错误都会阻止整批导入。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -261,19 +261,19 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="激活与房间组" Tag="{StaticResource Icon.Device}">
+        <TabItem Header="激活与考场分组" Tag="{StaticResource Icon.Device}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="激活与房间组" Tag="{StaticResource Icon.Device}"
-                                    Content="审批学生端激活申请、查询设备，并整理房间组草稿。" />
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="激活与考场分组" Tag="{StaticResource Icon.Device}"
+                                    Content="审批学生端激活申请、查询设备，并整理考场分组。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="设备激活审批 / 查询" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="权威试场组接口尚未提供，审批时房间组只能留空，设备进入未分组。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="考场分组暂不能在审批时指定，批准后设备先归入未分组。" Style="{StaticResource CardNote}" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="24"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0"><TextBlock Text="激活申请 ID" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.ActivationRequestId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                <StackPanel Grid.Column="1"><TextBlock Text="房间组 ID（暂不可指定）" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" IsEnabled="False" ToolTip="权威试场组接口尚未提供；审批时只能留空，设备进入未分组。" Text="{Binding Activation.ApprovalRoomGroupId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                <StackPanel Grid.Column="1"><TextBlock Text="考场分组（暂不可指定）" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" IsEnabled="False" ToolTip="考场分组暂不能在审批时指定，批准后设备先归入未分组。" Text="{Binding Activation.ApprovalRoomGroupId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <Button Grid.Column="2" Content="审批" Style="{StaticResource Btn.Primary}" MinWidth="80" VerticalAlignment="Bottom" Margin="0,0,0,12" Command="{Binding Activation.ApproveCommand}"/>
                                 <Border Grid.Column="3" Width="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,12" HorizontalAlignment="Center" />
                                 <StackPanel Grid.Column="4"><TextBlock Text="设备 ID" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.QueryDeviceId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
@@ -283,7 +283,7 @@
                             <DataGrid ItemsSource="{Binding Activation.Devices}" Height="260">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="设备 ID" Binding="{Binding DeviceId}" Width="*"/><DataGridTextColumn Header="客户端编号" Binding="{Binding ClientNumber}" Width="120"/>
-                                    <DataGridTextColumn Header="激活状态" Binding="{Binding ActivationStatus}" Width="110"/><DataGridTextColumn Header="房间组" Binding="{Binding RoomGroupId}" Width="*"/>
+                                    <DataGridTextColumn Header="激活状态" Binding="{Binding ActivationStatus}" Width="110"/><DataGridTextColumn Header="考场分组" Binding="{Binding RoomGroupId}" Width="*"/>
                                     <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="120"/><DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="120"/><DataGridTextColumn Header="最后心跳" Binding="{Binding LastSeen}" Width="120"/>
                                 </DataGrid.Columns>
                             </DataGrid>
@@ -291,12 +291,12 @@
                     </Border>
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="房间组草稿" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="仅为本进程内存草稿，不是服务器分组。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="考场分组" Style="{StaticResource CardHeading}" />
+                            <TextBlock Text="当前只在本机整理，关闭考务端后不保留，尚不能保存到服务器。" Style="{StaticResource CardNote}" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="24"/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="新组名称" Style="{StaticResource FormLabel}"/>
+                                    <TextBlock Text="新分组名称" Style="{StaticResource FormLabel}"/>
                                     <DockPanel>
                                         <Button DockPanel.Dock="Right" Content="新增" Style="{StaticResource Btn.Primary}" MinWidth="72" Command="{Binding Activation.AddGroupCommand}"/>
                                         <Button DockPanel.Dock="Right" Content="删除空组" Style="{StaticResource Btn.Danger}" Margin="8,0" Command="{Binding Activation.RemoveGroupCommand}"/>
@@ -304,15 +304,15 @@
                                     </DockPanel>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Text="选中草稿的新名称" Style="{StaticResource FormLabel}"/>
+                                    <TextBlock Text="选中分组的新名称" Style="{StaticResource FormLabel}"/>
                                     <DockPanel>
-                                        <Button DockPanel.Dock="Right" Content="重命名草稿" Style="{StaticResource Btn.Secondary}" Margin="8,0,0,0" Command="{Binding Activation.RenameGroupCommand}"/>
-                                        <TextBox Text="{Binding Activation.SelectedGroupName, UpdateSourceTrigger=PropertyChanged}" ToolTip="选中草稿的新名称"/>
+                                        <Button DockPanel.Dock="Right" Content="重命名" Style="{StaticResource Btn.Secondary}" Margin="8,0,0,0" Command="{Binding Activation.RenameGroupCommand}"/>
+                                        <TextBox Text="{Binding Activation.SelectedGroupName, UpdateSourceTrigger=PropertyChanged}" ToolTip="选中分组的新名称"/>
                                     </DockPanel>
                                 </StackPanel>
                             </Grid>
                             <DataGrid ItemsSource="{Binding Activation.Groups}" SelectedItem="{Binding Activation.SelectedGroup}" Height="145" Margin="0,14,0,0">
-                                <DataGrid.Columns><DataGridTextColumn Header="房间组 ID" Binding="{Binding RoomGroupId}" Width="2*"/><DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/></DataGrid.Columns>
+                                <DataGrid.Columns><DataGridTextColumn Header="分组编号" Binding="{Binding RoomGroupId}" Width="2*"/><DataGridTextColumn Header="分组名称" Binding="{Binding Name}" Width="*"/></DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>
                     </Border>
@@ -320,10 +320,10 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="监控与处置" Tag="{StaticResource Icon.Monitor}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
+        <TabItem Header="设备监控" Tag="{StaticResource Icon.Monitor}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="监控与处置" Tag="{StaticResource Icon.Monitor}"
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备监控" Tag="{StaticResource Icon.Monitor}"
                                     Content="查看考场参与状态与收齐事件，处理设备冲突裁决和命令补发。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -434,64 +434,10 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="清单静态预检" Tag="{StaticResource Icon.Checklist}">
-            <ScrollViewer Style="{StaticResource PageScroller}">
-                <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="清单静态预检" Tag="{StaticResource Icon.Checklist}"
-                                    Content="对 D01 导入源 manifest.json 做静态预检（不是 D03 学生包清单），问题按 JSON Pointer 定位。" />
-                    <Border Style="{StaticResource CardGap}">
-                        <StackPanel>
-                            <TextBlock Text="静态预检" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="当前考试 ID 必须与清单中的 examId 完全一致。" Style="{StaticResource CardNote}" />
-                            <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions><ColumnDefinition MaxWidth="420"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                    <TextBlock Text="当前考试 ID" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Text="{Binding ManifestPreflight.ExamId, UpdateSourceTrigger=PropertyChanged}"
-                                             ToolTip="必须与清单 examId 完全一致"/>
-                                </StackPanel>
-                                <Button Grid.Column="1" Content="选择 manifest.json 并静态预检" Style="{StaticResource Btn.Primary}" Padding="14,0"
-                                        Command="{Binding ManifestPreflight.SelectManifestCommand}" VerticalAlignment="Bottom"/>
-                            </Grid>
-                            <TextBlock Text="{Binding ManifestPreflight.Status}" TextWrapping="Wrap"
-                                       Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
-                            <DataGrid ItemsSource="{Binding ManifestPreflight.Issues}" Height="260"
-                                      IsReadOnly="True" AutoGenerateColumns="False">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="规则标识" Binding="{Binding Rule}" Width="2*"/>
-                                    <DataGridTextColumn Header="JSON Pointer 位置" Binding="{Binding Location}" Width="2*"/>
-                                    <DataGridTextColumn Header="问题说明" Binding="{Binding Message}" Width="3*"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="能力边界" Style="{StaticResource CardHeading}" Margin="0,0,0,8"/>
-                            <TextBlock Text="只读取不超过 10 MB、严格 UTF-8 的 manifest.json，并复用 D01 正式校验器。不会读取独立答案，不执行依赖检查、XeLaTeX 编译、正式计分、发布或客户端更新。"
-                                       Style="{StaticResource BodyText}" Foreground="{DynamicResource Brush.Text.Secondary}"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-        </TabItem>
 
-        <TabItem Header="成绩报表" Tag="{StaticResource Icon.Chart}" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
+        <TabItem Header="成绩统计" Tag="{StaticResource Icon.Chart}" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
             <reporting:ReportPageView DataContext="{Binding Reports}" />
         </TabItem>
 
-        <TabItem Header="模块接入状态" Tag="{StaticResource Icon.Layers}">
-            <ScrollViewer Style="{StaticResource PageScroller}">
-                <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="模块接入状态" Tag="{StaticResource Icon.Layers}"
-                                    Content="后续模块依赖审计：状态来自当前 Contracts 与 Server 的实际能力盘点，没有使用 Mock/Fake 数据。" />
-                    <Border Style="{StaticResource Card}">
-                        <DataGrid ItemsSource="{Binding Dependencies.Items}" Height="320" BorderThickness="0">
-                            <DataGrid.Columns><DataGridTextColumn Header="模块" Binding="{Binding Module}" Width="180"/><DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="130"/><DataGridTextColumn Header="原因与边界" Binding="{Binding Reason}" Width="*"/></DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-        </TabItem>
     </TabControl>
 </Window>

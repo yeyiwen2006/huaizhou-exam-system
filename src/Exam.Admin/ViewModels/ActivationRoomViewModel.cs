@@ -13,7 +13,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     private string _activationRequestId = string.Empty;
     private string _approvalRoomGroupId = string.Empty;
     private string _queryDeviceId = string.Empty;
-    private string _status = "激活审批和单设备查询使用正式 API；房间组持久化/移动接口尚未提供。";
+    private string _status = "可审批学生端激活申请并按设备编号查询；考场分组目前只能在本机整理。";
 
     public ActivationRoomViewModel(AdminApiClient api)
     {
@@ -24,7 +24,7 @@ public sealed class ActivationRoomViewModel : BindableBase
             ActivationRequestId = string.Empty;
             ApprovalRoomGroupId = string.Empty;
             QueryDeviceId = string.Empty;
-            Status = "服务器连接已更换；设备结果和审批输入已清除，本地房间组草稿不是服务器分组。";
+            Status = "已切换服务器，之前的查询结果和审批输入已清除。";
         };
         AddGroupCommand = new RelayCommand(AddGroup);
         RenameGroupCommand = new RelayCommand(RenameGroup, () => SelectedGroup is not null);
@@ -67,12 +67,12 @@ public sealed class ActivationRoomViewModel : BindableBase
         var name = NewGroupName.Trim();
         if (name.Length == 0)
         {
-            Status = "房间组名称不能为空。";
+            Status = "分组名称不能为空。";
             return;
         }
         if (Groups.Any(group => StringComparer.Ordinal.Equals(group.Name, name)))
         {
-            Status = "房间组名称不能重复。";
+            Status = "分组名称不能重复。";
             return;
         }
 
@@ -80,7 +80,7 @@ public sealed class ActivationRoomViewModel : BindableBase
         Groups.Add(group);
         SelectedGroup = group;
         NewGroupName = string.Empty;
-        Status = "房间组已加入本地草稿；等待 A 提供正式 CRUD API 后才能持久化。";
+        Status = "已添加分组（仅在本机，尚未保存到服务器）。";
     }
 
     private void RemoveGroup()
@@ -91,13 +91,13 @@ public sealed class ActivationRoomViewModel : BindableBase
         }
         if (Devices.Any(device => StringComparer.Ordinal.Equals(device.RoomGroupId, SelectedGroup.RoomGroupId)))
         {
-            Status = "该组已有设备，不能删除。请先通过正式移动接口清空；该接口当前尚未提供。";
+            Status = "该分组中还有设备，不能删除。请先把设备移到其他分组。";
             return;
         }
 
         Groups.Remove(SelectedGroup);
         SelectedGroup = null;
-        Status = "房间组已从本进程草稿删除；未删除服务器分组，也未校验服务器全量成员。";
+        Status = "已删除分组（仅在本机）。";
     }
 
     private void RenameGroup()
@@ -110,7 +110,7 @@ public sealed class ActivationRoomViewModel : BindableBase
         if (name.Length == 0 || Groups.Any(group => group != SelectedGroup &&
                                                      StringComparer.Ordinal.Equals(group.Name, name)))
         {
-            Status = "房间组名称不能为空，也不能与已有组重复。";
+            Status = "分组名称不能为空，也不能与已有分组重复。";
             return;
         }
 
@@ -119,7 +119,7 @@ public sealed class ActivationRoomViewModel : BindableBase
         var renamed = oldGroup with { Name = name };
         Groups[index] = renamed;
         SelectedGroup = renamed;
-        Status = "房间组已在本地草稿中改名；正式持久化仍等待 A 的房间组 API。";
+        Status = "已重命名分组（仅在本机）。";
     }
 
     private async Task ApproveAsync()
@@ -132,7 +132,7 @@ public sealed class ActivationRoomViewModel : BindableBase
 
         if (!string.IsNullOrWhiteSpace(ApprovalRoomGroupId))
         {
-            Status = "当前没有权威试场组查询和校验接口，不能按本地草稿或手填 ID 指定试场；请清空试场组 ID 后审批为未分组。";
+            Status = "考场分组暂不能在审批时指定，请清空分组后再审批，设备将先归入未分组。";
             return;
         }
 

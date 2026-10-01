@@ -71,7 +71,7 @@ public sealed class RosterViewModel : BindableBase
 
     private void CreateTemplate()
     {
-        var path = _dialogs.SaveExcelFile("考生名册模板.xlsx");
+        var path = _dialogs.SaveExcelFile("考生名单模板.xlsx");
         if (path is null)
         {
             return;
