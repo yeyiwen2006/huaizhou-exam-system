@@ -73,10 +73,46 @@ public static class ReportWorkbookDownload
                 await file.FlushAsync(cancellationToken);
                 file.Flush(true);
             }
-            await validateBeforeCommit();
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporary, destination, overwrite: true);
+            await ReportFileCommit.ReplaceAsync(temporary, destination, validateBeforeCommit, cancellationToken);
         }
         finally { if (created) File.Delete(temporary); }
     }
+}
+
+// Shared by generated workbooks and downloaded workbooks (including the WPF linked source).
+// A transient Windows rename denial must not cause a delete/copy fallback or a stale commit.
+internal static class ReportFileCommit
+{
+    private static readonly System.Threading.Lock CommitGate = new();
+
+    internal static async Task ReplaceAsync(string temporary, string destination,
+        Func<Task>? validateBeforeCommit, CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var retries = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // A wait may span a report/identity/version change. Never reuse a previous validation.
+            if (validateBeforeCommit is not null) await validateBeforeCommit();
+            try
+            {
+                lock (CommitGate)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    File.Move(temporary, destination, overwrite: true);
+                }
+                return; // The atomic same-directory replacement is the commit point.
+            }
+            catch (Exception error) when (IsWindowsSharingFailure(error) && retries < 20 &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2))
+            {
+                retries++;
+                await Task.Delay(Math.Min(10 * retries, 100), cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsWindowsSharingFailure(Exception error) => OperatingSystem.IsWindows() &&
+        error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) is 5 or 32 or 33;
 }
