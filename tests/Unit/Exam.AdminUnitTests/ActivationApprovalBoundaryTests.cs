@@ -84,6 +84,8 @@ public sealed class ActivationApprovalBoundaryTests
         var viewModel = new ActivationRoomViewModel(api) { ActivationRequestId = "synthetic-request" };
 
         await ExecuteAsync(viewModel);
+        Assert.Equal(string.Empty, viewModel.ActivationRequestId);
+        viewModel.ActivationRequestId = "synthetic-request";
         await ExecuteAsync(viewModel);
 
         Assert.Equal(2, handler.Calls);
