@@ -70,40 +70,67 @@
 
     <TabControl Style="{StaticResource Nav.TabControl}" Tag="考务端" SelectedIndex="{Binding SelectedPage, Mode=TwoWay}">
         <controls:NavShell.TopBar>
-            <!-- 常驻连接条：切换页面时保持不变 -->
+            <!-- 常驻登录条：切换页面时保持不变。未登录时输入考务账号登录或注册；登录后显示当前账号。 -->
             <Border Style="{StaticResource TopBar}">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="2*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBlock Grid.Column="0" Text="服务器地址" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
-                    <TextBox Grid.Column="1" Margin="0,0,20,0" Text="{Binding Connection.ServerAddress, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Grid.Column="2" Text="考务身份" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
-                    <TextBox Grid.Column="3" Margin="0,0,20,0" Text="{Binding Connection.OperatorId, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Grid.Column="4" Text="访问令牌" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center"
-                               ToolTip="令牌只保存在本进程内存中，不写入磁盘。" />
-                    <PasswordBox Grid.Column="5" Margin="0,0,20,0" PasswordChanged="OperatorToken_OnPasswordChanged"
-                                 ToolTip="令牌只保存在本进程内存中，不写入磁盘。" />
-                    <Button Grid.Column="6" Content="连接服务器" Style="{StaticResource Btn.Primary}" MinWidth="108"
-                            Command="{Binding Connection.ConnectCommand}" />
-                    <StackPanel Grid.Row="1" Grid.ColumnSpan="7" Orientation="Horizontal" Margin="0,8,0,0">
+                    <!-- 未登录 -->
+                    <StackPanel Visibility="{Binding Connection.IsLoggedOut, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="服务器地址" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Margin="0,0,20,0" Text="{Binding Connection.ServerAddress, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Grid.Column="2" Text="用户名" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="3" Margin="0,0,20,0" Text="{Binding Connection.Username, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Grid.Column="4" Text="口令" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <PasswordBox x:Name="PasswordInput" Grid.Column="5" Margin="0,0,20,0" PasswordChanged="Password_OnPasswordChanged" />
+                            <Button Grid.Column="6" Content="登录" Style="{StaticResource Btn.Primary}" MinWidth="96" Margin="0,0,8,0"
+                                    Command="{Binding Connection.ConnectCommand}" />
+                            <Button Grid.Column="7" Content="注册账号" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
+                                    Command="{Binding Connection.ShowRegisterCommand}" />
+                        </Grid>
+                        <!-- 注册：在上方填写用户名和口令之外，再填写姓名并再次输入口令。 -->
+                        <Grid Margin="0,10,0,0" Visibility="{Binding Connection.ShowRegisterFields, Converter={StaticResource BoolToVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="姓名" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Margin="0,0,20,0" Text="{Binding Connection.DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Grid.Column="2" Text="再次输入口令" Style="{StaticResource FieldLabel}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <PasswordBox x:Name="ConfirmPasswordInput" Grid.Column="3" Margin="0,0,20,0" PasswordChanged="ConfirmPassword_OnPasswordChanged" />
+                            <Button Grid.Column="4" Content="提交注册" Style="{StaticResource Btn.Primary}" MinWidth="96" Margin="0,0,8,0"
+                                    Command="{Binding Connection.RegisterCommand}" />
+                            <Button Grid.Column="5" Content="取消" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
+                                    Command="{Binding Connection.CancelRegisterCommand}" />
+                        </Grid>
+                    </StackPanel>
+                    <!-- 已登录 -->
+                    <DockPanel Visibility="{Binding Connection.IsConnected, Converter={StaticResource BoolToVis}}">
+                        <Button DockPanel.Dock="Right" Content="退出登录" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
+                                Command="{Binding Connection.LogoutCommand}" />
+                        <Border Style="{StaticResource IconTile}" Width="36" Height="36" CornerRadius="9" Margin="0,0,12,0">
+                            <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Users}" Width="18" Height="18" />
+                        </Border>
+                        <TextBlock Text="{Binding Connection.AccountTitle}" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
                         <Path Data="{StaticResource Icon.Server}" Style="{StaticResource IconTile.Glyph}" Width="13" Height="13"
                               Stroke="{DynamicResource Brush.Text.Secondary}" StrokeThickness="1.5" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding Connection.Status}" Style="{StaticResource CaptionText}" VerticalAlignment="Center" />
                     </StackPanel>
                     <!-- 当前考试：进入某场考试或新建考试时显示，不在主页显示。 -->
-                    <Border Grid.Row="2" Grid.ColumnSpan="7" Margin="-28,12,-28,-12" Padding="28,10"
+                    <Border Grid.Row="2" Margin="-28,12,-28,-12" Padding="28,10"
                             Background="{DynamicResource Brush.Primary.Soft}"
                             Visibility="{Binding ShowCurrentExamBar, Converter={StaticResource BoolToVis}}">
                         <DockPanel>
@@ -513,6 +540,51 @@
 
         <TabItem Header="成绩统计" Tag="{StaticResource Icon.Chart}" IsEnabled="{Binding HasCurrentExam}" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
             <reporting:ReportPageView DataContext="{Binding Reports}" />
+        </TabItem>
+
+        <!-- 考务账号：仅管理员可见。批准新注册的账号，停用或重新启用账号。 -->
+        <TabItem Header="考务账号" Tag="{StaticResource Icon.Lock}"
+                 Visibility="{Binding Connection.IsAdministrator, Converter={StaticResource BoolToVis}}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <DockPanel Margin="0,0,0,20">
+                        <Button DockPanel.Dock="Right" Content="刷新" Style="{StaticResource ActionButton}" Margin="0" VerticalAlignment="Center"
+                                Command="{Binding Accounts.RefreshCommand}"/>
+                        <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考务账号" Tag="{StaticResource Icon.Lock}" Margin="0"
+                                                Content="新注册的考务账号经管理员批准后才能登录；账号停用后立即退出登录。" />
+                    </DockPanel>
+                    <TextBlock Text="{Binding Accounts.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                    <Border Style="{StaticResource CardGap}">
+                        <DataGrid ItemsSource="{Binding Accounts.Accounts}" IsReadOnly="True" MinHeight="200">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="姓名" Binding="{Binding DisplayName}" Width="*"/>
+                                <DataGridTextColumn Header="用户名" Binding="{Binding Username}" Width="*"/>
+                                <DataGridTextColumn Header="角色" Binding="{Binding RoleText}" Width="110"/>
+                                <DataGridTemplateColumn Header="状态" Width="120">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <controls:StatusPill Text="{Binding StatusText}" Level="{Binding StatusLevel}" HorizontalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="注册时间" Binding="{Binding CreatedText}" Width="150"/>
+                                <DataGridTemplateColumn Header="操作" Width="200">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                <Button Content="{Binding ApproveText}" Style="{StaticResource Btn.Primary}" MinWidth="72" Padding="10,0" Margin="0,0,8,0"
+                                                        Command="{Binding ApproveCommand}"/>
+                                                <Button Content="停用" Style="{StaticResource Btn.Secondary}" MinWidth="72" Padding="10,0"
+                                                        Command="{Binding DisableCommand}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
         </TabItem>
 
     </TabControl>

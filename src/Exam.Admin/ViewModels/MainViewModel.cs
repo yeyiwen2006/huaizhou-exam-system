@@ -7,7 +7,7 @@ namespace Exam.Admin.ViewModels;
 
 /// <summary>
 /// 考务端主窗口。主页列出全部考试；进入某场考试后，考试设置、设备监控和成绩统计都作用于这场考试。
-/// 导航页序号：0 全部考试，1 考试设置，2 考生名单，3 激活与试场分组，4 设备监控，5 成绩统计。
+/// 导航页序号：0 全部考试，1 考试设置，2 考生名单，3 激活与试场分组，4 设备监控，5 成绩统计，6 考务账号（仅管理员）。
 /// </summary>
 public sealed class MainViewModel : BindableBase, IDisposable
 {
@@ -34,6 +34,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Connection.PropertyChanged += OnConnectionPropertyChanged;
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
         Home = new ExamHomeViewModel(_api);
+        Accounts = new OperatorAccountsViewModel(_api);
         Home.ExamOpened += OpenExam;
         Home.NewExamRequested += NewExam;
         Exam.ExamSaved += OnExamSaved;
@@ -42,6 +43,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     public ExamHomeViewModel Home { get; }
+    public OperatorAccountsViewModel Accounts { get; }
     public RelayCommand BackToHomeCommand { get; }
 
     public int SelectedPage
@@ -135,7 +137,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
         {
             Monitoring.ConnectionReady = Connection.IsConnected;
             Reports.ConnectionReady = Connection.IsConnected;
+            Accounts.NotifyLoginChanged();
             if (Connection.IsConnected && Home.RefreshCommand.CanExecute(null)) Home.RefreshCommand.Execute(null);
+            if (Connection.IsConnected && Accounts.RefreshCommand.CanExecute(null)) Accounts.RefreshCommand.Execute(null);
         }
     }
 
@@ -149,68 +153,141 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 }
 
+/// <summary>
+/// 顶部登录条：未登录时填写服务器地址、用户名和口令登录，或注册新的考务账号；
+/// 登录后显示当前账号并可退出登录。口令只在本进程内存中短暂保存，登录或注册后即清空。
+/// </summary>
 public sealed class ConnectionViewModel : BindableBase
 {
     private readonly AdminApiClient _api;
     private string _serverAddress = "https://localhost:5001/";
-    private string _operatorId = string.Empty;
-    private string _operatorToken = string.Empty;
-    private string _status = "尚未连接服务器。";
+    private string _username = string.Empty;
+    private string _displayName = string.Empty;
+    private string _password = string.Empty;
+    private string _confirmPassword = string.Empty;
+    private string _status = "请登录考务账号。";
     private bool _isConnected;
+    private bool _isRegistering;
 
     public ConnectionViewModel(AdminApiClient api)
     {
         _api = api;
-        ConnectCommand = new AsyncRelayCommand(ConnectAsync, onError: SetError);
+        ConnectCommand = new AsyncRelayCommand(LoginAsync, onError: error => SetError("登录", error));
+        RegisterCommand = new AsyncRelayCommand(RegisterAsync, onError: error => SetError("注册", error));
+        LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsConnected);
+        ShowRegisterCommand = new RelayCommand(() => IsRegistering = true);
+        CancelRegisterCommand = new RelayCommand(() => IsRegistering = false);
     }
 
-    public string ServerAddress
+    public string ServerAddress { get => _serverAddress; set => SetProperty(ref _serverAddress, value); }
+    public string Username { get => _username; set => SetProperty(ref _username, value); }
+    public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value); }
+
+    /// <summary>由界面的口令框写入；不绑定显示。</summary>
+    public string Password { get => _password; set => SetProperty(ref _password, value); }
+    public string ConfirmPassword { get => _confirmPassword; set => SetProperty(ref _confirmPassword, value); }
+
+    public string Status { get => _status; private set => SetProperty(ref _status, value); }
+
+    public bool IsRegistering
     {
-        get => _serverAddress;
-        set => SetProperty(ref _serverAddress, value);
+        get => _isRegistering;
+        set
+        {
+            if (SetProperty(ref _isRegistering, value))
+            {
+                Status = value ? "填写姓名并再次输入口令后提交注册。" : "请登录考务账号。";
+                OnPropertyChanged(nameof(ShowRegisterFields));
+            }
+        }
     }
 
-    public string OperatorId
-    {
-        get => _operatorId;
-        set => SetProperty(ref _operatorId, value);
-    }
-
-    public string OperatorToken
-    {
-        get => _operatorToken;
-        set => SetProperty(ref _operatorToken, value);
-    }
-
-    public string Status
-    {
-        get => _status;
-        private set => SetProperty(ref _status, value);
-    }
+    public bool ShowRegisterFields => IsRegistering && !IsConnected;
 
     public bool IsConnected
     {
         get => _isConnected;
-        private set => SetProperty(ref _isConnected, value);
+        private set
+        {
+            if (SetProperty(ref _isConnected, value))
+            {
+                OnPropertyChanged(nameof(IsLoggedOut));
+                OnPropertyChanged(nameof(ShowRegisterFields));
+                OnPropertyChanged(nameof(AccountTitle));
+                OnPropertyChanged(nameof(IsAdministrator));
+                LogoutCommand.RaiseCanExecuteChanged();
+            }
+        }
     }
 
+    public bool IsLoggedOut => !IsConnected;
+    public bool IsAdministrator => IsConnected && _api.IsAdministrator;
+
+    public string AccountTitle => _api.Account is { } account && IsConnected
+        ? $"{account.DisplayName}（{account.Username}）{(account.IsAdministrator ? " · 管理员" : string.Empty)}"
+        : string.Empty;
+
+    /// <summary>登录（沿用原“连接服务器”命令名，供界面和测试共用）。</summary>
     public AsyncRelayCommand ConnectCommand { get; }
+    public AsyncRelayCommand RegisterCommand { get; }
+    public AsyncRelayCommand LogoutCommand { get; }
+    public RelayCommand ShowRegisterCommand { get; }
+    public RelayCommand CancelRegisterCommand { get; }
 
-    private async Task ConnectAsync()
+    /// <summary>清空口令框；由界面订阅，在登录或注册结束后执行。</summary>
+    public event Action? PasswordsCleared;
+
+    private async Task LoginAsync()
     {
         IsConnected = false;
-        Status = "正在检查服务器…";
+        Status = "正在登录…";
         _api.Disconnect();
-        _api.Configure(ServerAddress, OperatorToken, OperatorId);
-        await _api.CheckConnectionAsync();
+        try
+        {
+            await _api.LoginAsync(ServerAddress, Username, Password);
+            await _api.CheckConnectionAsync();
+        }
+        finally { ClearPasswords(); }
+        IsRegistering = false;
         IsConnected = true;
-        Status = "已连接服务器。";
+        Status = $"已登录服务器 {ServerAddress.Trim()}。";
     }
 
-    private void SetError(Exception exception)
+    private async Task RegisterAsync()
     {
-        _api.Disconnect();
+        if (!string.Equals(Password, ConfirmPassword, StringComparison.Ordinal))
+        {
+            ClearPasswords();
+            Status = "两次输入的口令不一致，请重新输入。";
+            return;
+        }
+        Status = "正在提交注册…";
+        Exam.Contracts.Operators.RegisterOperatorResult result;
+        try { result = await _api.RegisterAsync(ServerAddress, Username, DisplayName, Password); }
+        finally { ClearPasswords(); }
+        IsRegistering = false;
+        Status = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Active
+            ? "注册成功。这是服务器上的第一个考务账号，已设为管理员，请输入口令登录。"
+            : "注册成功，请等待管理员批准后再登录。";
+    }
+
+    private async Task LogoutAsync()
+    {
+        await _api.LogoutAsync();
         IsConnected = false;
-        Status = $"连接失败：{FriendlyErrors.Describe(exception)}";
+        Status = "已退出登录。";
+    }
+
+    private void ClearPasswords()
+    {
+        Password = string.Empty;
+        ConfirmPassword = string.Empty;
+        PasswordsCleared?.Invoke();
+    }
+
+    private void SetError(string action, Exception exception)
+    {
+        if (!IsConnected) _api.Disconnect();
+        Status = $"{action}失败：{FriendlyErrors.Describe(exception)}";
     }
 }

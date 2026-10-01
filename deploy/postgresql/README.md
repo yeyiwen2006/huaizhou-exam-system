@@ -28,8 +28,6 @@ ConnectionStrings__Exam
 ExamServer__ServerId
 ExamServer__NodeId
 ExamServer__ServerEpoch
-ExamSecurity__OperatorToken
-ExamSecurity__OperatorId
 HighAvailability__RequiredNodeIds__0
 HighAvailability__RequiredNodeIds__1
 Database__ApplyMigrations=false

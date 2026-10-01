@@ -83,7 +83,8 @@ def main() -> int:
     environment.update(ASPNETCORE_ENVIRONMENT="Development", DOTNET_ENVIRONMENT="Development", Database__ApplyMigrations="true", Logging__LogLevel__Default="Warning", DOTNET_CLI_TELEMETRY_OPTOUT="1")
     target = f"http://127.0.0.1:{args.port}"
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    token = configuration["ExamSecurity"]["OperatorToken"]
+    # 夹具登录合成考务账号后保存的会话令牌（sessions.json 为私有、被忽略的文件）。
+    token = manifest["operatorToken"]
     def request(path: str, authenticated: bool = False) -> dict:
         headers = {"Authorization": "Bearer " + token} if authenticated else {}
         with opener.open(urllib.request.Request(target + path, headers=headers), timeout=3) as response:

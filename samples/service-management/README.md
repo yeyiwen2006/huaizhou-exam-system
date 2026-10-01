@@ -17,8 +17,8 @@
 正式 CLI 使用 `exam-cli management status --management-url https://localhost:9443 --server-id synthetic-server --node-id synthetic-node`；
 `configuration`、`logs`、`runtime-logs` 和 `operation --request-id ID` 为只读命令。`start`、`stop`、`checks`、`configure`、`backup`、`restore`
 须附 `--input FILE|-`，请求 JSON 内携带稳定 requestId，超时后用原标识查询，不重新生成请求。
-上述地址和身份也可由 `EXAM_MANAGEMENT_URL`、`EXAM_SERVER_ID`、`EXAM_NODE_ID` 提供；令牌只从
-`EXAM_OPERATOR_TOKEN` 读取。CLI 保持系统证书验证，不支持管理 HTTP 降级。
+上述地址和身份也可由 `EXAM_MANAGEMENT_URL`、`EXAM_SERVER_ID`、`EXAM_NODE_ID` 提供。使用前先执行
+`exam-cli management login` 以考务账号登录，会话按当前 Windows 用户加密保存在本机，`management logout` 删除。CLI 保持系统证书验证，不支持管理 HTTP 降级。
 
 `GET /management/v1/service/logs?limit=1..100` 仅返回受保护本机操作记录的审计摘要：请求标识、类型、阶段、
 受理/更新时间和错误码。它不读取任意文件，也不返回原请求 JSON、内容摘要、恢复路径或业务日志正文；
@@ -48,7 +48,7 @@
 
 业务 `/health/ready` 在全部现有检查通过后返回实际加载的非秘密 `serviceConfiguration` 快照。管理端按本次期望配置逐字段、逐版本核对；旧宿主缺少该证据或字段不一致时不报告启动成功。探测保留 `Management:BusinessReadyEndpoint` 的 HTTPS 证书主机名及 `/health/ready` 路径，端口使用持久配置中的 `httpsPort`。保存配置只表示文件已持久化，启动成功还必须取得这份实际应用证据；修改配置后需按既有停机、保存和启动流程处理。
 
-模板刻意不包含 `ExamSecurity:OperatorToken`、`ExamSecurity:OperatorId` 或数据库连接串。按既有受保护部署配置/服务账户配置提供这些项，令牌至少 32 字符；不放命令行，不把填好的文件提交到仓库。证书指纹占位必须替换，证书/私钥必须实际部署并受保护，不能通过关闭 TLS 校验使用模板。缺少管理 TLS 证书时不会启动管理 HTTPS；缺少有效凭据时返回 401；缺失业务数据库/节点证书时允许管理认证和状态诊断，但对应操作或自检失败。
+模板刻意不包含数据库连接串。按既有受保护部署配置/服务账户配置提供，不放命令行，不把填好的文件提交到仓库。服务管理凭考务账号登录（不再配置共享令牌）；数据库停止时按 `Management:OperatorCachePath`（默认在操作目录下的 `operators.cache`）中的本机加密缓存核对，该文件须与操作目录一样受保护。证书指纹占位必须替换，证书/私钥必须实际部署并受保护，不能通过关闭 TLS 校验使用模板。缺少管理 TLS 证书时不会启动管理 HTTPS；未登录或登录失效时返回 401；缺失业务数据库/节点证书时允许管理认证和状态诊断，但对应操作或自检失败。
 
 服务配置、操作目录及备份/暂存根目录分别保护。操作目录不放其他 JSON、不经过联接点，也不放在备份材料源目录内。模板的 `version=1` 仅为合成首次配置版本，不能用于覆盖现有配置；后续保存必须读取当前版本并携带 expectedVersion。`highAvailabilityEnabled=true` 不代表已完成配对或复制，`ExamServer:ServerEpoch=1` 仅为合成部署比较值，不是当前权威代次。模板不默认启用连接切换。
 

@@ -33,7 +33,7 @@ dotnet build Huaizhou.ExamSystem.sln --no-restore
 dotnet test Huaizhou.ExamSystem.sln --no-build
 ```
 
-PostgreSQL 集成测试要求只在当前进程提供 `EXAM_TEST_POSTGRES`，测试会为每次运行创建并删除随机数据库，不会把连接信息写入仓库。生产运行至少通过受保护环境配置提供 `ConnectionStrings__Exam`、`ExamSecurity__OperatorToken`、与该令牌绑定的 `ExamSecurity__OperatorId` 和 `ExamServer__*`；示例和双机部署步骤见 [PostgreSQL 双机部署基线](deploy/postgresql/README.md)。
+PostgreSQL 集成测试要求只在当前进程提供 `EXAM_TEST_POSTGRES`，测试会为每次运行创建并删除随机数据库，不会把连接信息写入仓库。生产运行至少通过受保护环境配置提供 `ConnectionStrings__Exam` 和 `ExamServer__*`；考务人员凭数据库中的考务账号登录，不再配置共享令牌（见[考务账号](docs/operator-accounts.md)）；示例和双机部署步骤见 [PostgreSQL 双机部署基线](deploy/postgresql/README.md)。
 
 学生端和考务端项目仅在 Windows 上构建。真实试卷、答案、考生数据、数据库、证书、密钥、日志、备份和本地发布产物不得提交。
 

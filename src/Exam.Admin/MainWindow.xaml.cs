@@ -12,15 +12,21 @@ public partial class MainWindow : Window
         _viewModel = new MainViewModel();
         InitializeComponent();
         _viewModel.Monitoring.CollectionCompleted += OnCollectionCompleted;
+        _viewModel.Connection.PasswordsCleared += OnPasswordsCleared;
         DataContext = _viewModel;
     }
 
-    private void OperatorToken_OnPasswordChanged(object sender, RoutedEventArgs e)
+    // 口令框不支持绑定；口令只交给登录条的视图模型，登录或注册结束后清空。
+    private void Password_OnPasswordChanged(object sender, RoutedEventArgs e) =>
+        _viewModel.Connection.Password = PasswordInput.Password;
+
+    private void ConfirmPassword_OnPasswordChanged(object sender, RoutedEventArgs e) =>
+        _viewModel.Connection.ConfirmPassword = ConfirmPasswordInput.Password;
+
+    private void OnPasswordsCleared()
     {
-        if (sender is System.Windows.Controls.PasswordBox passwordBox)
-        {
-            _viewModel.Connection.OperatorToken = passwordBox.Password;
-        }
+        PasswordInput.Clear();
+        ConfirmPasswordInput.Clear();
     }
 
     private void OnCollectionCompleted(Exam.Contracts.Submissions.CollectionCompletedNotification item)
@@ -34,6 +40,7 @@ public partial class MainWindow : Window
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
         _viewModel.Monitoring.CollectionCompleted -= OnCollectionCompleted;
+        _viewModel.Connection.PasswordsCleared -= OnPasswordsCleared;
         _viewModel.Dispose();
     }
 }

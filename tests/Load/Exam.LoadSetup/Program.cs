@@ -51,7 +51,13 @@ await new PostgresMigrationRunner(dataSource).MigrateAsync();
 var examId = $"synthetic-{Guid.NewGuid():N}";
 var serverId = "local-capacity-server-" + database[10..];
 var nodeId = "local-capacity-node-" + database[10..];
-var operatorToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+// 合成考务账号：隔离夹具数据库中的第一个账号即管理员；口令随机生成且不写出，只保存登录会话令牌。
+var operatorAccounts = new Exam.Infrastructure.Postgres.Operators.PostgresOperatorAccounts(dataSource);
+var operatorPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+await operatorAccounts.RegisterAsync(new Exam.Contracts.Operators.RegisterOperatorRequest(
+    "capacity-test-operator", "合成容量测试考务", operatorPassword));
+var operatorToken = (await operatorAccounts.LoginAsync(new Exam.Contracts.Operators.LoginOperatorRequest(
+    "capacity-test-operator", operatorPassword))).Token;
 var resourceId = $"synthetic-package-{Guid.NewGuid():N}";
 using var key = RSA.Create(2048);
 var certificateRequest = new CertificateRequest("CN=local-capacity-fixture", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -118,7 +124,6 @@ await FixtureConfiguration.WriteAsync(Path.Combine(output, "local-server.json"),
 {
     ConnectionStrings = new { Exam = connectionOptions.ConnectionString },
     ExamServer = new { ServerId = serverId, NodeId = nodeId, ServerEpoch = 1 },
-    ExamSecurity = new { OperatorId = "capacity-test-operator", OperatorToken = operatorToken },
     Database = new { ApplyMigrations = false },
     HighAvailability = new { RequiredNodeIds = new[] { nodeId } }
 });

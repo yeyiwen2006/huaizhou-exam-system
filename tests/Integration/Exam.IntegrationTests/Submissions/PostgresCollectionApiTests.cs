@@ -1,3 +1,4 @@
+using Exam.IntegrationTests.Postgres;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -22,7 +23,7 @@ public sealed partial class PostgresSubmissionStoreTests
     [Fact]
     public async Task Collection_HttpApiRequiresOperatorAndReplaysAuthoritativeEvents()
     {
-        const string operatorToken = "test-collection-operator-0123456789abcdef";
+        var operatorToken = await SyntheticOperators.LoginAsync(fixture.DataSource, "operator-test");
         var first = await SeedParticipationAsync();
         var missing = await SeedParticipationAsync(examId: first.ExamId);
         await SaveFinalAsync(first);
@@ -36,7 +37,7 @@ public sealed partial class PostgresSubmissionStoreTests
         builder.Services.AddSingleton<IAuthoritativeCollectionCompletionStore>(provider => provider.GetRequiredService<PostgresCollectionCompletionStore>());
         builder.Services.AddSingleton<SubmissionService>();
         builder.Services.AddSingleton<CollectionCompletionService>();
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(operatorToken, "operator-test"));
+        builder.Services.AddPostgresOperatorAccounts();
         builder.Services.AddSingleton<IDeviceCredentialValidator, CollectionTestDeviceValidator>();
         builder.Services.AddSingleton(new ServerNodeEnvelope(Id("api-server"), "node-a", 1));
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource, new ServerIdentityOptions

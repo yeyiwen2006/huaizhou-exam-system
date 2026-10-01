@@ -47,7 +47,7 @@ public sealed partial class PostgresSubmissionStoreTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    private static async Task<(int Exit, string Output)> RunReportCliAsync(string server, string[] args, bool authenticated = true)
+    private async Task<(int Exit, string Output)> RunReportCliAsync(string server, string[] args, bool authenticated = true)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Huaizhou.ExamSystem.sln"))) root=root.Parent;
@@ -60,6 +60,8 @@ public sealed partial class PostgresSubmissionStoreTests
         start.ArgumentList.Add("--server"); start.ArgumentList.Add(server);
         start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"]="true";
         start.Environment.Remove("EXAM_OPERATOR_TOKEN");
+        // 不读取本机用户保存的 CLI 登录会话。
+        start.Environment["EXAM_CLI_SESSION_DIRECTORY"]=Path.Combine(Path.GetTempPath(), "exam-cli-empty-" + Guid.NewGuid().ToString("N"));
         if (authenticated) start.Environment["EXAM_OPERATOR_TOKEN"]=ReportTestToken;
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();

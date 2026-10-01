@@ -25,7 +25,7 @@ public static class FriendlyErrors
     {
         ErrorCodes.VersionConflict => "数据已被其他人修改，请重新读取后再保存。",
         ErrorCodes.NotFound or "EXAM_NOT_FOUND" => "没有找到对应的考试或记录，请核对后重试。",
-        ErrorCodes.Forbidden or "UNAUTHORIZED" or "OPERATOR_AUTH_FAILED" => "没有操作权限或登录已失效，请重新连接后再试。",
+        ErrorCodes.Forbidden or "UNAUTHORIZED" or "OPERATOR_AUTH_FAILED" => "没有操作权限或登录已失效，请重新登录后再试。",
         ErrorCodes.NotActiveServer or ErrorCodes.StaleServerEpoch or "STALE_SERVER_IDENTITY" or "INVALID_SERVER_IDENTITY"
             => "当前连接的不是正在提供服务的服务器，请核对服务器地址。",
         ErrorCodes.ServiceRecovering or "SERVICE_NOT_READY" => "服务器正在启动或恢复，请稍后再试。",

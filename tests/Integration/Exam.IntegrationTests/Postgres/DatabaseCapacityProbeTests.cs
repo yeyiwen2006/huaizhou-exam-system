@@ -22,13 +22,13 @@ public sealed class DatabaseCapacityProbeTests(PostgresDatabaseFixture database)
     [Fact]
     public async Task DiagnosticsIsOperatorOnly_AndReturnsSafeRealDatabaseAggregates()
     {
-        const string operatorToken = "capacity-test-only-operator-token-0123456789";
+        var operatorToken = await SyntheticOperators.LoginAsync(database.DataSource, "capacity-operator");
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(database.DataSource);
         builder.Services.AddExamCapacity(builder.Configuration, new(16, 100, 3, 1, 0, 10, false));
         builder.Services.AddSingleton(new ServerNodeEnvelope("capacity-server", "node-a", 1));
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(operatorToken, "capacity-operator"));
+        builder.Services.AddPostgresOperatorAccounts();
         builder.Services.AddSingleton<IDeviceCredentialValidator, SyntheticDeviceValidator>();
         builder.Services.AddSingleton(new ActiveNodeGuard(database.DataSource,
             new ServerIdentityOptions { ServerId = "capacity-server", NodeId = "node-a", ServerEpoch = 1 }, true));

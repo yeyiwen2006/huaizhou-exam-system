@@ -47,6 +47,11 @@ public static class ManagementEntryPoint
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler
             { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(5) });
         builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>()));
+        // 考务账号登录：以数据库为准，数据库不可用时按本机加密缓存核对。
+        builder.Services.AddSingleton(_ => new ManagementOperatorSessions(
+            () => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId,
+                long.TryParse(configuration["ExamServer:ServerEpoch"], out var cachedEpoch) ? cachedEpoch : 0),
+            configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache")));
 
         ManagementRuntime CreateRuntime(HttpClient http)
         {

@@ -6,11 +6,6 @@ using Exam.Contracts.Common;
 
 namespace Exam.Server.Runtime;
 
-public sealed record ExamApiSecurityOptions(string OperatorToken, string OperatorId)
-{
-    public const string SectionName = "ExamSecurity";
-}
-
 /// <summary>
 /// Separates operator endpoints from device endpoints at the server boundary. Device requests use
 /// the same protected device credential as activation and must also pass the application-layer
@@ -23,10 +18,11 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
     private const string DeviceCredentialHeader = "X-Exam-Device-Credential";
     private const string AuthenticatedDeviceItem = "Exam.AuthenticatedDeviceId";
     private const string AuthenticatedOperatorItem = "Exam.AuthenticatedOperatorId";
+    private const string AuthenticatedOperatorRecord = "Exam.AuthenticatedOperator";
 
     public async Task InvokeAsync(
         HttpContext context,
-        ExamApiSecurityOptions security,
+        IOperatorAuthenticator operators,
         IDeviceCredentialValidator credentials,
         ActiveNodeGuard activeNode,
         ServerNodeEnvelope server)
@@ -76,22 +72,27 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             return;
         }
 
-        if (!OperatorIdentityValidator.Authenticate(context.Request.Headers.Authorization.ToString(),
-                security.OperatorToken, security.OperatorId))
+        // 考务接口一律凭登录会话访问；不再接受共享口令。
+        var authorization = context.Request.Headers.Authorization.ToString();
+        var session = authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+            ? await operators.AuthenticateAsync(authorization[7..], context.RequestAborted)
+            : null;
+        if (session is null)
         {
             await RejectAsync(context, server, StatusCodes.Status401Unauthorized,
-                "UNAUTHORIZED", "缺少有效的考务操作令牌。");
+                "UNAUTHORIZED", "请先登录考务账号，或登录已失效。");
             return;
         }
 
-        if (!await HasMatchingAuditActorAsync(context, security.OperatorId))
+        if (!await HasMatchingAuditActorAsync(context, session.Username))
         {
             await RejectAsync(context, server, StatusCodes.Status403Forbidden,
-                ErrorCodes.Forbidden, "请求中的操作者身份与已认证考务身份不一致。");
+                ErrorCodes.Forbidden, "请求中的操作者身份与已登录的考务账号不一致。");
             return;
         }
 
-        context.Items[AuthenticatedOperatorItem] = security.OperatorId;
+        context.Items[AuthenticatedOperatorItem] = session.Username;
+        context.Items[AuthenticatedOperatorRecord] = session;
         await next(context);
     }
 
@@ -101,7 +102,9 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             "/activation/status" or
             "/activation/cancel-own" or
             "/activation/reactivate" or
-            "/participation/login") ||
+            "/participation/login" or
+            "/operators/register" or
+            "/operators/login") ||
         (HttpMethods.IsGet(method) && route == "/commands/time");
 
     private static bool IsDeviceRoute(string method, string route)
@@ -133,6 +136,11 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
         context.Items.TryGetValue(AuthenticatedDeviceItem, out var value) && value is string deviceId
             ? deviceId
             : throw new InvalidOperationException("请求未经过设备身份验证中间件。");
+
+    public static AuthenticatedOperator RequireAuthenticatedOperator(HttpContext context) =>
+        context.Items.TryGetValue(AuthenticatedOperatorRecord, out var value) && value is AuthenticatedOperator session
+            ? session
+            : throw new InvalidOperationException("请求未经过考务身份验证中间件。");
 
     public static string RequireAuthenticatedOperatorId(HttpContext context) =>
         context.Items.TryGetValue(AuthenticatedOperatorItem, out var value) && value is string operatorId

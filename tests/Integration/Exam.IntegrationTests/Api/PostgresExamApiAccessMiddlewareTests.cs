@@ -29,7 +29,7 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
 
         await middleware.InvokeAsync(
             context,
-            new ExamApiSecurityOptions(Token, "operator-a"),
+            new FixedOperatorAuthenticator(Token, "operator-a"),
             new AcceptingCredentialValidator(),
             CreateGuard(),
             server);
@@ -54,7 +54,7 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
 
         await middleware.InvokeAsync(
             context,
-            new ExamApiSecurityOptions(Token, "operator-a"),
+            new FixedOperatorAuthenticator(Token, "operator-a"),
             new AcceptingCredentialValidator(),
             CreateGuard(),
             server);
@@ -73,7 +73,7 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
         context.Request.Headers["X-Exam-Device-Id"] = "device-a";
         context.Request.Headers["X-Exam-Device-Credential"] = "credential-a";
 
-        await middleware.InvokeAsync(context, new ExamApiSecurityOptions(Token, "operator-a"),
+        await middleware.InvokeAsync(context, new FixedOperatorAuthenticator(Token, "operator-a"),
             new AcceptingCredentialValidator(), CreateGuard(), server);
 
         Assert.False(invoked);
@@ -88,7 +88,7 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
         var middleware = CreateMiddleware(() => invoked = true);
         var context = CreateJsonContext("/api/v1/resources/unlock", "application/json", "{}");
 
-        await middleware.InvokeAsync(context, new ExamApiSecurityOptions(Token, "operator-a"),
+        await middleware.InvokeAsync(context, new FixedOperatorAuthenticator(Token, "operator-a"),
             new AcceptingCredentialValidator(), CreateGuard(allowUninitializedState: false), server);
 
         Assert.False(invoked);
