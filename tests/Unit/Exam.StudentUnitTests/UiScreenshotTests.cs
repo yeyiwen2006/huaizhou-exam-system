@@ -248,20 +248,28 @@ public sealed class UiScreenshotTests
         var sources = new Dictionary<string, (string File, string Body)>
         {
             ["q1"] = ("questions/衔接合成考试_1.tex", """
+                {\linespread{1}\selectfont
                 \noindent 合成示例：设 $f(x)=2x^2-x+1$，则 $f(3)$ 的值为（\quad）。
+                \par}
 
+                {\linespread{2}\selectfont
                 \noindent\optmark{q1}{A}{A.} $14$\\
                 \optmark{q1}{B}{B.} $16$\\
                 \optmark{q1}{C}{C.} $18$\\
                 \optmark{q1}{D}{D.} $20$
+                \par}
                 """),
             ["q2"] = ("questions/衔接合成考试_2.tex", """
+                {\linespread{1}\selectfont
                 \noindent 合成多选题：下列各数中，属于偶数的有（\quad）。
+                \par}
 
+                {\linespread{2}\selectfont
                 \noindent\optmark{q2}{A}{A.} $2$\\
                 \optmark{q2}{B}{B.} $4$\\
                 \optmark{q2}{C}{C.} $7$\\
                 \optmark{q2}{D}{D.} $9$
+                \par}
                 """)
         };
         var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
@@ -284,7 +292,6 @@ public sealed class UiScreenshotTests
                 \usepackage{unicode-math}
                 \setmainfont{Times New Roman}
                 \setmathfont{XITS Math}
-                \linespread{1.75}
                 \usepackage[a4paper,margin=1in]{geometry}
                 \pagestyle{empty}
                 \usepackage{hyperref}
