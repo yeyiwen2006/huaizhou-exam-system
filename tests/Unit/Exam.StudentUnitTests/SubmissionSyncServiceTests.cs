@@ -329,12 +329,16 @@ public sealed partial class SubmissionSyncServiceTests
         public List<SyncProgressRequest> ProgressRequests { get; } = new();
         public List<SubmitFinalAnswersRequest> FinalRequests { get; } = new();
         public List<string> QueryCalls { get; } = new();
+        public List<ReportFocusEventsRequest> FocusRequests { get; } = new();
+        public List<Exam.Contracts.Versioning.ConfirmPaperReviewRequest> ReviewRequests { get; } = new();
 
         public Func<CancellationToken, Task<ApiEnvelope<ServerTimeSnapshot>>>? TimeHandler { get; set; }
         public Func<SyncProgressRequest, ApiEnvelope<PersistedProgress>?>? ProgressHandler { get; set; }
         public Func<SubmitFinalAnswersRequest, ApiEnvelope<SubmissionReceipt>?>? SubmitHandler { get; set; }
         public Func<FinalSubmission?>? QueryHandler { get; set; }
         public Func<ApiEnvelope<SubmissionReceipt>>? QueryResponseHandler { get; set; }
+        public Func<ReportFocusEventsRequest, ApiEnvelope<FocusEventsReceipt>?>? FocusHandler { get; set; }
+        public Func<Exam.Contracts.Versioning.ConfirmPaperReviewRequest, ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>?>? ReviewHandler { get; set; }
 
         private readonly Dictionary<string, FinalSubmission> _persisted = new();
 
@@ -411,8 +415,8 @@ public sealed partial class SubmissionSyncServiceTests
                     record.ParticipationId ?? "participation", DateTimeOffset.UtcNow, record.PaperVersion, 1));
 
         private static ApiEnvelope<T> Ok<T>(T value) => new("server", "node", 1, "correlation", value, null);
-        private static ApiEnvelope<T> Fail<T>(string message) => new("server", "node", 1, "correlation", default,
-            new ApiError(ErrorCodes.ServiceRecovering, message, Retryable: true));
+        private static ApiEnvelope<T> Fail<T>(string message, bool retryable = true) => new("server", "node", 1, "correlation", default,
+            new ApiError(retryable ? ErrorCodes.ServiceRecovering : ErrorCodes.InvalidInput, message, Retryable: retryable));
 
         public void ConfigureConnection(DeviceRecord device) { }
         public Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(SubmitActivationRequest request, CancellationToken ct = default) => throw new NotSupportedException();
@@ -424,6 +428,31 @@ public sealed partial class SubmissionSyncServiceTests
         public Task<IReadOnlyList<ExamOverview>> GetExamOverviewsAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) =>
             TimeHandler?.Invoke(ct) ?? throw new NotSupportedException();
+
+        public Task<ApiEnvelope<FocusEventsReceipt>> ReportFocusEventsAsync(
+            ReportFocusEventsRequest request, CancellationToken ct = default)
+        {
+            FocusRequests.Add(request);
+            var handler = FocusHandler;
+            if (handler is not null)
+                return Task.FromResult(handler(request) ?? Fail<FocusEventsReceipt>("失焦事件保存失败。"));
+            var receipt = new FocusEventsReceipt(request.ExamId, request.CandidateId, request.ParticipationId,
+                request.PaperVersion, request.Events.Select(item => item.EventId).ToArray(), DateTimeOffset.UtcNow);
+            return Task.FromResult(Ok(receipt));
+        }
+
+        public Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(
+            string examId, string participantId,
+            Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default)
+        {
+            ReviewRequests.Add(request);
+            var handler = ReviewHandler;
+            if (handler is not null)
+                return Task.FromResult(handler(request) ??
+                    Fail<Exam.Contracts.Versioning.ExamVersionSnapshot>("复核确认失败。"));
+            // 默认按不可重试拒绝处理：发件箱逻辑必须把明确拒绝视为终态。
+            return Task.FromResult(Fail<Exam.Contracts.Versioning.ExamVersionSnapshot>("复核确认被拒绝。", retryable: false));
+        }
     }
 
     private sealed class PackageApi : IExamPackageApi, IDisposable

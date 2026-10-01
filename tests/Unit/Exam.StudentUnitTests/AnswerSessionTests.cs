@@ -195,6 +195,43 @@ public sealed class FakeLocalStateStore : ILocalStateStore
         }
     }
 
+    private readonly Dictionary<LocalStateKey, List<PendingUploadRecord>> _uploads = new();
+
+    public Task<StoreWriteResult> EnqueueUploadAsync(
+        LocalStateKey key, PendingUploadRecord record, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _uploads.TryGetValue(key, out var existing) ? existing : _uploads[key] = [];
+            if (list.All(item => item.ItemId != record.ItemId))
+            {
+                list.Add(record);
+            }
+            return Task.FromResult(StoreWriteResult.Ok());
+        }
+    }
+
+    public Task<IReadOnlyList<PendingUploadRecord>> LoadUploadsAsync(
+        LocalStateKey key, int limit, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _uploads.TryGetValue(key, out var existing) ? existing.ToList() : [];
+            return Task.FromResult<IReadOnlyList<PendingUploadRecord>>(list.Take(limit).ToList());
+        }
+    }
+
+    public Task<StoreWriteResult> DeleteUploadAsync(
+        LocalStateKey key, string itemId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!_uploads.TryGetValue(key, out var list) || list.RemoveAll(item => item.ItemId == itemId) == 0)
+                return Task.FromResult(StoreWriteResult.Fail("待删除的上报记录不存在。"));
+            return Task.FromResult(StoreWriteResult.Ok());
+        }
+    }
+
     public Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default)
     {
         lock (_gate)

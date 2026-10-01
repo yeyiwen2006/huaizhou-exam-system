@@ -114,6 +114,12 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             return true;
         }
 
+        // 失焦监测汇总是考务查询，只读且不含作答内容；学生端只允许 POST 补报自己的事件。
+        if (HttpMethods.IsGet(method) && route == "/submissions/focus-events")
+        {
+            return false;
+        }
+
         if (route.StartsWith("/commands/due", StringComparison.Ordinal) ||
             route == "/commands/acknowledgements" ||
             route.StartsWith("/submissions/", StringComparison.Ordinal) ||

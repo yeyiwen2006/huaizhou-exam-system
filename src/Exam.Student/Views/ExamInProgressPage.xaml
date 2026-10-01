@@ -178,13 +178,19 @@
                     <StackPanel Grid.Row="1" Margin="4,0,4,8">
                         <controls:Banner x:Name="PaperBanner" Level="Info" />
                         <controls:Banner x:Name="PaperUpdateBanner" Level="Warning" Margin="0,8,0,0" />
-                        <Button x:Name="ReviewUpdateButton" Style="{StaticResource Btn.Secondary}"
-                                Content="已查看更正后的试题"
-                                Margin="0,8,0,0"
-                                Padding="14,5"
-                                HorizontalAlignment="Left"
-                                Visibility="Collapsed"
-                                Click="OnConfirmReview" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="ReviewUpdateButton" Style="{StaticResource Btn.Secondary}"
+                                    Content="已查看更正后的试题"
+                                    Padding="14,5"
+                                    Visibility="Collapsed"
+                                    Click="OnConfirmReview" />
+                            <Button x:Name="JumpToChangedButton" Style="{StaticResource Btn.Secondary}"
+                                    Content="查看修订试题"
+                                    Margin="8,0,0,0"
+                                    Padding="14,5"
+                                    Visibility="Collapsed"
+                                    Click="OnJumpToChangedQuestion" />
+                        </StackPanel>
                         <controls:Banner x:Name="RuntimeErrorBanner" Level="Danger" Margin="0,8,0,0" />
                         <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
                     </StackPanel>

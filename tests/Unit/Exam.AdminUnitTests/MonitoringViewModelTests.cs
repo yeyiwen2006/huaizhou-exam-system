@@ -15,14 +15,39 @@ public sealed class MonitoringViewModelTests
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
 
     [Fact]
-    public async Task Load_MapsActualParticipationStatesWithoutInventingConnectionState()
+    public async Task Load_MapsParticipationFocusAndReviewStates()
     {
         var states = Enum.GetValues<ParticipationBusinessState>()
             .Where(state => state != ParticipationBusinessState.NotParticipating);
         var participations = states.Select((state, index) =>
             new ParticipationResult($"part-{index}", "exam-1", $"candidate-{index}", state,
                 $"device-{index}", 1, 1, 1, null)).ToArray();
-        using var handler = new SyntheticHandler(_ => Success(participations));
+        using var handler = new SyntheticHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/actual", StringComparison.Ordinal))
+                return Success(participations);
+            if (path.EndsWith("/focus-events", StringComparison.Ordinal))
+                return Success(new[]
+                {
+                    new FocusLossEventSummary("exam-1", "candidate-0", "part-0", 2, 4500, DateTimeOffset.UtcNow),
+                });
+            return Success(new Exam.Contracts.Versioning.ExamVersionSnapshot(
+                "exam-1",
+                new Exam.Contracts.Versioning.VersionVector(1, 2, 1),
+                new Exam.Contracts.Versioning.ScheduleWindow(
+                    DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddHours(2)),
+                ExamLifecycle.Running,
+                DateTimeOffset.UtcNow.AddMinutes(-30),
+                null, null, null,
+                new Dictionary<string, Exam.Contracts.Versioning.ParticipantVersionStatus>
+                {
+                    ["part-0"] = new("part-0", ParticipationBusinessState.Answering, 2, 2,
+                        Exam.Contracts.Versioning.PaperUpdateState.ReviewRequired, null),
+                    ["part-2"] = new("part-2", ParticipationBusinessState.Submitted, 2, 2,
+                        Exam.Contracts.Versioning.PaperUpdateState.Updated, null),
+                }));
+        });
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
@@ -31,8 +56,40 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal(new[] { "候考", "作答中", "已交卷" },
             viewModel.Rows.Select(row => row.BusinessState));
-        Assert.All(viewModel.Rows, row => Assert.Equal("—", row.ConnectionState));
         Assert.Equal("已提交", viewModel.Rows[^1].CollectionState);
+        // B06 失焦与复核监测：按参试合并真实服务端数据，未上报的考生显示占位。
+        Assert.Equal("2 次 / 共 4 秒", viewModel.Rows[0].FocusSummary);
+        Assert.Equal("暂无记录", viewModel.Rows[1].FocusSummary);
+        Assert.Equal("未复核", viewModel.Rows[0].PaperReviewState);
+        Assert.Equal("已复核", viewModel.Rows[2].PaperReviewState);
+        Assert.Equal("—", viewModel.Rows[1].PaperReviewState);
+    }
+
+    [Fact]
+    public async Task Load_FocusQueryFailureDoesNotBlockParticipationRows()
+    {
+        var participations = new[]
+        {
+            new ParticipationResult("part-0", "exam-1", "candidate-0",
+                ParticipationBusinessState.Answering, "device-0", 1, 1, 1, null),
+        };
+        using var handler = new SyntheticHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/actual", StringComparison.Ordinal))
+                return Success(participations);
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+
+        await viewModel.LoadAsync();
+
+        var row = Assert.Single(viewModel.Rows);
+        Assert.Equal("暂无记录", row.FocusSummary);
+        Assert.Equal("—", row.PaperReviewState);
+        Assert.Contains("失焦监测查询失败", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]

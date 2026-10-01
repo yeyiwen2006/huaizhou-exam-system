@@ -36,7 +36,7 @@ public sealed class PaperUpdateCoordinator : IAsyncDisposable
     }
 
     public event EventHandler<PaperUpdateStatusChangedEventArgs>? StatusChanged;
-    public event EventHandler<(long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt)>? UpdateInstalled;
+    public event EventHandler<(long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt, IReadOnlyList<string> ChangedQuestionIds)>? UpdateInstalled;
     public PaperUpdatePhase Phase => _phase;
     public string StatusText => Volatile.Read(ref _statusText);
     public long PendingVersion => _manager.PendingPaperUpdates
@@ -165,8 +165,28 @@ public sealed class PaperUpdateCoordinator : IAsyncDisposable
         if (_runtime.PendingReviewVersion is not { } version || version <= _announcedVersion ||
             !_runtime.IsPaperVersionReady(version) || _manager.LastPaperInstallation is not { } installation) return;
         _announcedVersion = version;
-        Dispatch(() => UpdateInstalled?.Invoke(this, (version, installation.ReceivedAt, installation.InstalledAt)));
+        Dispatch(() => UpdateInstalled?.Invoke(this,
+            (version, installation.ReceivedAt, installation.InstalledAt, ChangedQuestionsFor(version))));
         SetPhase(PaperUpdatePhase.Applied, $"试卷已修订为版本 {version}；原答案和标记保留，请复核修订试题。");
+    }
+
+    /// <summary>
+    /// B06 修订定位：PaperUpdated 指令元数据携带本次发布的变更题目标识清单；
+    /// 元数据缺失或损坏（旧版服务器/指令）时返回空清单，横幅退化为普通修订提示。
+    /// </summary>
+    private IReadOnlyList<string> ChangedQuestionsFor(long version)
+    {
+        var record = _manager.FindPaperUpdateCommand(version);
+        if (record?.Delivery.Metadata is not { } metadata) return [];
+        if (!metadata.TryGetValue("changedQuestionIds", out var json) || string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<string[]>(json) ?? [];
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return [];
+        }
     }
 
     private void SetPhase(PaperUpdatePhase phase, string message)

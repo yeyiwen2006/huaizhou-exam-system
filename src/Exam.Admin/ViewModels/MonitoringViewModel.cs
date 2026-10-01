@@ -337,8 +337,15 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         ValidateParticipations(results, examId);
         Rows.Clear();
         SelectedRow = null;
+
+        // B06 失焦与复核监测：与参试列表合并展示；查询失败不阻止主列表，显示占位并提示。
+        var (focusResult, focusError) = await LoadFocusSummariesAsync(examId, context, operation);
+        var focusByParticipation = focusResult ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var reviewByParticipation = await LoadReviewStatesAsync(examId, context, operation) ?? [];
         foreach (var item in results)
         {
+            focusByParticipation.TryGetValue(item.ParticipationId, out var focusSummary);
+            reviewByParticipation.TryGetValue(item.ParticipationId, out var reviewState);
             Rows.Add(new MonitoringRow(
                 item.ParticipationId,
                 item.CandidateId,
@@ -348,11 +355,79 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 item.AuthorizationVersion,
                 item.Version,
                 item.BusinessState == ParticipationBusinessState.Submitted ? "已提交" : "未提交",
-                "—",
-                "—"));
+                focusSummary ?? "暂无记录",
+                reviewState ?? "—"));
         }
         OnPropertyChanged(nameof(FilteredRows));
-        Status = $"共 {Rows.Count} 名实际参试考生。";
+        Status = focusError is null
+            ? $"共 {Rows.Count} 名实际参试考生。"
+            : $"共 {Rows.Count} 名实际参试考生；{focusError}";
+    }
+
+    /// <summary>失焦监测汇总；网络或权限异常时返回错误说明，不阻塞参试列表。</summary>
+    private async Task<(Dictionary<string, string>? Map, string? Error)> LoadFocusSummariesAsync(
+        string examId, long context, long operation)
+    {
+        try
+        {
+            var summaries = await _api.ListFocusSummariesAsync(examId);
+            if (context != _contextVersion || operation != _loadVersion) return (null, null);
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var summary in summaries)
+            {
+                if (summary is null || !StringComparer.Ordinal.Equals(summary.ExamId, examId) ||
+                    string.IsNullOrWhiteSpace(summary.ParticipationId) || summary.EventCount < 0 ||
+                    summary.TotalDurationMilliseconds < 0) continue;
+                map[summary.ParticipationId] = summary.EventCount == 0 ? "0 次" :
+                    $"{summary.EventCount} 次 / 共 {FormatDuration(summary.TotalDurationMilliseconds)}";
+            }
+            return (map, null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (null, $"失焦监测查询失败：{FriendlyErrors.Describe(exception)}");
+        }
+    }
+
+    /// <summary>修订复核状态；考生尚未进入修订流程时显示“—”。</summary>
+    private async Task<Dictionary<string, string>?> LoadReviewStatesAsync(string examId, long context, long operation)
+    {
+        try
+        {
+            var snapshot = await _api.GetExamAsync(examId);
+            if (context != _contextVersion || operation != _loadVersion) return null;
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (snapshot.Participants is not null)
+            {
+                foreach (var (participantId, status) in snapshot.Participants)
+                {
+                    if (status is null || string.IsNullOrWhiteSpace(participantId)) continue;
+                    map[participantId] = status.PaperUpdateState switch
+                    {
+                        Exam.Contracts.Versioning.PaperUpdateState.ReviewRequired => "未复核",
+                        Exam.Contracts.Versioning.PaperUpdateState.Updated => "已复核",
+                        Exam.Contracts.Versioning.PaperUpdateState.DownloadFailed => "修订未安装",
+                        _ => "—",
+                    };
+                }
+            }
+            return map;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // 复核状态属于增强信息，失败不阻塞监测列表。
+            return null;
+        }
+    }
+
+    private static string FormatDuration(long milliseconds)
+    {
+        var time = TimeSpan.FromMilliseconds(milliseconds);
+        return time.TotalHours >= 1
+            ? $"{(int)time.TotalHours} 时 {time.Minutes} 分 {time.Seconds} 秒"
+            : time.TotalMinutes >= 1
+                ? $"{(int)time.TotalMinutes} 分 {time.Seconds} 秒"
+                : $"{time.Seconds} 秒";
     }
 
     public async Task DecideDeviceAsync()
@@ -492,5 +567,5 @@ public sealed record MonitoringRow(
     long AuthorizationVersion,
     long Version,
     string CollectionState,
-    string ConnectionState,
-    string CurrentQuestion);
+    string FocusSummary,
+    string PaperReviewState);

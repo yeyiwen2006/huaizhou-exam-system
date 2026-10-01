@@ -1,10 +1,23 @@
+using System.IO;
+using System.Text.Json;
+using Exam.Contracts.Common;
 using Exam.Contracts.Resources;
+using Exam.Contracts.Submissions;
 using Exam.Student.Core;
 
 namespace Exam.Student.Core;
 
 public sealed partial class StudentExamRuntime
 {
+    /// <summary>发件箱失焦载荷：EventId 在事件完成时生成，重试保持不变。</summary>
+    public sealed record PendingFocusEventPayload(
+        string EventId, DateTimeOffset LostAt, DateTimeOffset RegainedAt, long DurationMilliseconds);
+
+    /// <summary>发件箱复核载荷：RequestId 入队时生成，同一版本重试沿用。</summary>
+    public sealed record ReviewConfirmationPayload(long PaperVersion, string RequestId);
+
+    private static readonly JsonSerializerOptions UploadJson = JsonDefaults.Create();
+
     public bool IsPaperUpdateInProgress => Volatile.Read(ref _paperUpdateCommitting) != 0;
 
     internal bool IsPaperVersionReady(long version) => !_disposed && !Manager.ExamEnded && !HasFixedSubmission &&
@@ -102,7 +115,17 @@ public sealed partial class StudentExamRuntime
         {
             var result = await localState.SavePaperUpdateReviewAsync(_localKey,
                 new(expectedVersion, installed.ReceivedAt, installed.InstalledAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
-            if (result.Succeeded) _confirmedReviewVersions.TryAdd(expectedVersion, 0);
+            if (result.Succeeded)
+            {
+                _confirmedReviewVersions.TryAdd(expectedVersion, 0);
+                // B06 服务端闭环：复核确认同时进入发件箱，由同步回合上报服务器；
+                // 入队失败不撤销本地确认，下一轮确认或重试时按版本幂等补报。
+                var upload = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
+                    $"review:{expectedVersion}", "review",
+                    JsonSerializer.Serialize(new ReviewConfirmationPayload(expectedVersion, RequestIds.New()), UploadJson)), ct).ConfigureAwait(false);
+                if (!upload.Succeeded)
+                    _localStateError = $"复核确认已保存，上报记录暂未入队：{upload.Error}";
+            }
             else _localStateError = $"复核确认保存失败：{result.Error}";
             NotifyStateChanged();
             return result;
@@ -115,4 +138,44 @@ public sealed partial class StudentExamRuntime
             return StoreWriteResult.Fail(_localStateError);
         }
     }
+
+    /// <summary>
+    /// B06 失焦留痕：每段失焦结束（复焦或页面关闭）先写入本地发件箱；由同步回合批量补报，
+    /// 服务器回执确认后删除。返回 false 只代表本地写入失败，不影响作答。
+    /// </summary>
+    public async Task<bool> RecordFocusLossAsync(FocusLossEvent focusEvent, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(focusEvent);
+        if (localState is null || _localKey is null) return false;
+        if (focusEvent.Duration < TimeSpan.Zero) return false;
+        var payload = new PendingFocusEventPayload(
+            Guid.NewGuid().ToString("N"),
+            focusEvent.LostAt,
+            focusEvent.LostAt + focusEvent.Duration,
+            (long)Math.Round(focusEvent.Duration.TotalMilliseconds, System.MidpointRounding.AwayFromZero));
+        try
+        {
+            var result = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
+                payload.EventId, "focus", JsonSerializer.Serialize(payload, UploadJson)), ct).ConfigureAwait(false);
+            if (!result.Succeeded) _localStateError = $"失焦记录保存失败：{result.Error}";
+            return result.Succeeded;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) when (IsLocalStorageError(error))
+        {
+            _localStateError = "失焦记录暂未保存，作答不受影响；恢复本地存储后新的失焦将继续留痕。";
+            return false;
+        }
+    }
+
+    internal Task<IReadOnlyList<PendingUploadRecord>> LoadPendingUploadsAsync(int limit, CancellationToken ct = default) =>
+        localState is not null && _localKey is not null
+            ? localState.LoadUploadsAsync(_localKey, limit, ct)
+            : Task.FromResult<IReadOnlyList<PendingUploadRecord>>(Array.Empty<PendingUploadRecord>());
+
+    internal Task<StoreWriteResult> DeletePendingUploadAsync(string itemId, CancellationToken ct = default) =>
+        localState is not null && _localKey is not null
+            ? localState.DeleteUploadAsync(_localKey, itemId, ct)
+            : Task.FromResult(StoreWriteResult.Fail("本地存储尚未初始化，不能删除上报记录。"));
 }

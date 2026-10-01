@@ -421,4 +421,90 @@ public sealed class SqliteLocalStateStoreTests : IDisposable
         Assert.True((await store.DeleteAsync(KeyA)).Succeeded);
         Assert.Null(await store.LoadPreparationAsync(KeyA));
     }
+
+    [Fact]
+    public async Task UploadOutbox_RoundTripKeepsFirstPayloadAndDeletesOnlyConfirmedItems()
+    {
+        using var store = new SqliteLocalStateStore(DatabasePath);
+        Assert.Empty(await store.LoadUploadsAsync(KeyA, 10));
+        Assert.True((await store.EnqueueUploadAsync(KeyA,
+            new PendingUploadRecord("focus-1", "focus", """{"eventId":"focus-1"}"""))).Succeeded);
+        Assert.True((await store.EnqueueUploadAsync(KeyA,
+            new PendingUploadRecord("focus-2", "focus", """{"eventId":"focus-2"}"""))).Succeeded);
+        // 同一 ItemId 重复入队（崩溃重放）不覆盖首次载荷。
+        Assert.True((await store.EnqueueUploadAsync(KeyA,
+            new PendingUploadRecord("focus-1", "focus", """{"eventId":"focus-1-replaced"}"""))).Succeeded);
+
+        var uploads = await store.LoadUploadsAsync(KeyA, 10);
+        Assert.Equal(2, uploads.Count);
+        Assert.Equal("focus-1", uploads[0].ItemId);
+        Assert.Equal("""{"eventId":"focus-1"}""", uploads[0].Payload);
+        Assert.Equal("focus", uploads[0].Kind);
+
+        Assert.True((await store.DeleteUploadAsync(KeyA, "focus-1")).Succeeded);
+        Assert.Single(await store.LoadUploadsAsync(KeyA, 10));
+        // 不存在的标识不能删除：防止把重复确认当作成功。
+        Assert.False((await store.DeleteUploadAsync(KeyA, "focus-1")).Succeeded);
+        Assert.False((await store.DeleteUploadAsync(KeyA, " ")).Succeeded);
+
+        // 考生/考试/服务器隔离。
+        Assert.Empty(await store.LoadUploadsAsync(KeyB, 10));
+        Assert.Empty(await store.LoadUploadsAsync(KeyOtherExam, 10));
+        Assert.Empty(await store.LoadUploadsAsync(KeyOtherServer, 10));
+    }
+
+    [Fact]
+    public async Task UploadOutbox_ReopenKeepsPendingItemsAndUpgradesV2Schema()
+    {
+        using (var store = new SqliteLocalStateStore(DatabasePath))
+        {
+            Assert.True((await store.EnqueueUploadAsync(KeyA,
+                new PendingUploadRecord("focus-1", "focus", "{}"))).Succeeded);
+        }
+
+        // 手工降级成 v2 结构（删除发件箱表并回退版本号），模拟旧版客户端升级路径；
+        // 身份侧文件同步回退到 v2，与真实 v2 数据库的组合一致。
+        ExecuteRaw("DROP TABLE upload_outbox; PRAGMA user_version=2;");
+        var identityPath = DatabasePath + ".identity";
+        File.WriteAllText(identityPath,
+            File.ReadAllText(identityPath).Replace("\"schemaVersion\":3", "\"schemaVersion\":2"));
+
+        using (var store = new SqliteLocalStateStore(DatabasePath))
+        {
+            // 打开旧库时自动补齐 v3 结构；历史数据保留。
+            Assert.Empty(await store.LoadUploadsAsync(KeyA, 10));
+            Assert.True((await store.EnqueueUploadAsync(KeyA,
+                new PendingUploadRecord("focus-2", "focus", "{}"))).Succeeded);
+        }
+
+        using (var store = new SqliteLocalStateStore(DatabasePath))
+        {
+            var uploads = await store.LoadUploadsAsync(KeyA, 10);
+            var item = Assert.Single(uploads);
+            Assert.Equal("focus-2", item.ItemId);
+        }
+    }
+
+    [Fact]
+    public async Task UploadOutbox_SidecarAheadOfDatabaseIsRejected()
+    {
+        using (var store = new SqliteLocalStateStore(DatabasePath))
+        {
+            Assert.True((await store.EnqueueUploadAsync(KeyA,
+                new PendingUploadRecord("focus-1", "focus", "{}"))).Succeeded);
+        }
+
+        // 侧文件 v3 + 数据库 v2 是不可能状态（侧文件只在 DDL 提交后升级），必须拒绝。
+        ExecuteRaw("DROP TABLE upload_outbox; PRAGMA user_version=2;");
+
+        var reopened = new SqliteLocalStateStore(DatabasePath);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => reopened.LoadUploadsAsync(KeyA, 10));
+        }
+        finally
+        {
+            reopened.Dispose();
+        }
+    }
 }

@@ -22,6 +22,7 @@ public sealed class SubmissionSyncService(
 {
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(20);
+    private static readonly System.Text.Json.JsonSerializerOptions UploadJson = JsonDefaults.Create();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _roundGate = new(1, 1);
@@ -122,8 +123,10 @@ public sealed class SubmissionSyncService(
         try
         {
             ct.ThrowIfCancellationRequested();
+            // B06 补报：失焦事件与复核确认先于进度/交卷处理；已确认回执后仍继续清空发件箱。
+            var uploadsPending = await FlushUploadsAsync(ct).ConfigureAwait(false);
             if (_phase is SubmissionSyncPhase.Confirmed or SubmissionSyncPhase.Blocked)
-                return Timeout.InfiniteTimeSpan;
+                return uploadsPending ? RetryInterval : Timeout.InfiniteTimeSpan;
             if (runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked ||
                 runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
                 return await BlockAsync("当前设备或本地记录没有有效授权，已停止自动上传，请联系考务人员核对。");
@@ -149,6 +152,104 @@ public sealed class SubmissionSyncService(
             return ScheduleRetry("网络或本地存储尚未恢复，原记录已保留");
         }
         finally { _roundGate.Release(); }
+    }
+
+    /// <summary>
+    /// B06 发件箱补报：失焦事件批量上报（按事件幂等），复核确认逐版本上报（按版本幂等）。
+    /// 明确的不可重试拒绝视为服务端终态：删除记录不再重发；临时失败保留待下轮。
+    /// 返回是否仍有未确认记录。
+    /// </summary>
+    private async Task<bool> FlushUploadsAsync(CancellationToken ct)
+    {
+        var uploads = await runtime.LoadPendingUploadsAsync(200, ct).ConfigureAwait(false);
+        if (uploads.Count == 0) return false;
+
+        var examId = runtime.Manager.ExamId;
+        var candidateId = runtime.Manager.CandidateId;
+        var participation = runtime.Manager.Participation;
+        var paperVersion = runtime.Manager.Descriptor?.PaperVersion ?? 0;
+
+        var focusPayloads = new List<StudentExamRuntime.PendingFocusEventPayload>();
+        var focusIds = new List<string>();
+        foreach (var item in uploads)
+        {
+            if (!string.Equals(item.Kind, "focus", StringComparison.Ordinal)) continue;
+            try
+            {
+                var payload = System.Text.Json.JsonSerializer.Deserialize<StudentExamRuntime.PendingFocusEventPayload>(
+                    item.Payload, UploadJson);
+                if (payload is null || payload.EventId != item.ItemId || payload.DurationMilliseconds < 0 ||
+                    payload.RegainedAt < payload.LostAt)
+                    throw new System.Text.Json.JsonException("载荷不完整。");
+                focusPayloads.Add(payload);
+                focusIds.Add(item.ItemId);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // 损坏载荷无法被服务器接受，删除以免永久阻塞其余补报。
+                await DeleteUploadQuietlyAsync(item.ItemId, ct).ConfigureAwait(false);
+            }
+        }
+
+        if (focusPayloads.Count > 0 && participation is { } current &&
+            !string.IsNullOrWhiteSpace(examId) && !string.IsNullOrWhiteSpace(candidateId) && paperVersion > 0)
+        {
+            var request = new ReportFocusEventsRequest(RequestIds.New(), examId, candidateId,
+                current.ParticipationId, current.EntryVersion, device.DeviceId, current.AuthorizationVersion,
+                paperVersion, focusPayloads.Select(payload => new ReportedFocusLossEvent(
+                    payload.EventId, payload.LostAt, payload.RegainedAt, payload.DurationMilliseconds)).ToArray());
+            var response = await api.ReportFocusEventsAsync(request, ct).ConfigureAwait(false);
+            if (response is { IsSuccess: true } ||
+                IsDefinitiveRejection(response?.Error))
+            {
+                foreach (var id in focusIds)
+                    await DeleteUploadQuietlyAsync(id, ct).ConfigureAwait(false);
+            }
+        }
+        else if (focusPayloads.Count > 0)
+        {
+            return true; // 授权元组尚未就绪，保留待报。
+        }
+
+        foreach (var item in uploads)
+        {
+            if (!string.Equals(item.Kind, "review", StringComparison.Ordinal)) continue;
+            StudentExamRuntime.ReviewConfirmationPayload? payload;
+            try
+            {
+                payload = System.Text.Json.JsonSerializer.Deserialize<StudentExamRuntime.ReviewConfirmationPayload>(
+                    item.Payload, UploadJson);
+                if (payload is null || payload.PaperVersion < 1 || string.IsNullOrWhiteSpace(payload.RequestId))
+                    throw new System.Text.Json.JsonException("载荷不完整。");
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                await DeleteUploadQuietlyAsync(item.ItemId, ct).ConfigureAwait(false);
+                continue;
+            }
+            if (participation is not { } reviewParticipation || string.IsNullOrWhiteSpace(examId)) return true;
+            var request = new Exam.Contracts.Versioning.ConfirmPaperReviewRequest(
+                examId, reviewParticipation.ParticipationId, payload.PaperVersion, payload.RequestId,
+                device.DeviceId, reviewParticipation.EntryVersion, reviewParticipation.AuthorizationVersion);
+            var response = await api.ConfirmPaperReviewAsync(
+                examId, reviewParticipation.ParticipationId, request, ct).ConfigureAwait(false);
+            if (response is { IsSuccess: true } || IsDefinitiveRejection(response?.Error))
+                await DeleteUploadQuietlyAsync(item.ItemId, ct).ConfigureAwait(false);
+            else
+                return true;
+        }
+
+        return await runtime.LoadPendingUploadsAsync(1, ct).ConfigureAwait(false) is { Count: > 0 };
+    }
+
+    private static bool IsDefinitiveRejection(ApiError? error) =>
+        error is { Retryable: false } && error.Code != ErrorCodes.ServiceRecovering;
+
+    private async Task DeleteUploadQuietlyAsync(string itemId, CancellationToken ct)
+    {
+        try { await runtime.DeletePendingUploadAsync(itemId, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception) { /* 删除失败时下轮幂等重试；服务器按标识去重 */ }
     }
 
     private async Task<TimeSpan> SyncProgressAsync(CancellationToken ct)

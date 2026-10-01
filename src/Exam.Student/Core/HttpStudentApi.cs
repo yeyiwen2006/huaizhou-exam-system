@@ -120,6 +120,23 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         SubmitFinalAnswersRequest request, CancellationToken ct = default) =>
         SendAsync<SubmissionReceipt>(HttpMethod.Post, "/api/v1/submissions/final", request, true, ct);
 
+    public Task<ApiEnvelope<FocusEventsReceipt>> ReportFocusEventsAsync(
+        ReportFocusEventsRequest request, CancellationToken ct = default) =>
+        SendAsync<FocusEventsReceipt>(HttpMethod.Post, "/api/v1/submissions/focus-events", request, true, ct);
+
+    public Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(
+        string examId, string participantId,
+        Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(examId) || string.IsNullOrWhiteSpace(participantId))
+            throw new ArgumentException("确认试卷复核需要完整的考试与参试标识。");
+        return SendAsync<Exam.Contracts.Versioning.ExamVersionSnapshot>(
+            HttpMethod.Post,
+            $"/api/v1/versioning/exams/{Uri.EscapeDataString(examId)}" +
+            $"/participants/{Uri.EscapeDataString(participantId)}/paper-review",
+            request, true, ct);
+    }
+
     public Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
         string participationId, long entryVersion, string deviceId, long authorizationVersion,
         CancellationToken ct = default)

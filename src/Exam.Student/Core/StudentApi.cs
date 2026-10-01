@@ -45,6 +45,15 @@ public interface IStudentApi
     Task<ApiEnvelope<SubmissionReceipt>> GetSubmissionReceiptAsync(
         string participationId, long entryVersion, string deviceId, long authorizationVersion,
         CancellationToken ct = default);
+
+    /// <summary>B06：批量补报复焦事件；服务器按 (ParticipationId, EventId) 幂等留痕，回执列出全部受理标识。</summary>
+    Task<ApiEnvelope<FocusEventsReceipt>> ReportFocusEventsAsync(
+        ReportFocusEventsRequest request, CancellationToken ct = default);
+
+    /// <summary>B06：向服务端确认已复核修订试卷；同一版本重复确认按幂等重放处理。</summary>
+    Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(
+        string examId, string participantId,
+        Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default);
 }
 
 public static class RequestIds
