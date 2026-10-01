@@ -120,6 +120,10 @@ public static class PostgresRuntimeRegistration
             gradingOptions.Lease,
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<RecalculationScheduler>();
+        services.AddSingleton(provider => new GradingStatusService(
+            provider.GetRequiredService<IGradingInputs>(),
+            provider.GetRequiredService<IGradingScope>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<GradingProcessor>();
         services.AddSingleton<RecalculationProcessor>();
         services.AddSingleton<PostgresCollectionCompletionStore>();
