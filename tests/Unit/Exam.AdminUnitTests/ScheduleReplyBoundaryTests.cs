@@ -31,7 +31,7 @@ public sealed class ScheduleReplyBoundaryTests
         Assert.Contains("无法确认保存结果", error.Message, StringComparison.Ordinal);
         Assert.Equal(5, handler.ExpectedVersions.Single());
         Assert.Equal(5, viewModel.LoadedScheduleVersion);
-        Assert.DoesNotContain("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -91,7 +91,7 @@ public sealed class ScheduleReplyBoundaryTests
 
         Assert.Equal(new long?[] { 5, 6 }, handler.ExpectedVersions);
         Assert.Equal(7, viewModel.LoadedScheduleVersion);
-        Assert.StartsWith("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
+        Assert.StartsWith("考试时间已保存", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class ScheduleReplyBoundaryTests
 
         await viewModel.SaveScheduleAsync();
 
-        Assert.StartsWith("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
+        Assert.StartsWith("考试时间已保存", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class ScheduleReplyBoundaryTests
         await saving.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存", viewModel.Status, StringComparison.Ordinal);
     }
 
     private static AdminApiClient CreateApi(HttpMessageHandler handler)

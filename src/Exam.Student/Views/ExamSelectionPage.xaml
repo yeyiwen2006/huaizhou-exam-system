@@ -84,8 +84,10 @@
                                                                  Margin="12,0,0,0"
                                                                  VerticalAlignment="Center" />
                                         </StackPanel>
+                                        <!-- 只有旧数据另设类别且与名称不同时才显示本行。 -->
                                         <TextBlock Style="{StaticResource CaptionText}"
                                                    Text="{Binding CategoryText}"
+                                                   Visibility="{Binding HasCategory, Converter={StaticResource BoolToVis}}"
                                                    Margin="0,6,0,0" />
                                         <TextBlock Style="{StaticResource CaptionText}"
                                                    Text="{Binding TimeText}"

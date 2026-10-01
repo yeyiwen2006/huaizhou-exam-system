@@ -10,6 +10,8 @@ using System.Windows.Threading;
 using Exam.Admin;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
+using Exam.Contracts.Common;
+using Exam.Contracts.Exams;
 using Exam.Contracts.Grading;
 using Exam.Contracts.Submissions;
 using Exam.Domain.Reporting;
@@ -130,10 +132,20 @@ public sealed class UiScreenshotTests
         viewModel.Connection.ServerAddress = "https://synthetic-server.invalid:5001/";
         viewModel.Connection.OperatorId = "synthetic-operator";
 
+        // 主页卡片与当前考试（合成数据）；进入考试会尝试读取服务器，离线时只在设置页显示读取失败。
+        var start = new DateTimeOffset(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
+        var summaries = new[]
+        {
+            new ExamSummary("synthetic-exam", "合成模拟考试", start, start.AddHours(2), ExamLifecycle.Scheduled, true, true, 4, 1, 3),
+            new ExamSummary("synthetic-exam-2", "合成模拟考试（第二场）", start.AddDays(1), start.AddDays(1).AddHours(2), ExamLifecycle.Scheduled, false, false, 0, 0, 1),
+            new ExamSummary("synthetic-exam-0", "合成练习考试", start.AddDays(-7), start.AddDays(-7).AddHours(1), ExamLifecycle.Ended, true, false, 28, 28, 2),
+        };
+        foreach (var summary in summaries) viewModel.Home.Exams.Add(new ExamCardViewModel(summary, () => { }));
+        viewModel.OpenExam(summaries[0]);
+        viewModel.SelectedPage = MainViewModel.HomePage;
+
         var exam = viewModel.Exam;
-        exam.ExamId = "synthetic-exam";
         exam.Name = "合成模拟考试";
-        exam.CategoryName = "合成类别";
         exam.ScheduledStartText = "2027-01-15 09:00";
         exam.ScheduledEndText = "2027-01-15 11:00";
         var subjectA = exam.Subjects[0];

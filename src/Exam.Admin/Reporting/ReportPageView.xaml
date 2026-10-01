@@ -47,9 +47,8 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="当前考试" Style="{DynamicResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,12,0" />
-                <TextBox x:Name="ExamSelector" Grid.Column="1" MaxWidth="420" HorizontalAlignment="Stretch" Margin="0,0,16,0"
-                         Text="{Binding ExamId, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="考试编号"
-                         ToolTip="输入考试编号；切换考试后原来的表格会立即隐藏。" />
+                <TextBlock x:Name="ExamSelector" Grid.Column="1" Text="{Binding ExamName}" Style="{DynamicResource SectionTitle}"
+                           VerticalAlignment="Center" Margin="0,0,16,0" TextTrimming="CharacterEllipsis" AutomationProperties.Name="当前考试" />
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <Button Content="刷新" Command="{Binding RefreshCommand}" Style="{DynamicResource Btn.Secondary}" MinWidth="104" Margin="0,0,8,0" />
                     <Button x:Name="ExportButton" Content="导出 Excel" Command="{Binding ExportCommand}" Style="{DynamicResource Btn.Primary}" MinWidth="120" Margin="0,0,8,0" />

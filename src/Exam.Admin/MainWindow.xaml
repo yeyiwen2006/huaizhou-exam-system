@@ -68,7 +68,7 @@
         </Style>
     </Window.Resources>
 
-    <TabControl Style="{StaticResource Nav.TabControl}" Tag="考务端">
+    <TabControl Style="{StaticResource Nav.TabControl}" Tag="{Binding CurrentExamTitle}" SelectedIndex="{Binding SelectedPage, Mode=TwoWay}">
         <controls:NavShell.TopBar>
             <!-- 常驻连接条：切换页面时保持不变 -->
             <Border Style="{StaticResource TopBar}">
@@ -105,11 +105,69 @@
             </Border>
         </controls:NavShell.TopBar>
 
-        <TabItem Header="考试设置" Tag="{StaticResource Icon.Calendar}">
+        <!-- 主页：全部考试以卡片列出，按名称区分；点击卡片进入该场考试，或新建考试。 -->
+        <TabItem Header="全部考试" Tag="{StaticResource Icon.Layers}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考试设置" Tag="{StaticResource Icon.Calendar}"
-                                    Content="填写考试名称、起止时间、科目与题组计分规则。目前只有考试编号和起止时间会保存到服务器，其余内容只在本机编辑。" />
+                    <DockPanel Margin="0,0,0,20">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="刷新" Style="{StaticResource ActionButton}" Margin="0,0,8,0" Command="{Binding Home.RefreshCommand}"/>
+                            <Button Content="新建考试" Style="{StaticResource PrimaryAction}" Margin="0" Command="{Binding Home.NewExamCommand}"/>
+                        </StackPanel>
+                        <HeaderedContentControl Style="{StaticResource PageHeading}" Header="全部考试" Tag="{StaticResource Icon.Layers}" Margin="0"
+                                                Content="点击考试进入设置、监控和成绩统计，或新建考试。" />
+                    </DockPanel>
+                    <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                    <ItemsControl ItemsSource="{Binding Home.Exams}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Command="{Binding OpenCommand}" Width="340" Height="Auto" Margin="0,0,16,16" Padding="0" Cursor="Hand"
+                                        HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="Card" Style="{StaticResource Card}" Padding="20,18">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Primary}" />
+                                                </Trigger>
+                                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Focus.Ring}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <Border Style="{StaticResource IconTile}" Margin="0,0,12,0">
+                                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,12,0,0"/>
+                                        <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,4,0,10"/>
+                                        <WrapPanel>
+                                            <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
+                                            <controls:StatusPill Text="{Binding VisibilityText}" Level="{Binding VisibilityLevel}"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="考试设置" Tag="{StaticResource Icon.Calendar}" IsEnabled="{Binding CanEditSettings}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="{Binding Exam.Heading}" Tag="{StaticResource Icon.Calendar}"
+                                    Content="填写考试名称、起止时间、科目与题组计分规则，保存到服务器后由此生成学生端的考试说明。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="考试基础信息" Style="{StaticResource CardHeading}" />
@@ -117,14 +175,11 @@
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="考试编号" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.ExamId, UpdateSourceTrigger=PropertyChanged}"/>
-                                    <TextBlock Text="考试类别" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.CategoryName, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Text="考试名称" Style="{StaticResource FormLabel}"/>
+                                    <TextBox Style="{StaticResource FormTextBox}" IsEnabled="{Binding Exam.IsSettingsEditable}"
+                                             Text="{Binding Exam.Name, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="考试名称" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.Name, UpdateSourceTrigger=PropertyChanged}"/>
                                     <TextBlock Text="开始时间" Style="{StaticResource FormLabel}"/>
                                     <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.ScheduledStartText, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
@@ -138,12 +193,21 @@
                                 <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
                                 <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                                 <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" Command="{Binding Exam.RefreshInstructionsCommand}"/>
-                                <Button Content="读取服务器上的时间" Style="{StaticResource ActionButton}" Command="{Binding Exam.LoadScheduleCommand}"/>
-                                <Button Content="保存考试时间到服务器" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveScheduleCommand}"/>
+                                <Button Content="保存考试设置" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveCommand}"/>
                             </WrapPanel>
-                            <TextBlock Text="{Binding Exam.ScheduleVersionText}" Style="{StaticResource StatusLine}"/>
                             <TextBlock Text="{Binding Exam.Status}" Style="{StaticResource StatusLine}"/>
                         </StackPanel>
+                    </Border>
+                    <!-- 学生端显示：随时可改；有考生确认参试后，全部答卷回收前不能取消显示。 -->
+                    <Border Style="{StaticResource CardGap}">
+                        <DockPanel>
+                            <CheckBox DockPanel.Dock="Right" Content="在学生端显示本场考试" VerticalAlignment="Center"
+                                      IsChecked="{Binding Exam.VisibleToStudents, Mode=TwoWay}" IsEnabled="{Binding Exam.CanChangeVisibility}"/>
+                            <StackPanel>
+                                <TextBlock Text="学生端显示" Style="{StaticResource CardHeading}" />
+                                <TextBlock Text="{Binding Exam.VisibilityNote}" Style="{StaticResource CaptionText}" />
+                            </StackPanel>
+                        </DockPanel>
                     </Border>
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -211,7 +275,7 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="考生名单" Tag="{StaticResource Icon.Users}">
+        <TabItem Header="考生名单" Tag="{StaticResource Icon.Users}" IsEnabled="{Binding HasCurrentExam}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考生名单" Tag="{StaticResource Icon.Users}"
@@ -321,7 +385,7 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="设备监控" Tag="{StaticResource Icon.Monitor}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
+        <TabItem Header="设备监控" Tag="{StaticResource Icon.Monitor}" IsEnabled="{Binding HasCurrentExam}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备监控" Tag="{StaticResource Icon.Monitor}"
@@ -331,11 +395,7 @@
                             <TextBlock Text="考生参试情况" Style="{StaticResource CardHeading}" />
                             <TextBlock Text="读取所选考试的实际参试考生，可按考生或设备筛选。" Style="{StaticResource CardNote}" />
                             <Grid Margin="0,0,0,10">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                    <TextBlock Text="考试编号" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Text="{Binding Monitoring.ExamId, UpdateSourceTrigger=PropertyChanged}" ToolTip="考试编号"/>
-                                </StackPanel>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="0"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="1" Margin="0,0,16,0">
                                     <TextBlock Text="筛选" Style="{StaticResource FormLabel}"/>
                                     <TextBox Text="{Binding Monitoring.FilterText, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入考生或设备的部分内容进行筛选"/>
@@ -437,7 +497,7 @@
         </TabItem>
 
 
-        <TabItem Header="成绩统计" Tag="{StaticResource Icon.Chart}" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
+        <TabItem Header="成绩统计" Tag="{StaticResource Icon.Chart}" IsEnabled="{Binding HasCurrentExam}" IsSelected="{Binding Reports.IsPageActive, Mode=TwoWay}">
             <reporting:ReportPageView DataContext="{Binding Reports}" />
         </TabItem>
 

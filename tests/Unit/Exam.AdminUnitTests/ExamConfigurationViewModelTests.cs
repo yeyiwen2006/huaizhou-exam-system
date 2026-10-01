@@ -30,7 +30,7 @@ public sealed class ExamConfigurationViewModelTests
     [InlineData("CON")]
     [InlineData("exam:name")]
     [InlineData("考试.")]
-    [InlineData("考试 ")]
+    [InlineData("  ")]
     public void Validate_RejectsWindowsInvalidExamName(string name)
     {
         using var api = new AdminApiClient();
@@ -165,7 +165,7 @@ public sealed class ExamConfigurationViewModelTests
         var status = await failure.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains("其他人修改", status, StringComparison.Ordinal);
-        Assert.DoesNotContain("考试时间已保存到服务器", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
-        var completed = WaitForStatus(viewModel, "考试时间已保存到服务器");
+        var completed = WaitForStatus(viewModel, "考试时间已保存");
 
         viewModel.SaveScheduleCommand.Execute(null);
         await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
@@ -207,7 +207,6 @@ public sealed class ExamConfigurationViewModelTests
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, viewModel.LoadedScheduleVersion);
-        Assert.Contains("仍只在本机", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -227,7 +226,7 @@ public sealed class ExamConfigurationViewModelTests
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("无法确认保存结果", status, StringComparison.Ordinal);
-        Assert.DoesNotContain("考试时间已保存到服务器", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存", status, StringComparison.Ordinal);
         Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
