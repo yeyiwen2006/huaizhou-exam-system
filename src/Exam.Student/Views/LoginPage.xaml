@@ -10,7 +10,15 @@
         </Grid.RowDefinitions>
 
         <controls:PageHeader Grid.Row="0"
-                            ClientNumber="{Binding ClientNumber, Mode=OneWay}" />
+                            ClientNumber="{Binding ClientNumber, Mode=OneWay}">
+            <controls:PageHeader.RightContent>
+                <Button AutomationProperties.AutomationId="ExitSystemButton"
+                        Style="{StaticResource Btn.Danger}"
+                        Content="退出系统"
+                        Visibility="{Binding IsActivated, Converter={StaticResource BoolToVis}}"
+                        Click="OnExitSystem" />
+            </controls:PageHeader.RightContent>
+        </controls:PageHeader>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <Border Style="{StaticResource Card}"
