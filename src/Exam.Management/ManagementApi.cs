@@ -12,7 +12,7 @@ public static class ManagementApi
 {
     public static void MapManagementApi(this WebApplication app)
     {
-        var json = JsonDefaults.Create();
+        var json = JsonDefaults.CreateServerTransport();
         app.Use(async (context, next) =>
         {
             var runtime = context.RequestServices.GetRequiredService<ManagementRuntime>();
@@ -155,6 +155,6 @@ public static class ManagementApi
         context.Response.StatusCode = status;
         // This response makes no authoritative database observation. Do not use configured/historical epochs.
         return context.Response.WriteAsJsonAsync(new ManagementEnvelope<object>(runtime.ServerId, runtime.NodeId,
-            null, false, null, context.TraceIdentifier, result, error), JsonDefaults.Create(), context.RequestAborted);
+            null, false, null, context.TraceIdentifier, result, error), JsonDefaults.CreateServerTransport(), context.RequestAborted);
     }
 }

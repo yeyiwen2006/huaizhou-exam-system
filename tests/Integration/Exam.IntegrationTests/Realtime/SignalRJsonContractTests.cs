@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text;
+using System.Text.Json;
 using Exam.Application.Commands;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
@@ -15,6 +16,31 @@ namespace Exam.IntegrationTests.Realtime;
 
 public sealed class SignalRJsonContractTests
 {
+    [Fact]
+    public async Task ProductionHttpAndHubOptionsWriteCurrentAndScheduleTimesAsUtc8()
+    {
+        await using var factory = new WebApplicationFactory<Program>();
+        var instant = new DateTimeOffset(2026, 10, 1, 20, 30, 0, TimeSpan.Zero);
+        var payload = new { serverTime = instant, schedule = new { startsAt = instant, endsAt = instant.AddHours(2) } };
+        var httpOptions = factory.Services.GetRequiredService<IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>>().Value.SerializerOptions;
+        using var http = JsonDocument.Parse(JsonSerializer.Serialize(payload, httpOptions));
+        VerifyTimes(http.RootElement);
+
+        var protocol = new JsonHubProtocol(factory.Services.GetRequiredService<IOptions<JsonHubProtocolOptions>>());
+        var frame = Encoding.UTF8.GetString(protocol.GetMessageBytes(new InvocationMessage("TimeUpdated", [payload])).Span);
+        using var hub = JsonDocument.Parse(frame.TrimEnd('\u001e'));
+        VerifyTimes(hub.RootElement.GetProperty("arguments")[0]);
+
+        void VerifyTimes(JsonElement result)
+        {
+            foreach (var time in new[] { result.GetProperty("serverTime"), result.GetProperty("schedule").GetProperty("startsAt"),
+                         result.GetProperty("schedule").GetProperty("endsAt") })
+                Assert.Equal(TimeSpan.FromHours(8), time.GetDateTimeOffset().Offset);
+            Assert.Equal(instant, result.GetProperty("serverTime").GetDateTimeOffset());
+            Assert.Equal(instant.AddHours(2), result.GetProperty("schedule").GetProperty("endsAt").GetDateTimeOffset());
+        }
+    }
+
     [Theory]
     [InlineData("Received", CommandProcessingResult.Received)]
     [InlineData("applied", CommandProcessingResult.Applied)]

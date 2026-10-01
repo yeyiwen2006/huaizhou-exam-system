@@ -14,20 +14,24 @@ public sealed class SolutionSmokeTests(WebApplicationFactory<Program> factory)
     }
 
     [Fact]
-    public async Task TimeEndpoint_ReturnsServerIdentityAndUtcTime()
+    public async Task TimeEndpoint_ReturnsServerIdentityAndUtc8Time()
     {
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost")
         });
 
+        var before = DateTimeOffset.UtcNow;
         using var response = await client.GetAsync("/api/system/time");
+        var after = DateTimeOffset.UtcNow;
         using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("development-server", document.RootElement.GetProperty("serverId").GetString());
         Assert.Equal("development-node-a", document.RootElement.GetProperty("nodeId").GetString());
         Assert.Equal(1, document.RootElement.GetProperty("serverEpoch").GetInt64());
-        Assert.True(document.RootElement.GetProperty("result").TryGetProperty("serverTime", out _));
+        var serverTime = document.RootElement.GetProperty("result").GetProperty("serverTime").GetDateTimeOffset();
+        Assert.Equal(TimeSpan.FromHours(8), serverTime.Offset);
+        Assert.InRange(serverTime, before, after);
     }
 }
