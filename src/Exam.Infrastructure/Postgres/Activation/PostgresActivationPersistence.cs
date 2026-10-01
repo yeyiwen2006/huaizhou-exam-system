@@ -87,6 +87,21 @@ public sealed class PostgresActivationPersistence(NpgsqlDataSource dataSource) :
             return reader.Read() ? ReadActivationRequest(reader) : null;
         }
 
+        public IReadOnlyList<DeviceActivationRequest> ListPendingRequests()
+        {
+            using var command = CreateCommand("""
+                SELECT activation_request_id, device_id, protected_credential,
+                       activation_status, requested_at, client_number, credential_version
+                  FROM exam.device_activation_requests
+                 WHERE activation_status = 'pending'
+                 ORDER BY requested_at ASC, activation_request_id ASC;
+                """);
+            using var reader = command.ExecuteReader();
+            var results = new List<DeviceActivationRequest>();
+            while (reader.Read()) results.Add(ReadActivationRequest(reader));
+            return results;
+        }
+
         public int GetLastDailySequence(DateOnly date)
         {
             using (var ensure = CreateCommand("""

@@ -1,0 +1,91 @@
+<UserControl x:Class="Exam.Admin.Views.AdminLoginPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls;assembly=Exam.Desktop.Shared"
+             Background="{DynamicResource Brush.Background}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Border Style="{StaticResource Card}"
+                Width="460"
+                Padding="0"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Margin="24">
+            <StackPanel>
+                <Border Style="{StaticResource BrandBand}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.Logo}" Stroke="{DynamicResource Brush.OnPrimary}"
+                                  Style="{StaticResource Icon.Stroke}" Width="18" Height="18" Margin="0,0,8,0" />
+                            <TextBlock Style="{StaticResource BrandBand.Caption}" Text="怀籀传承在线考试系统" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource BrandBand.Title}" Text="考务端登录" Margin="0,14,0,0" />
+                        <TextBlock Style="{StaticResource BrandBand.Caption}"
+                                   Text="请输入服务器地址、用户名和口令登录考务账号。"
+                                   Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Margin="28,24,28,20">
+                    <!-- 服务器地址 -->
+                    <TextBlock Text="服务器地址" Style="{StaticResource FieldLabel}" />
+                    <TextBox Margin="0,4,0,14"
+                             Text="{Binding ServerAddress, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="考务服务器地址，例如 https://exam.example.com/" />
+
+                    <!-- 用户名 -->
+                    <TextBlock Text="用户名" Style="{StaticResource FieldLabel}" />
+                    <TextBox x:Name="UsernameBox"
+                             Margin="0,4,0,14"
+                             Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <!-- 口令 -->
+                    <TextBlock Text="口令" Style="{StaticResource FieldLabel}" />
+                    <PasswordBox x:Name="PasswordInput"
+                                 Margin="0,4,0,0"
+                                 PasswordChanged="Password_OnPasswordChanged" />
+
+                    <!-- 注册额外字段 -->
+                    <StackPanel Margin="0,14,0,0"
+                                Visibility="{Binding ShowRegisterFields, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="姓名" Style="{StaticResource FieldLabel}" />
+                        <TextBox Margin="0,4,0,14"
+                                 Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="再次输入口令" Style="{StaticResource FieldLabel}" />
+                        <PasswordBox x:Name="ConfirmPasswordInput"
+                                     Margin="0,4,0,0"
+                                     PasswordChanged="ConfirmPassword_OnPasswordChanged" />
+                    </StackPanel>
+
+                    <!-- 状态提示 -->
+                    <TextBlock Text="{Binding Status}"
+                               Style="{StaticResource CaptionText}"
+                               Margin="0,12,0,0"
+                               TextWrapping="Wrap" />
+
+                    <!-- 主操作按钮 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button Style="{StaticResource Btn.Primary}"
+                                MinWidth="96" Padding="14,0"
+                                Height="{StaticResource Control.Height.Large}"
+                                Content="{Binding PrimaryActionText}"
+                                Command="{Binding PrimaryActionCommand}" />
+                        <Button Style="{StaticResource Btn.Secondary}"
+                                MinWidth="96" Padding="14,0" Margin="8,0,0,0"
+                                Height="{StaticResource Control.Height.Large}"
+                                Content="{Binding SecondaryActionText}"
+                                Command="{Binding SecondaryActionCommand}"
+                                Visibility="{Binding ShowSecondaryAction, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
+
+                    <!-- 注册 / 取消注册 切换链接 -->
+                    <Button Style="{StaticResource Btn.Ghost}"
+                            Content="{Binding ToggleRegisterText}"
+                            Margin="0,10,0,0"
+                            Padding="12,0"
+                            HorizontalAlignment="Center"
+                            Command="{Binding ToggleRegisterCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </ScrollViewer>
+</UserControl>

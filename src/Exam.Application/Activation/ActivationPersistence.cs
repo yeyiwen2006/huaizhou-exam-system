@@ -1,3 +1,4 @@
+﻿using Exam.Contracts.Activation;
 using Exam.Domain.Activation;
 
 namespace Exam.Application.Activation;
@@ -16,6 +17,8 @@ public interface IActivationTransaction
     DeviceActivationRequest? FindActivationRequest(string activationRequestId);
 
     DeviceActivationRequest? FindLatestActivationRequestForDevice(string deviceId);
+
+    IReadOnlyList<DeviceActivationRequest> ListPendingRequests();
 
     int GetLastDailySequence(DateOnly date);
 
@@ -88,6 +91,12 @@ public sealed class InMemoryActivationPersistence : IActivationPersistence
                 .Where(request => StringComparer.Ordinal.Equals(request.DeviceId, deviceId))
                 .OrderByDescending(request => request.RequestedAt)
                 .FirstOrDefault();
+
+        public IReadOnlyList<DeviceActivationRequest> ListPendingRequests() =>
+            state.Requests.Values
+                .Where(request => request.Status == ActivationStatus.Pending)
+                .OrderBy(request => request.RequestedAt)
+                .ToList();
 
         public int GetLastDailySequence(DateOnly date) => state.DailySequences.GetValueOrDefault(date);
 

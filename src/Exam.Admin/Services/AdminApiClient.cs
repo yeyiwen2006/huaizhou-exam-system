@@ -163,6 +163,14 @@ public sealed partial class AdminApiClient : IDisposable
             null,
             cancellationToken);
 
+    public async Task<IReadOnlyList<ActivationRequestResult>> ListPendingActivationRequestsAsync(
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<IReadOnlyList<ActivationRequestResult>>(
+            HttpMethod.Get,
+            "api/v1/activation/pending",
+            null,
+            cancellationToken);
+
     public async Task<ActivationResult> ApproveActivationAsync(
         string activationRequestId,
         string? roomGroupId,

@@ -214,6 +214,17 @@ public static class ExamApiEndpointExtensions
                 : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, result);
         });
 
+        group.MapGet("/pending", async (
+            ActivationService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            ApiEndpointResults.Success(
+                context,
+                configuration,
+                context.TraceIdentifier,
+                await service.ListPendingRequestsAsync(cancellationToken)));
+
         return group;
     }
 

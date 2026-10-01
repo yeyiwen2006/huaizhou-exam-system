@@ -1,32 +1,59 @@
-using System.Windows;
+﻿using System.Windows;
+using System.Windows.Controls;
 using Exam.Admin.ViewModels;
+using Exam.Admin.Views;
 
 namespace Exam.Admin;
 
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private AdminLoginPage? _loginPage;
 
     public MainWindow()
     {
         _viewModel = new MainViewModel();
         InitializeComponent();
         _viewModel.Monitoring.CollectionCompleted += OnCollectionCompleted;
-        _viewModel.Connection.PasswordsCleared += OnPasswordsCleared;
         DataContext = _viewModel;
+
+        _viewModel.Connection.PropertyChanged += OnConnectionPropertyChanged;
+        ShowLoginPage();
     }
 
-    // 口令框不支持绑定；口令只交给登录条的视图模型，登录或注册结束后清空。
-    private void Password_OnPasswordChanged(object sender, RoutedEventArgs e) =>
-        _viewModel.Connection.Password = PasswordInput.Password;
-
-    private void ConfirmPassword_OnPasswordChanged(object sender, RoutedEventArgs e) =>
-        _viewModel.Connection.ConfirmPassword = ConfirmPasswordInput.Password;
-
-    private void OnPasswordsCleared()
+    private void ShowLoginPage()
     {
-        PasswordInput.Clear();
-        ConfirmPasswordInput.Clear();
+        _loginPage = new AdminLoginPage(_viewModel.Connection);
+        PageRegion.Content = _loginPage;
+        MainTabArea.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowMainArea()
+    {
+        if (_loginPage is not null)
+        {
+            _loginPage.Detach();
+            _loginPage = null;
+        }
+        PageRegion.Content = null;
+        MainTabArea.Visibility = Visibility.Visible;
+    }
+
+    private void OnConnectionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ConnectionViewModel.IsConnected)) return;
+        if (_viewModel.Connection.IsConnected)
+            ShowMainArea();
+        else
+            ShowLoginPage();
+    }
+
+    private void OnSelectedPageChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_viewModel.SelectedPage == MainViewModel.ActivationPage)
+            _viewModel.Activation.StartPolling();
+        else
+            _viewModel.Activation.StopPolling();
     }
 
     private void OnCollectionCompleted(Exam.Contracts.Submissions.CollectionCompletedNotification item)
@@ -39,8 +66,9 @@ public partial class MainWindow : Window
 
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
+        _viewModel.Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _viewModel.Monitoring.CollectionCompleted -= OnCollectionCompleted;
-        _viewModel.Connection.PasswordsCleared -= OnPasswordsCleared;
+        _loginPage?.Detach();
         _viewModel.Dispose();
     }
 }

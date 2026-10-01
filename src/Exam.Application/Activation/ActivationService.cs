@@ -266,6 +266,15 @@ public sealed class ActivationService(
             transaction => transaction.FindDevice(deviceId) is { } device ? ToResult(device) : null,
             cancellationToken);
 
+    public ValueTask<IReadOnlyList<ActivationRequestResult>> ListPendingRequestsAsync(
+        CancellationToken cancellationToken = default) =>
+        persistence.ExecuteTransactionAsync(
+            transaction => (IReadOnlyList<ActivationRequestResult>)transaction
+                .ListPendingRequests()
+                .Select(ToRequestResult)
+                .ToList(),
+            cancellationToken);
+
     private static T RunIdempotent<T>(
         IActivationTransaction transaction,
         string requestId,
