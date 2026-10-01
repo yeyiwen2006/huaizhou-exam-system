@@ -50,7 +50,7 @@ public sealed class ConnectionViewModel : BindableBase
     private string _serverAddress = "https://localhost:5001/";
     private string _operatorId = string.Empty;
     private string _operatorToken = string.Empty;
-    private string _status = "尚未连接。令牌只保存在当前进程内，不写入配置或日志。";
+    private string _status = "尚未连接服务器。";
     private bool _isConnected;
 
     public ConnectionViewModel(AdminApiClient api)
@@ -99,13 +99,13 @@ public sealed class ConnectionViewModel : BindableBase
         _api.Configure(ServerAddress, OperatorToken, OperatorId);
         await _api.CheckConnectionAsync();
         IsConnected = true;
-        Status = "服务器已就绪，考务令牌已验证；操作者身份仍由服务器在写请求中核对。";
+        Status = "已连接服务器。";
     }
 
     private void SetError(Exception exception)
     {
         _api.Disconnect();
         IsConnected = false;
-        Status = $"连接失败：{exception.Message}";
+        Status = $"连接失败：{FriendlyErrors.Describe(exception)}";
     }
 }

@@ -71,7 +71,7 @@
 
                 <controls:Banner Level="Info"
                                 IsOpen="True"
-                                Message="请先取得完整试题包与考试说明，再确认参试。试题包在开考前保持加密。当前版本尚未提供完整答题与交卷功能，请勿用于正式考试。"
+                                Message="请阅读考试说明，试题下载完成后点击“确认参试”。开考前试题保持加密，开考时自动解锁。"
                                 Margin="0,16,0,0" />
 
                 <!-- 考试说明（全部科目全部题型） -->
@@ -104,23 +104,24 @@
                         <ProgressBar x:Name="DownloadBar" Minimum="0" Maximum="100" Height="8" Margin="0,12,0,0" />
                         <TextBlock x:Name="DownloadDetail" Style="{StaticResource CaptionText}" Margin="0,6,0,0" />
                         <Button x:Name="RetryDownloadButton" Style="{StaticResource Btn.Secondary}"
-                                Content="重试获取资料" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnRetryDownload" />
+                                Content="重新下载" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnRetryDownload" />
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                <!-- 本机答卷恢复：正常时隐藏，只在有未完成的答卷或保存出错时显示。 -->
+                <Border x:Name="LocalStateCard" Style="{StaticResource Card}" Margin="0,12,0,0" Visibility="Collapsed">
                     <StackPanel>
                         <DockPanel>
                             <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
                                 <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Refresh}" Width="16" Height="16" />
                             </Border>
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="本地答题恢复" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="本机答卷" Margin="12,0,0,0" VerticalAlignment="Center" />
                         </DockPanel>
                         <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}" Margin="0,8,0,0"
-                                   Text="正在检查本机是否有未完成的固定答卷…" />
+                                   Text="" />
                         <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
                         <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
-                                Content="重试本地保存" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                Content="重试保存" HorizontalAlignment="Left" Margin="0,12,0,0"
                                 Visibility="Collapsed" Click="OnRetryLocalSave" />
                     </StackPanel>
                 </Border>
@@ -134,12 +135,12 @@
                             <TextBlock Style="{StaticResource SectionTitle}" Text="参试确认" Margin="12,0,0,0" VerticalAlignment="Center" />
                         </DockPanel>
                         <TextBlock x:Name="ConfirmHint" Style="{StaticResource BodyText}" Margin="0,8,0,0"
-                                   Text="试题包与考试说明全部取得后才能确认参试。" />
+                                   Text="试题和考试说明下载完成后，才能确认参试。" />
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <Button x:Name="ConfirmButton" Style="{StaticResource Btn.Primary}" Content="确认参试" MinWidth="112" Padding="16,0"
                                     IsEnabled="False" Click="OnConfirmParticipation" />
                             <Button x:Name="RetryConnectionButton" Style="{StaticResource Btn.Secondary}"
-                                    Content="重试连接与解锁" Margin="12,0,0,0" Visibility="Collapsed" Click="OnRetryConnection" />
+                                    Content="重新连接" Margin="12,0,0,0" Visibility="Collapsed" Click="OnRetryConnection" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

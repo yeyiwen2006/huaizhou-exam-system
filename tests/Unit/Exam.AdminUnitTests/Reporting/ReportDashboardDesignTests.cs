@@ -27,14 +27,14 @@ public sealed partial class ReportViewReviewTests
         Assert.Equal("1", page.ParticipantCountText);
         Assert.Equal("1", page.CollectedCountText);
         Assert.Equal("1", page.GradedCountText);
-        Assert.Equal("V1", page.GradingVersionText);
-        Assert.Equal("报表已开放", page.StateLabel);
+        Assert.Equal("第 1 版", page.GradingVersionText);
+        Assert.Equal("成绩已生成", page.StateLabel);
         api.Disconnect();
         Assert.Equal("—", page.ParticipantCountText);
         Assert.Equal("—", page.CollectedCountText);
         Assert.Equal("—", page.GradedCountText);
         Assert.Equal("—", page.GradingVersionText);
-        Assert.NotEqual("报表已开放", page.StateLabel);
+        Assert.NotEqual("成绩已生成", page.StateLabel);
         Assert.False(page.Session.HasTables);
     });
 

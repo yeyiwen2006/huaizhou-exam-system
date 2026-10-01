@@ -16,12 +16,12 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="报表视图" VerticalAlignment="Center" Margin="0,0,12,0" Style="{DynamicResource SectionTitle}" />
+                    <TextBlock Text="查看表格" VerticalAlignment="Center" Margin="0,0,12,0" Style="{DynamicResource SectionTitle}" />
                     <ComboBox x:Name="TableChooser" Grid.Column="1" MaxWidth="380" HorizontalAlignment="Left" MinWidth="240"
                               MinHeight="34" ItemsSource="{Binding Tables}" DisplayMemberPath="Title"
                               SelectedItem="{Binding SelectedTable, Mode=TwoWay}" IsEnabled="{Binding HasTables}"
-                              AutomationProperties.Name="选择报表视图" />
-                    <TextBlock Grid.Column="2" Text="只读视图 · 与 Excel 同源" Style="{DynamicResource CaptionText}"
+                              AutomationProperties.Name="选择表格" />
+                    <TextBlock Grid.Column="2" Text="与导出的 Excel 内容一致" Style="{DynamicResource CaptionText}"
                                VerticalAlignment="Center" Margin="12,0,0,0" />
                 </Grid>
             </Border>

@@ -176,7 +176,7 @@
                         <controls:Banner x:Name="PaperBanner" Level="Info" />
                         <controls:Banner x:Name="PaperUpdateBanner" Level="Warning" Margin="0,8,0,0" />
                         <Button x:Name="ReviewUpdateButton" Style="{StaticResource Btn.Secondary}"
-                                Content="已复核修订试题"
+                                Content="已查看更正后的试题"
                                 Margin="0,8,0,0"
                                 Padding="14,5"
                                 HorizontalAlignment="Left"
@@ -227,13 +227,13 @@
                 <TextBlock Style="{StaticResource SectionTitle}"
                            FontSize="{DynamicResource Font.Size.Body.Large}"
                            HorizontalAlignment="Center"
-                           Text="本设备的答题授权已被撤销" />
+                           Text="本机已停止作答" />
                 <TextBlock x:Name="RevokedOverlayText"
                            Style="{StaticResource BodyText}"
                            HorizontalAlignment="Center"
                            TextWrapping="Wrap"
                            Margin="0,10,0,0"
-                           Text="考务人员已将本场考试的作答授权转移至其他设备。本机已停止作答并停止显示试题；本机已有记录已保留；服务器仅保存此前确认同步的进度，请联系考务人员。" />
+                           Text="本场考试已改由另一台设备继续作答。本机已作答内容已保留，请听从监考人员安排。" />
                 <Button Style="{StaticResource Btn.Secondary}"
                         Content="返回选择考试"
                         Margin="0,18,0,0"

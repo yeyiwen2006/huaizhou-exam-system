@@ -109,15 +109,15 @@
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考试设置" Tag="{StaticResource Icon.Calendar}"
-                                    Content="维护考试名称、起止时间、科目与题组计分规则，确认后保存到服务器。" />
+                                    Content="填写考试名称、起止时间、科目与题组计分规则。目前只有考试编号和起止时间会保存到服务器，其余内容只在本机编辑。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="考试基础信息" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="考试名称须符合 Windows 文件名规则；时间按“年-月-日 时:分”填写。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="考试名称会用作试题文件名的开头，不能包含 \ / : * ? &quot; &lt; &gt; | 等字符；时间按“年-月-日 时:分”填写。" Style="{StaticResource CardNote}" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="考试 ID" Style="{StaticResource FormLabel}"/>
+                                    <TextBlock Text="考试编号" Style="{StaticResource FormLabel}"/>
                                     <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.ExamId, UpdateSourceTrigger=PropertyChanged}"/>
                                     <TextBlock Text="考试类别" Style="{StaticResource FormLabel}"/>
                                     <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Exam.CategoryName, UpdateSourceTrigger=PropertyChanged}"/>
@@ -138,8 +138,8 @@
                                 <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
                                 <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                                 <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" Command="{Binding Exam.RefreshInstructionsCommand}"/>
-                                <Button Content="加载服务器计划" Style="{StaticResource ActionButton}" Command="{Binding Exam.LoadScheduleCommand}"/>
-                                <Button Content="保存计划到服务器" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveScheduleCommand}"/>
+                                <Button Content="读取服务器上的时间" Style="{StaticResource ActionButton}" Command="{Binding Exam.LoadScheduleCommand}"/>
+                                <Button Content="保存考试时间到服务器" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveScheduleCommand}"/>
                             </WrapPanel>
                             <TextBlock Text="{Binding Exam.ScheduleVersionText}" Style="{StaticResource StatusLine}"/>
                             <TextBlock Text="{Binding Exam.Status}" Style="{StaticResource StatusLine}"/>
@@ -148,10 +148,10 @@
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="科目与题组" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="字段与 D01 scoring-rules schema 一致；选中科目后在下方编辑其题组与计分规则。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="先在上表选中一个科目，再在下表编辑它的题组和计分规则。" Style="{StaticResource CardNote}" />
                             <DataGrid ItemsSource="{Binding Exam.Subjects}" SelectedItem="{Binding Exam.SelectedSubject}" IsReadOnly="False" Height="145" Margin="0,0,0,14">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="subjectId" Binding="{Binding SubjectId, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                    <DataGridTextColumn Header="科目编号" Binding="{Binding SubjectId, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
                                     <DataGridTextColumn Header="科目名称" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
                                     <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="120"/>
                                 </DataGrid.Columns>
@@ -163,12 +163,13 @@
                             <DataGrid ItemsSource="{Binding Exam.SelectedSubject.Groups}" SelectedItem="{Binding Exam.SelectedSubject.SelectedGroup}"
                                       IsReadOnly="False" Height="245" HorizontalScrollBarVisibility="Auto">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="groupId" Binding="{Binding GroupId, UpdateSourceTrigger=PropertyChanged}" Width="160"/>
+                                    <DataGridTextColumn Header="题组编号" Binding="{Binding GroupId, UpdateSourceTrigger=PropertyChanged}" Width="160"/>
                                     <DataGridTextColumn Header="题组名" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
-                                    <DataGridTemplateColumn Header="type" Width="140">
+                                    <DataGridTemplateColumn Header="题型" Width="150">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <ComboBox SelectedItem="{Binding Type, UpdateSourceTrigger=PropertyChanged}" MinHeight="28"
+                                                <ComboBox SelectedValue="{Binding Type, UpdateSourceTrigger=PropertyChanged}" MinHeight="28"
+                                                          SelectedValuePath="Value" DisplayMemberPath="Label"
                                                           ItemsSource="{Binding DataContext.Exam.QuestionTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
@@ -177,13 +178,13 @@
                                     <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                     <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
                                     <DataGridCheckBoxColumn Header="允许不答" Binding="{Binding AllowAbstain}" Width="85"/>
-                                    <DataGridTextColumn Header="one.correct" Binding="{Binding Correct}" Width="100"/>
-                                    <DataGridTextColumn Header="one.blank" Binding="{Binding OneBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="one.wrong" Binding="{Binding OneWrong}" Width="100"/>
-                                    <DataGridTextColumn Header="multi.all" Binding="{Binding AllCorrect}" Width="100"/>
-                                    <DataGridTextColumn Header="multi.partial" Binding="{Binding PartialCorrect}" Width="110"/>
-                                    <DataGridTextColumn Header="multi.blank" Binding="{Binding MultipleBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="multi.wrong" Binding="{Binding MultipleWrong}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案·选对" Binding="{Binding Correct}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案·不选" Binding="{Binding OneBlank}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案·选错" Binding="{Binding OneWrong}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案·全对" Binding="{Binding AllCorrect}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案·对但不全" Binding="{Binding PartialCorrect}" Width="110"/>
+                                    <DataGridTextColumn Header="多答案·不选" Binding="{Binding MultipleBlank}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案·选错" Binding="{Binding MultipleWrong}" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>
@@ -224,7 +225,7 @@
                                 <StackPanel Grid.Column="0"><TextBlock Text="姓名" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Roster.Name, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <StackPanel Grid.Column="1"><TextBlock Text="班级" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Roster.ClassText, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <StackPanel Grid.Column="2"><TextBlock Text="准考证号" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Roster.AdmissionNo, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                <Button Grid.Column="3" Content="加入名册" Style="{StaticResource Btn.Primary}" MinWidth="96" VerticalAlignment="Bottom" Margin="0,0,0,12" Command="{Binding Roster.AddManualCommand}"/>
+                                <Button Grid.Column="3" Content="加入名单" Style="{StaticResource Btn.Primary}" MinWidth="96" VerticalAlignment="Bottom" Margin="0,0,0,12" Command="{Binding Roster.AddManualCommand}"/>
                             </Grid>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,2,0,14" />
                             <WrapPanel>
@@ -250,8 +251,8 @@
                     </Border>
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="本进程名册草稿" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="仅保存在本进程内存中，关闭即丢失，未写入服务器。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="已录入的考生" Style="{StaticResource CardHeading}" />
+                            <TextBlock Text="目前只保存在本机，关闭考务端后不保留，尚不能保存到服务器。" Style="{StaticResource CardNote}" />
                             <DataGrid ItemsSource="{Binding Roster.Entries}" Height="220">
                                 <DataGrid.Columns><DataGridTextColumn Header="姓名" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="*"/><DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="*"/></DataGrid.Columns>
                             </DataGrid>
@@ -272,17 +273,17 @@
                             <TextBlock Text="考场分组暂不能在审批时指定，批准后设备先归入未分组。" Style="{StaticResource CardNote}" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="24"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0"><TextBlock Text="激活申请 ID" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.ActivationRequestId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                <StackPanel Grid.Column="0"><TextBlock Text="激活申请编号" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.ActivationRequestId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <StackPanel Grid.Column="1"><TextBlock Text="考场分组（暂不可指定）" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" IsEnabled="False" ToolTip="考场分组暂不能在审批时指定，批准后设备先归入未分组。" Text="{Binding Activation.ApprovalRoomGroupId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <Button Grid.Column="2" Content="审批" Style="{StaticResource Btn.Primary}" MinWidth="80" VerticalAlignment="Bottom" Margin="0,0,0,12" Command="{Binding Activation.ApproveCommand}"/>
                                 <Border Grid.Column="3" Width="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,12" HorizontalAlignment="Center" />
-                                <StackPanel Grid.Column="4"><TextBlock Text="设备 ID" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.QueryDeviceId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                <StackPanel Grid.Column="4"><TextBlock Text="设备标识" Style="{StaticResource FormLabel}"/><TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.QueryDeviceId, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
                                 <Button Grid.Column="5" Content="查询设备" Style="{StaticResource Btn.Secondary}" MinWidth="96" VerticalAlignment="Bottom" Margin="0,0,0,12" Command="{Binding Activation.QueryDeviceCommand}"/>
                             </Grid>
                             <TextBlock Text="{Binding Activation.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                             <DataGrid ItemsSource="{Binding Activation.Devices}" Height="260">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="设备 ID" Binding="{Binding DeviceId}" Width="*"/><DataGridTextColumn Header="客户端编号" Binding="{Binding ClientNumber}" Width="120"/>
+                                    <DataGridTextColumn Header="设备标识" Binding="{Binding DeviceId}" Width="*"/><DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="120"/>
                                     <DataGridTextColumn Header="激活状态" Binding="{Binding ActivationStatus}" Width="110"/><DataGridTextColumn Header="考场分组" Binding="{Binding RoomGroupId}" Width="*"/>
                                     <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="120"/><DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="120"/><DataGridTextColumn Header="最后心跳" Binding="{Binding LastSeen}" Width="120"/>
                                 </DataGrid.Columns>
@@ -324,31 +325,31 @@
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备监控" Tag="{StaticResource Icon.Monitor}"
-                                    Content="查看考场参与状态与收齐事件，处理设备冲突裁决和命令补发。" />
+                                    Content="查看考生参试和答卷回收情况，处理同一考生多台设备的冲突，以及重发考试指令。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
-                            <TextBlock Text="考场参与状态" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="按考试读取服务器上的参与记录，可按参与、考生或设备 ID 筛选。" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="考生参试情况" Style="{StaticResource CardHeading}" />
+                            <TextBlock Text="读取所选考试的实际参试考生，可按考生或设备筛选。" Style="{StaticResource CardNote}" />
                             <Grid Margin="0,0,0,10">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                    <TextBlock Text="考试 ID" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Text="{Binding Monitoring.ExamId, UpdateSourceTrigger=PropertyChanged}" ToolTip="考试 ID"/>
+                                    <TextBlock Text="考试编号" Style="{StaticResource FormLabel}"/>
+                                    <TextBox Text="{Binding Monitoring.ExamId, UpdateSourceTrigger=PropertyChanged}" ToolTip="考试编号"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Margin="0,0,16,0">
                                     <TextBlock Text="筛选" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Text="{Binding Monitoring.FilterText, UpdateSourceTrigger=PropertyChanged}" ToolTip="筛选参与/考生/设备 ID"/>
+                                    <TextBox Text="{Binding Monitoring.FilterText, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入考生或设备的部分内容进行筛选"/>
                                 </StackPanel>
                                 <CheckBox Grid.Column="2" Content="只看已交卷" IsChecked="{Binding Monitoring.OnlySubmitted}" Margin="0,0,16,9" VerticalAlignment="Bottom"/>
-                                <Button Grid.Column="3" Content="从服务器刷新" Style="{StaticResource Btn.Primary}" MinWidth="108" VerticalAlignment="Bottom" Command="{Binding Monitoring.LoadCommand}"/>
+                                <Button Grid.Column="3" Content="刷新" Style="{StaticResource Btn.Primary}" MinWidth="108" VerticalAlignment="Bottom" Command="{Binding Monitoring.LoadCommand}"/>
                             </Grid>
                             <TextBlock Text="{Binding Monitoring.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
                             <DataGrid ItemsSource="{Binding Monitoring.FilteredRows}" SelectedItem="{Binding Monitoring.SelectedRow}" Height="275">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="参与 ID" Binding="{Binding ParticipationId}" Width="*"/><DataGridTextColumn Header="考生 ID" Binding="{Binding CandidateId}" Width="*"/>
-                                    <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="100"/><DataGridTextColumn Header="授权设备" Binding="{Binding AuthorizedDeviceId}" Width="*"/>
-                                    <DataGridTextColumn Header="entryVer" Binding="{Binding EntryVersion}" Width="85"/><DataGridTextColumn Header="authVer" Binding="{Binding AuthorizationVersion}" Width="85"/>
-                                    <DataGridTextColumn Header="采集" Binding="{Binding CollectionState}" Width="90"/><DataGridTextColumn Header="连接" Binding="{Binding ConnectionState}" Width="110"/><DataGridTextColumn Header="当前题号" Binding="{Binding CurrentQuestion}" Width="110"/>
+                                    <DataGridTextColumn Header="参试记录" Binding="{Binding ParticipationId}" Width="*"/><DataGridTextColumn Header="考生" Binding="{Binding CandidateId}" Width="*"/>
+                                    <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="100"/><DataGridTextColumn Header="答题设备" Binding="{Binding AuthorizedDeviceId}" Width="*"/>
+
+                                    <DataGridTextColumn Header="答卷" Binding="{Binding CollectionState}" Width="90"/><DataGridTextColumn Header="连接" Binding="{Binding ConnectionState}" Width="110"/><DataGridTextColumn Header="当前题号" Binding="{Binding CurrentQuestion}" Width="110"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>
@@ -356,20 +357,20 @@
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="查询收齐事件" Style="{StaticResource ActionButton}" Margin="0" Command="{Binding Monitoring.RefreshCollectionEventsCommand}"/>
+                                <Button DockPanel.Dock="Right" Content="查询收齐记录" Style="{StaticResource ActionButton}" Margin="0" Command="{Binding Monitoring.RefreshCollectionEventsCommand}"/>
                                 <StackPanel>
-                                    <TextBlock Text="服务器收齐历史事件" Style="{StaticResource CardHeading}"/>
-                                    <TextBlock Text="本页连接后每 20 秒定期补取，非实时推送。" Style="{StaticResource CardNote}" />
+                                    <TextBlock Text="答卷收齐记录" Style="{StaticResource CardHeading}"/>
+                                    <TextBlock Text="打开本页时每 20 秒自动刷新一次。" Style="{StaticResource CardNote}" />
                                 </StackPanel>
                             </DockPanel>
                             <TextBlock Text="{Binding Monitoring.CollectionStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,8"/>
                             <DataGrid ItemsSource="{Binding Monitoring.CollectionEvents}" Height="145">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="事件 ID" Binding="{Binding EventId}" Width="*"/>
+                                    <DataGridTextColumn Header="记录编号" Binding="{Binding EventId}" Width="*"/>
                                     <DataGridTextColumn Header="考试" Binding="{Binding ExamId}" Width="*"/>
-                                    <DataGridTextColumn Header="名单版本" Binding="{Binding RosterVersion}" Width="100"/>
-                                    <DataGridTextColumn Header="参与人数" Binding="{Binding ParticipantCount}" Width="100"/>
-                                    <DataGridTextColumn Header="收齐时间" Binding="{Binding CompletedAt}" Width="2*"/>
+                                    <DataGridTextColumn Header="名单批次" Binding="{Binding RosterVersion}" Width="100"/>
+                                    <DataGridTextColumn Header="参试人数" Binding="{Binding ParticipantCount}" Width="100"/>
+                                    <DataGridTextColumn Header="收齐时间" Binding="{Binding CompletedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="2*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>
@@ -378,55 +379,56 @@
                         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                         <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
                             <StackPanel>
-                                <TextBlock Text="设备裁决" Style="{StaticResource CardHeading}" />
-                                <TextBlock Text="同一账号多端进入时，指定保留的唯一授权设备。" Style="{StaticResource CardNote}" />
-                                <TextBlock Text="参与 ID" Style="{StaticResource FormLabel}"/>
-                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.ParticipationId}" ToolTip="参与 ID"/>
-                                <TextBlock Text="选择的设备 ID" Style="{StaticResource FormLabel}"/>
-                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.SelectedDeviceId}" ToolTip="选择的设备 ID"/>
+                                <TextBlock Text="多设备冲突处理" Style="{StaticResource CardHeading}" />
+                                <TextBlock Text="同一考生从两台设备进入时，指定保留哪一台继续答题。先在上表选中该考生。" Style="{StaticResource CardNote}" />
+                                <TextBlock Text="参试记录（选中上表一行后自动填写）" Style="{StaticResource FormLabel}"/>
+                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.ParticipationId}" IsReadOnly="True"/>
+                                <TextBlock Text="保留的设备" Style="{StaticResource FormLabel}"/>
+                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.SelectedDeviceId}" ToolTip="填写要保留继续答题的设备标识"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="140"/><ColumnDefinition/></Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="预期 version" Style="{StaticResource FormLabel}"/>
-                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.ExpectedVersionText}" ToolTip="预期 version"/>
+                                        <TextBlock Text="记录版本（自动填写）" Style="{StaticResource FormLabel}"/>
+                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.ExpectedVersionText}" IsReadOnly="True"
+                                                 ToolTip="用于防止同时有人处理同一考生；选中上表一行后自动填写。"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="原因" Style="{StaticResource FormLabel}"/>
                                         <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.DecisionReason}" ToolTip="原因"/>
                                     </StackPanel>
                                 </Grid>
-                                <Button Content="确认设备裁决" Style="{StaticResource Btn.Danger}" HorizontalAlignment="Left" MinWidth="120" Padding="14,0" Command="{Binding Monitoring.DecideDeviceCommand}"/>
+                                <Button Content="确认保留该设备" Style="{StaticResource Btn.Danger}" HorizontalAlignment="Left" MinWidth="120" Padding="14,0" Command="{Binding Monitoring.DecideDeviceCommand}"/>
                             </StackPanel>
                         </Border>
                         <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
                             <StackPanel>
-                                <TextBlock Text="补发命令" Style="{StaticResource CardHeading}" />
-                                <TextBlock Text="按原事件重发有效的开始或结束指令。" Style="{StaticResource CardNote}" />
-                                <TextBlock Text="事件 ID" Style="{StaticResource FormLabel}"/>
-                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.EventId}" ToolTip="事件 ID"/>
+                                <TextBlock Text="重发考试指令" Style="{StaticResource CardHeading}" />
+                                <TextBlock Text="考生没有收到开始或结束指令时重发。先在上表选中该考生。" Style="{StaticResource CardNote}" />
+                                <TextBlock Text="指令编号" Style="{StaticResource FormLabel}"/>
+                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.EventId}" ToolTip="要重发的开始或结束指令编号"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="参与 ID" Style="{StaticResource FormLabel}"/>
-                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.ResendParticipationId}" ToolTip="参与 ID"/>
+                                        <TextBlock Text="参试记录（自动填写）" Style="{StaticResource FormLabel}"/>
+                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.ResendParticipationId}" IsReadOnly="True"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="设备 ID" Style="{StaticResource FormLabel}"/>
-                                        <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.ResendDeviceId}" ToolTip="设备 ID"/>
+                                        <TextBlock Text="答题设备（自动填写）" Style="{StaticResource FormLabel}"/>
+                                        <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.ResendDeviceId}" IsReadOnly="True"/>
                                     </StackPanel>
                                 </Grid>
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="entryVersion" Style="{StaticResource FormLabel}"/>
-                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.EntryVersionText}" ToolTip="entryVersion"/>
+                                        <TextBlock Text="进入版本（自动填写）" Style="{StaticResource FormLabel}"/>
+                                        <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.EntryVersionText}" IsReadOnly="True"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="authorizationVersion" Style="{StaticResource FormLabel}"/>
-                                        <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.AuthorizationVersionText}" ToolTip="authorizationVersion"/>
+                                        <TextBlock Text="授权版本（自动填写）" Style="{StaticResource FormLabel}"/>
+                                        <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.AuthorizationVersionText}" IsReadOnly="True"/>
                                     </StackPanel>
                                 </Grid>
-                                <Button Content="补发" Style="{StaticResource Btn.Primary}" HorizontalAlignment="Left" MinWidth="96" Command="{Binding Monitoring.ResendCommand}"/>
+                                <Button Content="重发指令" Style="{StaticResource Btn.Primary}" HorizontalAlignment="Left" MinWidth="96" Command="{Binding Monitoring.ResendCommand}"/>
                             </StackPanel>
                         </Border>
                     </Grid>

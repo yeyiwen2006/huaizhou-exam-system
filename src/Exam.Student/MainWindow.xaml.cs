@@ -96,8 +96,8 @@ public partial class MainWindow : Window
             _kiosk = KioskGuard.Enable(this);
             Topmost = true;
             if (!_kiosk.IsInstalled)
-                MessageBox.Show(this, $"快捷键防护未能启用（Windows 错误 {_kiosk.InstallationError}）。窗口仍保持全屏；请通知考务人员，不能视为防护正常。",
-                    "快捷键防护未启用", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(this, $"本机考试防护未能开启，请联系监考人员。（错误代码 {_kiosk.InstallationError}）",
+                    "考试防护未开启", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         else if (!activated && _kiosk is not null)
         {

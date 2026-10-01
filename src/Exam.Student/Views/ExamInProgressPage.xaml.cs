@@ -200,17 +200,17 @@ public partial class ExamInProgressPage : UserControl
     private string? StudentNotice()
     {
         if (_runtime.Answers?.HasPendingSubmission == true)
-            return "答卷已固定，但还没有保存到本机。请点击“重试保存”，或举手联系监考老师。";
+            return "答卷已提交，但尚未保存到本机。请点击“重试保存”，或联系监考人员。";
         if (_runtime.Answers?.Status == AnswerSessionStatus.WriteBlocked)
-            return "答案暂时无法保存到本机，已暂停作答。请点击“重试保存”，或举手联系监考老师。";
+            return "作答内容暂时无法保存到本机，已暂停作答。请点击“重试保存”，或联系监考人员。";
         if (_runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
-            return "本机暂时不能继续作答，已有答案已保留。请举手联系监考老师。";
+            return "本机暂停作答，已作答内容已保留。请联系监考人员。";
         if (_syncStopped || _sync.Phase == SubmissionSyncPhase.Blocked)
-            return "答案已保存在本机，但暂时无法上报到服务器。请举手联系监考老师。";
+            return "作答内容已保存在本机，但暂时无法同步到服务器。请联系监考人员。";
         if (_runtime.HasFixedSubmission && _sync.Phase != SubmissionSyncPhase.Confirmed)
-            return "答卷已提交，正在等待服务器确认，请不要关闭本机。";
+            return "答卷已提交，正在等待服务器确认，请勿关闭程序。";
         if (_sync.Phase == SubmissionSyncPhase.WaitingRetry)
-            return "网络暂时中断，答案已保存在本机，恢复后会自动上报。";
+            return "网络连接中断，作答内容已保存在本机，恢复后将自动同步。";
         return null;
     }
 
@@ -249,8 +249,8 @@ public partial class ExamInProgressPage : UserControl
             if (_lifetime.IsCancellationRequested) return;
             PaperBanner.Level = result is { Succeeded: true } ? StatusLevel.Info : StatusLevel.Warning;
             PaperBanner.Message = result is { Succeeded: true }
-                ? $"版本 {version} 的复核确认已保存在本机。"
-                : "复核确认尚未保存或版本已变化，请查看当前试题后重试。";
+                ? "已确认查看更正后的试题。"
+                : "确认未保存成功，请查看当前试题后重新确认。";
             PaperBanner.IsOpen = true;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -266,7 +266,7 @@ public partial class ExamInProgressPage : UserControl
     {
         if (Window.GetWindow(this) is not { } window) { return; }
         var confirmed = await ConfirmDialog.ShowAsync(
-            window, "返回选择考试", "确定返回选择考试页面吗？本机已停止作答并保留已有记录；服务器仅保留此前确认同步的进度。",
+            window, "返回选择考试", "确定返回选择考试页面吗？本机已停止作答，已作答内容已保留。",
             "返回", "留在本页", isDanger: false);
         if (!confirmed) { return; }
         _lifetime.Cancel();
@@ -294,7 +294,7 @@ public partial class ExamInProgressPage : UserControl
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) when (IsWorkbenchError(error))
         {
-            _regionError ??= $"题目内容加载失败：{error.Message} 原答卷已保留，请重试或联系考务人员。";
+            _regionError ??= "题目显示失败，已作答内容已保存。请联系监考人员。";
             RefreshStatus();
         }
     }
@@ -330,7 +330,7 @@ public partial class ExamInProgressPage : UserControl
         }
         catch (Exception failure) when (IsWorkbenchError(failure))
         {
-            error = "选项坐标未通过完整校验，已停止坐标作答，请联系考务人员。";
+            error = "本场试卷的选项位置无法确定，暂无法作答。请联系监考人员。";
         }
         if (ct.IsCancellationRequested || generation != _workbenchGeneration || !ReferenceEquals(paper, _runtime.Paper) ||
             !ReferenceEquals(payload, _runtime.Manager.UnlockedPayload)) return;
@@ -384,7 +384,7 @@ public partial class ExamInProgressPage : UserControl
         catch (Exception error) when (IsWorkbenchError(error))
         {
             if (generation == _renderGeneration && ReferenceEquals(paper, _runtime.Paper))
-                _regionError = "题目加载或导航保存失败，原答卷已保留，请恢复后重试。";
+                _regionError = "题目切换未完成，已作答内容已保存。请重新点击题号；如仍未完成，请联系监考人员。";
         }
         finally
         {
@@ -455,7 +455,7 @@ public partial class ExamInProgressPage : UserControl
     private void OnRegionsInvalid(string message)
     {
         if (_lifetime.IsCancellationRequested) { return; }
-        _regionError = $"选项坐标校验失败：{message} 已停止坐标作答，请联系考务人员。";
+        _regionError = "本题的选项位置无法确定，暂无法作答。请联系监考人员。";
         QuestionView.SetInteractionEnabled(false);
         RefreshStatus();
     }
@@ -475,7 +475,7 @@ public partial class ExamInProgressPage : UserControl
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error) when (IsWorkbenchError(error))
             {
-                _regionError ??= $"题目内容加载失败：{error.Message}";
+                _regionError ??= "题目显示失败，请联系监考人员。";
                 RefreshStatus();
             }
         }
@@ -538,7 +538,7 @@ public partial class ExamInProgressPage : UserControl
         if (_runtime.Answers is not { Status: AnswerSessionStatus.Active } answers)
         {
             PaperBanner.Level = StatusLevel.Warning;
-            PaperBanner.Message = "当前答卷尚未就绪或已被冻结，不能发起新的交卷。";
+            PaperBanner.Message = "答卷已提交或尚未就绪，当前不能交卷。";
             PaperBanner.IsOpen = true;
             return;
         }
@@ -552,7 +552,7 @@ public partial class ExamInProgressPage : UserControl
             var confirmed = await ConfirmDialog.ShowAsync(
                 window,
                 "提前交卷",
-                "确定提前交卷吗？交卷后答案立即冻结，不能继续修改；只有取得服务器持久化回执才视为交卷成功。",
+                "确定提前交卷吗？交卷后不能修改答案。",
                 "提前交卷",
                 "继续答题",
                 isDanger: true);
@@ -568,7 +568,7 @@ public partial class ExamInProgressPage : UserControl
             if (!fix.Succeeded)
             {
                 PaperBanner.Level = StatusLevel.Danger;
-                PaperBanner.Message = $"本地固定提交未完成：{fix.Error} 原答案已保留，恢复写入后重试。";
+                PaperBanner.Message = "答卷未能保存到本机，已作答内容仍保留。请点击“重试保存”，或联系监考人员。";
                 PaperBanner.IsOpen = true;
                 return;
             }
@@ -580,7 +580,7 @@ public partial class ExamInProgressPage : UserControl
             else
             {
                 PaperBanner.Level = StatusLevel.Info;
-                PaperBanner.Message = "答卷已冻结，正在向服务器提交并等待持久化回执；期间请保持客户端运行，失败会自动沿用原提交重试。";
+                PaperBanner.Message = "正在交卷，请勿关闭程序。网络中断时系统将自动重试。";
                 PaperBanner.IsOpen = true;
             }
         }
@@ -589,7 +589,7 @@ public partial class ExamInProgressPage : UserControl
             System.Data.Common.DbException or InvalidOperationException)
         {
             PaperBanner.Level = StatusLevel.Danger;
-            PaperBanner.Message = $"交卷流程出现异常：{error.Message} 原答卷已保留，将自动重试。";
+            PaperBanner.Message = "交卷尚未完成，答卷已保留，系统将自动重试。请勿关闭程序。";
             PaperBanner.IsOpen = true;
         }
         finally
@@ -635,7 +635,7 @@ public partial class ExamInProgressPage : UserControl
         catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or
                                           System.Data.Common.DbException or InvalidOperationException)
         {
-            _localRetryError = "本地保存尚未恢复，原记录和待保存修改均已保留。请联系考务人员检查存储后重试。";
+            _localRetryError = "作答内容仍无法保存到本机，已有内容和最近的修改均已保留。请联系监考人员。";
         }
         finally { _retryingLocalSave = false; RefreshStatus(); }
     }
@@ -656,7 +656,7 @@ public partial class ExamInProgressPage : UserControl
     {
         var question = _currentQuestionId is not null ? _navigator?.Find(_currentQuestionId) : null;
         CurrentQuestionText.Text = question is null
-            ? "题目尚不可用"
+            ? "正在准备试题"
             : $"第 {question.QuestionNo} 题 · {QuestionTypeTitle(question.QuestionType)}";
         MarkButton.Content = question is not null && _runtime.Answers?.Marks.Contains(question.QuestionId) == true
             ? "取消标记"
@@ -683,25 +683,28 @@ public partial class ExamInProgressPage : UserControl
         else if (_runtime.HasFixedSubmission)
         {
             PaperBanner.Level = StatusLevel.Info;
-            PaperBanner.Message = "答卷已冻结，正在向服务器提交并等待持久化回执；期间请保持客户端运行，失败会自动沿用原提交重试。";
+            PaperBanner.Message = "正在交卷，请勿关闭程序。网络中断时系统将自动重试。";
         }
         else
         {
             PaperBanner.Level = StatusLevel.Warning;
             PaperBanner.Message = _runtime.Manager.CurrentPhase switch
             {
-                ExamPackageManager.Phase.Ended => "服务器已结束考试。原答卷固定后自动补传；尚未取得并保存服务器回执前不视为交卷成功。",
-                ExamPackageManager.Phase.Revoked => "当前设备的答题授权已撤销，已停止访问试题。请联系考务人员。",
-                ExamPackageManager.Phase.Unlocked when _navigator is null => "试题清单尚未就绪，正在按服务器授权准备原版题目显示。",
-                ExamPackageManager.Phase.Unlocked when _regionMap is null => "当前试题包未提供选项坐标，仅原版显示题目内容，不能作答。",
+                ExamPackageManager.Phase.Ended => "考试已结束，正在自动交卷，请勿关闭程序。",
+                ExamPackageManager.Phase.Revoked => "本机已停止作答，请联系监考人员。",
+                ExamPackageManager.Phase.Unlocked when _navigator is null => "正在准备试题。",
+                ExamPackageManager.Phase.Unlocked when _regionMap is null => "本场试卷暂无法作答，请联系监考人员。",
                 ExamPackageManager.Phase.Unlocked => string.Empty,
-                _ => "试题尚未完成安全解锁，不能开始答题。请联系考务人员。",
+                _ => "试题尚未解锁，请等待开考；如已到开考时间，请联系监考人员。",
             };
         }
         PaperBanner.IsOpen = !string.IsNullOrEmpty(PaperBanner.Message);
 
-        RuntimeErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime.ConnectionError) || !string.IsNullOrWhiteSpace(_runtime.Manager.LastError);
-        RuntimeErrorBanner.Message = _runtime.ConnectionError ?? _runtime.Manager.LastError ?? string.Empty;
+        // 连接或试题处理的技术原因只放在悬停说明里；考生看到通俗提示。
+        var runtimeError = _runtime.ConnectionError ?? _runtime.Manager.LastError;
+        RuntimeErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(runtimeError);
+        RuntimeErrorBanner.Message = string.IsNullOrWhiteSpace(runtimeError) ? string.Empty : StudentMessages.ConnectionProblem;
+        RuntimeErrorBanner.ToolTip = string.IsNullOrWhiteSpace(runtimeError) ? null : runtimeError;
         // 本机保存失败的技术原因只放在提示框的悬停说明里，供监考老师排查；考生看到的是底部的通俗提示。
         var localError = _localRetryError ?? _runtime.LocalStateError;
         LocalStateErrorBanner.IsOpen = false;
@@ -716,7 +719,7 @@ public partial class ExamInProgressPage : UserControl
         _reviewPending = _runtime.PendingReviewVersion is not null && !revoked && !_runtime.HasFixedSubmission && !_runtime.Manager.ExamEnded;
         ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;
         ReviewUpdateButton.IsEnabled = _reviewPending && !_reviewSaving && !_runtime.IsPaperUpdateInProgress;
-        if (_reviewPending) ReviewUpdateButton.Content = $"已复核版本 {_runtime.PendingReviewVersion} 的修订试题";
+        if (_reviewPending) ReviewUpdateButton.Content = "已查看更正后的试题";
     }
 
     private static string QuestionTypeTitle(string questionType) => questionType switch

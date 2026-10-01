@@ -36,7 +36,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient();
         var viewModel = new ExamConfigurationViewModel(api) { Name = name };
 
-        Assert.Contains(viewModel.Validate(), error => error.Contains("Windows 文件名", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Validate(), error => error.Contains("不能包含", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public sealed class ExamConfigurationViewModelTests
         var viewModel = new ExamConfigurationViewModel(api);
         Assert.Single(Assert.Single(viewModel.Subjects).Groups).Correct = "{题目数} * 2";
 
-        Assert.Contains(viewModel.Validate(), error => error.Contains("计分表达式", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Validate(), error => error.Contains("计分规则只能", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed class ExamConfigurationViewModelTests
         var viewModel = new ExamConfigurationViewModel(api);
         Assert.Single(Assert.Single(viewModel.Subjects).Groups).Correct = new string('1', 201);
 
-        Assert.Contains(viewModel.Validate(), error => error.Contains("计分表达式", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Validate(), error => error.Contains("计分规则只能", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -164,8 +164,8 @@ public sealed class ExamConfigurationViewModelTests
         viewModel.SaveScheduleCommand.Execute(null);
         var status = await failure.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("VERSION_CONFLICT", status, StringComparison.Ordinal);
-        Assert.DoesNotContain("计划已保存", status, StringComparison.Ordinal);
+        Assert.Contains("其他人修改", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存到服务器", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
-        var completed = WaitForStatus(viewModel, "先前的计划已保存");
+        var completed = WaitForStatus(viewModel, "此前填写的考试时间已保存");
 
         viewModel.SaveScheduleCommand.Execute(null);
         await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
@@ -185,9 +185,9 @@ public sealed class ExamConfigurationViewModelTests
             new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))));
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("当前时间仍是未保存草稿", status, StringComparison.Ordinal);
+        Assert.Contains("尚未保存", status, StringComparison.Ordinal);
         Assert.Equal("2026-10-01 13:00 +08:00", viewModel.ScheduledEndText);
-        Assert.Contains("计划版本 1", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Equal(1, viewModel.LoadedScheduleVersion);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
-        var completed = WaitForStatus(viewModel, "计划已保存");
+        var completed = WaitForStatus(viewModel, "考试时间已保存到服务器");
 
         viewModel.SaveScheduleCommand.Execute(null);
         await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
@@ -206,8 +206,8 @@ public sealed class ExamConfigurationViewModelTests
             new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))));
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("scheduleVersion=1", status, StringComparison.Ordinal);
-        Assert.Contains("仍为本地草稿", status, StringComparison.Ordinal);
+        Assert.Equal(1, viewModel.LoadedScheduleVersion);
+        Assert.Contains("仍只在本机", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -226,9 +226,9 @@ public sealed class ExamConfigurationViewModelTests
             new DateTimeOffset(2026, 10, 1, 13, 0, 0, TimeSpan.FromHours(8)))));
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("回执", status, StringComparison.Ordinal);
-        Assert.DoesNotContain("计划已保存", status, StringComparison.Ordinal);
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("无法确认保存结果", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存到服务器", status, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     private static ExamConfigurationViewModel CreateFixedScheduleDraft(AdminApiClient api) => new(api)

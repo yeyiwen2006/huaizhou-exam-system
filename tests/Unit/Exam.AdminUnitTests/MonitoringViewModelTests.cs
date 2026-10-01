@@ -31,7 +31,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal(new[] { "候考", "作答中", "已交卷" },
             viewModel.Rows.Select(row => row.BusinessState));
-        Assert.All(viewModel.Rows, row => Assert.Equal("接口未提供", row.ConnectionState));
+        Assert.All(viewModel.Rows, row => Assert.Equal("—", row.ConnectionState));
         Assert.Equal("已提交", viewModel.Rows[^1].CollectionState);
     }
 
@@ -91,7 +91,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Empty(viewModel.Rows);
         Assert.Empty(viewModel.CollectionEvents);
-        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal(new long[] { 0, 100, 101 }, calls);
         Assert.Equal(101, viewModel.CollectionEvents.Count);
-        Assert.Contains("不代表成绩已开放", viewModel.CollectionStatus, StringComparison.Ordinal);
+        Assert.Contains("重新统计", viewModel.CollectionStatus, StringComparison.Ordinal);
     }
 
     private static HttpResponseMessage Success<T>(T value) => new(HttpStatusCode.OK)

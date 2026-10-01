@@ -98,7 +98,7 @@ public partial class ActivationPage : UserControl
 
                 if (result.Status == ActivationStatus.Rejected)
                 {
-                    throw new StudentIdentityException("激活申请已被拒绝，请联系考务人员。");
+                    throw new StudentIdentityException("激活申请未获批准，请联系监考人员。");
                 }
 
                 await Task.Delay(1500, _lifetime.Token);
@@ -110,7 +110,7 @@ public partial class ActivationPage : UserControl
         {
             ActivationPill.Text = "未激活";
             ActivationPill.Level = StatusLevel.Danger;
-            ErrorBanner.Show(ex.Message + " 请稍后重试。");
+            StudentMessages.ShowWithDetail(ErrorBanner, "等待批准超时，请重新点击“请求激活”，或联系监考人员。", ex.Message);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -120,13 +120,13 @@ public partial class ActivationPage : UserControl
         {
             ActivationPill.Text = "激活尚未完成";
             ActivationPill.Level = StatusLevel.Danger;
-            ErrorBanner.Show(error.Message);
+            StudentMessages.ShowWithDetail(ErrorBanner, "激活未完成，请联系监考人员。", error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException)
         {
             ActivationPill.Text = "等待连接恢复";
             ActivationPill.Level = StatusLevel.Warning;
-            ErrorBanner.Show("未收到服务器确认，请检查连接后重试。原设备身份和激活申请已保留。");
+            ErrorBanner.Show("未收到服务器响应，请检查网络后重试。");
         }
         finally
         {

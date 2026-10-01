@@ -64,7 +64,7 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        SetBusy(true, "正在准备并下载加密试题与考试说明…");
+        SetBusy(true, "正在下载试题和考试说明…");
         ErrorBanner.Hide();
         try
         {
@@ -105,12 +105,12 @@ public partial class WaitingExamPage : UserControl
 
             if (!await _runtime.InitializeLocalRecoveryAsync(_lifetime.Token))
             {
-                ErrorBanner.Show(_runtime.LocalStateError ?? "本地恢复检查尚未完成，不能开始新的参试操作。");
+                StudentMessages.ShowWithDetail(ErrorBanner, "本机答卷检查尚未完成，如长时间未完成，请联系监考人员。", _runtime.LocalStateError);
                 return;
             }
             if (_runtime.HasFixedSubmission)
             {
-                ErrorBanner.Show("本机已有固定答卷，原记录已保留。正在转入原答卷补传和回执核对，不能重新开始作答。");
+                ErrorBanner.Show("本机存在已提交的答卷，正在继续交卷，不能重新作答。");
                 return;
             }
 
@@ -131,7 +131,7 @@ public partial class WaitingExamPage : UserControl
 
             if (!prepared)
             {
-                ErrorBanner.Show(_runtime.Manager.LastError ?? "试题获取失败！请重试。");
+                StudentMessages.ShowWithDetail(ErrorBanner, "试题获取失败！请点击“重新下载”。", _runtime.Manager.LastError);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -140,7 +140,7 @@ public partial class WaitingExamPage : UserControl
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            ErrorBanner.Show("试题或考试说明获取失败！请检查服务器连接和本机存储后重试，原记录已保留。");
+            ErrorBanner.Show("试题或考试说明获取失败！请点击“重新下载”；如仍失败，请联系监考人员。");
         }
         finally
         {
@@ -156,14 +156,14 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        SetBusy(true, "正在等待服务器确认参试…");
+        SetBusy(true, "正在确认参试…");
         ErrorBanner.Hide();
         try
         {
             var response = await _runtime.Manager.ConfirmParticipationAsync(_lifetime.Token);
             if (response?.IsSuccess != true || response.Result is null)
             {
-                ErrorBanner.Show(response?.Error?.Message ?? _runtime.Manager.LastError ?? "参试确认尚未完成，请重试原请求。");
+                StudentMessages.ShowWithDetail(ErrorBanner, "参试确认未完成，请重新点击“确认参试”。", response?.Error?.Message ?? _runtime.Manager.LastError);
                 return;
             }
 
@@ -175,7 +175,7 @@ public partial class WaitingExamPage : UserControl
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            ErrorBanner.Show("参试或指令连接尚未确认，请重试。原请求和参试登记已保留。");
+            ErrorBanner.Show("与服务器的连接尚未恢复，请点击“重新连接”。");
         }
         finally
         {
@@ -209,7 +209,7 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        SetBusy(true, "正在恢复指令连接与解锁…");
+        SetBusy(true, "正在重新连接…");
         ErrorBanner.Hide();
         try
         {
@@ -226,7 +226,7 @@ public partial class WaitingExamPage : UserControl
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            ErrorBanner.Show("连接或解锁尚未恢复，请继续重试。原参试登记保持不变。");
+            ErrorBanner.Show("尚未连接到服务器，请重新点击“重新连接”。");
         }
         finally
         {
@@ -248,7 +248,7 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        SetBusy(true, "退出处理中，正在等待服务器确认…");
+        SetBusy(true, "正在退出考试…");
         ErrorBanner.Hide();
         try
         {
@@ -273,7 +273,7 @@ public partial class WaitingExamPage : UserControl
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            ErrorBanner.Show("退出处理中，请重试。收到服务器确认前仍保留原参试登记。");
+            ErrorBanner.Show("退出未完成，请重试。");
         }
         finally
         {
@@ -287,7 +287,7 @@ public partial class WaitingExamPage : UserControl
     private async void OnRetryLocalSave(object sender, RoutedEventArgs e)
     {
         if (_busy || _runtime is null) { return; }
-        SetBusy(true, "正在恢复本地保存…");
+        SetBusy(true, "正在重试保存…");
         try
         {
             await _runtime.RetryLocalSaveAsync(_lifetime.Token);
@@ -297,7 +297,7 @@ public partial class WaitingExamPage : UserControl
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) when (IsRecoverable(error))
         {
-            ErrorBanner.Show("本地保存尚未恢复，原记录和待保存内容均已保留，请检查存储后重试。");
+            ErrorBanner.Show("作答内容仍无法保存到本机，请联系监考人员。");
         }
         finally { SetBusy(false); RefreshState(); }
     }
@@ -365,12 +365,12 @@ public partial class WaitingExamPage : UserControl
         }
         var manager = _runtime?.Manager;
         InstructionList.ItemsSource = manager?.Instructions?.Lines.Select(line => InstructionTextRenderer.Create(line, (Style)FindResource("BodyText"))).ToArray();
-        DownloadPill.Text = manager?.HasPackage == true ? "试题包已保存（加密）" : "试题包尚未完整获取";
+        DownloadPill.Text = manager?.HasPackage == true ? "试题已下载" : "试题尚未下载完成";
         DownloadPill.Level = manager?.HasPackage == true ? StatusLevel.Success : StatusLevel.Warning;
         DownloadBar.Value = manager?.HasPackage == true ? 100 : DownloadBar.Value;
         ConfirmButton.IsEnabled = !_busy && _runtime?.LocalRecoveryChecked == true &&
             !_runtime.HasFixedSubmission && manager?.CanConfirmParticipation == true;
-        ConfirmButton.Content = manager?.Participation is null ? "确认参试" : "核对并恢复原参试";
+        ConfirmButton.Content = manager?.Participation is null ? "确认参试" : "继续参试";
         RetryDownloadButton.Visibility = _runtime?.HasFixedSubmission == true ||
             manager?.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended or ExamPackageManager.Phase.Withdrawn
             ? Visibility.Collapsed : Visibility.Visible;
@@ -385,31 +385,37 @@ public partial class WaitingExamPage : UserControl
         (StatePill.Text, StatePill.Level, ConfirmHint.Text) = manager?.CurrentPhase switch
         {
             ExamPackageManager.Phase.ConfirmedWaiting when _runtime?.NotificationsStarted != true =>
-                ("原参试登记已保留", StatusLevel.Warning, "正在核对当前状态或恢复指令连接，不能据此视为已退出或开始答题。"),
-            ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参试，等待开考", StatusLevel.Info, "已计入实际参试。请保持连接，收到服务器开考指令后解锁。"),
-            ExamPackageManager.Phase.Unlocked => ("试题已解锁", StatusLevel.Success, "当前授权和试题版本已校验。"),
-            ExamPackageManager.Phase.Ended => ("服务器已结束考试", StatusLevel.Warning, "考试已结束。原参试与待补传记录继续保留，当前版本尚不能完成补传，请联系考务人员。"),
-            ExamPackageManager.Phase.Revoked => ("当前设备授权已撤销", StatusLevel.Danger, "本机不能继续答题，请联系考务人员。"),
-            ExamPackageManager.Phase.Withdrawn => ("已确认退出考试", StatusLevel.Neutral, "服务器已将本次登记移出实际参试，请返回选择考试页面。"),
+                ("正在恢复连接", StatusLevel.Warning, "已确认参试，正在重新连接服务器。"),
+            ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参试，等待开考", StatusLevel.Info, "请保持程序运行，开考后试题将自动显示。"),
+            ExamPackageManager.Phase.Unlocked => ("试题已解锁", StatusLevel.Success, "即将进入答题。"),
+            ExamPackageManager.Phase.Ended => ("考试已结束", StatusLevel.Warning, "考试已结束。未提交的答卷将自动提交；如有疑问，请联系监考人员。"),
+            ExamPackageManager.Phase.Revoked => ("本机不能继续答题", StatusLevel.Danger, "请联系监考人员。"),
+            ExamPackageManager.Phase.Withdrawn => ("已退出考试", StatusLevel.Neutral, "已退出本场考试，请返回选择考试页面。"),
             ExamPackageManager.Phase.Downloaded when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("资料齐备，待核对原参试", StatusLevel.Success, "原参试登记继续保留。请核对并恢复原参试，服务器将返回当前授权与考试状态。"),
-            ExamPackageManager.Phase.Downloaded => ("资料齐备，尚未参试", StatusLevel.Success, "请阅读考试说明，再确认参试。确认时服务器将再次核对准入条件。"),
+                ("资料已就绪", StatusLevel.Success, "已确认参试，请点击“继续参试”。"),
+            ExamPackageManager.Phase.Downloaded => ("资料已就绪", StatusLevel.Success, "请阅读考试说明后点击“确认参试”。"),
             _ when manager?.DeviceDecisionPending == true =>
-                ("设备冲突待裁决", StatusLevel.Warning, "同一账号在另一设备登录本场考试，正在等待考务人员裁决。本设备暂不能进入该考试，确认后将自动继续。"),
+                ("等待监考人员处理", StatusLevel.Warning, "该考生账号已在另一台设备进入本场考试，请联系监考人员。处理完成后本机将自动继续。"),
             _ when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("正在恢复原参试", StatusLevel.Warning, "原参试登记继续保留，资料准备或状态核对尚未完成，请重试。"),
-            _ => ("尚未确认参试", StatusLevel.Info, "试题包与考试说明全部取得后才能确认参试。"),
+                ("正在恢复", StatusLevel.Warning, "已确认参试，考试资料正在准备，可点击“重新下载”。"),
+            _ => ("尚未确认参试", StatusLevel.Info, "试题和考试说明下载完成后，才能确认参试。"),
         };
 
         if (_runtime?.HasFixedSubmission == true)
         {
             (StatePill.Text, StatePill.Level, ConfirmHint.Text) =
-                (_runtime.Answers?.HasPendingSubmission == true ? "答卷冻结待保存" : "本机答卷已固定",
-                    StatusLevel.Warning, "原冻结答卷等待可靠保存、核对和补传；本地冻结不等于服务器已收卷，不能重新开始作答。");
+                (_runtime.Answers?.HasPendingSubmission == true ? "答卷待保存" : "正在交卷",
+                    StatusLevel.Warning, "本机存在已提交的答卷，正在继续交卷，不能重新作答。");
         }
-        LocalStateText.Text = _runtime?.LocalStateSummary ?? "本地答题恢复尚未开始。";
-        LocalStateErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime?.LocalStateError);
-        LocalStateErrorBanner.Message = _runtime?.LocalStateError ?? string.Empty;
+        // 本机答卷卡片只在需要考生知道时出现；技术原因放在悬停说明里。
+        var localError = _runtime?.LocalStateError;
+        var localNotice = !string.IsNullOrWhiteSpace(localError)
+            ? "作答内容暂时无法保存到本机，已有内容仍保留。请点击“重试保存”，或联系监考人员。"
+            : _runtime?.HasFixedSubmission == true ? "本机存在已提交的答卷，正在继续交卷。" : null;
+        LocalStateCard.Visibility = localNotice is null ? Visibility.Collapsed : Visibility.Visible;
+        LocalStateText.Text = localNotice ?? string.Empty;
+        LocalStateText.ToolTip = string.IsNullOrWhiteSpace(localError) ? null : localError;
+        LocalStateErrorBanner.IsOpen = false;
         RetryLocalSaveButton.IsEnabled = !_busy && _runtime?.CanRetryLocalSave == true;
         RetryLocalSaveButton.Visibility = _runtime?.CanRetryLocalSave == true ? Visibility.Visible : Visibility.Collapsed;
         RefreshRuntimeError();
@@ -428,12 +434,12 @@ public partial class WaitingExamPage : UserControl
 
         if (!App.Services.Clock.IsSynchronized)
         {
-            CountdownText.Text = "服务器时间尚未同步";
+            CountdownText.Text = "正在同步时间…";
             return;
         }
 
         var remain = _exam.ScheduledStart - App.Services.Clock.UtcNow;
-        CountdownText.Text = remain > TimeSpan.Zero ? $"距计划开考 {remain:hh\\:mm\\:ss}" : "计划开始时间已到，请等待服务器确认";
+        CountdownText.Text = remain > TimeSpan.Zero ? $"距开考 {remain:hh\\:mm\\:ss}" : "已到开考时间，请等待试题解锁";
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
         MaybeRetryArbitration();
     }
@@ -464,8 +470,8 @@ public partial class WaitingExamPage : UserControl
         var error = _runtime?.ConnectionError ?? _runtime?.Manager.LastError;
         if (!string.IsNullOrWhiteSpace(error))
         {
-            ErrorBanner.Show(error);
-            _lastRuntimeError = error;
+            StudentMessages.ShowWithDetail(ErrorBanner, StudentMessages.ConnectionProblem, error);
+            _lastRuntimeError = StudentMessages.ConnectionProblem;
         }
         else if (_lastRuntimeError is not null && ErrorBanner.Message == _lastRuntimeError)
         {

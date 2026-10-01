@@ -30,7 +30,7 @@ public partial class App : Application
         }
         catch (DeviceStoreException error)
         {
-            MessageBox.Show(error.Message, "设备身份需要恢复", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(error.Message, "本机激活信息异常", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
     }
@@ -40,7 +40,7 @@ public partial class App : Application
     {
         // 未知异常可能已破坏业务状态，关闭程序并保留本地恢复记录。
         MessageBox.Show(
-            "发生无法安全继续的错误，程序将关闭。已保存的身份和恢复记录会保留，请重新打开或联系考务人员。",
+            "程序发生错误，即将关闭。已保存的作答内容不会丢失，请重新启动程序或联系监考人员。",
             "程序已停止当前操作",
             MessageBoxButton.OK,
             MessageBoxImage.Error);

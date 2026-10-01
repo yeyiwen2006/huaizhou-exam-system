@@ -24,7 +24,7 @@ public partial class LoginPage : UserControl
         DataContext = App.Services.Session;
         if (App.Services.Device?.PendingOperation == "cancel")
         {
-            ErrorBanner.Show("取消激活处理中，请点击“取消激活”重试原请求，收到确认前不能登录。");
+            ErrorBanner.Show("取消激活未完成，请重新点击“取消激活”。完成前不能登录。");
         }
     }
 
@@ -93,7 +93,7 @@ public partial class LoginPage : UserControl
             var persisted = await Task.Run(App.Services.DeviceStore.Load);
             if (persisted is null || persisted.DeviceId != device.DeviceId || persisted.PendingOperation is not null)
             {
-                ErrorBanner.Show("设备身份操作尚未完成，请先重试取消激活或重新启动恢复。");
+                ErrorBanner.Show("本机激活状态尚未确认，请重新启动程序或联系监考人员。");
                 return;
             }
 
@@ -102,7 +102,7 @@ public partial class LoginPage : UserControl
             var envelope = await App.Services.Api.LoginAsync(request);
             if (!envelope.IsSuccess)
             {
-                ErrorBanner.Show(envelope.Error!.Message);
+                StudentMessages.ShowWithDetail(ErrorBanner, LoginFailure(envelope.Error!), envelope.Error!.Message);
                 return;
             }
 
@@ -110,7 +110,7 @@ public partial class LoginPage : UserControl
             if (result.DeviceId != device.DeviceId || result.Candidate.Name != name ||
                 result.Candidate.ClassText != classText || result.Candidate.AdmissionNo != admissionNo)
             {
-                ErrorBanner.Show("服务器返回的考生身份与本次登录不一致，已停止登录。");
+                ErrorBanner.Show("登录未完成，请重新登录。");
                 return;
             }
 
@@ -119,7 +119,7 @@ public partial class LoginPage : UserControl
         }
         catch (DeviceStoreException error)
         {
-            ErrorBanner.Show(error.Message);
+            StudentMessages.ShowWithDetail(ErrorBanner, "操作未完成，请重试；如仍未完成，请联系监考人员。", error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
         {
@@ -149,7 +149,7 @@ public partial class LoginPage : UserControl
         var confirmed = await ConfirmDialog.ShowAsync(
             window,
             "取消激活",
-            "取消激活后将停止登录和参试，原编号、设备身份及试场关联会保留。确定取消激活吗？",
+            "取消激活后本机将不能登录和参加考试，本机编号会保留。确定取消激活吗？",
             "确定取消",
             "返回",
             isDanger: true);
@@ -159,7 +159,7 @@ public partial class LoginPage : UserControl
         }
 
         _requesting = true;
-        Busy.Message = "正在等待服务器确认取消激活…";
+        Busy.Message = "正在取消激活…";
         Busy.IsBusy = true;
         ErrorBanner.Hide();
         try
@@ -172,11 +172,11 @@ public partial class LoginPage : UserControl
         }
         catch (Exception error) when (error is DeviceStoreException or StudentIdentityException)
         {
-            ErrorBanner.Show(error.Message);
+            StudentMessages.ShowWithDetail(ErrorBanner, "操作未完成，请重试；如仍未完成，请联系监考人员。", error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
         {
-            ErrorBanner.Show("取消激活处理中，尚未收到服务器确认。请重试，原设备身份和请求已保留。");
+            ErrorBanner.Show("取消激活未完成，请重试。");
         }
         finally
         {
@@ -192,4 +192,12 @@ public partial class LoginPage : UserControl
             OnInputChanged(null, EventArgs.Empty);
         }
     }
+
+    // 名册不匹配等明确原因照常提示；其余服务器原因统一为通俗说法。
+    private static string LoginFailure(Exam.Contracts.Common.ApiError error) => error.Code switch
+    {
+        Exam.Contracts.Common.ErrorCodes.RosterMismatch => "姓名、班级或准考证号与考生名单不一致，请核对后重新填写。",
+        Exam.Contracts.Common.ErrorCodes.NotActivated => "本机尚未激活或激活已取消，请联系监考人员。",
+        _ => "登录未完成，请重试；如仍未完成，请联系监考人员。",
+    };
 }

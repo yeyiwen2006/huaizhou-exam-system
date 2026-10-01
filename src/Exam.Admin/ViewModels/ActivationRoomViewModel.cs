@@ -126,7 +126,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     {
         if (string.IsNullOrWhiteSpace(ActivationRequestId))
         {
-            Status = "请填写激活申请 ID。";
+            Status = "请填写激活申请编号。";
             return;
         }
 
@@ -137,21 +137,21 @@ public sealed class ActivationRoomViewModel : BindableBase
         }
 
         var result = await _api.ApproveActivationAsync(ActivationRequestId.Trim(), null);
-        Upsert(result.DeviceId, result.ClientNumber, result.Status.ToString(), result.RoomGroupId);
-        Status = $"审批成功：设备 {result.DeviceId}，客户端编号 {result.ClientNumber}。编号由 A02 服务生成。";
+        Upsert(result.DeviceId, result.ClientNumber, StatusText(result.Status), result.RoomGroupId);
+        Status = $"已批准，学生端编号为 {result.ClientNumber}。";
     }
 
     private async Task QueryDeviceAsync()
     {
         if (string.IsNullOrWhiteSpace(QueryDeviceId))
         {
-            Status = "请填写设备 ID。";
+            Status = "请填写设备标识。";
             return;
         }
 
         var result = await _api.FindDeviceAsync(QueryDeviceId.Trim());
-        Upsert(result.DeviceId, result.ClientNumber, result.Status.ToString(), result.RoomGroupId);
-        Status = $"已加载设备 {result.DeviceId}。候选人和在线状态字段当前接口未提供。";
+        Upsert(result.DeviceId, result.ClientNumber, StatusText(result.Status), result.RoomGroupId);
+        Status = $"已找到该设备，学生端编号为 {result.ClientNumber}。当前考生和连接情况请到设备监控页查看。";
     }
 
     private void Upsert(string deviceId, string clientNumber, string activationStatus, string? roomGroupId)
@@ -161,10 +161,19 @@ public sealed class ActivationRoomViewModel : BindableBase
         {
             Devices.Remove(existing);
         }
-        Devices.Add(new ActivationDeviceRow(deviceId, clientNumber, activationStatus, roomGroupId ?? "", "接口未提供", "接口未提供", "接口未提供"));
+        Devices.Add(new ActivationDeviceRow(deviceId, clientNumber, activationStatus, roomGroupId ?? "", "—", "—", "—"));
     }
 
-    private void SetError(Exception exception) => Status = $"操作失败：{exception.Message}";
+    private void SetError(Exception exception) => Status = $"操作失败：{FriendlyErrors.Describe(exception)}";
+
+    private static string StatusText(Exam.Contracts.Activation.ActivationStatus status) => status switch
+    {
+        Exam.Contracts.Activation.ActivationStatus.Pending => "待审批",
+        Exam.Contracts.Activation.ActivationStatus.Active => "已激活",
+        Exam.Contracts.Activation.ActivationStatus.Revoked => "已取消",
+        Exam.Contracts.Activation.ActivationStatus.Rejected => "已拒绝",
+        _ => "未知",
+    };
 }
 
 public sealed record RoomGroupDraft(string RoomGroupId, string Name);

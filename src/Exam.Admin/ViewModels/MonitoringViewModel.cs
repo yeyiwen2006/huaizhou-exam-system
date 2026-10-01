@@ -62,8 +62,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         ParticipationId = SelectedDeviceId = ExpectedVersionText = DecisionReason = string.Empty;
         EventId = ResendParticipationId = ResendDeviceId = EntryVersionText = AuthorizationVersionText = string.Empty;
         OnPropertyChanged(nameof(FilteredRows));
-        Status = "考试或连接已变更；请重新从服务器刷新参与状态。";
-        CollectionStatus = "请查询该考试的收齐事件；连接且打开本页后定期补取，历史事件不代表当前名单仍已收齐。";
+        Status = "考试或服务器已切换，请点击“刷新”。";
+        CollectionStatus = "打开本页时会自动查询收齐记录，也可以点击“查询收齐记录”。";
     }
     private string _filterText = string.Empty;
     private bool _onlySubmitted;
@@ -76,8 +76,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private string _resendDeviceId = string.Empty;
     private string _entryVersionText = string.Empty;
     private string _authorizationVersionText = string.Empty;
-    private string _status = "考生业务状态来自正式参与接口；连接状态、当前题号和交卷采集详情等待 A/B API。";
-    private string _collectionStatus = "尚未查询收齐事件；事件只对应其名单版本，不代表成绩已开放。";
+    private string _status = "填写考试编号后点击“刷新”，查看实际参试考生。";
+    private string _collectionStatus = "尚未查询收齐记录。";
 
     public MonitoringViewModel(AdminApiClient api, TimeSpan? collectionPollInterval = null)
     {
@@ -150,13 +150,13 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public async Task RefreshCollectionEventsAsync(CancellationToken cancellationToken = default)
     {
         var examId = ExamId.Trim();
-        if (examId.Length == 0) { CollectionStatus = "请先填写考试 ID。"; return; }
+        if (examId.Length == 0) { CollectionStatus = "请先填写考试编号。"; return; }
         var context = _contextVersion;
         var operation = ++_collectionRequestVersion;
         var cursor = _collectionCursors.GetValueOrDefault(examId);
         var added = 0;
         CollectionCompletedNotification? newest = null;
-        CollectionStatus = "正在读取服务器持久化收齐事件…";
+        CollectionStatus = "正在查询收齐记录…";
         try
         {
             for (var page = 0; page < 10; page++)
@@ -199,7 +199,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 }
                 if (events.Count < 100)
                 {
-                    CollectionStatus = $"本次读取 {added} 条收齐事件，至名单版本 {cursor}；页面仅保留最近 500 条。历史事件不保证当前名单收齐，也不代表成绩已开放。";
+                    CollectionStatus = $"新增 {added} 条收齐记录（页面保留最近 500 条）。收齐记录只说明当时的名单已全部交卷，之后有考生加入时会重新统计。";
                     return;
                 }
                 if (cursor == previousCursor)
@@ -207,7 +207,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                     throw new InvalidOperationException("收齐事件分页未推进；请核对服务器返回的名单版本。");
                 }
             }
-            CollectionStatus = $"本次读取 {added} 条收齐事件；仍可能有后续分页，请再次查询或等待下次轮询。";
+            CollectionStatus = $"新增 {added} 条收齐记录，还有更多记录，稍后会自动继续读取。";
         }
         catch when (context != _contextVersion || operation != _collectionRequestVersion)
         {
@@ -307,14 +307,14 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     {
         if (string.IsNullOrWhiteSpace(ExamId))
         {
-            Status = "请填写考试 ID。";
+            Status = "请填写考试编号。";
             return;
         }
 
         var examId = ExamId.Trim();
         var context = _contextVersion;
         var operation = ++_loadVersion;
-        Status = "正在读取实际参与记录…";
+        Status = "正在读取参试考生…";
         IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results;
         try
         {
@@ -348,11 +348,11 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 item.AuthorizationVersion,
                 item.Version,
                 item.BusinessState == ParticipationBusinessState.Submitted ? "已提交" : "未提交",
-                "接口未提供",
-                "接口未提供"));
+                "—",
+                "—"));
         }
         OnPropertyChanged(nameof(FilteredRows));
-        Status = $"已从正式接口加载 {Rows.Count} 条实际参与记录。";
+        Status = $"共 {Rows.Count} 名实际参试考生。";
     }
 
     public async Task DecideDeviceAsync()
@@ -360,7 +360,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         if (string.IsNullOrWhiteSpace(ParticipationId) || string.IsNullOrWhiteSpace(SelectedDeviceId) ||
             string.IsNullOrWhiteSpace(DecisionReason) || !long.TryParse(ExpectedVersionText, out var expectedVersion) || expectedVersion < 0)
         {
-            Status = "设备判定需要参与 ID、选择设备、非负预期版本和原因。";
+            Status = "请先在上表选中考生，再填写要保留的设备和原因。";
             return;
         }
 
@@ -391,7 +391,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             throw new InvalidOperationException("设备裁决回执与当前请求不匹配，已拒绝应用。");
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         inputVersion = _decisionInputVersion;
-        var success = $"设备裁决已保存：授权设备 {result.AuthorizedDeviceId}，撤销设备 {result.RevokedDeviceId}；操作者 {result.OperatorId}，原因：{result.Reason}。";
+        var success = $"已保留设备 {result.AuthorizedDeviceId} 继续答题，设备 {result.RevokedDeviceId} 已停止答题（操作人 {result.OperatorId}，原因：{result.Reason}）。";
         try
         {
             await LoadAsync();
@@ -401,7 +401,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         catch (Exception exception)
         {
             if (context == _contextVersion && operation == _decisionRequestVersion && inputVersion == _decisionInputVersion)
-                Status = $"{success} 但监测刷新失败：{exception.Message}。请刷新，不要重复裁决。";
+                Status = $"{success}但列表刷新失败：{FriendlyErrors.Describe(exception)}请点击“刷新”，不要重复操作。";
         }
     }
 
@@ -411,7 +411,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             string.IsNullOrWhiteSpace(ResendDeviceId) || !long.TryParse(EntryVersionText, out var entryVersion) || entryVersion < 0 ||
             !long.TryParse(AuthorizationVersionText, out var authorizationVersion) || authorizationVersion < 0)
         {
-            Status = "补发需要考试、事件、参与、设备 ID，以及两个非负版本号。";
+            Status = "请先在上表选中考生，并填写要重发的指令编号。";
             return;
         }
 
@@ -438,7 +438,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             !StringComparer.Ordinal.Equals(result.TargetDeviceId, deviceId) ||
             result.TargetAuthorizationVersion != authorizationVersion || result.DeliveryAttempts < 1)
             throw new InvalidOperationException("补发回执与当前考试或请求不匹配，已拒绝应用。");
-        Status = $"补发请求成功：事件 {result.EventId}，累计投递 {result.DeliveryAttempts} 次。";
+        Status = $"已重发指令（累计发送 {result.DeliveryAttempts} 次）。";
     }
 
     private static void ValidateParticipations(
@@ -477,12 +477,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         _ => state.ToString()
     };
 
-    private void SetError(Exception exception) => Status = $"操作失败：{exception.Message}";
+    private void SetError(Exception exception) => Status = $"操作失败：{FriendlyErrors.Describe(exception)}";
 
     private void SetCollectionError(Exception exception) =>
-        CollectionStatus = exception is AdminApiException apiError
-            ? $"收齐事件查询失败（{apiError.Code}）：{apiError.Message}"
-            : $"收齐事件查询失败：{exception.Message}";
+        CollectionStatus = $"收齐记录查询失败：{FriendlyErrors.Describe(exception)}";
 }
 
 public sealed record MonitoringRow(

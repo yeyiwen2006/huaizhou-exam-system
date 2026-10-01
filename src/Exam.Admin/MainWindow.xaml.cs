@@ -26,8 +26,8 @@ public partial class MainWindow : Window
     private void OnCollectionCompleted(Exam.Contracts.Submissions.CollectionCompletedNotification item)
     {
         if (!IsVisible) return;
-        _ = Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "服务器已记录收卷完成",
-            $"考试 {item.ExamId} 在 {item.CompletedAt:yyyy-MM-dd HH:mm:ss zzz} 已记录名单版本 {item.RosterVersion}、{item.ParticipantCount} 人收齐。\n这是持久化历史事件，不保证当前名单仍已收齐，也不代表成绩已开放。",
+        _ = Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "本场考试全部答卷已成功回收",
+            $"考试 {item.ExamId} 的 {item.ParticipantCount} 名实际参试考生答卷已全部保存（{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。\n如果之后又有考生进入考试，系统会重新统计；成绩在考试结束后生成。",
             confirmText: "知道了", cancelText: "关闭");
     }
 
