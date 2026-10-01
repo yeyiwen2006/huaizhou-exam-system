@@ -83,7 +83,9 @@ public static class ReportWorkbookDownload
 // A transient Windows rename denial must not cause a delete/copy fallback or a stale commit.
 internal static class ReportFileCommit
 {
-    private static readonly System.Threading.Lock CommitGate = new();
+    // Final validation and replacement form one async commit interval across both savers.
+    // Downloads, durable temporary writes and retry delays do not hold the gate.
+    private static readonly SemaphoreSlim CommitGate = new(1, 1);
 
     internal static async Task ReplaceAsync(string temporary, string destination,
         Func<Task>? validateBeforeCommit, CancellationToken cancellationToken)
@@ -92,24 +94,26 @@ internal static class ReportFileCommit
         var retries = 0;
         while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            // A wait may span a report/identity/version change. Never reuse a previous validation.
-            if (validateBeforeCommit is not null) await validateBeforeCommit();
+            await CommitGate.WaitAsync(cancellationToken);
             try
             {
-                lock (CommitGate)
+                cancellationToken.ThrowIfCancellationRequested();
+                // Queueing or a retry may span a version change. Validate only after entry.
+                if (validateBeforeCommit is not null) await validateBeforeCommit();
+                try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     File.Move(temporary, destination, overwrite: true);
+                    return; // The atomic same-directory replacement is the commit point.
                 }
-                return; // The atomic same-directory replacement is the commit point.
+                catch (Exception error) when (IsWindowsSharingFailure(error) && retries < 20 &&
+                    System.Diagnostics.Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2))
+                {
+                    retries++;
+                }
             }
-            catch (Exception error) when (IsWindowsSharingFailure(error) && retries < 20 &&
-                System.Diagnostics.Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2))
-            {
-                retries++;
-                await Task.Delay(Math.Min(10 * retries, 100), cancellationToken);
-            }
+            finally { CommitGate.Release(); }
+            await Task.Delay(Math.Min(10 * retries, 100), cancellationToken);
         }
     }
 
