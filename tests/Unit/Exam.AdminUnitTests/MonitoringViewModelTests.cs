@@ -32,6 +32,7 @@ public sealed class MonitoringViewModelTests
         Assert.Equal(new[] { "候考", "作答中", "已交卷" },
             viewModel.Rows.Select(row => row.BusinessState));
         Assert.All(viewModel.Rows, row => Assert.Equal("—", row.ConnectionState));
+        Assert.Contains("不代表离线", viewModel.Status, StringComparison.Ordinal);
         Assert.Equal("已提交", viewModel.Rows[^1].CollectionState);
     }
 

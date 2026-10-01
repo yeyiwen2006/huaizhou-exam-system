@@ -352,7 +352,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                 "—"));
         }
         OnPropertyChanged(nameof(FilteredRows));
-        Status = $"共 {Rows.Count} 名实际参试考生。";
+        Status = $"共 {Rows.Count} 名实际参试考生。连接与当前题号暂无服务器权威数据；“—”不代表离线或未作答。";
     }
 
     public async Task DecideDeviceAsync()
