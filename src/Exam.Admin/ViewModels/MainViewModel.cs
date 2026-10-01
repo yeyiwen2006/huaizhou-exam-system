@@ -13,6 +13,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
 {
     public const int HomePage = 0;
     public const int SettingsPage = 1;
+    public const int ActivationPage = 5; // 激活与试场分组：不与具体考试挂钩，不显示当前考试条。
     private readonly AdminApiClient _api;
     private ExamSummary? _currentExam;
     private bool _isCreatingExam;
@@ -53,7 +54,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     /// <summary>进入某场考试（或新建考试）后，在除主页外的页面顶部显示当前考试。</summary>
-    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage;
+    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage && SelectedPage != ActivationPage;
 
     public ExamSummary? CurrentExam
     {

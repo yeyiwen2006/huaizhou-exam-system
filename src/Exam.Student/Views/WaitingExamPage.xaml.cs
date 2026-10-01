@@ -156,7 +156,7 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        SetBusy(true, "正在确认参试…");
+        SetBusy(true, "正在确认参加考试…");
         ErrorBanner.Hide();
         try
         {
@@ -370,7 +370,7 @@ public partial class WaitingExamPage : UserControl
         DownloadBar.Value = manager?.HasPackage == true ? 100 : DownloadBar.Value;
         ConfirmButton.IsEnabled = !_busy && _runtime?.LocalRecoveryChecked == true &&
             !_runtime.HasFixedSubmission && manager?.CanConfirmParticipation == true;
-        ConfirmButton.Content = manager?.Participation is null ? "确认参试" : "继续参试";
+        ConfirmButton.Content = manager?.Participation is null ? "确认参加考试" : "继续参加考试";
         RetryDownloadButton.Visibility = _runtime?.HasFixedSubmission == true ||
             manager?.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended or ExamPackageManager.Phase.Withdrawn
             ? Visibility.Collapsed : Visibility.Visible;
@@ -386,7 +386,7 @@ public partial class WaitingExamPage : UserControl
         {
             ExamPackageManager.Phase.ConfirmedWaiting when _runtime?.NotificationsStarted != true =>
                 ("正在恢复连接", StatusLevel.Warning, "已确认参试，正在重新连接服务器。"),
-            ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参试，等待开考", StatusLevel.Info, "请保持程序运行，开考后试题将自动显示。"),
+            ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参加考试，等待开考", StatusLevel.Info, "请保持程序运行，开考后试题将自动显示。"),
             ExamPackageManager.Phase.Unlocked => ("试题已解锁", StatusLevel.Success, "即将进入答题。"),
             ExamPackageManager.Phase.Ended => ("考试已结束", StatusLevel.Warning, "考试已结束。未提交的答卷将自动提交；如有疑问，请联系监考人员。"),
             ExamPackageManager.Phase.Revoked => ("本机不能继续答题", StatusLevel.Danger, "请联系监考人员。"),
@@ -398,7 +398,7 @@ public partial class WaitingExamPage : UserControl
                 ("等待监考人员处理", StatusLevel.Warning, "该考生账号已在另一台设备进入本场考试，请联系监考人员。处理完成后本机将自动继续。"),
             _ when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
                 ("正在恢复", StatusLevel.Warning, "已确认参试，考试资料正在准备，可点击“重新下载”。"),
-            _ => ("尚未确认参试", StatusLevel.Info, "试题和考试说明下载完成后，才能确认参试。"),
+            _ => ("尚未确认参加考试", StatusLevel.Info, "试题和考试说明下载完成后，才能确认参加考试。"),
         };
 
         if (_runtime?.HasFixedSubmission == true)
