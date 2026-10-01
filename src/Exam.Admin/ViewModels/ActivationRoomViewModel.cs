@@ -13,7 +13,7 @@ public sealed class ActivationRoomViewModel : BindableBase
     private string _activationRequestId = string.Empty;
     private string _approvalRoomGroupId = string.Empty;
     private string _queryDeviceId = string.Empty;
-    private string _status = "可审批学生端激活申请并按设备编号查询；考场分组目前只能在本机整理。";
+    private string _status = "可审批学生端激活申请并按设备编号查询；试场分组目前只能在本机整理。";
 
     public ActivationRoomViewModel(AdminApiClient api)
     {
@@ -132,7 +132,7 @@ public sealed class ActivationRoomViewModel : BindableBase
 
         if (!string.IsNullOrWhiteSpace(ApprovalRoomGroupId))
         {
-            Status = "考场分组暂不能在审批时指定，请清空分组后再审批，设备将先归入未分组。";
+            Status = "试场分组暂不能在审批时指定，请清空分组后再审批，设备将先归入未分组。";
             return;
         }
 

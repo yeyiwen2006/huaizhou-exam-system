@@ -56,7 +56,7 @@ public sealed class ActivationRoomViewModelTests
 
         viewModel.ApproveCommand.Execute(null);
 
-        Assert.Contains("考场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("试场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
         Assert.Empty(viewModel.Devices);
     }
 }
