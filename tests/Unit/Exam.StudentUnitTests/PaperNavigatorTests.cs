@@ -78,6 +78,40 @@ public sealed class PaperNavigatorTests
         Assert.Null(navigator.Find(""));
     }
 
+    [Fact]
+    public void AdjacentQuestionsFollowGlobalNumbersWithoutWrapping()
+    {
+        var navigator = new PaperNavigator(CreateManifest());
+        Assert.Null(navigator.PreviousQuestion("q1"));
+        Assert.Equal("q2", navigator.NextQuestion("q1")?.QuestionId);
+        Assert.Equal("q5", navigator.NextQuestion("q2")?.QuestionId);
+        Assert.Equal("q2", navigator.PreviousQuestion("q5")?.QuestionId);
+        Assert.Equal("q5", navigator.PreviousQuestion("q10")?.QuestionId);
+        Assert.Null(navigator.NextQuestion("q10"));
+        Assert.Null(navigator.PreviousQuestion("unknown"));
+        Assert.Null(navigator.NextQuestion("unknown"));
+    }
+
+    [Fact]
+    public void UnansweredCountIncludesEmptyAndMissingButExcludesSelectionsAndAbstain()
+    {
+        var navigator = new PaperNavigator(CreateManifest());
+        Assert.Equal(4, navigator.CountUnanswered(null));
+        var answers = new Dictionary<string, AnswerValue>
+        {
+            ["q1"] = AnswerValue.Selected("A"),
+            ["q2"] = AnswerValue.Empty(),
+            ["q5"] = AnswerValue.Abstain(),
+            ["other-paper-question"] = AnswerValue.Selected("A")
+        };
+        Assert.Equal(2, navigator.CountUnanswered(answers));
+        answers["q2"] = AnswerValue.Selected("B");
+        answers["q10"] = AnswerValue.Selected("A", "B");
+        Assert.Equal(0, navigator.CountUnanswered(answers));
+        answers["q1"] = AnswerValue.Empty();
+        Assert.Equal(1, navigator.CountUnanswered(answers));
+    }
+
     [Theory]
     [InlineData("single", true, AnswerKind.Selected, "q2")]
     [InlineData("single", true, AnswerKind.Empty, null)]

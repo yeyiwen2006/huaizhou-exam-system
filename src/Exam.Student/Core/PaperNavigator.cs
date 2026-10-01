@@ -46,6 +46,16 @@ public sealed partial class PaperNavigator
         Questions.Count > 0 ? Questions[0] :
             throw new InvalidOperationException("学生清单没有题目。");
 
+    public PaperQuestionStructure? NextQuestion(string questionId) => Find(questionId) is { } current
+        ? Questions.FirstOrDefault(question => question.QuestionNo > current.QuestionNo) : null;
+
+    public PaperQuestionStructure? PreviousQuestion(string questionId) => Find(questionId) is { } current
+        ? Questions.LastOrDefault(question => question.QuestionNo < current.QuestionNo) : null;
+
+    /// <summary>只统计本卷题目；选中“不作答”已完成作答，缺失答案与 Empty 才计为未答。</summary>
+    public int CountUnanswered(IReadOnlyDictionary<string, AnswerValue>? answers) =>
+        Questions.Count(question => !IsAnswered(answers, question.QuestionId));
+
     /// <summary>单选普通选项或启用的“不作答”保存成功后按全卷题号前进；末题不循环、不交卷。</summary>
     public PaperQuestionStructure? NextQuestionAfterSelection(string questionId, AnswerValue savedAnswer)
     {
@@ -53,7 +63,7 @@ public sealed partial class PaperNavigator
         if (current is null ||
             !(savedAnswer.Kind == AnswerKind.Selected && current.QuestionType == "single" ||
               savedAnswer.Kind == AnswerKind.Abstain && current.AllowAbstain)) return null;
-        return Questions.FirstOrDefault(question => question.QuestionNo > current.QuestionNo);
+        return NextQuestion(questionId);
     }
 
     /// <summary>构建导航分区。answers/marks 为当前可靠快照（可为 null 表示尚无作答）。</summary>

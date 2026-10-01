@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -188,9 +189,50 @@ public sealed class UiScreenshotTests
                 await WaitUntilAsync(() => ReadyAt(id), TimeSpan.FromSeconds(5));
             }
 
+            void PressArrow(Key key) => window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(window)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+
+            async Task CheckConfirmationAsync(int expected, bool capture = false)
+            {
+                var checkedDialog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)(async () =>
+                {
+                    ConfirmDialog? dialog = null;
+                    try
+                    {
+                        dialog = Assert.Single(window.OwnedWindows.OfType<ConfirmDialog>());
+                        var text = Assert.IsType<TextBlock>(((ContentControl)dialog.FindName("BodyHost")).Content).Text;
+                        Assert.StartsWith($"当前还有 {expected} 道题目未作答。", text, StringComparison.Ordinal);
+                        var before = answers.CurrentQuestionId;
+                        PressArrow(Key.Right);
+                        Assert.Equal(before, answers.CurrentQuestionId); // 确认框打开时不切题。
+                        if (capture) await CaptureAsync(dialog, directory, "student-submit-confirmation");
+                        checkedDialog.TrySetResult();
+                    }
+                    catch (Exception error) { checkedDialog.TrySetException(error); }
+                    finally { dialog?.Close(); }
+                }));
+                Assert.Single(Descendants<Button>(inProgress), button => Equals(button.Content, "提交答卷"))
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await checkedDialog.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await WaitUntilAsync(() => navList.IsEnabled, TimeSpan.FromSeconds(5));
+                Assert.False(answeringRuntime.HasFixedSubmission);
+            }
+
+            PressArrow(Key.Left);
+            Assert.True(ReadyAt("q1"));
+            PressArrow(Key.Right);
+            await WaitUntilAsync(() => ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            PressArrow(Key.Right);
+            Assert.True(ReadyAt("q2"));
+            PressArrow(Key.Left);
+            await WaitUntilAsync(() => ReadyAt("q1"), TimeSpan.FromSeconds(5));
+            await CheckConfirmationAsync(1, capture: true);
+
             // 再点已选单选项只取消；选中另一项后，答案与下一题位置均经真实 SQLite 保存。
             Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Empty && ReadyAt("q1"), TimeSpan.FromSeconds(5));
+            await CheckConfirmationAsync(2);
             Choice("A").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             await WaitUntilAsync(() => ReadyAt("q2"), TimeSpan.FromSeconds(5));
             var saved = Assert.IsType<AnswerStateRecord>(await answeringFixture.Store.LoadAnswerStateAsync(answeringFixture.Key));
@@ -233,6 +275,7 @@ public sealed class UiScreenshotTests
                 await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Contains("A") && ReadyAt("q2"), TimeSpan.FromSeconds(5));
                 Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Count == 2 && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                await CheckConfirmationAsync(0); // q1 的“不作答”不计入未答题数。
                 Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null)
                     .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await WaitUntilAsync(() => answers.Answers["q2"].Kind == AnswerKind.Abstain && ReadyAt("q2"), TimeSpan.FromSeconds(5));
