@@ -231,8 +231,6 @@
                             </Grid>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,14" />
                             <WrapPanel>
-                                <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
-                                <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                                 <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" Command="{Binding Exam.RefreshInstructionsCommand}"/>
                                 <Button Content="保存考试设置" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveCommand}"/>
                             </WrapPanel>
@@ -254,14 +252,18 @@
                         <StackPanel>
                             <TextBlock Text="科目与题组" Style="{StaticResource CardHeading}" />
                             <TextBlock Text="先在上表选中一个科目，再在下表编辑它的题组和计分规则。" Style="{StaticResource CardNote}" />
-                            <DataGrid ItemsSource="{Binding Exam.Subjects}" SelectedItem="{Binding Exam.SelectedSubject}" IsReadOnly="False" Height="145" Margin="0,0,0,14">
+                            <DataGrid ItemsSource="{Binding Exam.Subjects}" SelectedItem="{Binding Exam.SelectedSubject}" IsReadOnly="False" Height="145" Margin="0,0,0,6">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="科目编号" Binding="{Binding SubjectId, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
                                     <DataGridTextColumn Header="科目名称" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
                                     <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="120"/>
                                 </DataGrid.Columns>
                             </DataGrid>
-                            <WrapPanel>
+                            <WrapPanel Margin="0,0,0,14">
+                                <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
+                                <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,0,0,6">
                                 <Button Content="新增题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddGroupCommand}"/>
                                 <Button Content="删除题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveGroupCommand}"/>
                             </WrapPanel>
