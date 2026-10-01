@@ -68,7 +68,7 @@
         </Style>
     </Window.Resources>
 
-    <TabControl Style="{StaticResource Nav.TabControl}" Tag="{Binding CurrentExamTitle}" SelectedIndex="{Binding SelectedPage, Mode=TwoWay}">
+    <TabControl Style="{StaticResource Nav.TabControl}" Tag="考务端" SelectedIndex="{Binding SelectedPage, Mode=TwoWay}">
         <controls:NavShell.TopBar>
             <!-- 常驻连接条：切换页面时保持不变 -->
             <Border Style="{StaticResource TopBar}">
@@ -83,6 +83,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -101,6 +102,18 @@
                               Stroke="{DynamicResource Brush.Text.Secondary}" StrokeThickness="1.5" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding Connection.Status}" Style="{StaticResource CaptionText}" VerticalAlignment="Center" />
                     </StackPanel>
+                    <!-- 当前考试：进入某场考试或新建考试时显示，不在主页显示。 -->
+                    <Border Grid.Row="2" Grid.ColumnSpan="7" Margin="-28,12,-28,-12" Padding="28,10"
+                            Background="{DynamicResource Brush.Primary.Soft}"
+                            Visibility="{Binding ShowCurrentExamBar, Converter={StaticResource BoolToVis}}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="返回全部考试" Style="{StaticResource Btn.Secondary}" Padding="14,0"
+                                    Command="{Binding BackToHomeCommand}"/>
+                            <TextBlock Text="当前考试" Style="{StaticResource FieldLabel}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding CurrentExamTitle}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap"
+                                       VerticalAlignment="Center" Margin="0,0,16,0"/>
+                        </DockPanel>
+                    </Border>
                 </Grid>
             </Border>
         </controls:NavShell.TopBar>
@@ -119,12 +132,9 @@
                     </DockPanel>
                     <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                     <ItemsControl ItemsSource="{Binding Home.Exams}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Button Command="{Binding OpenCommand}" Width="340" Height="Auto" Margin="0,0,16,16" Padding="0" Cursor="Hand"
+                                <Button Command="{Binding OpenCommand}" Height="Auto" Margin="0,0,0,12" Padding="0" Cursor="Hand"
                                         HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
@@ -141,20 +151,24 @@
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Button.Template>
-                                    <StackPanel>
-                                        <DockPanel>
-                                            <Border Style="{StaticResource IconTile}" Margin="0,0,12,0">
-                                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" />
-                                            </Border>
-                                            <TextBlock Text="{Binding Name}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                                        </DockPanel>
-                                        <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,12,0,0"/>
-                                        <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,4,0,10"/>
-                                        <WrapPanel>
+                                    <!-- 一行一场考试；名称自动换行，完整显示。 -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="11" Margin="0,0,16,0" VerticalAlignment="Center">
+                                            <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="22" Height="22" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,6,0,0"/>
+                                            <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
                                             <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
                                             <controls:StatusPill Text="{Binding VisibilityText}" Level="{Binding VisibilityLevel}"/>
-                                        </WrapPanel>
-                                    </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
                                 </Button>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

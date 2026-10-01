@@ -137,7 +137,7 @@ public sealed class UiScreenshotTests
         var summaries = new[]
         {
             new ExamSummary("synthetic-exam", "合成模拟考试", start, start.AddHours(2), ExamLifecycle.Scheduled, true, true, 4, 1, 3),
-            new ExamSummary("synthetic-exam-2", "合成模拟考试（第二场）", start.AddDays(1), start.AddDays(1).AddHours(2), ExamLifecycle.Scheduled, false, false, 0, 0, 1),
+            new ExamSummary("synthetic-exam-2", "2027届清华复旦交大联合模拟笔试理科综合能力测试第一场正式", start.AddDays(1), start.AddDays(1).AddHours(2), ExamLifecycle.Scheduled, false, false, 0, 0, 1),
             new ExamSummary("synthetic-exam-0", "合成练习考试", start.AddDays(-7), start.AddDays(-7).AddHours(1), ExamLifecycle.Ended, true, false, 28, 28, 2),
         };
         foreach (var summary in summaries) viewModel.Home.Exams.Add(new ExamCardViewModel(summary, () => { }));
