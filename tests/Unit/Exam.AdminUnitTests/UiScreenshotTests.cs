@@ -169,8 +169,8 @@ public sealed class UiScreenshotTests
         roster.AdmissionNo = "2027006";
 
         var activation = viewModel.Activation;
-        activation.Groups.Add(new RoomGroupDraft("synthetic-room-a", "合成考场A"));
-        activation.Groups.Add(new RoomGroupDraft("synthetic-room-b", "合成考场B"));
+        activation.Groups.Add(new RoomGroupDraft("synthetic-room-a", "合成试场A"));
+        activation.Groups.Add(new RoomGroupDraft("synthetic-room-b", "合成试场B"));
         activation.SelectedGroup = activation.Groups[0];
         activation.Devices.Add(new ActivationDeviceRow("synthetic-device-01", "A-001", "已激活", "", "—", "—", "—"));
         activation.Devices.Add(new ActivationDeviceRow("synthetic-device-02", "A-002", "已激活", "", "—", "—", "—"));

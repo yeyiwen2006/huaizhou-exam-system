@@ -54,7 +54,7 @@ public sealed class ActivationApprovalBoundaryTests
 
         Assert.Equal(0, handler.Calls);
         Assert.Empty(viewModel.Devices);
-        Assert.Contains("考场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("试场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]

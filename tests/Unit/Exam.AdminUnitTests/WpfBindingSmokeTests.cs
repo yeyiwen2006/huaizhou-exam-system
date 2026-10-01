@@ -77,7 +77,7 @@ public sealed class WpfBindingSmokeTests
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
-                    if ((string)tab.Header == "激活与考场分组")
+                    if ((string)tab.Header == "激活与试场分组")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);
                     if ((string)tab.Header == "设备监控")
                     {
