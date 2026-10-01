@@ -45,13 +45,14 @@ public partial class ExamInProgressPage : UserControl
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
     {
-        Text = "服务器时间 --:--:--",
+        Text = "--:--:--",
         Level = StatusLevel.Info,
     };
 
     /// <summary>提交按钮启用状态（RightContent 命名作用域限制，经 INPC 绑定驱动）。</summary>
     public SubmitButtonState Submit { get; } = new();
     private DispatcherTimer? _clock;
+    private bool _syncStopped;
 
     /// <summary>提交按钮启用状态的可绑定载体。</summary>
     public sealed class SubmitButtonState : System.ComponentModel.INotifyPropertyChanged
@@ -140,7 +141,8 @@ public partial class ExamInProgressPage : UserControl
         catch (Exception error) when (error is InvalidOperationException or System.IO.IOException or
             System.Text.Json.JsonException or ArgumentException)
         {
-            SyncStatusText.Text = "同步服务已停止，原答卷保留，请联系考务人员恢复后重试。";
+            _syncStopped = true;
+            RefreshStatus();
         }
     }
 
@@ -188,12 +190,28 @@ public partial class ExamInProgressPage : UserControl
         finally { RefreshStatus(); }
     }
 
-    private void RefreshFocusStatus()
+    // 失焦次数随同步上报给考务端，不在考生界面显示。
+    private void RefreshFocusStatus() { }
+
+    /// <summary>
+    /// 底部提示只在考生需要知道或处理时出现，使用通俗说法；正常保存与上报时不显示。
+    /// 详细的内部状态保留在运行时对象中，供考务排查。
+    /// </summary>
+    private string? StudentNotice()
     {
-        var count = _focus.FocusLostCount;
-        FocusStatusText.Text = count > 0
-            ? $"累计失焦 {count} 次（约 {Math.Round(_focus.TotalUnfocusedDuration.TotalSeconds)} 秒），仅为本机会话记录，尚无服务器留痕回执"
-            : string.Empty;
+        if (_runtime.Answers?.HasPendingSubmission == true)
+            return "答卷已固定，但还没有保存到本机。请点击“重试保存”，或举手联系监考老师。";
+        if (_runtime.Answers?.Status == AnswerSessionStatus.WriteBlocked)
+            return "答案暂时无法保存到本机，已暂停作答。请点击“重试保存”，或举手联系监考老师。";
+        if (_runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
+            return "本机暂时不能继续作答，已有答案已保留。请举手联系监考老师。";
+        if (_syncStopped || _sync.Phase == SubmissionSyncPhase.Blocked)
+            return "答案已保存在本机，但暂时无法上报到服务器。请举手联系监考老师。";
+        if (_runtime.HasFixedSubmission && _sync.Phase != SubmissionSyncPhase.Confirmed)
+            return "答卷已提交，正在等待服务器确认，请不要关闭本机。";
+        if (_sync.Phase == SubmissionSyncPhase.WaitingRetry)
+            return "网络暂时中断，答案已保存在本机，恢复后会自动上报。";
+        return null;
     }
 
     /// <summary>B06 在线更新：状态横幅按阶段着色。</summary>
@@ -496,18 +514,19 @@ public partial class ExamInProgressPage : UserControl
     private void UpdateClock()
     {
         RefreshStatus();
+        // 时间只取服务器时钟；尚未校时时显示占位，不使用本机时间。
         if (!App.Services.Clock.IsSynchronized)
         {
-            ClockPillContent.Text = "服务器时间尚未同步";
+            ClockPillContent.Text = "--:--:--";
             return;
         }
 
         var now = App.Services.Clock.UtcNow;
-        ClockPillContent.Text = $"服务器时间 {now:HH:mm:ss}";
+        var clock = now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
         var remain = _exam.ScheduledEnd - now;
         ClockPillContent.Text = remain > TimeSpan.Zero
-            ? $"{ClockPillContent.Text} · 距结束 {remain:hh\\:mm\\:ss}"
-            : $"{ClockPillContent.Text} · 计划结束时间已到";
+            ? $"{clock} · 剩余 {remain:hh\\:mm\\:ss}"
+            : $"{clock} · 考试时间已到";
     }
 
     private async void OnSubmit(object sender, RoutedEventArgs e)
@@ -683,13 +702,16 @@ public partial class ExamInProgressPage : UserControl
 
         RuntimeErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(_runtime.ConnectionError) || !string.IsNullOrWhiteSpace(_runtime.Manager.LastError);
         RuntimeErrorBanner.Message = _runtime.ConnectionError ?? _runtime.Manager.LastError ?? string.Empty;
-        LocalStateText.Text = _runtime.LocalStateSummary;
+        // 本机保存失败的技术原因只放在提示框的悬停说明里，供监考老师排查；考生看到的是底部的通俗提示。
         var localError = _localRetryError ?? _runtime.LocalStateError;
-        LocalStateErrorBanner.IsOpen = !string.IsNullOrWhiteSpace(localError);
-        LocalStateErrorBanner.Message = localError ?? string.Empty;
-        RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave ? Visibility.Visible : Visibility.Collapsed;
+        LocalStateErrorBanner.IsOpen = false;
+        LocalStateErrorBanner.Message = string.Empty;
+        var notice = StudentNotice();
+        StatusNotice.Text = notice ?? string.Empty;
+        StatusNotice.ToolTip = string.IsNullOrWhiteSpace(localError) ? null : localError;
+        StatusNotice.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
+        RetryLocalSaveButton.Visibility = _runtime.CanRetryLocalSave && notice is not null ? Visibility.Visible : Visibility.Collapsed;
         RetryLocalSaveButton.IsEnabled = !_retryingLocalSave && _runtime.CanRetryLocalSave;
-        SyncStatusText.Text = _sync.StatusText;
         RefreshFocusStatus();
         _reviewPending = _runtime.PendingReviewVersion is not null && !revoked && !_runtime.HasFixedSubmission && !_runtime.Manager.ExamEnded;
         ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;

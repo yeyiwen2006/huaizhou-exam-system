@@ -53,6 +53,8 @@
     <SolidColorBrush x:Key="Brush.Success.Soft" Color="#E7F6ED" />
     <SolidColorBrush x:Key="Brush.Answer" Color="#2E9E5B" />
     <SolidColorBrush x:Key="Brush.Answer.Soft" Color="#2E9E5B" Opacity="0.18" />
+    <!-- 题目选项圆圈底色：主色 10% 透明，叠加在选项字母上仍可看清字母 -->
+    <SolidColorBrush x:Key="Brush.Option.Fill" Color="#1A1E5AA8" />
 
     <!-- 语义色：警告 -->
     <SolidColorBrush x:Key="Brush.Warning" Color="#D97706" />

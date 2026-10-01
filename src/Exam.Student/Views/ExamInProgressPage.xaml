@@ -189,29 +189,28 @@
                     <!-- 原版题目 + 圆形选项控件 -->
                     <views:PdfQuestionView x:Name="QuestionView" Grid.Row="2" Margin="4,0,4,0" />
 
-                    <!-- 底部状态条：本地保存（B04）、服务器同步（B05）与失焦统计（B06） -->
+                    <!--
+                      底部状态条：右下角显示服务器时间与剩余时间（需求第 66 行）。
+                      本机保存、上报正常时左侧不显示任何文字；只在考生需要知道或需要处理时显示一句提示。
+                    -->
                     <Border Grid.Row="3"
                             BorderBrush="{DynamicResource Brush.Border}"
                             BorderThickness="0,1,0,0"
                             Margin="4,10,4,2"
                             Padding="0,8,0,0">
                         <DockPanel>
-                            <!-- 右下角：服务器时间 -->
                             <ContentControl DockPanel.Dock="Right"
                                             Content="{Binding ClockPillContent, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=OneWay}"
                                             VerticalAlignment="Center"
                                             Margin="16,0,0,0" />
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}"
-                                           VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="420" />
+                                <TextBlock x:Name="StatusNotice" Style="{StaticResource BodyText}"
+                                           Foreground="{DynamicResource Brush.Warning}"
+                                           VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="560"
+                                           Visibility="Collapsed" />
                                 <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
-                                        Content="重试本地保存" Margin="12,0,0,0" Padding="12,4"
+                                        Content="重试保存" Margin="12,0,0,0" Padding="12,4"
                                         Visibility="Collapsed" Click="OnRetryLocalSave" />
-                                <TextBlock x:Name="SyncStatusText" Style="{StaticResource CaptionText}"
-                                           VerticalAlignment="Center" TextWrapping="Wrap"
-                                           Margin="16,0,0,0" Text="同步服务尚未启动。" />
-                                <TextBlock x:Name="FocusStatusText" Style="{StaticResource CaptionText}"
-                                           VerticalAlignment="Center" Margin="16,0,0,0" Text="" />
                             </StackPanel>
                         </DockPanel>
                     </Border>
