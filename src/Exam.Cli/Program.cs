@@ -35,6 +35,7 @@ internal static partial class ExamCli
                 ["operators", var change, .. var options] when change is "approve" or "disable" or "enable" =>
                     await RunAccountAsync(change, options, cancellationToken),
                 ["reports", var action, var examId, .. var options] => await RunReportAsync(action, examId, options, cancellationToken),
+                ["grading", var action, var examId, .. var options] => await RunGradingAsync(action, examId, options, cancellationToken),
                 ["management", var command, .. var options] => await ManagementCli.RunAsync(command, options, cancellationToken),
                 ["api", var method, var path, .. var options] => await SendAsync(
                     new HttpMethod(method.ToUpperInvariant()),

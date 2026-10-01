@@ -19,10 +19,7 @@ internal static partial class ExamCli
         if (action == "export" && (destination is null || destination.StartsWith("--", StringComparison.Ordinal))) return 2;
         var options = ParseOptions(destination is null ? arguments : arguments[1..]);
         var server = options.Server ?? Environment.GetEnvironmentVariable(ServerEnvironment);
-        if (!Uri.TryCreate(server, UriKind.Absolute, out var address) || address.UserInfo.Length != 0 ||
-            address.Query.Length != 0 || address.Fragment.Length != 0 ||
-            address.Scheme != "https" && !(address.Scheme == "http" && IPAddress.TryParse(address.Host, out var ip) &&
-                IPAddress.IsLoopback(ip) && Environment.GetEnvironmentVariable(InsecureLoopbackEnvironment) == "true")) return 2;
+        if (!TryResolveServer(server, out var address)) return 2;
         using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(5) };
         ApiEnvelope<T>? Envelope<T>(ApiEnvelope<T>? value) => value is not null &&
             !string.IsNullOrWhiteSpace(value.ServerId) && !string.IsNullOrWhiteSpace(value.NodeId) && value.ServerEpoch > 0

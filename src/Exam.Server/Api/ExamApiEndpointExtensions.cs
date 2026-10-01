@@ -27,6 +27,7 @@ public static class ExamApiEndpointExtensions
         api.MapStudentApi();
         api.MapPackageUnlockApi();
         api.MapReportApi();
+        api.MapGradingApi();
         api.MapExamCatalogApi();
         api.MapOperatorAccountApi();
         return endpoints;
