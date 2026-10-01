@@ -58,7 +58,15 @@ public sealed class WpfBindingSmokeTests
                 Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
                 Assert.All(tabsAtStart.Items.Cast<TabItem>(), tab => Assert.True(tab.IsEnabled));
                 var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
-                Assert.Equal((Thickness)application.FindResource("Padding.Control"), connect.Padding);
+                // 登录页主操作明确使用 14 DIP 的水平留白，覆盖通用控件默认值。
+                Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
+                // 本测试只验证主界面绑定；账号登录已有单独测试。新登录页会折叠主区域，
+                // 在测试夹具中显式展示主区域后，DataGrid/ComboBox 的模板才会实际加载。
+                Assert.Equal(Visibility.Collapsed, tabsAtStart.Visibility);
+                ((ContentControl)window.FindName("PageRegion")).Content = null;
+                tabsAtStart.Visibility = Visibility.Visible;
+                DrainDispatcher();
+                window.UpdateLayout();
                 var subjectGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.Subjects));
                 Assert.Same(application.FindResource("Brush.Surface.Alt"), subjectGrid.AlternatingRowBackground);
                 var horizontalBar = new ScrollBar { Style = (Style)application.FindResource(typeof(ScrollBar)), Orientation = Orientation.Horizontal, Minimum = 0, Maximum = 100, ViewportSize = 10 };
