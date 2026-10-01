@@ -9,8 +9,9 @@
         <TextBlock x:Name="LabelText"
                    Text=""
                    FontSize="{DynamicResource Font.Size.Caption}"
+                   FontWeight="SemiBold"
                    Foreground="{DynamicResource Brush.Text.Secondary}"
-                   Margin="2,0,0,6" />
+                   Margin="0,0,0,6" />
         <Grid>
             <TextBox x:Name="Input"
                      TextChanged="OnTextChanged" />

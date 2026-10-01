@@ -36,6 +36,7 @@ public partial class ReportTableView : UserControl
     public ReportTableView()
     {
         InitializeComponent();
+        HorizontalScroller.SizeChanged += (_, _) => FitColumns();
         RenderTable();
     }
 
@@ -54,6 +55,7 @@ public partial class ReportTableView : UserControl
             HorizontalScroller.Visibility = Visibility.Collapsed;
             UnavailableText.Text = UnavailableReason;
             UnavailableText.Visibility = Visibility.Visible;
+            EmptyState.Visibility = Visibility.Visible;
             return;
         }
 
@@ -71,9 +73,9 @@ public partial class ReportTableView : UserControl
             RowsGrid.Columns.Add(new DataGridTemplateColumn
             {
                 Header = column.Header,
-                HeaderTemplate = HeaderTemplate(),
+                HeaderTemplate = HeaderTemplate(i),
                 Width = new DataGridLength(column.Width),
-                CellTemplate = CellTemplate(i),
+                CellTemplate = CellTemplate(i, i == table.Columns.Count - 1),
                 ClipboardContentBinding = new Binding($"Cells[{i}].Text"),
                 CanUserSort = false
             });
@@ -88,20 +90,38 @@ public partial class ReportTableView : UserControl
         {
             if (table.Columns.Count < 4)
                 throw new ArgumentException("固定均分行至少需要前四列。", nameof(Table));
-            var label = FooterCell("平均分");
+            var label = FooterCell("平均分", false);
             Grid.SetColumn(label, 0);
             Grid.SetColumnSpan(label, 4);
             FooterGrid.Children.Add(label);
             for (var i = 4; i < table.MeanFooter.Count; i++)
             {
-                var value = FooterCell(table.MeanFooter[i]);
+                var value = FooterCell(table.MeanFooter[i], true);
                 Grid.SetColumn(value, i);
                 FooterGrid.Children.Add(value);
             }
             FooterBorder.Visibility = Visibility.Visible;
         }
         UnavailableText.Visibility = Visibility.Collapsed;
+        EmptyState.Visibility = Visibility.Collapsed;
         HorizontalScroller.Visibility = Visibility.Visible;
+        FitColumns();
+    }
+
+    // Short reports fill the available card; wide reports retain minimum widths and horizontal scroll.
+    // Footer columns use exactly the same calculated widths, preserving alignment while resizing.
+    private void FitColumns()
+    {
+        if (Table is not { } table || RowsGrid.Columns.Count != table.Columns.Count || table.Columns.Count == 0) return;
+        var minimum = table.Columns.Sum(column => column.Width);
+        var extra = Math.Max(0, HorizontalScroller.ActualWidth - SystemParameters.VerticalScrollBarWidth - minimum);
+        for (var index = 0; index < table.Columns.Count; index++)
+        {
+            var width = table.Columns[index].Width + extra / table.Columns.Count;
+            RowsGrid.Columns[index].Width = new DataGridLength(width);
+            FooterGrid.ColumnDefinitions[index].Width = new GridLength(width);
+        }
+        TableBody.Width = minimum + extra + SystemParameters.VerticalScrollBarWidth;
     }
 
     private static Style CellStyle(int index)
@@ -119,27 +139,30 @@ public partial class ReportTableView : UserControl
         return style;
     }
 
-    private static DataTemplate CellTemplate(int index)
+    private static DataTemplate CellTemplate(int index, bool emphasis)
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
         text.SetBinding(TextBlock.TextProperty, new Binding($"Cells[{index}].Text"));
         text.SetBinding(FrameworkElement.ToolTipProperty, new Binding($"Cells[{index}].Text"));
         text.SetValue(FrameworkElement.StyleProperty, CellStyle(index));
-        text.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 0, 8, 0));
+        text.SetValue(TextBlock.TextAlignmentProperty, index == 0 ? TextAlignment.Center : index >= 4 ? TextAlignment.Right : TextAlignment.Left);
+        if (emphasis) text.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+        text.SetValue(FrameworkElement.MarginProperty, new Thickness(12, 0, 12, 0));
         text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
         return new DataTemplate { VisualTree = text };
     }
 
-    private static DataTemplate HeaderTemplate()
+    private static DataTemplate HeaderTemplate(int index)
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
         text.SetBinding(TextBlock.TextProperty, new Binding());
         text.SetBinding(FrameworkElement.ToolTipProperty, new Binding());
         text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        text.SetValue(TextBlock.TextAlignmentProperty, index == 0 ? TextAlignment.Center : index >= 4 ? TextAlignment.Right : TextAlignment.Left);
         return new DataTemplate { VisualTree = text };
     }
 
-    private static Border FooterCell(string text) => new()
+    private static Border FooterCell(string text, bool numeric) => new()
     {
         BorderBrush = Brushes.LightGray,
         BorderThickness = new Thickness(0, 0, 1, 0),
@@ -148,7 +171,9 @@ public partial class ReportTableView : UserControl
             Text = text,
             ToolTip = text,
             Foreground = Brushes.Black,
-            Padding = new Thickness(8, 7, 8, 7),
+            Padding = new Thickness(12, 10, 12, 10),
+            TextAlignment = numeric ? TextAlignment.Right : TextAlignment.Left,
+            FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis
         }
     };

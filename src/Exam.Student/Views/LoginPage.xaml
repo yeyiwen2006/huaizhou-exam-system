@@ -12,56 +12,70 @@
         <controls:PageHeader Grid.Row="0"
                             ClientNumber="{Binding ClientNumber, Mode=OneWay}" />
 
-        <Border Grid.Row="1"
-                Style="{StaticResource Card}"
-                Width="420"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Margin="24">
-            <StackPanel>
-                <TextBlock Style="{StaticResource PageTitle}" Text="考生登录" />
-                <TextBlock Style="{StaticResource CaptionText}"
-                           Text="同一学生端可在不同考试登录不同考生账号；各账号数据互不互通。"
-                           Margin="0,6,0,20" />
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <Border Style="{StaticResource Card}"
+                    Width="440"
+                    Padding="0"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Margin="24">
+                <StackPanel>
+                    <Border Style="{StaticResource BrandBand}">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="{StaticResource Icon.Logo}" Stroke="{DynamicResource Brush.OnPrimary}"
+                                      Style="{StaticResource Icon.Stroke}" Width="18" Height="18" Margin="0,0,8,0" />
+                                <TextBlock Style="{StaticResource BrandBand.Caption}" Text="怀籀传承在线考试系统" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource BrandBand.Title}" Text="考生登录" Margin="0,14,0,0" />
+                            <TextBlock Style="{StaticResource BrandBand.Caption}"
+                                       Text="同一学生端可在不同考试登录不同考生账号；各账号数据互不互通。"
+                                       Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
 
-                <controls:ValidatedInput x:Name="NameInput"
-                                         Label="姓名"
-                                         Watermark="请输入姓名"
-                                         InputChanged="OnInputChanged" />
-                <controls:ValidatedInput x:Name="ClassInput"
-                                         Label="班级（数字）"
-                                         Watermark="请输入班级，如 2"
-                                         IsNumericOnly="True"
-                                         Margin="0,12,0,0"
-                                         InputChanged="OnInputChanged" />
-                <controls:ValidatedInput x:Name="AdmissionInput"
-                                         Label="准考证号（数字）"
-                                         Watermark="请输入准考证号"
-                                         IsNumericOnly="True"
-                                         Margin="0,12,0,0"
-                                         InputChanged="OnInputChanged" />
+                    <StackPanel Margin="28,24,28,20">
+                        <controls:ValidatedInput x:Name="NameInput"
+                                                 Label="姓名"
+                                                 Watermark="请输入姓名"
+                                                 InputChanged="OnInputChanged" />
+                        <controls:ValidatedInput x:Name="ClassInput"
+                                                 Label="班级（数字）"
+                                                 Watermark="请输入班级，如 2"
+                                                 IsNumericOnly="True"
+                                                 Margin="0,14,0,0"
+                                                 InputChanged="OnInputChanged" />
+                        <controls:ValidatedInput x:Name="AdmissionInput"
+                                                 Label="准考证号（数字）"
+                                                 Watermark="请输入准考证号"
+                                                 IsNumericOnly="True"
+                                                 Margin="0,14,0,0"
+                                                 InputChanged="OnInputChanged" />
 
-                <Button x:Name="LoginButton"
-                        Style="{StaticResource Btn.Primary}"
-                        Content="登录"
-                        Height="{StaticResource Control.Height.Large}"
-                        FontSize="{DynamicResource Font.Size.Body.Large}"
-                        Margin="0,20,0,0"
-                        IsEnabled="False"
-                        Click="OnLogin" />
+                        <Button x:Name="LoginButton"
+                                Style="{StaticResource Btn.Primary}"
+                                Content="登录"
+                                Height="{StaticResource Control.Height.Large}"
+                                FontSize="{DynamicResource Font.Size.Body.Large}"
+                                Margin="0,22,0,0"
+                                IsEnabled="False"
+                                Click="OnLogin" />
 
-                <!-- 登录页面的小字“取消激活”选项 -->
-                <Button Style="{StaticResource Btn.Ghost}"
-                        Content="取消激活"
-                        Margin="0,16,0,0"
-                        HorizontalAlignment="Center"
-                        Click="OnCancelActivation" />
+                        <controls:Banner x:Name="ErrorBanner"
+                                        Level="Danger"
+                                        Margin="0,16,0,0" />
 
-                <controls:Banner x:Name="ErrorBanner"
-                                Level="Danger"
-                                Margin="0,16,0,0" />
-            </StackPanel>
-        </Border>
+                        <!-- 登录页面的小字“取消激活”选项 -->
+                        <Button Style="{StaticResource Btn.Ghost}"
+                                Content="取消激活"
+                                Margin="0,14,0,0"
+                                Padding="12,0"
+                                HorizontalAlignment="Center"
+                                Click="OnCancelActivation" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </ScrollViewer>
 
         <controls:BusyOverlay x:Name="Busy"
                               Grid.RowSpan="2"

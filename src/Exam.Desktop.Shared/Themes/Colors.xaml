@@ -14,22 +14,37 @@
     <SolidColorBrush x:Key="Brush.Primary" Color="#1E5AA8" />
     <SolidColorBrush x:Key="Brush.Primary.Hover" Color="#1A4F93" />
     <SolidColorBrush x:Key="Brush.Primary.Pressed" Color="#164079" />
-    <SolidColorBrush x:Key="Brush.Primary.Soft" Color="#E8F0FA" />
+    <SolidColorBrush x:Key="Brush.Primary.Soft" Color="#EAF1FB" />
     <SolidColorBrush x:Key="Brush.Primary.Variant" Color="#5B8AD4" />
     <SolidColorBrush x:Key="Brush.OnPrimary" Color="#FFFFFF" />
 
+    <!-- 品牌渐变：登录/激活卡片顶部与侧栏标识，只作装饰，不承载语义 -->
+    <LinearGradientBrush x:Key="Brush.Brand.Gradient" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#2A6CC4" Offset="0" />
+        <GradientStop Color="#173F78" Offset="1" />
+    </LinearGradientBrush>
+
     <!-- 界面基础 -->
-    <SolidColorBrush x:Key="Brush.Background" Color="#F4F6FA" />
+    <SolidColorBrush x:Key="Brush.Background" Color="#F3F5F9" />
     <SolidColorBrush x:Key="Brush.Surface" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="Brush.Surface.Alt" Color="#EEF1F6" />
-    <SolidColorBrush x:Key="Brush.Border" Color="#D9DEE7" />
-    <SolidColorBrush x:Key="Brush.Border.Strong" Color="#B9C2D0" />
+    <SolidColorBrush x:Key="Brush.Surface.Alt" Color="#F4F6FA" />
+    <SolidColorBrush x:Key="Brush.Border" Color="#E1E6EE" />
+    <SolidColorBrush x:Key="Brush.Border.Strong" Color="#C3CCD9" />
 
     <!-- 文本 -->
-    <SolidColorBrush x:Key="Brush.Text.Primary" Color="#1F2937" />
-    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="#667085" />
+    <SolidColorBrush x:Key="Brush.Text.Primary" Color="#1B2433" />
+    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="#5F6B7E" />
     <SolidColorBrush x:Key="Brush.Text.Disabled" Color="#9CA3AF" />
     <SolidColorBrush x:Key="Brush.Text.OnDark" Color="#FFFFFF" />
+
+    <!-- 考务端侧栏导航（深色底，仅用于导航外壳） -->
+    <SolidColorBrush x:Key="Brush.Nav.Background" Color="#132A4C" />
+    <SolidColorBrush x:Key="Brush.Nav.Hover" Color="#1C3863" />
+    <SolidColorBrush x:Key="Brush.Nav.Selected" Color="#24467A" />
+    <SolidColorBrush x:Key="Brush.Nav.Accent" Color="#7DB2FF" />
+    <SolidColorBrush x:Key="Brush.Nav.Text" Color="#B9C7DD" />
+    <SolidColorBrush x:Key="Brush.Nav.Text.Muted" Color="#7F93B3" />
+    <SolidColorBrush x:Key="Brush.Nav.Divider" Color="#26406A" />
 
     <!-- 语义色：成功 / 已作答 -->
     <SolidColorBrush x:Key="Brush.Success" Color="#2E9E5B" />
@@ -52,16 +67,17 @@
 
     <!-- 语义色：信息 -->
     <SolidColorBrush x:Key="Brush.Info" Color="#1E5AA8" />
-    <SolidColorBrush x:Key="Brush.Info.Soft" Color="#E8F0FA" />
+    <SolidColorBrush x:Key="Brush.Info.Soft" Color="#EAF1FB" />
 
     <!-- 焦点与覆盖 -->
     <SolidColorBrush x:Key="Brush.Focus.Ring" Color="#8FB8E8" />
-    <SolidColorBrush x:Key="Brush.Busy.Overlay" Color="#F4F6FA" Opacity="0.72" />
+    <SolidColorBrush x:Key="Brush.Busy.Overlay" Color="#F3F5F9" Opacity="0.78" />
+    <SolidColorBrush x:Key="Brush.Scrim" Color="#F2FFFFFF" />
 
     <!-- 阴影资源 -->
-    <DropShadowEffect x:Key="Effect.Card" BlurRadius="16" ShadowDepth="1"
-                      Direction="270" Opacity="0.10" Color="#1F2937" />
-    <DropShadowEffect x:Key="Effect.Popup" BlurRadius="24" ShadowDepth="2"
-                      Direction="270" Opacity="0.16" Color="#1F2937" />
+    <DropShadowEffect x:Key="Effect.Card" BlurRadius="18" ShadowDepth="2"
+                      Direction="270" Opacity="0.06" Color="#1B2433" />
+    <DropShadowEffect x:Key="Effect.Popup" BlurRadius="24" ShadowDepth="4"
+                      Direction="270" Opacity="0.16" Color="#1B2433" />
 
 </ResourceDictionary>
