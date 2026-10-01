@@ -84,6 +84,8 @@
                             Padding="12,0"
                             HorizontalAlignment="Center"
                             Command="{Binding ToggleRegisterCommand}" />
+                    <Button Content="本机服务管理" Style="{StaticResource Btn.Secondary}" Margin="0,12,0,0"
+                            Click="OnManagementRequested" />
                 </StackPanel>
             </StackPanel>
         </Border>
