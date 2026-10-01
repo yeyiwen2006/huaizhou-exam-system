@@ -32,7 +32,7 @@ public sealed record StudentPackageRequest(
     public IReadOnlyDictionary<string, TeXCompileResult>? CompiledQuestions { get; init; }
 
     /// <summary>
-    /// 本次组包的选项坐标产物。传入即产出学生清单 v2（必须附带根目录 option-regions.json）；
+    /// 本次组包的选项坐标产物。传入即产出学生清单 v3（附带坐标及导航分值显示文字）；
     /// 不传维持 v1（学生端不猜测点击位置）。产物必须与清单的题目及选项逐一对应，
     /// 由调用方用 OptionRegionExtractor 从本次已验收的编译产物抽取。
     /// </summary>
@@ -120,10 +120,12 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
             var structure = ImportedGradingRules.BuildStructure(manifest);
             var schemaVersion = request.OptionRegions is null
                 ? StudentPaperPackage.LegacySchemaVersion
-                : StudentPaperPackage.OptionRegionSchemaVersion;
+                : StudentPaperPackage.NavigationSchemaVersion;
             var studentManifest = new StudentPaperManifest(schemaVersion, examId, manifest.ExamName, request.PaperVersion,
-                manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name)).ToArray(),
-                manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order)).ToArray(),
+                manifest.Subjects.Select(s => new StudentPaperSubject(s.SubjectId, s.Name,
+                    request.OptionRegions is null ? null : s.MaxScore.Trim())).ToArray(),
+                manifest.Groups.Select(g => new StudentPaperGroup(g.GroupId, g.SubjectId, g.Name, g.Order,
+                    request.OptionRegions is null ? null : PerQuestionScoreText(g))).ToArray(),
                 manifest.Questions.Select((q, i) => new StudentPaperQuestion(structure.Questions[i],
                     StudentPackageLayout.QuestionPdfPath(q.Source),
                     q.DisplayMetadata?.OptionCaptions)).ToArray(),
@@ -446,6 +448,21 @@ public sealed class StudentPackageBuilder(PackageEncryptionService encryption)
         stream.ReadExactly(bytes);
         if (stream.ReadByte() != -1) throw new IOException("读取期间文件变化。");
         return bytes;
+    }
+
+    private static string PerQuestionScoreText(ManifestGroup group)
+    {
+        // 仅发布需求允许考生看到的满分表达式，不发送参考答案、错选/漏选规则或逐题正确选项数。
+        var one = group.Scoring?.OneCorrect?.Correct.Trim();
+        var many = group.Scoring?.MultipleCorrect?.AllCorrect.Trim();
+        return group.Type switch
+        {
+            "single" => $"{one}分",
+            "multiple" => $"{many}分",
+            "indeterminate" when one == many => $"{one}分",
+            "indeterminate" => $"{one}分/{many}分",
+            _ => throw new InvalidDataException("题组题型无效。")
+        };
     }
 
     private static string ReadUtf8(byte[] bytes) => new UTF8Encoding(false, true).GetString(

@@ -250,6 +250,8 @@ public sealed class PdfQuestionViewReviewTests
             var image = (Image)((Grid)pages.Children[0]).Children[0];
             var shown = (CroppedBitmap)image.Source;
             var abstain = (ToggleButton)pages.Children[1];
+            Assert.Equal(button.FontSize + .5 * 96 / 72, abstain.FontSize);
+            Assert.Equal(abstain.FontSize, ((TextBlock)abstain.Template.FindName("Label", abstain)).FontSize);
             Assert.Equal("A", button.Content);
             Assert.Equal(Colors.White, ((SolidColorBrush)button.Foreground).Color);
             var normalColor = ((SolidColorBrush)button.Background).Color;
@@ -273,6 +275,8 @@ public sealed class PdfQuestionViewReviewTests
                 view.UpdateLayout();
                 Assert.Equal(originalSize, new Size(image.Width, image.Height));
                 var box = button.TransformToAncestor(view).TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
+                var abstainBox = abstain.TransformToAncestor(view).TransformBounds(new Rect(0, 0, abstain.ActualWidth, abstain.ActualHeight));
+                Assert.Equal(box.Left, abstainBox.Left, 4);
                 Assert.True(box.Width > 0);
                 Assert.Equal("Arial", button.FontFamily.Source);
                 Assert.Equal(box.Width, box.Height, 5);

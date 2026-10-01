@@ -42,10 +42,10 @@ public partial class ExamInProgressPage : UserControl
     private bool _reviewPending;
     private bool _reviewSaving;
 
-    /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
+    /// <summary>右下角时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
     {
-        Text = "--:--:--",
+        Text = "--:--",
         Level = StatusLevel.Info,
     };
 
@@ -521,15 +521,15 @@ public partial class ExamInProgressPage : UserControl
         // 时间只取服务器时钟；尚未校时时显示占位，不使用本机时间。
         if (!App.Services.Clock.IsSynchronized)
         {
-            ClockPillContent.Text = "--:--:--";
+            ClockPillContent.Text = "--:--";
             return;
         }
 
         var now = App.Services.Clock.UtcNow;
-        var clock = now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        var clock = now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
         var remain = _exam.ScheduledEnd - now;
         ClockPillContent.Text = remain > TimeSpan.Zero
-            ? $"{clock} · 剩余 {remain:hh\\:mm\\:ss}"
+            ? $"{clock} · 剩余 {remain:hh\\:mm}"
             : $"{clock} · 考试时间已到";
     }
 

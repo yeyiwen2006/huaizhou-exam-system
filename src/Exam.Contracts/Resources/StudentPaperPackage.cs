@@ -9,8 +9,12 @@ namespace Exam.Contracts.Resources;
 
 public sealed record StudentPaperQuestion(PaperQuestionStructure Structure, string PdfPath,
     IReadOnlyList<string>? OptionCaptions);
-public sealed record StudentPaperSubject(string SubjectId, string Name);
-public sealed record StudentPaperGroup(string GroupId, string SubjectId, string Name, int Order);
+public sealed record StudentPaperSubject(string SubjectId, string Name,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? MaxScoreText = null);
+public sealed record StudentPaperGroup(string GroupId, string SubjectId, string Name, int Order,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? PerQuestionScoreText = null);
 
 /// <summary>学生显示清单。没有源文件路径、计分规则或参考答案；坐标未就绪时不提供点击区域。</summary>
 public sealed record StudentPaperManifest(int SchemaVersion, string ExamId, string ExamName, long PaperVersion,
@@ -32,6 +36,9 @@ public static class StudentPaperPackage
 
     /// <summary>学生清单 v2：必须附带根目录选项坐标文件，学生端据此绑定选项控件。</summary>
     public const int OptionRegionSchemaVersion = 2;
+
+    /// <summary>学生清单 v3：附带坐标，并提供科目满分、题组每题分值的只读显示文字。</summary>
+    public const int NavigationSchemaVersion = 3;
 
     public static StudentPaperManifest ReadManifest(byte[] payload, string examId, long paperVersion, CancellationToken cancellationToken = default)
     {
@@ -81,14 +88,14 @@ public static class StudentPaperPackage
                 throw new InvalidDataException("显示资源清单无效。");
             ValidateDisplayEntry(zip, resource, cancellationToken);
         }
-        // 坐标文件只作为专用元数据接受：声明 v2 就必须在，声明 v1 就不许夹带，
+        // 坐标文件只作为专用元数据接受：声明 v2/v3 就必须在，声明 v1 就不许夹带，
         // 否则同一份清单会有两种解释。返回清单前完成语义核对，不能等到 GUI 绑定后才拒绝。
-        var declaresOptionRegions = manifest.SchemaVersion == OptionRegionSchemaVersion;
+        var declaresOptionRegions = manifest.SchemaVersion is OptionRegionSchemaVersion or NavigationSchemaVersion;
         var hasOptionRegions = zip.Entries.Any(entry =>
             string.Equals(entry.FullName, OptionRegionArtifact.FileName, StringComparison.Ordinal));
         if (declaresOptionRegions != hasOptionRegions)
             throw new InvalidDataException(declaresOptionRegions
-                ? "v2 学生清单必须附带根目录选项坐标文件。"
+                ? "v2/v3 学生清单必须附带根目录选项坐标文件。"
                 : "v1 学生清单不得附带选项坐标文件。");
         if (hasOptionRegions)
         {
@@ -234,7 +241,7 @@ public static class StudentPaperPackage
 
     private static void ValidateManifest(StudentPaperManifest manifest, string examId, long version)
     {
-        if (manifest.SchemaVersion is not (LegacySchemaVersion or OptionRegionSchemaVersion) ||
+        if (manifest.SchemaVersion is not (LegacySchemaVersion or OptionRegionSchemaVersion or NavigationSchemaVersion) ||
             manifest.ExamId != examId || manifest.PaperVersion != version || version < 1 ||
             string.IsNullOrWhiteSpace(manifest.ExamId) || string.IsNullOrWhiteSpace(manifest.ExamName) ||
             manifest.Subjects is null || manifest.Groups is null || manifest.Questions is null ||
@@ -242,14 +249,16 @@ public static class StudentPaperPackage
             throw new InvalidDataException("学生清单格式、考试或试卷版本不匹配。");
         var subjects = new HashSet<string>(StringComparer.Ordinal);
         foreach (var subject in manifest.Subjects)
-            if (subject is null || string.IsNullOrWhiteSpace(subject.SubjectId) || string.IsNullOrWhiteSpace(subject.Name) || !subjects.Add(subject.SubjectId))
+            if (subject is null || string.IsNullOrWhiteSpace(subject.SubjectId) || string.IsNullOrWhiteSpace(subject.Name) || !subjects.Add(subject.SubjectId) ||
+                !ValidNavigationText(subject.MaxScoreText, manifest.SchemaVersion))
                 throw new InvalidDataException("科目清单无效。");
         var groups = new Dictionary<string, string>(StringComparer.Ordinal);
         var groupOrders = new HashSet<(string SubjectId, int Order)>();
         foreach (var group in manifest.Groups)
             if (group is null || string.IsNullOrWhiteSpace(group.GroupId) || string.IsNullOrWhiteSpace(group.Name) ||
                 !subjects.Contains(group.SubjectId) || !groups.TryAdd(group.GroupId, group.SubjectId) ||
-                group.Order < 1 || !groupOrders.Add((group.SubjectId, group.Order)))
+                group.Order < 1 || !groupOrders.Add((group.SubjectId, group.Order)) ||
+                !ValidNavigationText(group.PerQuestionScoreText, manifest.SchemaVersion))
                 throw new InvalidDataException("题组清单无效。");
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var numbers = new HashSet<int>();
@@ -265,6 +274,9 @@ public static class StudentPaperPackage
                 throw new InvalidDataException("题目清单无效。");
         }
     }
+
+    private static bool ValidNavigationText(string? text, int schemaVersion) =>
+        schemaVersion == NavigationSchemaVersion ? !string.IsNullOrWhiteSpace(text) : text is null;
 
     private static void RejectDuplicateProperties(JsonElement node)
     {

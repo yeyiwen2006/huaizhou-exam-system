@@ -52,9 +52,9 @@ public sealed class UiScreenshotTests
             Func<DeviceRecord, DeviceRecord> device = record => record with { ClientNumber = "A-017", Port = 9 };
             var candidate = new CandidateIdentity("candidate", "合成考生01", "01", "2027017");
             using var waitingFixture = await StudentPaperFixture.CreateAsync(optionRegions: regions, questionPdfs: pdfs,
-                device: device, candidate: candidate);
+                device: device, candidate: candidate, allowAbstain: true);
             using var answeringFixture = await StudentPaperFixture.CreateAsync(optionRegions: regions, questionPdfs: pdfs,
-                device: device, candidate: candidate);
+                device: device, candidate: candidate, allowAbstain: true);
             await OnStaAsync(() => RenderPagesAsync(directory, waitingFixture, answeringFixture, notes));
         }
         finally
@@ -178,6 +178,29 @@ public sealed class UiScreenshotTests
             if (!ready) notes.AppendLine("答题页：15 秒内题目或题号导航未出现，截图为当时状态。");
             await IdleAsync(TimeSpan.FromMilliseconds(500));
             await CaptureAsync(window, directory, "student-exam-in-progress");
+            var abstain = Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null);
+            abstain.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Abstain, TimeSpan.FromSeconds(5));
+            await IdleAsync();
+            Assert.True(abstain.IsChecked);
+            Assert.All(Descendants<ToggleButton>(questionView).Where(button => button.Tag is string),
+                button => Assert.False(button.IsChecked));
+            await CaptureAsync(window, directory, "student-exam-in-progress-abstain");
+            // 使用真实导航模板测量十一题：前十题同一行，第十一题回到下一行的第一列。
+            var originalSections = navList.ItemsSource;
+            navList.ItemsSource = new[] { new GroupNavSection("synthetic", "合成科目（100分）", "synthetic-group",
+                "一、单项选择题（每小题3分）", Enumerable.Range(1, 11)
+                    .Select(i => new QuestionNavBox($"layout-{i}", i, false, false, false)).ToArray()) };
+            await IdleAsync();
+            window.UpdateLayout();
+            var layoutButtons = Descendants<Button>(navList).ToArray();
+            Assert.Equal(11, layoutButtons.Length);
+            var positions = layoutButtons.Select(b => b.TransformToAncestor(navList).Transform(new Point())).ToArray();
+            Assert.All(positions.Take(10), p => Assert.Equal(positions[0].Y, p.Y, 2));
+            Assert.True(positions[10].Y > positions[0].Y);
+            Assert.Equal(positions[0].X, positions[10].X, 2);
+            navList.ItemsSource = originalSections;
+            await IdleAsync();
             if (Descendants<Button>(navList).FirstOrDefault(button => Equals(button.Tag, "q2")) is { } q2)
             {
                 q2.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
@@ -261,6 +284,7 @@ public sealed class UiScreenshotTests
                 \usepackage{unicode-math}
                 \setmainfont{Times New Roman}
                 \setmathfont{XITS Math}
+                \linespread{1.75}
                 \usepackage[a4paper,margin=1in]{geometry}
                 \pagestyle{empty}
                 \usepackage{hyperref}

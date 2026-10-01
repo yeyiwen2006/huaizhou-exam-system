@@ -93,6 +93,39 @@ public sealed class StudentPackageV2SemanticTests
 
     [Theory]
     [InlineData("valid")]
+    [InlineData("missing-subject")]
+    [InlineData("empty-group")]
+    [InlineData("legacy-version")]
+    public void NavigationMetadata_RequiresV3AndCompleteDisplayFields(string defect)
+    {
+        var source = Manifest();
+        var manifest = source with
+        {
+            SchemaVersion = StudentPaperPackage.NavigationSchemaVersion,
+            Subjects = source.Subjects.Select(s => s with { MaxScoreText = "100" }).ToArray(),
+            Groups = source.Groups.Select(g => g with { PerQuestionScoreText = "3分/4分" }).ToArray()
+        };
+        manifest = defect switch
+        {
+            "missing-subject" => manifest with { Subjects = manifest.Subjects.Select(s => s with { MaxScoreText = null }).ToArray() },
+            "empty-group" => manifest with { Groups = manifest.Groups.Select(g => g with { PerQuestionScoreText = " " }).ToArray() },
+            "legacy-version" => manifest with { SchemaVersion = StudentPaperPackage.OptionRegionSchemaVersion },
+            _ => manifest
+        };
+        var bytes = Package(JsonSerializer.Serialize(Artifact(), ImportJson.Create()), manifest);
+        if (defect != "valid")
+        {
+            Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(bytes, "exam", 1));
+            return;
+        }
+        var actual = StudentPaperPackage.ReadManifest(bytes, "exam", 1);
+        Assert.All(actual.Subjects, s => Assert.Equal("100", s.MaxScoreText));
+        Assert.All(actual.Groups, g => Assert.Equal("3分/4分", g.PerQuestionScoreText));
+        Assert.NotNull(OptionRegionMap.TryReadFromPackage(bytes, actual));
+    }
+
+    [Theory]
+    [InlineData("valid")]
     [InlineData("legacy")]
     [InlineData("empty-text")]
     [InlineData("bounds")]
@@ -141,9 +174,9 @@ public sealed class StudentPackageV2SemanticTests
         Manifest().Questions.Select(question => new OptionRegionQuestion(question.Structure.QuestionId,
             question.Structure.OptionIds.Select(id => new Exam.Contracts.Importing.OptionRegion(id, 0, 0.1, 0.1, 0.1, 0.1)).ToArray())).ToArray());
 
-    private static byte[] Package(string json)
+    private static byte[] Package(string json, StudentPaperManifest? manifest = null)
     {
-        var manifest = Manifest();
+        manifest ??= Manifest();
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {

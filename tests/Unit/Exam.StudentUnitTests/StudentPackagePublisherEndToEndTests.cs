@@ -69,7 +69,7 @@ public sealed partial class StudentPackagePublisherEndToEndTests : IDisposable
         // 按学生端路径解密，交给学生清单与学生端读取器核对。
         var plaintext = await DecryptAsStudentAsync(service, result.Envelope!, node, target);
         var manifest = StudentPaperPackage.ReadManifest(plaintext, ExamId, PaperVersion);
-        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, manifest.SchemaVersion);
+        Assert.Equal(StudentPaperPackage.NavigationSchemaVersion, manifest.SchemaVersion);
 
         var map = OptionRegionMap.TryReadFromPackage(plaintext, manifest);
         Assert.NotNull(map);

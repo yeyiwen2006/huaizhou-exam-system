@@ -47,11 +47,11 @@
                     <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="Shell"
                                 CornerRadius="16"
-                                Padding="18,8"
+                                Padding="10,6"
                                 Background="{TemplateBinding Background}">
                             <TextBlock x:Name="Label"
-                                       Text="不 作 答"
-                                       FontSize="15"
+                                       Text="不作答"
+                                       FontSize="{TemplateBinding FontSize}"
                                        FontWeight="SemiBold"
                                        Foreground="{TemplateBinding Foreground}" />
                         </Border>

@@ -2,6 +2,8 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
@@ -291,7 +293,7 @@ public sealed class StudentPackageBuilderTests : IDisposable
     }
 
     [Fact]
-    public async Task Build_WithOptionRegions_ProducesV2ManifestAndCoordinateFile()
+    public async Task Build_WithOptionRegions_ProducesV3ManifestAndCoordinateFile()
     {
         var result = await new StudentPackageBuilder(_encryption).BuildAsync(
             Request() with { OptionRegions = OptionRegions() });
@@ -299,7 +301,43 @@ public sealed class StudentPackageBuilderTests : IDisposable
         Assert.True(result.Succeeded, Describe(result));
         Assert.Contains(OptionRegionArtifact.FileName, result.Plan.IncludedPaths);
         Assert.True(File.Exists(Path.Combine(_studentDirectory, OptionRegionArtifact.FileName)));
-        Assert.Equal(StudentPaperPackage.OptionRegionSchemaVersion, PackagedSchemaVersion());
+        Assert.Equal(StudentPaperPackage.NavigationSchemaVersion, PackagedSchemaVersion());
+    }
+
+    [Theory]
+    [InlineData("single", "3", "4", "3分")]
+    [InlineData("multiple", "3", "4", "4分")]
+    [InlineData("indeterminate", "3", "4", "3分/4分")]
+    [InlineData("indeterminate", "3", "3", "3分")]
+    [InlineData("indeterminate", "{正确选项总数}", "{正确选项总数}", "{正确选项总数}分")]
+    public async Task Build_PublishesOnlyTheConfiguredFullScoreDisplay(string type, string one, string many, string expected)
+    {
+        var input = JsonNode.Parse(ManifestJson)!;
+        var group = input["groups"]![0]!;
+        group["type"] = type;
+        group.AsObject().Remove("maxScore");
+        var scoring = new JsonObject();
+        if (type != "multiple") scoring["oneCorrect"] = new JsonObject
+        {
+            ["correct"] = one, ["blank"] = "0", ["wrong"] = "-1"
+        };
+        if (type != "single") scoring["multipleCorrect"] = new JsonObject
+        {
+            ["allCorrect"] = many, ["partialCorrect"] = "1", ["blank"] = "0", ["wrong"] = "-2"
+        };
+        group["scoring"] = scoring;
+        input["subjects"]![0]!["maxScore"] = "100";
+        WriteFile(Path.Combine(_packageRoot, "manifest.json"), input.ToJsonString());
+
+        var result = await new StudentPackageBuilder(_encryption).BuildAsync(Request() with { OptionRegions = OptionRegions() });
+
+        Assert.True(result.Succeeded, Describe(result));
+        var json = File.ReadAllText(Path.Combine(_studentDirectory, "manifest.json"), Encoding.UTF8);
+        var manifest = JsonSerializer.Deserialize<StudentPaperManifest>(json, ImportJson.Create())!;
+        Assert.Equal("100", Assert.Single(manifest.Subjects).MaxScoreText);
+        Assert.Equal(expected, Assert.Single(manifest.Groups).PerQuestionScoreText);
+        foreach (var field in new[] { "scoring", "correctOptionIds", "partialCorrect", "blank", "wrong" })
+            Assert.DoesNotContain($"\"{field}\"", json, StringComparison.Ordinal);
     }
 
     [Fact]
