@@ -87,7 +87,7 @@ public sealed partial class ReviewRegressionTests
         Assert.Equal(new long[] { 7, 7 }, expectedVersions);
         Assert.Equal(1, gets);
         Assert.Equal("2026-10-01 12:00:00 +00:00", viewModel.ScheduledEndText);
-        Assert.Contains("版本 7", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("已读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed partial class ReviewRegressionTests
         await viewModel.SaveScheduleAsync();
         Assert.Equal(new long[] { 7, 8 }, expected);
         api.Configure("https://localhost:5002/", "synthetic-token", "operator-1");
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public sealed partial class ReviewRegressionTests
         release.SetResult(Success(Snapshot(7)));
         await pending;
         Assert.Equal("2026-10-01 12:00:00 +00:00", viewModel.ScheduledEndText);
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public sealed partial class ReviewRegressionTests
     {
         using var api = new AdminApiClient();
         var viewModel = new ExamConfigurationViewModel(api) { Name = name };
-        Assert.Contains(viewModel.Validate(), error => error.Contains("Windows 文件名", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Validate(), error => error.Contains("不能包含", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public sealed partial class ReviewRegressionTests
         var viewModel = new ExamConfigurationViewModel(api);
         viewModel.AddSubjectCommand.Execute(null);
         viewModel.Subjects[1].Groups[0].GroupId = viewModel.Subjects[0].Groups[0].GroupId;
-        Assert.Contains(viewModel.Validate(), error => error.Contains("标识为空或重复", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Validate(), error => error.Contains("编号为空或与其他题组重复", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public sealed partial class ReviewRegressionTests
         release.SetResult(Success(new[] { Participation("exam-1") }));
         await pending;
         Assert.Empty(viewModel.Rows);
-        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -349,9 +349,9 @@ public sealed partial class ReviewRegressionTests
             ExpectedVersionText = "3", DecisionReason = "synthetic reason"
         };
         await viewModel.DecideDeviceAsync();
-        Assert.Contains("裁决已保存", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已保留设备", viewModel.Status, StringComparison.Ordinal);
         Assert.Contains("刷新失败", viewModel.Status, StringComparison.Ordinal);
-        Assert.Contains("不要重复裁决", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("不要重复操作", viewModel.Status, StringComparison.Ordinal);
         Assert.Equal("4", viewModel.ExpectedVersionText);
     }
 
@@ -383,7 +383,7 @@ public sealed partial class ReviewRegressionTests
         await pending;
 
         Assert.Empty(viewModel.ExpectedVersionText);
-        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public sealed partial class ReviewRegressionTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.ResendAsync());
 
-        Assert.DoesNotContain("补发请求成功", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("已重发指令", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -411,8 +411,8 @@ public sealed partial class ReviewRegressionTests
         release.SetResult(Success(CommandEvent("exam-1")));
         await pending;
 
-        Assert.Contains("重新", viewModel.Status, StringComparison.Ordinal);
-        Assert.DoesNotContain("补发请求成功", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("已重发指令", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]

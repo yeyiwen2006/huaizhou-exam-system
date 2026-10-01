@@ -62,8 +62,9 @@ public sealed class WpfBindingSmokeTests
                 Assert.Same(ScrollBar.PageRightCommand, track.IncreaseRepeatButton.Command);
                 var group = viewModel.Exam.SelectedSubject!.Groups[0];
                 var typeSelector = Assert.Single(Descendants<ComboBox>(window), combo => ReferenceEquals(combo.DataContext, group));
-                Assert.Equal(new[] { "single", "multiple", "indeterminate" }, typeSelector.Items.Cast<string>());
-                typeSelector.SelectedItem = "multiple";
+                Assert.Equal(new[] { "single", "multiple", "indeterminate" }, typeSelector.Items.Cast<QuestionTypeOption>().Select(item => item.Value));
+                Assert.Equal(new[] { "单项选择题", "多项选择题", "不定项选择题" }, typeSelector.Items.Cast<QuestionTypeOption>().Select(item => item.Label));
+                typeSelector.SelectedValue = "multiple";
                 DrainDispatcher();
                 Assert.Equal("multiple", group.Type);
                 var instructions = Assert.Single(Descendants<TextBox>(window), box =>
@@ -81,7 +82,7 @@ public sealed class WpfBindingSmokeTests
                     if ((string)tab.Header == "设备监控")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
-                        Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
+                        Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐记录") && button.Command is not null);
                         var screenshotPath = Environment.GetEnvironmentVariable("EXAM_C04_SCREENSHOT_PATH");
                         if (!string.IsNullOrWhiteSpace(screenshotPath))
                         {

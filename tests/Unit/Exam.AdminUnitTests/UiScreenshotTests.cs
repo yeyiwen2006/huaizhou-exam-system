@@ -172,18 +172,18 @@ public sealed class UiScreenshotTests
         activation.Groups.Add(new RoomGroupDraft("synthetic-room-a", "合成考场A"));
         activation.Groups.Add(new RoomGroupDraft("synthetic-room-b", "合成考场B"));
         activation.SelectedGroup = activation.Groups[0];
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-01", "A-001", "Active", "", "接口未提供", "接口未提供", "接口未提供"));
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-02", "A-002", "Active", "", "接口未提供", "接口未提供", "接口未提供"));
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-17", "A-017", "Revoked", "", "接口未提供", "接口未提供", "接口未提供"));
+        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-01", "A-001", "已激活", "", "—", "—", "—"));
+        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-02", "A-002", "已激活", "", "—", "—", "—"));
+        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-17", "A-017", "已取消", "", "—", "—", "—"));
         activation.ActivationRequestId = "synthetic-activation-request-03";
         activation.QueryDeviceId = "synthetic-device-02";
 
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-01", "synthetic-candidate-01", "Answering", "synthetic-device-01", 1, 1, 3, "未采集", "接口未提供", "接口未提供"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-02", "synthetic-candidate-02", "Submitted", "synthetic-device-02", 1, 1, 5, "已采集", "接口未提供", "接口未提供"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-03", "synthetic-candidate-03", "Waiting", "synthetic-device-17", 1, 2, 2, "未采集", "接口未提供", "接口未提供"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-04", "synthetic-candidate-04", "NotParticipating", "", 0, 0, 1, "未采集", "接口未提供", "接口未提供"));
+        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-01", "synthetic-candidate-01", "作答中", "synthetic-device-01", 1, 1, 3, "未提交", "—", "—"));
+        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-02", "synthetic-candidate-02", "已交卷", "synthetic-device-02", 1, 1, 5, "已提交", "—", "—"));
+        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-03", "synthetic-candidate-03", "候考", "synthetic-device-17", 1, 2, 2, "未提交", "—", "—"));
+        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-04", "synthetic-candidate-04", "未参加", "", 0, 0, 1, "未提交", "—", "—"));
         // FilteredRows 是计算属性，借过滤条件的属性通知让表格重新读取。
         monitoring.FilterText = "synthetic";
         monitoring.FilterText = string.Empty;

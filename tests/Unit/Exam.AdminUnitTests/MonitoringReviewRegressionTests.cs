@@ -96,7 +96,7 @@ public sealed partial class ReviewRegressionTests
         viewModel.EventId = "other-event";
         release.SetResult(Success(CommandEvent("exam-1")));
         await pending;
-        Assert.DoesNotContain("补发请求成功", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("已重发指令", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]

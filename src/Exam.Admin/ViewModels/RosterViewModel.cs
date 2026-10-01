@@ -11,7 +11,7 @@ public sealed class RosterViewModel : BindableBase
     private string _name = string.Empty;
     private string _classText = string.Empty;
     private string _admissionNo = string.Empty;
-    private string _status = "名册仅在当前进程内存中，关闭程序即丢失；服务器尚未提供正式名册写入 API。";
+    private string _status = "考生名单目前只保存在本机，关闭考务端后不保留，尚不能保存到服务器。";
     private RosterPreview? _pendingPreview;
 
     public RosterViewModel(RosterWorkbookService workbooks, IFileDialogService dialogs)
@@ -58,7 +58,7 @@ public sealed class RosterViewModel : BindableBase
         var prior = Entries.FirstOrDefault(item => StringComparer.Ordinal.Equals(item.AdmissionNo, entry.AdmissionNo));
         if (prior is not null)
         {
-            Status = prior == entry ? "该名册记录已经存在。" : "准考证号与已有记录冲突，未写入。";
+            Status = prior == entry ? "该考生已在名单中。" : "准考证号与已有记录冲突，未写入。";
             return;
         }
 
@@ -66,7 +66,7 @@ public sealed class RosterViewModel : BindableBase
         Name = string.Empty;
         ClassText = string.Empty;
         AdmissionNo = string.Empty;
-        Status = $"已加入本地名册，共 {Entries.Count} 人；若先前有导入预览，现已失效，需重新选择文件。";
+        Status = $"已加入名单，共 {Entries.Count} 人。之前的导入预览已失效，如需导入请重新选择文件。";
     }
 
     private void CreateTemplate()
@@ -84,7 +84,7 @@ public sealed class RosterViewModel : BindableBase
         }
         catch (Exception exception)
         {
-            Status = $"模板保存失败：{exception.Message}";
+            Status = $"模板保存失败：{FriendlyErrors.Describe(exception)}";
         }
     }
 
@@ -115,7 +115,7 @@ public sealed class RosterViewModel : BindableBase
             _pendingPreview = null;
             PreviewRows.Clear();
             ConfirmImportCommand.RaiseCanExecuteChanged();
-            Status = $"读取失败：{exception.Message}";
+            Status = $"读取失败：{FriendlyErrors.Describe(exception)}";
         }
     }
 
@@ -137,6 +137,6 @@ public sealed class RosterViewModel : BindableBase
         _pendingPreview = null;
         PreviewRows.Clear();
         ConfirmImportCommand.RaiseCanExecuteChanged();
-        Status = $"已整体加入本地名册 {added} 条，共 {Entries.Count} 人。仅本进程内存有效，关闭即丢失，尚未写入服务器。";
+        Status = $"已导入 {added} 名考生，名单共 {Entries.Count} 人。名单目前只保存在本机，关闭考务端后不保留。";
     }
 }

@@ -18,7 +18,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private string _scheduledStartText = DateTimeOffset.Now.AddHours(1).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private string _scheduledEndText = DateTimeOffset.Now.AddHours(3).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private SubjectDraftViewModel? _selectedSubject;
-    private string _status = "可离线编辑完整结构；服务器当前只能持久化 examId 和起止时间。";
+    private string _status = "目前只有考试编号和起止时间会保存到服务器；名称、类别、科目、题组和计分规则只在本机编辑，关闭考务端后不保留。";
     private string _validationSummary = string.Empty;
     private string _instructionsText = string.Empty;
     private long? _expectedScheduleVersion;
@@ -26,9 +26,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private long _editVersion;
     private long _scheduleOperation;
 
+    /// <summary>已读取或已保存的服务器考试时间版本；用于保存时的并发核对，不在界面显示。</summary>
+    public long? LoadedScheduleVersion => _expectedScheduleVersion;
+
     public string ScheduleVersionText => _expectedScheduleVersion is { } version
-        ? $"已加载计划版本 {version}；保存时使用此版本，冲突不会自动覆盖。"
-        : "尚未加载服务器计划；保存只会尝试新建，不会覆盖已有考试。";
+        ? $"已读取服务器上的考试时间。保存时如果其他人已修改过，会提示重新读取，不会覆盖。"
+        : "尚未读取服务器上的考试时间；保存时只会新建考试，不会覆盖已有考试。";
 
     private void ResetScheduleContext()
     {
@@ -53,7 +56,13 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     }
 
     public ObservableCollection<SubjectDraftViewModel> Subjects { get; } = [];
-    public IReadOnlyList<string> QuestionTypes { get; } = ["single", "multiple", "indeterminate"];
+    /// <summary>题型下拉项：保存值沿用计分规则中的英文标识，界面显示中文名称。</summary>
+    public IReadOnlyList<QuestionTypeOption> QuestionTypes { get; } =
+    [
+        new("single", "单项选择题"),
+        new("multiple", "多项选择题"),
+        new("indeterminate", "不定项选择题"),
+    ];
 
     public string ExamId
     {
@@ -102,19 +111,19 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     public async Task LoadScheduleAsync()
     {
         var examId = ExamId.Trim();
-        if (examId.Length == 0) { Status = "请填写考试 ID。"; return; }
+        if (examId.Length == 0) { Status = "请填写考试编号。"; return; }
         var context = _contextVersion;
         var edits = _editVersion;
         var operation = ++_scheduleOperation;
         var snapshot = await _api.GetExamAsync(examId);
         if (context != _contextVersion || edits != _editVersion || operation != _scheduleOperation) return;
         if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId))
-            throw new InvalidOperationException("服务器返回了不同考试的计划，已拒绝使用。");
+            throw new InvalidOperationException("服务器返回的不是这场考试的数据，已忽略，请重试。");
         ScheduledStartText = snapshot.Schedule.StartsAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
         ScheduledEndText = snapshot.Schedule.EndsAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
-        Status = $"已加载服务器计划版本 {_expectedScheduleVersion}；其他配置仍为本进程草稿。";
+        Status = $"已读取服务器上的考试时间。名称、科目、题组和计分规则仍只在本机，尚未保存到服务器。";
     }
 
     public IReadOnlyList<string> Validate()
@@ -122,17 +131,17 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(ExamId) || ExamId.Trim().Length > 128)
         {
-            errors.Add("考试 ID 必须为 1–128 个字符。");
+            errors.Add("考试编号必须为 1–128 个字符。");
         }
 
         if (!IsValidWindowsFileName(Name))
         {
-            errors.Add("考试名称不能为空，且必须可用作 Windows 文件名。");
+            errors.Add("考试名称不能为空，且不能包含 \\ / : * ? \" < > | 等字符。");
         }
 
         if (!TryReadSchedule(out var start, out var end))
         {
-            errors.Add("开始和结束时间必须采用有效日期时间，且结束时间晚于开始时间。");
+            errors.Add("请按“年-月-日 时:分”填写开始和结束时间，且结束时间要晚于开始时间。");
         }
         else if (end <= start)
         {
@@ -151,15 +160,15 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             if (string.IsNullOrWhiteSpace(subject.SubjectId) || subject.SubjectId.Trim().Length > 128 ||
                 !subjectIds.Add(subject.SubjectId.Trim()))
             {
-                errors.Add($"科目“{subject.Name}”的标识为空或重复。");
+                errors.Add($"科目“{subject.Name}”的编号为空或与其他科目重复。");
             }
             if (string.IsNullOrWhiteSpace(subject.Name) || subject.Name.Length > 64)
             {
-                errors.Add($"科目 {subject.SubjectId} 缺少名称。");
+                errors.Add($"有科目没有填写名称。");
             }
             if (subject.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(subject.MaxScore.Trim()))
             {
-                errors.Add($"科目“{subject.Name}”满分必须是有限十进制常量。");
+                errors.Add($"科目“{subject.Name}”的满分必须是数字，例如 100 或 7.5。");
             }
             if (subject.Groups.Count == 0)
             {
@@ -246,12 +255,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var errors = Validate();
         if (errors.Count > 0)
         {
-            Status = "配置校验失败，未发送服务器请求。";
+            Status = "填写内容有误，请按下方“校验结果”修改后再保存。";
             return;
         }
 
         TryReadSchedule(out var start, out var end);
-        Status = "正在保存服务器当前支持的考试计划字段…";
+        Status = "正在保存考试时间…";
         var examId = ExamId.Trim();
         var context = _contextVersion;
         var edits = _editVersion;
@@ -266,19 +275,19 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId) ||
             snapshot.Schedule != schedule || snapshot.Versions is null ||
             snapshot.Versions.ScheduleVersion != savedVersion)
-            throw new InvalidOperationException("服务器保存回执的考试、计划时间或版本与请求不符，请核对原服务器，不能视为保存成功。");
+            throw new InvalidOperationException("无法确认保存结果，请点击“读取服务器上的时间”核对后再操作。");
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
         Status = edits == _editVersion
-            ? $"计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}。名称、类别、科目、题组和计分规则仍为本地草稿，等待 A 的正式元数据 API。"
-            : $"先前的计划已保存：scheduleVersion={snapshot.Versions.ScheduleVersion}；等待回执期间修改的当前时间仍是未保存草稿，请核对后再次保存。";
+            ? $"考试时间已保存到服务器。名称、类别、科目、题组和计分规则仍只在本机，尚未保存到服务器。"
+            : $"此前填写的考试时间已保存；保存期间修改的时间尚未保存，请核对后再次保存。";
     }
 
     private void RefreshInstructions()
     {
         var errors = Validate();
         ValidationSummary = errors.Count == 0
-            ? "已按主线 D01 schema 检查字段、长度与字符集；这不是计分发布校验。表达式语法、求值及满分一致性仍须 D04 服务验证。"
+            ? "填写格式检查通过。计分规则能否算出正确的满分，要在导入试题和答案时再核对。"
             : string.Join(Environment.NewLine, errors.Select(error => $"• {error}"));
         InstructionsText = BuildInstructions();
     }
@@ -333,7 +342,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         if (string.IsNullOrWhiteSpace(group.GroupId) || group.GroupId.Trim().Length > 128 ||
             !groupIds.Add(group.GroupId.Trim()))
         {
-            errors.Add($"{label}的标识为空或重复。");
+            errors.Add($"{label}的编号为空或与其他题组重复。");
         }
         if (string.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 64)
         {
@@ -341,19 +350,19 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         }
         if (group.Type is not ("single" or "multiple" or "indeterminate"))
         {
-            errors.Add($"{label}题型只能是 single、multiple 或 indeterminate。");
+            errors.Add($"{label}的题型只能是单项选择题、多项选择题或不定项选择题。");
         }
         if (group.Order is < 1 or > 9999 || !orders.Add(group.Order))
         {
-            errors.Add($"{label}顺序必须为 1–9999 且在科目内唯一。");
+            errors.Add($"{label}的顺序必须是 1–9999 的整数，且同一科目内不能重复。");
         }
         if (group.QuestionCount is < 1 or > 9999)
         {
-            errors.Add($"{label}题量必须为 1–9999。");
+            errors.Add($"{label}的题量必须是 1–9999 的整数。");
         }
         if (group.MaxScore.Trim().Length > 32 || !ScoreConstant().IsMatch(group.MaxScore.Trim()))
         {
-            errors.Add($"{label}满分必须是有限十进制常量。");
+            errors.Add($"{label}的满分必须是数字，例如 30 或 7.5。");
         }
 
         if (group.Type is "single" or "indeterminate")
@@ -371,7 +380,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         if (expressions.Any(expression => string.IsNullOrWhiteSpace(expression) || expression.Length > 200 ||
                                           !ScoreExpression().IsMatch(expression)))
         {
-            errors.Add($"{label}计分表达式只能使用有限十进制、两个规定变量、四则运算和括号。");
+            errors.Add($"{label}的计分规则只能使用数字、加减乘除、括号和 {{正确选项总数}}、{{选择的正确选项数}} 两个变量。");
         }
     }
 
@@ -391,9 +400,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                !Regex.IsMatch(stem, "^(COM|LPT)[1-9]$", RegexOptions.CultureInvariant);
     }
 
-    private void SetError(Exception exception) => Status = exception is AdminApiException apiError
-        ? $"保存失败（{apiError.Code}）：{apiError.Message}"
-        : $"保存失败：{exception.Message}";
+    private void SetError(Exception exception) => Status = $"保存失败：{FriendlyErrors.Describe(exception)}";
 
     [GeneratedRegex("^[+-]?[0-9]+(?:\\.[0-9]+)?$", RegexOptions.CultureInvariant)]
     private static partial Regex ScoreConstant();
@@ -455,3 +462,5 @@ public sealed class GroupDraftViewModel : BindableBase
     public string MultipleBlank { get => _multipleBlank; set => SetProperty(ref _multipleBlank, value); }
     public string MultipleWrong { get => _multipleWrong; set => SetProperty(ref _multipleWrong, value); }
 }
+
+public sealed record QuestionTypeOption(string Value, string Label);

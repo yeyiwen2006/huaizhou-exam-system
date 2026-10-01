@@ -28,10 +28,10 @@ public sealed class ScheduleReplyBoundaryTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.SaveScheduleAsync());
 
-        Assert.Contains("回执", error.Message, StringComparison.Ordinal);
+        Assert.Contains("无法确认保存结果", error.Message, StringComparison.Ordinal);
         Assert.Equal(5, handler.ExpectedVersions.Single());
-        Assert.Contains("计划版本 5", viewModel.ScheduleVersionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("计划已保存", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal(5, viewModel.LoadedScheduleVersion);
+        Assert.DoesNotContain("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -47,7 +47,7 @@ public sealed class ScheduleReplyBoundaryTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.SaveScheduleAsync());
 
         Assert.Null(handler.ExpectedVersions.Single());
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -66,8 +66,8 @@ public sealed class ScheduleReplyBoundaryTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.SaveScheduleAsync());
 
-        Assert.Contains("回执", error.Message, StringComparison.Ordinal);
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Contains("无法确认保存结果", error.Message, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -84,14 +84,14 @@ public sealed class ScheduleReplyBoundaryTests
         await saving.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal("2026-10-01 13:00 +08:00", viewModel.ScheduledEndText);
-        Assert.Contains("未保存草稿", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("尚未保存", viewModel.Status, StringComparison.Ordinal);
         handler.DelaySave = false;
         handler.SaveReply = Snapshot(7) with { Schedule = Window() with { EndsAt = Window().EndsAt.AddHours(1) } };
         await viewModel.SaveScheduleAsync();
 
         Assert.Equal(new long?[] { 5, 6 }, handler.ExpectedVersions);
-        Assert.Contains("计划版本 7", viewModel.ScheduleVersionText, StringComparison.Ordinal);
-        Assert.StartsWith("计划已保存", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal(7, viewModel.LoadedScheduleVersion);
+        Assert.StartsWith("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class ScheduleReplyBoundaryTests
 
         await viewModel.SaveScheduleAsync();
 
-        Assert.StartsWith("计划已保存", viewModel.Status, StringComparison.Ordinal);
+        Assert.StartsWith("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -124,8 +124,8 @@ public sealed class ScheduleReplyBoundaryTests
         handler.Reply.TrySetResult(Snapshot(1));
         await saving.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("尚未加载", viewModel.ScheduleVersionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("计划已保存", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.DoesNotContain("考试时间已保存到服务器", viewModel.Status, StringComparison.Ordinal);
     }
 
     private static AdminApiClient CreateApi(HttpMessageHandler handler)

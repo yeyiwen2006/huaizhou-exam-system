@@ -11,16 +11,16 @@ public sealed partial class ReportPageViewModel
     public string CollectedCountText => Count(_observedStatus?.CollectedCount);
     public string GradedCountText => Count(_observedStatus?.GradedCount);
     public string GradingVersionText => _observedStatus is { GradingVersion: > 0 } status
-        ? "V" + status.GradingVersion.ToString(CultureInfo.InvariantCulture) : "—";
+        ? "第 " + status.GradingVersion.ToString(CultureInfo.InvariantCulture) + " 版" : "—";
     public string StateLabel => !_connected ? "未连接服务器" : _busy ? "操作进行中" :
-        Session.HasTables ? "报表已开放" : _observedStatus?.State switch
+        Session.HasTables ? "成绩已生成" : _observedStatus?.State switch
         {
             ReportState.ExamNotEnded => "考试尚未结束",
             ReportState.NoParticipants => "暂无参试记录",
             ReportState.Collecting => "等待答卷回收",
             ReportState.Grading => "等待计分完成",
             ReportState.InvalidSource => "数据需要核对",
-            _ => "等待加载报表"
+            _ => "等待加载成绩"
         };
 
     private static string Count(int? value) => value?.ToString(CultureInfo.CurrentCulture) ?? "—";

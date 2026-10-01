@@ -34,7 +34,7 @@ public sealed class ActivationApprovalBoundaryTests
         Assert.Equal("synthetic-device", device.DeviceId);
         Assert.Equal("20260928001", device.ClientNumber);
         Assert.Equal(string.Empty, device.RoomGroupId);
-        Assert.StartsWith("审批成功", viewModel.Status, StringComparison.Ordinal);
+        Assert.StartsWith("已批准", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -103,7 +103,7 @@ public sealed class ActivationApprovalBoundaryTests
         Assert.Equal(1, handler.Calls);
         Assert.Empty(viewModel.Devices);
         Assert.StartsWith("操作失败", viewModel.Status, StringComparison.Ordinal);
-        Assert.DoesNotContain("审批成功", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("已批准", viewModel.Status, StringComparison.Ordinal);
     }
 
     private static AdminApiClient CreateApi(HttpMessageHandler handler)
