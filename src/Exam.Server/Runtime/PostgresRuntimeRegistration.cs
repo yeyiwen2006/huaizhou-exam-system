@@ -91,6 +91,9 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<ReliableCommandService>();
 
         services.AddSingleton<ISubmissionStore, PostgresSubmissionStore>();
+        // B06 失焦留痕：学生端补报 + 考务端汇总共用同一事务存储。
+        services.AddSingleton<IFocusEventStore, PostgresFocusEventStore>();
+        services.AddSingleton<FocusEventService>();
         services.AddSingleton<IGradingTaskQueue, PostgresGradingTaskQueue>();
         // D05 生产后台：持久计分任务的领取、结果与输入，重算范围、专用重算队列与已发布版本对账。
         // 这些适配器已随 D04/D05 交付但此前未注册，Server 因而没有任何生产后台消费计分任务。

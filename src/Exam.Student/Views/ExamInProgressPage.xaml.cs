@@ -41,6 +41,8 @@ public partial class ExamInProgressPage : UserControl
     private Window? _focusWindow;
     private bool _reviewPending;
     private bool _reviewSaving;
+    private bool _jumping;
+    private IReadOnlyList<string>? _changedQuestionIds;
 
     /// <summary>页头右侧时钟胶囊（因 XAML 命名作用域限制经绑定注入）。</summary>
     public StatusPill ClockPillContent { get; } = new()
@@ -115,8 +117,19 @@ public partial class ExamInProgressPage : UserControl
         Unloaded += async (_, _) =>
         {
             _clock?.Stop();
-            _lifetime.Cancel();
+            // B06 失焦留痕：页面卸载时闭合尚未恢复的失焦段，先落盘再触发一个补报回合。
+            var wasUnfocused = _focus.IsUnfocused;
             _focus.Close();
+            if (wasUnfocused && _focus.Snapshot().LastOrDefault() is { } closingFocus)
+            {
+                try
+                {
+                    if (await _runtime.RecordFocusLossAsync(closingFocus, CancellationToken.None))
+                        await _sync.KickAsync(CancellationToken.None);
+                }
+                catch (Exception) { /* 卸载时的留痕失败不阻止清理；事件已尽最大努力落盘 */ }
+            }
+            _lifetime.Cancel();
             DetachFocusWindow();
             _runtime.StateChanged -= OnRuntimeStateChanged;
             _runtime.PaperUpdate.StatusChanged -= OnPaperUpdateStatusChanged;
@@ -176,10 +189,25 @@ public partial class ExamInProgressPage : UserControl
         if (_lifetime.IsCancellationRequested) return;
         if (_focus.OnFocusRegained())
         {
-            // 失焦补报：重新获得焦点立即触发一个同步回合，不等 60 秒周期。
+            // B06 失焦留痕：该段失焦写入本地发件箱；复焦立即触发同步回合补报。
+            _ = PersistAndReportFocusAsync(_focus.Snapshot().LastOrDefault());
             _ = KickSyncAfterRefocusAsync();
         }
         RefreshFocusStatus();
+    }
+
+    /// <summary>把一段已完成的失焦先落盘再唤醒同步；本地失败不阻塞作答，由状态行提示。</summary>
+    private async Task PersistAndReportFocusAsync(FocusLossEvent? focusEvent)
+    {
+        if (focusEvent is null || _lifetime.IsCancellationRequested) return;
+        try
+        {
+            if (await _runtime.RecordFocusLossAsync(focusEvent, _lifetime.Token))
+                await _sync.KickAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception) { /* 留痕失败由运行时错误状态呈现，不影响作答 */ }
+        finally { RefreshStatus(); }
     }
 
     private async Task KickSyncAfterRefocusAsync()
@@ -230,11 +258,37 @@ public partial class ExamInProgressPage : UserControl
     }
 
     /// <summary>先允许考生阅读修订内容，再由按钮明确确认，不用挡住题目的弹窗代替复核。</summary>
-    private void OnPaperUpdateInstalled(object? sender, (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt) e)
+    private void OnPaperUpdateInstalled(object? sender,
+        (long Version, DateTimeOffset ReceivedAt, DateTimeOffset InstalledAt, IReadOnlyList<string> ChangedQuestionIds) e)
     {
         if (_lifetime.IsCancellationRequested) return;
         _runtime.RecordInstalledPaperUpdate(e.Version, e.ReceivedAt, e.InstalledAt);
+        _changedQuestionIds = e.ChangedQuestionIds;
         RefreshStatus();
+    }
+
+    /// <summary>跳到本次修订的第一道变更题；清单为空或题目不在当前清单内时按钮不可见。</summary>
+    private async void OnJumpToChangedQuestion(object sender, RoutedEventArgs e)
+    {
+        if (_jumping || _lifetime.IsCancellationRequested || _navigator is null || _rendering ||
+            _changedQuestionIds is not { Count: > 0 }) return;
+        var target = _changedQuestionIds
+            .Select(id => _navigator.Find(id))
+            .FirstOrDefault(question => question is not null);
+        if (target is null) return;
+        _jumping = true;
+        try
+        {
+            _currentQuestionId = target.QuestionId;
+            await RenderCurrentQuestionAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (IsWorkbenchError(error))
+        {
+            _regionError ??= "题目显示失败，请联系监考人员。";
+            RefreshStatus();
+        }
+        finally { _jumping = false; RefreshStatus(); }
     }
 
     private async void OnConfirmReview(object sender, RoutedEventArgs e)
@@ -724,6 +778,13 @@ public partial class ExamInProgressPage : UserControl
         ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;
         ReviewUpdateButton.IsEnabled = _reviewPending && !_reviewSaving && !_runtime.IsPaperUpdateInProgress;
         if (_reviewPending) ReviewUpdateButton.Content = "已查看更正后的试题";
+        // B06 修订定位：复核期间提供“跳到第一道修订题”；清单缺失或不在当前试卷时隐藏。
+        var changedQuestions = (_changedQuestionIds ?? [])
+            .Select(id => _navigator?.Find(id)).OfType<PaperQuestionStructure>().ToArray();
+        JumpToChangedButton.Visibility =
+            _reviewPending && changedQuestions.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (changedQuestions.Length > 0)
+            JumpToChangedButton.Content = $"查看修订试题（{changedQuestions.Length} 题）";
     }
 
     private static string QuestionTypeTitle(string questionType) => questionType switch

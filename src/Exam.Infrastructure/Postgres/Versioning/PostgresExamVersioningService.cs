@@ -779,15 +779,23 @@ public sealed class PostgresExamVersioningService : IExamVersioningService
             "resource_version",
             NpgsqlDbType.Bigint,
             resourceVersion ?? (object)DBNull.Value);
+        // B06 修订定位：PaperUpdated 指令携带本次发布的变更题目标识清单，
+        // 学生端据此列出修订题号并支持一键跳转；其他指令保持原有元数据。
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["scheduleVersion"] = snapshot.Versions.ScheduleVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["paperVersion"] = snapshot.Versions.PaperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+        if (eventType == CommandEventType.PaperUpdated && snapshot.Paper is { } paper)
+        {
+            metadata["changedQuestionIds"] = JsonSerializer.Serialize(
+                paper.ChangedQuestionIds);
+        }
+
         command.Parameters.AddWithValue(
             "metadata",
             NpgsqlDbType.Jsonb,
-            JsonSerializer.Serialize(
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["scheduleVersion"] = snapshot.Versions.ScheduleVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["paperVersion"] = snapshot.Versions.PaperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                }));
+            JsonSerializer.Serialize(metadata));
         command.Parameters.AddWithValue("created_at", recordedAt);
         command.Parameters.AddWithValue("exam_id", snapshot.ExamId);
         command.ExecuteNonQuery();

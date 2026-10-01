@@ -482,6 +482,29 @@ public static class ExamApiEndpointExtensions
                     authorizationVersion,
                     cancellationToken)));
 
+        group.MapPost("/focus-events", async (
+            ReportFocusEventsRequest request,
+            FocusEventService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            ApiEndpointResults.FromSubmission(
+                context,
+                configuration,
+                request.RequestId,
+                await service.ReportAsync(request, cancellationToken)));
+
+        // 考务端失焦监测汇总：按考生聚合本场考试的失焦次数与总时长。
+        group.MapGet("/focus-events", async (
+            string examId,
+            FocusEventService service,
+            HttpContext context,
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(
+                context, configuration, context.TraceIdentifier,
+                () => service.ListSummariesAsync(examId, cancellationToken)));
+
         group.MapPost("/collection/evaluate", async (
             EvaluateCollectionApiRequest request,
             CollectionCompletionService service,

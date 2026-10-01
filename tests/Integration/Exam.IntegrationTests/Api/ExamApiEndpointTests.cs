@@ -235,6 +235,8 @@ public sealed class ExamApiEndpointTests
         builder.Services.AddSingleton<ICollectionCompletionStore, InMemoryCollectionCompletionStore>();
         builder.Services.AddSingleton<SubmissionService>();
         builder.Services.AddSingleton<CollectionCompletionService>();
+        builder.Services.AddSingleton<IFocusEventStore, InMemoryFocusEventStore>();
+        builder.Services.AddSingleton<FocusEventService>();
         builder.Services.AddSingleton<IExamVersioningService, InMemoryExamVersioningService>();
 
         var application = builder.Build();

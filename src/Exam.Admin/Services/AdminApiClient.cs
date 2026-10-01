@@ -209,6 +209,16 @@ public sealed partial class AdminApiClient : IDisposable
             null,
             cancellationToken);
 
+    /// <summary>B06 失焦监测：按考生汇总本场考试的失焦次数与累计时长。</summary>
+    public async Task<IReadOnlyList<Exam.Contracts.Submissions.FocusLossEventSummary>> ListFocusSummariesAsync(
+        string examId,
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<IReadOnlyList<Exam.Contracts.Submissions.FocusLossEventSummary>>(
+            HttpMethod.Get,
+            $"api/v1/submissions/focus-events?examId={Uri.EscapeDataString(examId)}",
+            null,
+            cancellationToken);
+
     public async Task<DeviceDecisionResult> DecideDeviceAsync(
         string participationId,
         string selectedDeviceId,

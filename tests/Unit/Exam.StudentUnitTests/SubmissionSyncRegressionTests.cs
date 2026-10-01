@@ -46,6 +46,8 @@ public sealed partial class SubmissionSyncServiceTests
             ExamLifecycle.Running, ParticipationBusinessState.Answering, 1, 1));
         builder.Services.AddSingleton(new SubmissionService(store, queue, accessReader: access));
         builder.Services.AddSingleton(new CollectionCompletionService(store, new InMemoryCollectionCompletionStore()));
+        // B06 失焦端点属于同一分组：分组在首个请求时整体构建，服务必须在 DI 中可用。
+        builder.Services.AddSingleton(new FocusEventService(new InMemoryFocusEventStore()));
         await using var app = builder.Build();
         app.MapGroup("/api/v1").MapSubmissionApi();
         await app.StartAsync();
@@ -112,7 +114,7 @@ public sealed partial class SubmissionSyncServiceTests
         fixture.SubmissionApi.SubmitHandler = request =>
         {
             fixture.SubmissionApi.Persist(request);
-            throw new HttpRequestException("合成丢响应");
+            throw new HttpRequestException("合成丢响�?");
         };
         await using (var first = fixture.CreateSync())
         {
@@ -140,7 +142,7 @@ public sealed partial class SubmissionSyncServiceTests
         await using var fixture = await StartedAsync();
         await fixture.Answers!.SetAnswerAsync("q1", AnswerValue.Selected("B"));
         Assert.True(await fixture.Runtime.Manager.HandleCommandAsync(fixture.Api.End()));
-        // 故意不调用运行时的 END 固定步骤，模拟两个本地存储之间的进程中断。
+        // 故意不调用运行时�? END 固定步骤，模拟两个本地存储之间的进程中断�?
         Assert.Null(await fixture.Store.LoadFixedSubmissionAsync(fixture.Key));
         await fixture.RestartForRecoveryAsync();
         Assert.Null(fixture.Runtime.Answers);
@@ -329,7 +331,7 @@ public sealed partial class SubmissionSyncServiceTests
         {
             timeStarted.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            throw new InvalidOperationException("取消前不应结束合成校时等待。");
+            throw new InvalidOperationException("取消前不应结束合成校时等待�?");
         };
         var clock = new ServerClock();
         await using var sync = new SubmissionSyncService(fixture.SubmissionApi, fixture.Runtime, fixture.Device, clock: clock);

@@ -146,7 +146,16 @@ public sealed partial class StudentExamRuntime(
             }
             _lastInstalledUpdate = Manager.LastPaperInstallation;
             foreach (var review in await localState.LoadPaperUpdateReviewsAsync(_localKey, ct))
+            {
                 _confirmedReviewVersions.TryAdd(review.PaperVersion, 0);
+                // B06 服务端闭环：重启后把已确认但尚未上报的版本补回发件箱（按版本幂等）。
+                var enqueued = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
+                    $"review:{review.PaperVersion}", "review",
+                    System.Text.Json.JsonSerializer.Serialize(
+                        new ReviewConfirmationPayload(review.PaperVersion, RequestIds.New()), UploadJson)), ct);
+                if (!enqueued.Succeeded)
+                    _localStateError = $"复核上报记录恢复失败：{enqueued.Error}";
+            }
             _recoveredSubmission = await localState.LoadFixedSubmissionAsync(_localKey, ct);
             if (_recoveredSubmission is null && Manager.RequiresLocalAnswerRecovery &&
                 await localState.LoadAnswerStateAsync(_localKey, ct) is null)

@@ -364,7 +364,7 @@
                                     <DataGridTextColumn Header="参试记录" Binding="{Binding ParticipationId}" Width="*"/><DataGridTextColumn Header="考生" Binding="{Binding CandidateId}" Width="*"/>
                                     <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="100"/><DataGridTextColumn Header="答题设备" Binding="{Binding AuthorizedDeviceId}" Width="*"/>
 
-                                    <DataGridTextColumn Header="答卷" Binding="{Binding CollectionState}" Width="90"/><DataGridTextColumn Header="连接" Binding="{Binding ConnectionState}" Width="110"/><DataGridTextColumn Header="当前题号" Binding="{Binding CurrentQuestion}" Width="110"/>
+                                    <DataGridTextColumn Header="答卷" Binding="{Binding CollectionState}" Width="90"/><DataGridTextColumn Header="失焦情况" Binding="{Binding FocusSummary}" Width="130"/><DataGridTextColumn Header="修订复核" Binding="{Binding PaperReviewState}" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>

@@ -26,6 +26,11 @@ public sealed partial class ExamPackageManager
         delivery.ResourceVersion is > 0 && MatchesCurrentAuthorization(delivery) &&
         _state.Commands.Any(item => item.Delivery.EventId == delivery.EventId && SameCommand(item.Delivery, delivery));
 
+    /// <summary>按版本查找已记录的 PaperUpdated 指令（含已确认），供复核横幅读取变更题目元数据。</summary>
+    internal ProcessedPackageCommand? FindPaperUpdateCommand(long paperVersion) => _state.Commands
+        .SingleOrDefault(item => item.Delivery.EventType == CommandEventType.PaperUpdated &&
+            item.Delivery.ResourceVersion == paperVersion);
+
     private bool IsVerifiedDeviceDecision(CommandDelivery delivery) =>
         delivery.EventType == CommandEventType.DeviceDecided && _authorizedThisRun &&
         Participation is { } current && delivery.Server is { } server && delivery.Metadata is not null &&

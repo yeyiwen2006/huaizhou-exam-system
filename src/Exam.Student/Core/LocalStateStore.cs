@@ -70,6 +70,12 @@ public sealed record PaperUpdateReviewRecord(
     DateTimeOffset InstalledAt,
     DateTimeOffset ConfirmedAt);
 
+/// <summary>
+/// B06 待上报发件箱：失焦事件与复核确认先落盘，再由同步回合补报；服务器确认后删除。
+/// ItemId 唯一（失焦=事件标识，复核=版本号），重试沿用首次写入的载荷与请求标识。
+/// </summary>
+public sealed record PendingUploadRecord(string ItemId, string Kind, string Payload);
+
 public sealed record StoreWriteResult(bool Succeeded, string? Error)
 {
     public static StoreWriteResult Ok() => new(true, null);
@@ -106,6 +112,18 @@ public interface ILocalStateStore : IDisposable
     Task<IReadOnlyList<PaperUpdateReviewRecord>> LoadPaperUpdateReviewsAsync(
         LocalStateKey key, CancellationToken ct = default);
 
+    /// <summary>追加待上报记录；同一 ItemId 已存在时保持原载荷（重试不换请求标识）。</summary>
+    Task<StoreWriteResult> EnqueueUploadAsync(
+        LocalStateKey key, PendingUploadRecord record, CancellationToken ct = default);
+
+    /// <summary>按落盘顺序读取待上报记录（最多 limit 条）。</summary>
+    Task<IReadOnlyList<PendingUploadRecord>> LoadUploadsAsync(
+        LocalStateKey key, int limit, CancellationToken ct = default);
+
+    /// <summary>删除已被服务器确认的待上报记录；只允许删除确实存在的标识。</summary>
+    Task<StoreWriteResult> DeleteUploadAsync(
+        LocalStateKey key, string itemId, CancellationToken ct = default);
+
     /// <summary>只允许清理没有答题状态的准备记录，正常客户端不能删除答案或固定提交。</summary>
     Task<StoreWriteResult> DeleteAsync(LocalStateKey key, CancellationToken ct = default);
 }
@@ -117,7 +135,7 @@ public interface ILocalStateStore : IDisposable
 /// </summary>
 public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceiptStore
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
     private const int LegacySchemaVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = JsonDefaults.Create();
     private readonly BlockingCollection<WorkItem> _queue = new(new ConcurrentQueue<WorkItem>(), 128);
@@ -279,7 +297,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             var identity = JsonSerializer.Deserialize<StoreIdentity>(
                 File.ReadAllText(_identityPath, new UTF8Encoding(false, true)), JsonOptions);
             if (identity is null ||
-                (identity.SchemaVersion != SchemaVersion && identity.SchemaVersion != LegacySchemaVersion) ||
+                (identity.SchemaVersion is not (LegacySchemaVersion or 2 or SchemaVersion)) ||
                 !Guid.TryParseExact(identity.DatabaseId, "N", out _))
                 throw new InvalidDataException("本地数据库初始化记录损坏或版本不受支持。");
             return (identity, false);
@@ -321,8 +339,10 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
                 throw new InvalidDataException("本地数据库完整性检查失败；已保留原文件，不能自动重建。");
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (LegacySchemaVersion or SchemaVersion) ||
-            (version == LegacySchemaVersion && identity.SchemaVersion != LegacySchemaVersion))
+        if (version is not (LegacySchemaVersion or 2 or SchemaVersion) ||
+            (version == LegacySchemaVersion && identity.SchemaVersion != LegacySchemaVersion) ||
+            // 侧文件只在新结构的事务提交后才升级：侧文件领先于数据库是不可能状态。
+            (version == 2 && identity.SchemaVersion == SchemaVersion))
             throw new InvalidDataException("本地数据库与初始化记录的结构版本不受支持，原文件未修改。");
         command.CommandText = "SELECT database_id FROM store_identity WHERE singleton=1;";
         if (!string.Equals(command.ExecuteScalar() as string, identity.DatabaseId, StringComparison.Ordinal))
@@ -343,11 +363,21 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             // 身份与旧结构均核对后才改变持久化设置；DDL 和 user_version 同一 FULL 事务提交。
             ConfigureDurability(connection);
             UpgradeSchemaV1ToV2(connection);
+            version = 2;
+        }
+        if (version == 2)
+        {
+            command.CommandText = "SELECT count(*) FROM sqlite_master WHERE name='upload_outbox';";
+            if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                throw new InvalidDataException("旧版数据库出现非预期发件箱表，未自动覆盖或迁移。");
+            ConfigureDurability(connection);
+            UpgradeSchemaV2ToV3(connection);
         }
         ValidateReviewTable(connection);
-        if (identity.SchemaVersion == LegacySchemaVersion)
+        ValidateOutboxTable(connection);
+        if (identity.SchemaVersion != SchemaVersion)
         {
-            // DB v2 / sidecar v1 是 SQL 事务提交后、侧文件替换前中断的唯一可恢复组合。
+            // DB 结构已领先于侧文件是唯一可恢复组合（事务先提交、侧文件后替换）。
             // 已核对 database_id、完整结构及外键，不能仅凭版本号修复任意文件。
             identity = identity with { SchemaVersion = SchemaVersion };
             PersistIdentityUpgrade(identity);
@@ -369,6 +399,20 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             throw new InvalidDataException("试卷复核表的字段或唯一键不符合已知结构，原库已保留。");
     }
 
+    private static void ValidateOutboxTable(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(upload_outbox);";
+        using var reader = command.ExecuteReader();
+        var columns = new List<(string Name, string Type, long Required, long Primary)>();
+        while (reader.Read()) columns.Add((reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetInt64(5)));
+        (string, string, long, long)[] expected =
+        [ ("server_key", "TEXT", 1, 1), ("exam_id", "TEXT", 1, 2), ("candidate_id", "TEXT", 1, 3),
+          ("item_id", "TEXT", 1, 4), ("kind", "TEXT", 1, 0), ("payload", "TEXT", 1, 0) ];
+        if (!columns.SequenceEqual(expected))
+            throw new InvalidDataException("待上报发件箱表的字段或唯一键不符合已知结构，原库已保留。");
+    }
+
     private static void UpgradeSchemaV1ToV2(SqliteConnection connection)
     {
         using var tx = connection.BeginTransaction();
@@ -380,6 +424,22 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
                 paper_version INTEGER NOT NULL, payload TEXT NOT NULL,
                 PRIMARY KEY(server_key,exam_id,candidate_id,paper_version));
             PRAGMA user_version=2;
+            """;
+        command.ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    private static void UpgradeSchemaV2ToV3(SqliteConnection connection)
+    {
+        using var tx = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            CREATE TABLE upload_outbox(
+                server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+                item_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(server_key,exam_id,candidate_id,item_id));
+            PRAGMA user_version=3;
             """;
         command.ExecuteNonQuery();
         tx.Commit();
@@ -431,8 +491,12 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
                 server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
                 paper_version INTEGER NOT NULL, payload TEXT NOT NULL,
                 PRIMARY KEY(server_key,exam_id,candidate_id,paper_version));
+            CREATE TABLE upload_outbox(
+                server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+                item_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(server_key,exam_id,candidate_id,item_id));
             INSERT INTO store_identity(singleton,database_id) VALUES(1,$database_id);
-            PRAGMA user_version=2;
+            PRAGMA user_version=3;
             """;
         command.Parameters.AddWithValue("$database_id", identity.DatabaseId);
         command.ExecuteNonQuery();
@@ -649,6 +713,56 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
             using var command = KeyCommand(conn, tx, key,
                 "DELETE FROM preparation WHERE server_key=$s AND exam_id=$e AND candidate_id=$c;");
             command.ExecuteNonQuery();
+        }, ct);
+
+    public Task<StoreWriteResult> EnqueueUploadAsync(
+        LocalStateKey key, PendingUploadRecord record, CancellationToken ct = default) =>
+        WriteAsync(key, (conn, tx) =>
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            Require(!string.IsNullOrWhiteSpace(record.ItemId), "待上报记录的标识不能为空。");
+            Require(!string.IsNullOrWhiteSpace(record.Kind) && !string.IsNullOrWhiteSpace(record.Payload),
+                "待上报记录的类型或载荷不能为空。");
+            // 与复核确认相同的首次写入语义：崩溃重放不换请求标识，服务器按 ItemId 幂等。
+            using var command = KeyCommand(conn, tx, key, """
+                INSERT INTO upload_outbox(server_key,exam_id,candidate_id,item_id,kind,payload)
+                VALUES($s,$e,$c,$item,$kind,$payload)
+                ON CONFLICT(server_key,exam_id,candidate_id,item_id) DO NOTHING;
+                """);
+            command.Parameters.AddWithValue("$item", record.ItemId);
+            command.Parameters.AddWithValue("$kind", record.Kind);
+            command.Parameters.AddWithValue("$payload", record.Payload);
+            command.ExecuteNonQuery();
+        }, ct);
+
+    public Task<IReadOnlyList<PendingUploadRecord>> LoadUploadsAsync(
+        LocalStateKey key, int limit, CancellationToken ct = default) =>
+        ReadAsync<IReadOnlyList<PendingUploadRecord>>(key, (conn, tx) =>
+        {
+            Require(limit > 0, "读取待上报记录的数量必须为正数。");
+            using var command = KeyCommand(conn, tx, key, """
+                SELECT item_id, kind, payload FROM upload_outbox
+                 WHERE server_key=$s AND exam_id=$e AND candidate_id=$c
+                 ORDER BY rowid LIMIT $limit;
+                """);
+            command.Parameters.AddWithValue("$limit", limit);
+            using var reader = command.ExecuteReader();
+            var records = new List<PendingUploadRecord>();
+            while (reader.Read())
+                records.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            return (IReadOnlyList<PendingUploadRecord>)records.AsReadOnly();
+        }, ct);
+
+    public Task<StoreWriteResult> DeleteUploadAsync(
+        LocalStateKey key, string itemId, CancellationToken ct = default) =>
+        WriteAsync(key, (conn, tx) =>
+        {
+            Require(!string.IsNullOrWhiteSpace(itemId), "待删除的上报标识不能为空。");
+            using var command = KeyCommand(conn, tx, key,
+                "DELETE FROM upload_outbox WHERE server_key=$s AND exam_id=$e AND candidate_id=$c AND item_id=$item;");
+            command.Parameters.AddWithValue("$item", itemId);
+            var deleted = command.ExecuteNonQuery();
+            Require(deleted == 1, "待删除的上报记录不存在或已被确认，不能重复删除。");
         }, ct);
 
     public void Dispose()

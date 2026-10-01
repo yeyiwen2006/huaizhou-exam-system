@@ -356,8 +356,21 @@ public sealed class ExamVersionAggregate
         {
             var participant = GetParticipant(participantId);
             EnsureExpectedVersion(paperVersion, _paperVersion, "paperVersion");
-            if (participant.InstalledPaperVersion != _paperVersion ||
-                participant.PaperUpdateState != PaperUpdateState.ReviewRequired)
+            if (participant.InstalledPaperVersion != _paperVersion)
+            {
+                throw new VersioningRuleException(
+                    VersioningErrorCode.InvalidStateTransition,
+                    "Review can only be confirmed after the current paper has been installed and requested for review.");
+            }
+
+            // 学生端回执丢失后的重试（新请求标识）会重复确认同一版本：已确认视为幂等成功，
+            // 返回当前快照而不抛状态冲突；旧版本的确认仍被版本检查拒绝。
+            if (participant.PaperUpdateState == PaperUpdateState.Updated)
+            {
+                return CreateSnapshot();
+            }
+
+            if (participant.PaperUpdateState != PaperUpdateState.ReviewRequired)
             {
                 throw new VersioningRuleException(
                     VersioningErrorCode.InvalidStateTransition,
