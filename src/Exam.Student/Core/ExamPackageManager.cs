@@ -87,6 +87,10 @@ public sealed partial class ExamPackageManager : IDisposable
     public string? LastError { get; private set; }
     /// <summary>已收到的最新试卷版本（PaperUpdated 事件推进）；高于当前描述符版本表示有待应用的更新。</summary>
     public long NewestPaperVersion => _state.NewestPaperVersion;
+    /// <summary>ScheduleChanged 事件携带的最新开考时间；null 表示未收到过时间更新。</summary>
+    public DateTimeOffset? OverriddenScheduledStart => _state.OverriddenScheduledStart;
+    /// <summary>ScheduleChanged 事件携带的最新结束时间；null 表示未收到过时间更新。</summary>
+    public DateTimeOffset? OverriddenScheduledEnd => _state.OverriddenScheduledEnd;
     /// <summary>B06 设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
     public bool DeviceDecisionPending =>
         !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
@@ -337,7 +341,11 @@ public sealed partial class ExamPackageManager : IDisposable
                         ? Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion!.Value)
                         : _state.NewestPaperVersion,
                     LifecycleStateVersion = delivery.EventType == CommandEventType.ScheduleChanged
-                        ? Math.Max(_state.LifecycleStateVersion, delivery.StateVersion) : _state.LifecycleStateVersion
+                        ? Math.Max(_state.LifecycleStateVersion, delivery.StateVersion) : _state.LifecycleStateVersion,
+                    OverriddenScheduledStart = delivery.EventType == CommandEventType.ScheduleChanged && delivery.NewScheduledStart.HasValue
+                        ? delivery.NewScheduledStart.Value : _state.OverriddenScheduledStart,
+                    OverriddenScheduledEnd = delivery.EventType == CommandEventType.ScheduleChanged && delivery.NewScheduledEnd.HasValue
+                        ? delivery.NewScheduledEnd.Value : _state.OverriddenScheduledEnd,
                 });
                 LastError = delivery.EventType == CommandEventType.PaperUpdated
                     ? "已收到试卷更新，当前版本尚未完成更新，请重新同步。"

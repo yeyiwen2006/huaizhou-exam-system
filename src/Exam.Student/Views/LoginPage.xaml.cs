@@ -125,7 +125,7 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(
                 ErrorBanner,
-                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
                 error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
@@ -185,7 +185,7 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(
                 ErrorBanner,
-                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
                 error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)

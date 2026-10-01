@@ -38,18 +38,16 @@
 
 ## A 先明确、C 随后接线的公共事项
 
-这些事项来自 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46) 的接线请求，以及 [PR #103](https://github.com/yeyiwen2006/huaizhou-exam-system/pull/103) 的草稿交接。A 应明确可复用接口、必须补充的能力和授权范围，再由 C 完成对应 GUI 与业务 CLI。已确认的接口直接复用，不因旧评论而重建已有能力。
+这些事项来自 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46) 的接线请求，以及 [PR #103](https://github.com/yeyiwen2006/huaizhou-exam-system/pull/103) 的草稿交接。以下基于当前主线代码核查，列出 A 需要补充的服务器端能力，C 在 A 完成对应接口后再接线 GUI 与业务 CLI。
 
-| 事项 | A 需要明确或补齐的内容 | C 随后负责 |
-| --- | --- | --- |
-| C02 权威名册 | 按考试查询与原子整批写入的请求、响应、权限、幂等和冲突语义，姓名、班级、准考证号与现有考生标识的关系。明确失败零写入、完全重复跳过、前导零保留及并发修改规则 | 手工新增、Excel 预览与确认、按考试加载、失败保留旧状态和 CLI |
-| C03 试场与设备关联 | 权威分组存储、必要迁移、审批时分组校验、按学生端编号查设备、批量转组及操作历史，确认权限、版本和批量原子性 | 分组管理、审批选择、完整设备列表、筛选和转组流程 |
-| C04 实时状态与通知 | 明确设备、考生、当前页面、作答进度、通信状态、指令确认与回收状态的权威来源及聚合接口，定义实时事件、重连补取和版本处理。复用已经合入的失焦汇总、复核状态和收齐历史接口 | 完整监控展示、筛选、裁决信息、回收统计、补传和实时提醒 |
-| C05 原子发布与修订 | 核对资源写入、试卷版本发布及答案规则发布的整体成功边界，提供或确认具备授权、幂等、版本检查和可证明原子性的正式入口，明确与 D05 重算的衔接 | 导入编排、预览确认、发布、题目及规则修订、失败清理与结果展示 |
+| 事项 | 当前代码状态 | A 需要补充的内容 | C 随后负责 |
+| --- | --- | --- | --- |
+| C02 权威名册 | 只有单条参与者写入接口（`POST /versioning/exams/{examId}/participants`），无按考试全量查询或批量导入端点 | 补充按考试查询名册的 GET 端点、原子整批写入端点；语义：完全重复行跳过，整批失败全部回滚，前导零保留，明确并发修改规则 | 手工新增、Excel 预览与确认、按考试加载、失败保留旧状态和 CLI |
+| C03 试场与设备关联 | 服务器无任何试场分组接口，框架层 `MapGroup` 和 SignalR `Groups` 均与业务分组无关 | 设计分组数据模型与迁移，补充分组增删改查、审批时分组校验、按学生端编号查设备、批量转组及操作历史端点，明确权限、版本和批量原子性 | 分组管理、审批选择、完整设备列表、筛选和转组流程 |
+| C04 实时状态与通知 | SignalR Hub（`/hubs/exam-events`）和失焦汇总端点（`GET/POST /submissions/focus-events`）已存在；无聚合监控状态 REST 端点 | 补充聚合监控状态端点（设备、考生、作答进度、通信状态、指令确认与回收结果一次性查询）；明确实时事件定义、重连补取和版本处理规则。失焦汇总和收齐历史接口已有，C 直接复用 | 完整监控展示、筛选、裁决信息、回收统计、补传和实时提醒 |
+| C05 原子发布与修订 | 试卷发布（`POST /versioning/exams/{examId}/paper-publications`）和评分规则发布（`POST /versioning/exams/{examId}/grading-publications`）为两个独立端点，无原子整体发布入口 | 确认是补充原子整体发布入口，还是明确由两个独立端点分别调用的失败边界与清理规则；明确与 D05 重算的衔接 | 导入编排、预览确认、发布、题目及规则修订、失败清理与结果展示 |
 
-C05 的草稿明确指出，已有资源保存、试卷发布和规则发布为分开的操作。不能仅凭各自有事务，就认定整套发布已经原子化。A 先核对当前实现，再决定补接口还是复用已经满足边界的入口；不能让 C 通过顺序调用和补偿删除承担未经确认的跨资源一致性。
-
-C01 旧评论所说的“完整考试配置尚未持久化”已经不适用于当前主线。现有 [ExamConfigurationCatalog.cs](../../src/Exam.Admin/ViewModels/ExamConfigurationCatalog.cs) 和 [ExamCatalogEndpoints.cs](../../src/Exam.Server/Api/ExamCatalogEndpoints.cs) 已有正式保存链路，剩余 UI 限制与回归见 C 文档。公共契约、权限、计分及迁移仍按 [AGENTS.md](../../AGENTS.md) 由 A 确认和审查。
+C01 旧评论所说的”完整考试配置尚未持久化”已经不适用于当前主线。现有 [ExamConfigurationCatalog.cs](../../src/Exam.Admin/ViewModels/ExamConfigurationCatalog.cs) 和 [ExamCatalogEndpoints.cs](../../src/Exam.Server/Api/ExamCatalogEndpoints.cs) 已有正式保存链路，剩余 UI 限制与回归见 C 文档。公共契约、权限、计分及迁移仍按 [AGENTS.md](../../AGENTS.md) 由 A 确认和审查。
 
 ## A 跟进的服务管理入口
 

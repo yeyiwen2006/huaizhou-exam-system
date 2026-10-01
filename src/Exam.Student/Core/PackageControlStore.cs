@@ -55,6 +55,10 @@ internal sealed record PackageControlState
     public PendingPaperInstallation? PendingPaperInstallation { get; init; }
     public PaperUpdateInstallation? LastPaperInstallation { get; init; }
     public IReadOnlyList<ProcessedPackageCommand> Commands { get; init; } = [];
+    /// <summary>ScheduleChanged 指令中服务端传来的最新开考时间；null 表示未收到过更新。</summary>
+    public DateTimeOffset? OverriddenScheduledStart { get; init; }
+    /// <summary>ScheduleChanged 指令中服务端传来的最新结束时间；null 表示未收到过更新。</summary>
+    public DateTimeOffset? OverriddenScheduledEnd { get; init; }
 }
 
 /// <summary>

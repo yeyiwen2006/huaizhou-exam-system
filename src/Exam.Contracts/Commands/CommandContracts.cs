@@ -89,7 +89,13 @@ public sealed record CommandDelivery(
     string? ProtectedUnlockReference,
     IReadOnlyDictionary<string, string> Metadata,
     DateTimeOffset CreatedAt,
-    int DeliveryAttempt);
+    int DeliveryAttempt)
+{
+    /// <summary>ScheduleChanged 事件携带的新开考时间；服务端不填时为 null。</summary>
+    public DateTimeOffset? NewScheduledStart { get; init; }
+    /// <summary>ScheduleChanged 事件携带的新结束时间；服务端不填时为 null。</summary>
+    public DateTimeOffset? NewScheduledEnd { get; init; }
+}
 
 public sealed record AcknowledgeCommandRequest(
     string RequestId,

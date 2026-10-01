@@ -30,7 +30,7 @@ C01～C04 的旧卡 #17～#20 因合并跟踪而关闭，剩余工作统一记�
 
 ## C02 考生名册
 
-依据 [requirements.md](../../requirements.md) 第 29～31、116 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。A 先确认权威名册接口，C 完成 GUI 与业务 CLI 接线。
+依据 [requirements.md](../../requirements.md) 第 29～31、116 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。服务器目前只有单条参与者写入接口（`POST /versioning/exams/{examId}/participants`），**没有按考试全量查询名册或原子整批导入的端点**，A 需先补充这两个接口后 C 再接线。批量写入规则：完全重复行跳过，整批写入失败全部回滚，不允许部分写入。
 
 - [ ] **3. 名册真正保存到服务器。** 当前手工新增和 Excel 确认导入只修改内存集合，关闭考务端即丢失。接入服务器查询和写入，复用现有格式校验及预览。验证重启后仍可读取、前导零保留、重复行与冲突行按统一规则处理、整批失败没有部分写入，失败时不显示导入成功。
 
@@ -42,7 +42,7 @@ C01～C04 的旧卡 #17～#20 因合并跟踪而关闭，剩余工作统一记�
 
 ## C03 激活与试场分组
 
-依据 [requirements.md](../../requirements.md) 第 17、23、25 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。权威分组模型、权限及必要迁移由 A 确认后接入。
+依据 [requirements.md](../../requirements.md) 第 17、23、25 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。**服务器目前没有任何试场分组接口**（分组查询、创建、修改、删除、设备关联、按学生端编号查设备均不存在），A 需先设计并实现分组存储模型、必要迁移及全套接口后，C 再接线。
 
 - [ ] **5. 批准激活时能选择真实试场。** 当前输入被禁用，批准请求固定传空分组，设备只能先归入未分组。接入服务器维护的分组选择，并在批准时保存关联。未指定时明确显示“未分组”，失效分组不能提交。保留现有幂等批准和重复回执保护。
 
@@ -62,7 +62,7 @@ C01～C04 的旧卡 #17～#20 因合并跟踪而关闭，剩余工作统一记�
 
 ## C04 监控、裁决与答卷回收
 
-依据 [requirements.md](../../requirements.md) 第 35、178～184 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。C 消费正式状态源；公共状态聚合和通知接口由 A 协调确认。
+依据 [requirements.md](../../requirements.md) 第 35、178～184 行，跟踪到 [#46](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/46)。SignalR Hub（`/hubs/exam-events`）和失焦汇总端点已存在，C 可直接复用。**但目前没有独立的聚合监控状态 REST 端点**（设备、考生、作答进度、通信状态、回收结果的一次性聚合查询），A 需先补充该端点后 C 再接线实时展示部分。
 
 - [ ] **9. 补齐监控字段。** 当前表格仍以内部参试、考生和设备标识为主，缺少姓名、班级、准考证号、学生端编号、试场、当前页面、题号及已选答案、实际试卷版本、最后通信和指令确认等信息。最新主线已有失焦汇总和修订复核列，应保留并接入统一刷新。验证字段来自真实业务状态，版本更新失败可辨认，私人标记不会显示到考务端。
 
@@ -90,7 +90,7 @@ C01～C04 的旧卡 #17～#20 因合并跟踪而关闭，剩余工作统一记�
 
 ## C05 导入、发布和考试中修改
 
-依据 [requirements.md](../../requirements.md) 的“考试设置与计分”“逐题导入、原版显示与加密”“考试中修改时间与试题”，跟踪到 [#21](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/21)。
+依据 [requirements.md](../../requirements.md) 的”考试设置与计分””逐题导入、原版显示与加密””考试中修改时间与试题”，跟踪到 [#21](https://github.com/yeyiwen2006/huaizhou-exam-system/issues/21)。服务器目前有两个独立的发布端点（`POST /versioning/exams/{examId}/paper-publications` 和 `POST /versioning/exams/{examId}/grading-publications`），**没有原子整体发布入口**。A 需先确认是补充原子入口还是由现有两个端点分别调用，明确失败边界后 C 再接线 GUI 与 CLI。
 
 - [ ] **15. 完成正式导入和发布流程。** 主线缺少目录或 ZIP 导入、清单生成编辑、依赖检查、逐题编译、版式与选项绑定预览、确认发布的完整 GUI。PR #103 的只读预览可复用，但不能算完整导入。消费 D01～D03 已有模块，在 A 确认的原子发布接口上接 GUI、API、CLI。验证合成材料成功发布、缺项和编译失败、取消及重试、权限与版本冲突；失败不留下半份可用试卷，学生包不含答案和解析。
 
