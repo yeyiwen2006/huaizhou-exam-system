@@ -23,8 +23,17 @@ public partial class MainWindow : Window
 
     private void ShowLoginPage()
     {
+        _loginPage?.Detach();
         _loginPage = new AdminLoginPage(_viewModel.Connection);
         PageRegion.Content = _loginPage;
+        MainTabArea.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowRegistrationSuccessPage()
+    {
+        _loginPage?.Detach();
+        _loginPage = null;
+        PageRegion.Content = new RegistrationSuccessPage(_viewModel.Connection);
         MainTabArea.Visibility = Visibility.Collapsed;
     }
 
@@ -41,6 +50,14 @@ public partial class MainWindow : Window
 
     private void OnConnectionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(ConnectionViewModel.ShowRegistrationSuccess))
+        {
+            if (_viewModel.Connection.ShowRegistrationSuccess)
+                ShowRegistrationSuccessPage();
+            else
+                ShowLoginPage();
+            return;
+        }
         if (e.PropertyName != nameof(ConnectionViewModel.IsConnected)) return;
         if (_viewModel.Connection.IsConnected)
             ShowMainArea();
