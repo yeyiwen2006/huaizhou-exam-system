@@ -442,6 +442,12 @@ public partial class ExamInProgressPage : UserControl
             QuestionView.UpdateAnswer(persisted);
             RefreshNav();
             RefreshStatus();
+            // 只在本次选择已经可靠保存、页面与授权仍有效时前进；取消选择和多选普通选项留在原题。
+            if (CanAnswer && _navigator?.NextQuestionAfterSelection(question.QuestionId, persisted) is { } nextQuestion)
+            {
+                _currentQuestionId = nextQuestion.QuestionId;
+                await RenderCurrentQuestionAsync(_lifetime.Token);
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) when (IsWorkbenchError(error))

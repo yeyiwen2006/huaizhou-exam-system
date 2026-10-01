@@ -1,4 +1,5 @@
 using Exam.Contracts.Resources;
+using Exam.Contracts.Common;
 using Exam.Contracts.Submissions;
 using Exam.Student.Core;
 
@@ -75,6 +76,48 @@ public sealed class PaperNavigatorTests
         Assert.Equal(10, navigator.Find("q10")?.QuestionNo);
         Assert.Null(navigator.Find("missing"));
         Assert.Null(navigator.Find(""));
+    }
+
+    [Theory]
+    [InlineData("single", true, AnswerKind.Selected, "q2")]
+    [InlineData("single", true, AnswerKind.Empty, null)]
+    [InlineData("single", true, AnswerKind.Abstain, "q2")]
+    [InlineData("single", false, AnswerKind.Abstain, null)]
+    [InlineData("multiple", true, AnswerKind.Selected, null)]
+    [InlineData("multiple", true, AnswerKind.Abstain, "q2")]
+    [InlineData("indeterminate", true, AnswerKind.Selected, null)]
+    [InlineData("indeterminate", true, AnswerKind.Abstain, "q2")]
+    public void AutomaticAdvanceDependsOnQuestionTypeAndTheSavedSelection(string type, bool allowAbstain,
+        AnswerKind kind, string? expected)
+    {
+        var template = CreateManifest();
+        var manifest = template with
+        {
+            Questions = template.Questions.Select(q => q.Structure.QuestionId == "q1"
+                ? q with { Structure = q.Structure with { QuestionType = type, AllowAbstain = allowAbstain } } : q).ToArray()
+        };
+        var answer = kind switch
+        {
+            AnswerKind.Selected => AnswerValue.Selected("A"),
+            AnswerKind.Abstain => AnswerValue.Abstain(),
+            _ => AnswerValue.Empty()
+        };
+        Assert.Equal(expected, new PaperNavigator(manifest).NextQuestionAfterSelection("q1", answer)?.QuestionId);
+    }
+
+    [Fact]
+    public void AutomaticAdvanceUsesGlobalNumericOrderAndStopsAtTheLastQuestion()
+    {
+        var template = CreateManifest();
+        var navigator = new PaperNavigator(template with
+        {
+            Questions = template.Questions.Select(q => q.Structure.QuestionId == "q10"
+                ? q with { Structure = q.Structure with { QuestionType = "single" } } : q).ToArray()
+        });
+        Assert.Equal("q5", navigator.NextQuestionAfterSelection("q2", AnswerValue.Selected("A"))?.QuestionId);
+        Assert.Equal("q10", navigator.NextQuestionAfterSelection("q5", AnswerValue.Abstain())?.QuestionId);
+        Assert.Null(navigator.NextQuestionAfterSelection("q10", AnswerValue.Selected("A")));
+        Assert.Null(navigator.NextQuestionAfterSelection("missing", AnswerValue.Selected("A")));
     }
 
     [Fact]

@@ -178,10 +178,31 @@ public sealed class UiScreenshotTests
             if (!ready) notes.AppendLine("答题页：15 秒内题目或题号导航未出现，截图为当时状态。");
             await IdleAsync(TimeSpan.FromMilliseconds(500));
             await CaptureAsync(window, directory, "student-exam-in-progress");
+
+            ToggleButton Choice(string id) => Assert.Single(Descendants<ToggleButton>(questionView), button => Equals(button.Tag, id));
+            bool ReadyAt(string id) => answers.CurrentQuestionId == id && navList.IsEnabled && questionView.HasQuestion;
+            async Task GoToAsync(string id)
+            {
+                Assert.Single(Descendants<Button>(navList), button => Equals(button.Tag, id))
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => ReadyAt(id), TimeSpan.FromSeconds(5));
+            }
+
+            // 再点已选单选项只取消；选中另一项后，答案与下一题位置均经真实 SQLite 保存。
+            Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Empty && ReadyAt("q1"), TimeSpan.FromSeconds(5));
+            Choice("A").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await WaitUntilAsync(() => ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            var saved = Assert.IsType<AnswerStateRecord>(await answeringFixture.Store.LoadAnswerStateAsync(answeringFixture.Key));
+            Assert.Equal(new[] { "A" }, saved.Answers["q1"].OptionIds);
+            Assert.Equal("q2", saved.CurrentQuestionId);
+            await GoToAsync("q1");
+
             var abstain = Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null);
             abstain.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Abstain, TimeSpan.FromSeconds(5));
-            await IdleAsync();
+            await WaitUntilAsync(() => answers.Answers["q1"].Kind == AnswerKind.Abstain && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+            await GoToAsync("q1");
+            abstain = Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null);
             Assert.True(abstain.IsChecked);
             Assert.All(Descendants<ToggleButton>(questionView).Where(button => button.Tag is string),
                 button => Assert.False(button.IsChecked));
@@ -208,6 +229,26 @@ public sealed class UiScreenshotTests
                     questionView.HasQuestion, TimeSpan.FromSeconds(15), throwOnTimeout: false);
                 await IdleAsync(TimeSpan.FromMilliseconds(500));
                 await CaptureAsync(window, directory, "student-exam-in-progress-q2");
+                Choice("A").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Contains("A") && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                Choice("B").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].OptionIds.Count == 2 && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null)
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].Kind == AnswerKind.Abstain && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+                Assert.False(answeringRuntime.HasFixedSubmission); // 末题不循环，也不自动交卷。
+                Assert.Single(Descendants<ToggleButton>(questionView), button => button.Tag is null)
+                    .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Answers["q2"].Kind == AnswerKind.Empty && ReadyAt("q2"), TimeSpan.FromSeconds(5));
+
+                await GoToAsync("q1");
+                // 关闭测试专用存储注入写失败，验证页面不会在答案尚未保存时前进。
+                answeringFixture.Store.Dispose();
+                Choice("C").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await WaitUntilAsync(() => answers.Status == AnswerSessionStatus.WriteBlocked, TimeSpan.FromSeconds(5));
+                Assert.Equal("q1", answers.CurrentQuestionId);
+                Assert.StartsWith("第 1 题", ((TextBlock)inProgress.FindName("CurrentQuestionText")).Text, StringComparison.Ordinal);
+                Assert.Equal(AnswerKind.Abstain, answers.Answers["q1"].Kind);
             }
             else notes.AppendLine("答题页：未找到 q2 题号按钮，未生成 q2 截图。");
             host.Content = null;
@@ -253,10 +294,10 @@ public sealed class UiScreenshotTests
                 \par}
 
                 {\linespread{2}\selectfont
-                \noindent\optmark{q1}{A}{A.} $14$\\
-                \optmark{q1}{B}{B.} $16$\\
-                \optmark{q1}{C}{C.} $18$\\
-                \optmark{q1}{D}{D.} $20$
+                \noindent\optmark{q1}{A}{A.}\hspace{\fontdimen2\font} $14$\\
+                \optmark{q1}{B}{B.}\hspace{\fontdimen2\font} $16$\\
+                \optmark{q1}{C}{C.}\hspace{\fontdimen2\font} $18$\\
+                \optmark{q1}{D}{D.}\hspace{\fontdimen2\font} $20$
                 \par}
                 """),
             ["q2"] = ("questions/衔接合成考试_2.tex", """
@@ -265,10 +306,10 @@ public sealed class UiScreenshotTests
                 \par}
 
                 {\linespread{2}\selectfont
-                \noindent\optmark{q2}{A}{A.} $2$\\
-                \optmark{q2}{B}{B.} $4$\\
-                \optmark{q2}{C}{C.} $7$\\
-                \optmark{q2}{D}{D.} $9$
+                \noindent\optmark{q2}{A}{A.}\hspace{\fontdimen2\font} $2$\\
+                \optmark{q2}{B}{B.}\hspace{\fontdimen2\font} $4$\\
+                \optmark{q2}{C}{C.}\hspace{\fontdimen2\font} $7$\\
+                \optmark{q2}{D}{D.}\hspace{\fontdimen2\font} $9$
                 \par}
                 """)
         };

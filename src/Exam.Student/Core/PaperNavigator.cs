@@ -46,6 +46,16 @@ public sealed partial class PaperNavigator
         Questions.Count > 0 ? Questions[0] :
             throw new InvalidOperationException("学生清单没有题目。");
 
+    /// <summary>单选普通选项或启用的“不作答”保存成功后按全卷题号前进；末题不循环、不交卷。</summary>
+    public PaperQuestionStructure? NextQuestionAfterSelection(string questionId, AnswerValue savedAnswer)
+    {
+        var current = Find(questionId);
+        if (current is null ||
+            !(savedAnswer.Kind == AnswerKind.Selected && current.QuestionType == "single" ||
+              savedAnswer.Kind == AnswerKind.Abstain && current.AllowAbstain)) return null;
+        return Questions.FirstOrDefault(question => question.QuestionNo > current.QuestionNo);
+    }
+
     /// <summary>构建导航分区。answers/marks 为当前可靠快照（可为 null 表示尚无作答）。</summary>
     public IReadOnlyList<GroupNavSection> BuildSections(
         IReadOnlyDictionary<string, AnswerValue>? answers,
