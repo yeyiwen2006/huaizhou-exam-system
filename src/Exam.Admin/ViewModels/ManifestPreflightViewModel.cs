@@ -13,6 +13,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
     public const long MaxManifestBytes = 10 * 1024 * 1024;
 
     private readonly IManifestFileDialogService _manifestFiles;
+    private readonly IImportSourceFileDialogService _importSources;
     private readonly Func<string, ImportValidationReport> _validateManifest;
     private string _examId = string.Empty;
     private bool _isPreflighting;
@@ -30,16 +31,28 @@ public sealed class ManifestPreflightViewModel : BindableBase
     {
     }
 
+    public ManifestPreflightViewModel(
+        AdminApiClient api,
+        IManifestFileDialogService? manifestFiles,
+        IImportSourceFileDialogService importSources)
+        : this(api, manifestFiles, json => new ExamManifestValidator().ValidateJson(json), importSources)
+    {
+    }
+
     internal ManifestPreflightViewModel(
         AdminApiClient api,
         IManifestFileDialogService? manifestFiles,
-        Func<string, ImportValidationReport> validateManifest)
+        Func<string, ImportValidationReport> validateManifest,
+        IImportSourceFileDialogService? importSources = null)
     {
         _manifestFiles = manifestFiles ?? new FileDialogService();
+        _importSources = importSources ?? new FileDialogService();
         _validateManifest = validateManifest ?? throw new ArgumentNullException(nameof(validateManifest));
         api.ConfigurationChanged += (_, _) =>
             Reset("连接已变更；旧预检结果已清除，请重新选择并校验清单。");
         SelectManifestCommand = new AsyncRelayCommand(SelectManifestAsync, onError: SetPreflightError);
+        SelectDirectoryCommand = new AsyncRelayCommand(SelectDirectoryAsync, onError: SetPreflightError);
+        SelectZipCommand = new AsyncRelayCommand(SelectZipAsync, onError: SetPreflightError);
     }
 
     public string ExamId
@@ -86,8 +99,22 @@ public sealed class ManifestPreflightViewModel : BindableBase
     }
 
     public AsyncRelayCommand SelectManifestCommand { get; }
+    public AsyncRelayCommand SelectDirectoryCommand { get; }
+    public AsyncRelayCommand SelectZipCommand { get; }
 
-    public async Task SelectManifestAsync()
+    public Task SelectManifestAsync() => SelectSourceAsync(
+        _manifestFiles.OpenManifestFile, _manifestFiles.ReadManifestAsync, requireManifestName: true);
+
+    public Task SelectDirectoryAsync() => SelectSourceAsync(
+        _importSources.OpenImportDirectory, _importSources.ReadManifestFromDirectoryAsync, requireManifestName: false);
+
+    public Task SelectZipAsync() => SelectSourceAsync(
+        _importSources.OpenImportZip, _importSources.ReadManifestFromZipAsync, requireManifestName: false);
+
+    private async Task SelectSourceAsync(
+        Func<string?> chooseSource,
+        Func<string, long, CancellationToken, Task<string>> readManifest,
+        bool requireManifestName)
     {
         var context = _contextVersion;
         var sequence = ++_preflightSequence;
@@ -98,7 +125,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
         string? path;
         try
         {
-            path = _manifestFiles.OpenManifestFile();
+            path = chooseSource();
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -118,11 +145,11 @@ public sealed class ManifestPreflightViewModel : BindableBase
 
         if (string.IsNullOrWhiteSpace(ExamId))
         {
-            Status = "请先填写当前考试 ID，再选择 manifest.json。";
+            Status = "请先填写当前考试 ID（选择并保存考试），再选择试题源。";
             return;
         }
 
-        if (!string.Equals(Path.GetFileName(path), "manifest.json", StringComparison.OrdinalIgnoreCase))
+        if (requireManifestName && !string.Equals(Path.GetFileName(path), "manifest.json", StringComparison.OrdinalIgnoreCase))
         {
             Status = "只接受名为 manifest.json 的清单；独立答案不在考务端本地预检范围内。";
             return;
@@ -132,7 +159,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
         Status = "正在读取并静态校验 manifest.json…";
         try
         {
-            var json = await _manifestFiles.ReadManifestAsync(path, MaxManifestBytes);
+            var json = await readManifest(path, MaxManifestBytes, CancellationToken.None);
             if (context != _contextVersion || sequence != _preflightSequence)
             {
                 return;
@@ -237,7 +264,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
     {
         ClearResult();
         Status = exception is InvalidDataException
-            ? "清单超过 10 MB 上限；未执行静态预检。"
+            ? "导入源格式不正确、根目录缺少唯一 manifest.json，或清单超过 10 MB；未执行静态预检。"
             : "读取清单失败；请检查文件权限、严格 UTF-8 编码及文件是否仍存在。未执行静态预检。";
     }
 }

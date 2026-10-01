@@ -89,6 +89,10 @@ public sealed class WpfBindingSmokeTests
                 var previewControl = Assert.Single(Descendants<ContentControl>(window), control =>
                     BindingOperations.GetBinding(control, ContentControl.ContentProperty)?.Path.Path ==
                     "ManifestPreflight.StructurePreview");
+                Assert.Contains(Descendants<Button>(window), button =>
+                    ReferenceEquals(button.Command, viewModel.ManifestPreflight.SelectDirectoryCommand));
+                Assert.Contains(Descendants<Button>(window), button =>
+                    ReferenceEquals(button.Command, viewModel.ManifestPreflight.SelectZipCommand));
                 Assert.Null(previewControl.Content);
                 var sampleRoot = new DirectoryInfo(AppContext.BaseDirectory);
                 while (sampleRoot is not null && !Directory.Exists(Path.Combine(sampleRoot.FullName, "samples", "synthetic")))

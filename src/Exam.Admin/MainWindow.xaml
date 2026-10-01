@@ -287,11 +287,16 @@
                     <Border Style="{StaticResource CardGap}" Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="试题清单检查与只读预览" Style="{StaticResource CardHeading}" />
-                            <TextBlock Text="选择当前考试的导入源清单 manifest.json。这里仅核对清单结构，不读取独立答案，也不会编译或发布试卷。"
+                            <TextBlock Text="选择当前考试的试题目录、ZIP 包或导入源清单。这里仅核对清单结构，不读取独立答案，也不会编译或发布试卷。"
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap" />
-                            <Button Content="选择清单并检查" Style="{StaticResource ActionButton}"
-                                    IsEnabled="{Binding HasCurrentExam}" HorizontalAlignment="Left"
-                                    Command="{Binding ManifestPreflight.SelectManifestCommand}" />
+                            <WrapPanel>
+                                <Button Content="选择试题目录" Style="{StaticResource ActionButton}"
+                                        IsEnabled="{Binding HasCurrentExam}" Command="{Binding ManifestPreflight.SelectDirectoryCommand}" />
+                                <Button Content="选择 ZIP 包" Style="{StaticResource ActionButton}"
+                                        IsEnabled="{Binding HasCurrentExam}" Command="{Binding ManifestPreflight.SelectZipCommand}" />
+                                <Button Content="选择 manifest.json" Style="{StaticResource ActionButton}"
+                                        IsEnabled="{Binding HasCurrentExam}" Command="{Binding ManifestPreflight.SelectManifestCommand}" />
+                            </WrapPanel>
                             <TextBlock Text="{Binding ManifestPreflight.SelectedManifestPath, StringFormat='本次选择：{0}'}"
                                        Style="{StaticResource CaptionText}" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding ManifestPreflight.Status}" Style="{StaticResource StatusLine}"
