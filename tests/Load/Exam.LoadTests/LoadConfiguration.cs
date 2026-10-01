@@ -97,7 +97,9 @@ public sealed class LoadSession
     public long InitialAnswerVersion { get; init; }
     public string? ResourcePath { get; init; }
     public long ExpectedResourceBytes { get; init; }
+    public string? ExpectedResourceSha256 { get; init; }
     public bool IsValid() => new[] { ExamId, CandidateId, ParticipationId, DeviceId, Credential }.All(v => !string.IsNullOrWhiteSpace(v) && !v.Any(char.IsControl)) &&
-        EntryVersion > 0 && AuthorizationVersion > 0 && PaperVersion > 0 && InitialAnswerVersion >= 0;
+        EntryVersion > 0 && AuthorizationVersion > 0 && PaperVersion > 0 && InitialAnswerVersion >= 0 &&
+        (ExpectedResourceSha256 is null || (ExpectedResourceSha256.Length == 64 && ExpectedResourceSha256.All(Uri.IsHexDigit)));
     public string Query => $"participationId={Uri.EscapeDataString(ParticipationId)}&entryVersion={EntryVersion}&deviceId={Uri.EscapeDataString(DeviceId)}&authorizationVersion={AuthorizationVersion}";
 }

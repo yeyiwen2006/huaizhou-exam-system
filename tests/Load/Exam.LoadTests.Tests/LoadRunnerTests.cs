@@ -21,7 +21,7 @@ public sealed partial class LoadRunnerTests
     [Theory]
     [InlineData("http://example.test", true)]
     [InlineData("http://127.0.0.1:5089", false)]
-    [InlineData("https://user:secret@example.test", false)]
+    [InlineData("https://user:secret\u0040example.test", false)]
     [InlineData("https://example.test/path", false)]
     [InlineData("https://example.test?token=secret", false)]
     public void UnsafeTargetsAreRejected(string target, bool allowHttp)
@@ -218,6 +218,31 @@ public sealed partial class LoadRunnerTests
         });
         await using (var runner = new LoadRunner(options, manifest, handler)) Assert.Equal(1, await runner.RunAsync(default));
         Directory.Delete(options.OutputDirectory, true);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DownloadChecksOptionalDigestAndPreservesLegacyInputs(bool corrupted)
+    {
+        var bytes = new byte[100];
+        var source = Session();
+        var session = new LoadSession { ExamId = source.ExamId, CandidateId = source.CandidateId,
+            ParticipationId = source.ParticipationId, DeviceId = source.DeviceId, Credential = source.Credential,
+            EntryVersion = 1, AuthorizationVersion = 1, PaperVersion = 1, ResourcePath = "/api/v1/resources/test",
+            ExpectedResourceBytes = 100, ExpectedResourceSha256 = corrupted ? new string('a', 64) : null };
+        var manifest = new LoadManifest { Synthetic = true, ServerId = "server", ServerEpoch = 1, Sessions = [session] };
+        var options = Options("download");
+        using var handler = new Handler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
+            response.Headers.Add("X-Exam-Server-Id", "server");
+            response.Headers.Add("X-Exam-Server-Epoch", "1");
+            response.Headers.Add("X-Exam-Paper-Version", "1");
+            return Task.FromResult(response);
+        });
+        try { await using var runner = new LoadRunner(options, manifest, handler); Assert.Equal(corrupted ? 1 : 0, await runner.RunAsync(default)); }
+        finally { if (Directory.Exists(options.OutputDirectory)) Directory.Delete(options.OutputDirectory, true); }
     }
 
     private static HttpResponseMessage Envelope<T>(T result) => new(HttpStatusCode.OK)

@@ -8,6 +8,8 @@ using Exam.Infrastructure.Postgres;
 using Exam.Infrastructure.Postgres.Submissions;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Security;
+using Exam.Contracts.Versioning;
+using Exam.Infrastructure.Postgres.Versioning;
 using Npgsql;
 
 // Deliberately separate provisioning from measured traffic. Never seed an existing database.
@@ -20,6 +22,8 @@ if (args is ["--validate-fixture", var validationDirectory])
 }
 if (args is ["--audit", var fixtureDirectory, var reportPath])
     return await LocalCapacityAudit.RunAsync(fixtureDirectory, reportPath);
+if (args is ["--cleanup-owned", var cleanupDirectory])
+    return await FixtureOwnership.CleanupAsync(cleanupDirectory);
 if (args.Length != 3 || args[0] != "--create-isolated" ||
     !int.TryParse(args[1], out var count) || count is < 1 or > 300)
 {
@@ -41,6 +45,9 @@ await using (var admin = new NpgsqlConnection(adminOptions.ConnectionString))
     await using var create = new NpgsqlCommand($"CREATE DATABASE \"{database}\" TEMPLATE template0 ENCODING 'UTF8'", admin);
     await create.ExecuteNonQueryAsync();
 }
+try
+{
+await FixtureOwnership.MarkAsync(output, adminOptions.ConnectionString, database);
 var connectionOptions = new NpgsqlConnectionStringBuilder(source)
 {
     Database = database, Pooling = true, MinPoolSize = 0, MaxPoolSize = 16,
@@ -62,10 +69,14 @@ var resourceId = $"synthetic-package-{Guid.NewGuid():N}";
 using var key = RSA.Create(2048);
 var certificateRequest = new CertificateRequest("CN=local-capacity-fixture", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 using var certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+var certificatePassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+await File.WriteAllBytesAsync(Path.Combine(output, "synthetic-node.pfx"), certificate.Export(X509ContentType.Pkcs12, certificatePassword));
+await File.WriteAllTextAsync(Path.Combine(output, "synthetic-node.password"), certificatePassword);
 var policy = new ManagedNodeEncryptionPolicy(new HashSet<string>([nodeId], StringComparer.Ordinal));
 var encryption = new PackageEncryptionService(65536, policy);
 await using var ciphertext = new MemoryStream();
-var envelope = await encryption.EncryptAsync(new MemoryStream(RandomNumberGenerator.GetBytes(1024 * 1024)),
+var paper = SyntheticFixturePaper.Build(examId);
+var envelope = await encryption.EncryptAsync(new MemoryStream(paper.Bytes),
     ciphertext, resourceId, 1, [new(nodeId, certificate)]);
 await new PostgresVersionedResourceStore(dataSource, policy).SaveAsync(new VersionedEncryptedResource(
     resourceId, examId, "paper-package", 1, ciphertext.ToArray(), envelope, DateTimeOffset.UtcNow, "capacity-test-operator"));
@@ -73,15 +84,23 @@ var protector = new Pbkdf2DeviceCredentialProtector();
 var store = new PostgresSubmissionStore(dataSource);
 var sessions = new List<object>();
 await using var connection = await dataSource.OpenConnectionAsync();
+var now = DateTimeOffset.UtcNow;
+var versioning = new PostgresExamVersioningService(dataSource);
+Require(versioning.CreateExam(new(examId, new(now.AddMinutes(-1), now.AddHours(6)), now.AddMinutes(-2), "synthetic-create")));
+Require(versioning.PublishPaper(new(examId, 0, resourceId, paper.Structure, [], new(true, true, true, true),
+    "G", "预先构造的合成显示夹具，未执行真实编译与预览验收", now, "synthetic-paper")));
+Require(versioning.PublishGradingRules(new(examId, 0, "synthetic-rules", new(true, true, true), "G", "合成计分夹具",
+    now, "synthetic-grading", paper.ManifestJson, paper.AnswerKeyJson)));
 await using (var seedExam = new NpgsqlCommand("""
-    INSERT INTO exam.exam_entry_access
-      (exam_id, scheduled_start, scheduled_end, lifecycle, package_ready, instructions_ready)
-    VALUES (@exam, clock_timestamp() - interval '1 minute', clock_timestamp() + interval '6 hours', 'running', false, false);
+    WITH prepared AS (UPDATE exam.exam_entry_access SET instructions_ready=true WHERE exam_id=$1 RETURNING exam_id)
+    INSERT INTO exam.activation_daily_sequences VALUES (CURRENT_DATE, $2);
     """, connection))
 {
-    seedExam.Parameters.AddWithValue("exam", examId);
+    seedExam.Parameters.AddWithValue(examId);
+    seedExam.Parameters.AddWithValue(count);
     await seedExam.ExecuteNonQueryAsync();
 }
+Require(versioning.ExecuteScheduleTrigger(new(examId, 1, ScheduleTriggerKind.Start, now, "synthetic-start")));
 for (var index = 1; index <= count; index++)
 {
     var deviceId = $"load-device-{index:D3}";
@@ -89,21 +108,21 @@ for (var index = 1; index <= count; index++)
     var participationId = $"load-participation-{index:D3}";
     var credential = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
     await using (var seed = new NpgsqlCommand("""
-        INSERT INTO exam.activation_devices
+        WITH device AS (INSERT INTO exam.activation_devices
           (device_id, client_number, activation_date, activation_status, protected_credential,
            credential_version, created_at, version)
-        VALUES (@device, @number, CURRENT_DATE, 'active', @verifier, 1, clock_timestamp(), 1);
+        VALUES ($1, to_char(CURRENT_DATE, 'YYYYMMDD') || $2, CURRENT_DATE, 'active', $3, 1, clock_timestamp(), 1) RETURNING device_id)
         INSERT INTO exam.candidate_roster_entries
           (exam_id, candidate_id, candidate_name, class_text, admission_no)
-        VALUES (@exam, @candidate, '合成容量考生', '01', @admission);
+        VALUES ($4, $5, '合成容量考生', '01', $6);
         """, connection))
     {
-        seed.Parameters.AddWithValue("device", deviceId);
-        seed.Parameters.AddWithValue("number", $"20260922{index:D3}");
-        seed.Parameters.AddWithValue("verifier", protector.Protect(credential));
-        seed.Parameters.AddWithValue("exam", examId);
-        seed.Parameters.AddWithValue("candidate", candidateId);
-        seed.Parameters.AddWithValue("admission", $"{index:D6}");
+        seed.Parameters.AddWithValue(deviceId);
+        seed.Parameters.AddWithValue($"{index:D3}");
+        seed.Parameters.AddWithValue(protector.Protect(credential));
+        seed.Parameters.AddWithValue(examId);
+        seed.Parameters.AddWithValue(candidateId);
+        seed.Parameters.AddWithValue($"{index:D6}");
         await seed.ExecuteNonQueryAsync();
     }
     await store.SetAuthorizationStateAsync(new SubmissionAuthorizationState(
@@ -112,7 +131,8 @@ for (var index = 1; index <= count; index++)
     sessions.Add(new { examId, candidateId, participationId, entryVersion = 1,
         deviceId, authorizationVersion = 1, paperVersion = 1, credential, initialAnswerVersion = 0,
         resourcePath = $"/api/v1/resources/{resourceId}?participationId={participationId}&entryVersion=1&deviceId={deviceId}&authorizationVersion=1",
-        expectedResourceBytes = ciphertext.Length });
+        expectedResourceBytes = ciphertext.Length,
+        expectedResourceSha256 = Convert.ToHexString(SHA256.HashData(ciphertext.ToArray())).ToLowerInvariant() });
 }
 Directory.CreateDirectory(output);
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -133,8 +153,21 @@ await File.WriteAllTextAsync(Path.Combine(output, "setup.json"), JsonSerializer.
     createdAt = DateTimeOffset.UtcNow,
     limitations = new[] { "Single local PostgreSQL; synchronous replication not enabled.",
         "Direct isolated fixture provisioning; activation/login are not measured.",
-        "Resource is 1 MiB encrypted synthetic bytes, not a compiled paper or maximum actual package; instructions/decryption are not covered.",
+        "Resource is a valid encrypted 120-question synthetic display ZIP, not a compiled or maximum actual paper; real compilation and GUI preview are not covered.",
+        "The test host provides an ephemeral synthetic certificate; production certificate-store deployment is not covered.",
         "Credentials and local-server.json must not be committed or uploaded." }
 }, json));
 Console.WriteLine($"Created {count} synthetic identities in a NEW isolated database. Private configuration: {output}");
 return 0;
+}
+catch
+{
+    // The create statement above succeeded in this process; never infer ownership from a prefix.
+    await FixtureOwnership.DropCreatedAsync(adminOptions.ConnectionString, database);
+    throw;
+}
+
+static void Require<T>(VersioningResult<T> result)
+{
+    if (!result.Succeeded) throw new InvalidOperationException("Synthetic fixture publication failed: " + result.ErrorCode + ": " + result.Error);
+}

@@ -1,0 +1,1127 @@
+{
+  "schemaVersion": 1,
+  "source": "requirements.md / current source / Issue #30 #35",
+  "redaction": "Roles and synthetic data only",
+  "rows": [
+    {
+      "id": "E01-C01",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "注册",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "register",
+      "sharedApi": "POST /api/v1/operators/register",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C02",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "登录",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "login",
+      "sharedApi": "POST /api/v1/operators/login",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C03",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "退出",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "logout",
+      "sharedApi": "POST /api/v1/operators/logout",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C04",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "身份查询",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "whoami",
+      "sharedApi": "GET /api/v1/operators/me",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C05",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "账号列表",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "operators list",
+      "sharedApi": "GET /api/v1/operators",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C06",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "批准",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "operators approve",
+      "sharedApi": "PUT /api/v1/operators/status",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C07",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "停用",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "operators disable",
+      "sharedApi": "PUT /api/v1/operators/status",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C08",
+      "requirement": "范围与运行环境 / 考务身份",
+      "action": "启用",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs",
+      "cli": "operators enable",
+      "sharedApi": "PUT /api/v1/operators/status",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Api/OperatorAccountApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C09",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "状态",
+      "role": "F",
+      "gui": null,
+      "cli": "management status",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C10",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "配置读取",
+      "role": "F",
+      "gui": null,
+      "cli": "management configuration",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C11",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "启动",
+      "role": "F",
+      "gui": null,
+      "cli": "management start",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C12",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "停止",
+      "role": "F",
+      "gui": null,
+      "cli": "management stop",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C13",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "自检",
+      "role": "F",
+      "gui": null,
+      "cli": "management checks",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C14",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "配置写入",
+      "role": "F",
+      "gui": null,
+      "cli": "management configure",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C15",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "管理日志",
+      "role": "F",
+      "gui": null,
+      "cli": "management logs",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C16",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "运行日志",
+      "role": "F",
+      "gui": null,
+      "cli": "management runtime-logs",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C17",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "备份",
+      "role": "F",
+      "gui": null,
+      "cli": "management backup",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C18",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "隔离恢复",
+      "role": "F",
+      "gui": null,
+      "cli": "management restore",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C19",
+      "requirement": "主备服务器与接管 / 运维",
+      "action": "操作进度",
+      "role": "F",
+      "gui": null,
+      "cli": "management operation",
+      "sharedApi": "独立管理宿主现有端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "F",
+      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+    },
+    {
+      "id": "E01-C20",
+      "requirement": "主备服务器与接管",
+      "action": "同步状态",
+      "role": "F",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "gapOwner": "F",
+      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+    },
+    {
+      "id": "E01-C21",
+      "requirement": "主备服务器与接管",
+      "action": "应急确认",
+      "role": "F",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "gapOwner": "F",
+      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+    },
+    {
+      "id": "E01-C22",
+      "requirement": "主备服务器与接管",
+      "action": "接管",
+      "role": "F",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "gapOwner": "F",
+      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+    },
+    {
+      "id": "E01-C23",
+      "requirement": "主备服务器与接管",
+      "action": "主节点重建",
+      "role": "F",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
+      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "gapOwner": "F",
+      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+    },
+    {
+      "id": "E01-C24",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "激活批准",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": "POST /api/v1/activation/approve",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+    },
+    {
+      "id": "E01-C25",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "激活撤销",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": "POST /api/v1/activation/revoke",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+    },
+    {
+      "id": "E01-C26",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "设备编号查询",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": "GET /api/v1/activation/devices/{deviceId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+    },
+    {
+      "id": "E01-C27",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "创建分组",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": null,
+      "successTest": "tests/Unit/Exam.AdminUnitTests",
+      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "gapOwner": "C",
+      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+    },
+    {
+      "id": "E01-C28",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "分组改名",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": null,
+      "successTest": "tests/Unit/Exam.AdminUnitTests",
+      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "gapOwner": "C",
+      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+    },
+    {
+      "id": "E01-C29",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "设备转组",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": null,
+      "successTest": "tests/Unit/Exam.AdminUnitTests",
+      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "gapOwner": "C",
+      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+    },
+    {
+      "id": "E01-C30",
+      "requirement": "学生端编号、激活与试场分组",
+      "action": "删除空组",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
+      "cli": null,
+      "sharedApi": null,
+      "successTest": "tests/Unit/Exam.AdminUnitTests",
+      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "gapOwner": "C",
+      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+    },
+    {
+      "id": "E01-C31",
+      "requirement": "考试设置与计分",
+      "action": "考试列表",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams list",
+      "sharedApi": "GET /api/v1/exams",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C32",
+      "requirement": "考试设置与计分",
+      "action": "考试详情",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams show",
+      "sharedApi": "GET /api/v1/exams/{examId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C33",
+      "requirement": "考试设置与计分",
+      "action": "新建考试",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams create",
+      "sharedApi": "POST /api/v1/exams",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C34",
+      "requirement": "考试设置与计分",
+      "action": "修改设置",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams update",
+      "sharedApi": "PUT /api/v1/exams/{examId}/settings",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C35",
+      "requirement": "考试设置与计分",
+      "action": "学生可见性",
+      "role": "A",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams visibility",
+      "sharedApi": "PUT /api/v1/exams/{examId}/visibility",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Exams/PostgresExamCatalogTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "A",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C36",
+      "requirement": "考生名单、参试与设备授权",
+      "action": "名单导入、重复及整批冲突",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/RosterViewModel.cs",
+      "cli": null,
+      "sharedApi": null,
+      "successTest": "tests/Unit/Exam.AdminUnitTests",
+      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "GUI 预览/本机暂存已实现；服务持久化与专用 CLI 未实现",
+      "gapOwner": "C",
+      "gap": "由 C 补齐服务导入及 CLI；界面仍提示本机保存"
+    },
+    {
+      "id": "E01-C37",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "目录/ZIP 导入",
+      "role": "D",
+      "gui": "src/Exam.Admin/ViewModels/ManifestPreflightViewModel.cs",
+      "cli": "import verify DIRECTORY (local)",
+      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "category": [
+        "core",
+        "latex"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "gapOwner": "D",
+      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+    },
+    {
+      "id": "E01-C38",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "依赖检查",
+      "role": "D",
+      "gui": "src/Exam.Admin/ViewModels/ManifestPreflightViewModel.cs",
+      "cli": "import verify DIRECTORY (local)",
+      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "category": [
+        "core",
+        "latex"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "gapOwner": "D",
+      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+    },
+    {
+      "id": "E01-C39",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "编译",
+      "role": "D",
+      "gui": null,
+      "cli": "import verify DIRECTORY (local)",
+      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "category": [
+        "core",
+        "latex"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "gapOwner": "D",
+      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+    },
+    {
+      "id": "E01-C40",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "预览",
+      "role": "D",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
+      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "gapOwner": "D",
+      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+    },
+    {
+      "id": "E01-C41",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "发布",
+      "role": "D",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
+      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "gapOwner": "D",
+      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+    },
+    {
+      "id": "E01-C42",
+      "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
+      "action": "在线试题修改",
+      "role": "D",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
+      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "gapOwner": "D",
+      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+    },
+    {
+      "id": "E01-C43",
+      "requirement": "实时监测与回收 / 可靠通知、交卷与恢复",
+      "action": "进度监测",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
+      "cli": null,
+      "sharedApi": "GET /api/v1/participation/exams/{examId}/actual",
+      "successTest": "tests/Integration/Exam.IntegrationTests",
+      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+    },
+    {
+      "id": "E01-C44",
+      "requirement": "实时监测与回收 / 可靠通知、交卷与恢复",
+      "action": "设备冲突裁决",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
+      "cli": null,
+      "sharedApi": "POST /api/v1/participation/device-decisions",
+      "successTest": "tests/Integration/Exam.IntegrationTests",
+      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+    },
+    {
+      "id": "E01-C45",
+      "requirement": "实时监测与回收 / 可靠通知、交卷与恢复",
+      "action": "指令重发",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
+      "cli": null,
+      "sharedApi": "POST /api/v1/commands/{eventId}/resend",
+      "successTest": "tests/Integration/Exam.IntegrationTests",
+      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+    },
+    {
+      "id": "E01-C46",
+      "requirement": "实时监测与回收 / 可靠通知、交卷与恢复",
+      "action": "事件订阅",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
+      "cli": null,
+      "sharedApi": "SignalR / 现有可靠事件端点",
+      "successTest": "tests/Integration/Exam.IntegrationTests",
+      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+    },
+    {
+      "id": "E01-C47",
+      "requirement": "实时监测与回收 / 可靠通知、交卷与恢复",
+      "action": "回收通知",
+      "role": "C",
+      "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
+      "cli": null,
+      "sharedApi": "GET /api/v1/submissions/collection/events",
+      "successTest": "tests/Integration/Exam.IntegrationTests",
+      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "C",
+      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+    },
+    {
+      "id": "E01-C48",
+      "requirement": "考试设置与计分",
+      "action": "当前计分规则/完整答卷范围及就绪",
+      "role": "D",
+      "gui": null,
+      "cli": "grading status",
+      "sharedApi": "GET /api/v1/grading/{examId}/status",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "D",
+      "gap": "GUI 就绪呈现由 D/C 对接；本卡合成运行核对真实状态 API"
+    },
+    {
+      "id": "E01-C49",
+      "requirement": "考试设置与计分",
+      "action": "规则修改与重新计分",
+      "role": "D",
+      "gui": null,
+      "cli": null,
+      "sharedApi": "POST /api/v1/versioning/exams/{examId}/grading-publications",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Scoring",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Scoring",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Scoring",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "规则/重算模块存在；专用业务 CLI 与 GUI 需 D/C 接线",
+      "gapOwner": "D",
+      "gap": "采用既有计分实现，不在 E01 重写计分算法"
+    },
+    {
+      "id": "E01-C50",
+      "requirement": "成绩统计与五类表格",
+      "action": "结果开放状态",
+      "role": "G",
+      "gui": "src/Exam.Admin/Reporting/ReportWorkspaceView.xaml",
+      "cli": "reports status",
+      "sharedApi": "GET /api/v1/reports/{examId}/status",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "G",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C51",
+      "requirement": "成绩统计与五类表格",
+      "action": "查询五表",
+      "role": "G",
+      "gui": "src/Exam.Admin/Reporting/ReportWorkspaceView.xaml",
+      "cli": "reports show",
+      "sharedApi": "GET /api/v1/reports/{examId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "G",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C52",
+      "requirement": "成绩统计与五类表格",
+      "action": "Excel 导出",
+      "role": "G",
+      "gui": "src/Exam.Admin/Reporting/ReportWorkspaceView.xaml",
+      "cli": "reports export",
+      "sharedApi": "GET /api/v1/reports/{examId}/xlsx",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "category": [
+        "core",
+        "postgres"
+      ],
+      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Reporting/GReportCliTests.cs",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "G",
+      "gap": "T01/T02/T03 整体场景及人工操作未在本卡验收"
+    },
+    {
+      "id": "E01-C53",
+      "requirement": "学生端界面 / 可靠通知、交卷与恢复",
+      "action": "激活与登录",
+      "role": "B",
+      "gui": "src/Exam.Student/Views/ActivationPage.xaml",
+      "cli": "不适用：学生端仅要求 GUI",
+      "sharedApi": "现有学生/提交 API",
+      "successTest": "tests/Unit/Exam.StudentUnitTests",
+      "failureTest": "tests/Unit/Exam.StudentUnitTests",
+      "category": [
+        "core",
+        "wpf"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.StudentUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "B",
+      "gap": "WPF 模块检查仍保留；真实设备完整交互由 T 阶段验收"
+    },
+    {
+      "id": "E01-C54",
+      "requirement": "学生端界面 / 可靠通知、交卷与恢复",
+      "action": "考试选择与等待",
+      "role": "B",
+      "gui": "src/Exam.Student/Views/WaitingExamPage.xaml",
+      "cli": "不适用：学生端仅要求 GUI",
+      "sharedApi": "现有学生/提交 API",
+      "successTest": "tests/Unit/Exam.StudentUnitTests",
+      "failureTest": "tests/Unit/Exam.StudentUnitTests",
+      "category": [
+        "core",
+        "wpf"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.StudentUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "B",
+      "gap": "WPF 模块检查仍保留；真实设备完整交互由 T 阶段验收"
+    },
+    {
+      "id": "E01-C55",
+      "requirement": "学生端界面 / 可靠通知、交卷与恢复",
+      "action": "答题、时间与全屏",
+      "role": "B",
+      "gui": "src/Exam.Student/Views/ExamInProgressPage.xaml",
+      "cli": "不适用：学生端仅要求 GUI",
+      "sharedApi": "现有学生/提交 API",
+      "successTest": "tests/Unit/Exam.StudentUnitTests",
+      "failureTest": "tests/Unit/Exam.StudentUnitTests",
+      "category": [
+        "core",
+        "wpf"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.StudentUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "B",
+      "gap": "WPF 模块检查仍保留；真实设备完整交互由 T 阶段验收"
+    },
+    {
+      "id": "E01-C56",
+      "requirement": "学生端界面 / 可靠通知、交卷与恢复",
+      "action": "交卷与恢复",
+      "role": "B",
+      "gui": "src/Exam.Student/Views/SubmittedPage.xaml",
+      "cli": "不适用：学生端仅要求 GUI",
+      "sharedApi": "现有学生/提交 API",
+      "successTest": "tests/Unit/Exam.StudentUnitTests",
+      "failureTest": "tests/Unit/Exam.StudentUnitTests",
+      "category": [
+        "core",
+        "wpf"
+      ],
+      "automatedEvidence": "run-report.json / tests/Unit/Exam.StudentUnitTests",
+      "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
+      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "gapOwner": "B",
+      "gap": "WPF 模块检查仍保留；真实设备完整交互由 T 阶段验收"
+    }
+  ]
+}
