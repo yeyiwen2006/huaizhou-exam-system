@@ -30,6 +30,13 @@ public sealed record ManagementStatus(
 public sealed record ManagementRestoreOutcome(
     string BackupId, bool IsolationStaged, bool RecoveryVerified, bool BusinessReady);
 
+/// <summary>Bounded, non-sensitive projection of the protected local operation journal.</summary>
+public sealed record ManagementAuditEntry(string RequestId, ManagementOperationKind Kind,
+    ManagementOperationPhase Phase, DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, string? ErrorCode);
+
+public sealed record ProtectedRuntimeLogEntry(DateTimeOffset Timestamp, string Source, string Level,
+    string Category, int EventId);
+
 public sealed record ManagementOperation(
     string RequestId, string ServerId, string NodeId, string ActorId,
     ManagementOperationKind Kind, string ContentHash, ManagementOperationPhase Phase,

@@ -185,6 +185,14 @@
           "Exam.Domain": "[1.0.0, )"
         }
       },
+      "exam.cli": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Application": "[1.0.0, )",
+          "Exam.Contracts": "[1.0.0, )",
+          "Exam.Infrastructure": "[1.0.0, )"
+        }
+      },
       "exam.contracts": {
         "type": "Project"
       },

@@ -4,6 +4,9 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Exam.Application.Activation;
+using Exam.Application.HighAvailability;
+using Exam.Contracts.HighAvailability;
+using Exam.Infrastructure.HighAvailability;
 using Exam.Application.Scoring;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Common;
@@ -43,6 +46,15 @@ public sealed class PhysicalPostgresFactAttribute : FactAttribute
     }
 }
 
+public sealed class NativeConfirmationFactAttribute : FactAttribute
+{
+    public NativeConfirmationFactAttribute()
+    {
+        if (!NativePhysicalPostgresTools.Enabled)
+            Skip = "备节点持久确认接线需要显式专用 Windows PostgreSQL 18 原生流复制环境。";
+    }
+}
+
 [Trait("Category", "Postgres")]
 [Trait("Category", "PostgresPhysical")]
 [Collection(PostgresCollection.Name)] // Source suspension must not interrupt another PostgreSQL test's connections.
@@ -75,6 +87,185 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
     private IPhysicalPostgresTools CreateTools() => NativePhysicalPostgresTools.Enabled
         ? new NativePhysicalPostgresTools(_source.ConnectionString, _root, _source.DataSource, collectionSource.DataSource)
         : new DockerPostgresTools();
+
+    [NativeConfirmationFact]
+    public async Task NativeStandbyConfirmationFlowsThroughHttpAndProvesRecoveryWithoutReadableOriginal()
+    {
+        using var standbyRsa = RSA.Create(2048);
+        using var standbyCertificate = new CertificateRequest("CN=Synthetic-Confirmation-Standby", standbyRsa,
+            HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        await SeedAsync(standbyCertificate);
+        await using (var authority = _source.DataSource.CreateCommand("""
+            UPDATE exam.server_state SET protection_mode='SynchronousDualNode' WHERE server_id='server';
+            INSERT INTO exam.server_nodes VALUES ('server','standby','Standby',true,true,0,true,true,now());
+            """)) await authority.ExecuteNonQueryAsync();
+        var resources = Path.Combine(_root, "resources"); var protectedDirectory = Path.Combine(_root, "protected");
+        var primaryJournal = Path.Combine(_root, "primary-confirmations"); var standbyJournal = Path.Combine(_root, "standby-confirmations");
+        foreach (var path in new[] { resources, protectedDirectory, primaryJournal, standbyJournal }) Directory.CreateDirectory(path);
+        await File.WriteAllTextAsync(Path.Combine(resources, "synthetic-source.tex"), "synthetic source only");
+        var privateKey = _key.ExportPkcs8PrivateKey();
+        try { await File.WriteAllBytesAsync(Path.Combine(protectedDirectory, "synthetic-node.pk8"), privateKey); }
+        finally { CryptographicOperations.ZeroMemory(privateKey); }
+        await using var standbyTools = new NativePhysicalPostgresTools(_source.ConnectionString, _root,
+            _source.DataSource, collectionSource.DataSource);
+        var options = new PostgresBackupOptions(standbyTools.NativeBinDirectory!, _source.ConnectionString,
+            Path.Combine(_root, "backups"), Path.Combine(_root, "staging"), resources, protectedDirectory, TimeSpan.FromMinutes(2));
+        var backups = new PostgresBackupCoordinator(options, standbyTools);
+        var backup = await backups.CreateAsync(new("confirmation-seed", Path.Combine(options.AllowedBackupRoot, "seed"), "operator"), default);
+        var restore = new RestoreRequest("standby-seed", backup.BackupId, backup.DestinationDirectory, "operator");
+        await backups.RestoreAsync(restore, default);
+        Directory.CreateDirectory(Path.Combine(_root, "working"));
+        var standbyWorking = await backups.PrepareRecoveryWorkingCopyAsync(restore, Path.Combine(_root, "working"), default);
+        var standbyDatabase = Path.Combine(standbyWorking.WorkingDirectory, "database");
+        await File.WriteAllTextAsync(Path.Combine(standbyDatabase, "standby.signal"), "");
+        var primarySettings = new NpgsqlConnectionStringBuilder(_source.ConnectionString);
+        await File.AppendAllTextAsync(Path.Combine(standbyDatabase, "postgresql.auto.conf"),
+            $"\nprimary_conninfo = 'host=127.0.0.1 port={primarySettings.Port} user=postgres application_name=synthetic_confirmation_standby'\n");
+        await standbyTools.StartRestoredAsync(standbyDatabase);
+        var standbySettings = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = standbyTools.RestoredPort };
+        await using var standbySource = NpgsqlDataSource.Create(standbySettings.ConnectionString);
+        await WaitForDatabaseAsync(standbySource);
+        var standbyResources = Path.Combine(standbyWorking.WorkingDirectory, "resources");
+        var witness = new PostgresStandbyConfirmation(standbySource, new(standbyJournal), "server", "standby", "node", 1,
+            standbyResources, new NodeUnwrapper("standby", standbyCertificate), standbySettings.ConnectionString, standbyTools.NativeBinDirectory);
+        var peerBuilder = WebApplication.CreateBuilder(); peerBuilder.WebHost.UseTestServer();
+        const string peerToken = "synthetic-confirmation-peer-token-32-characters";
+        peerBuilder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        { ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "standby", ["ExamServer:ServerEpoch"] = "1",
+          ["Confirmation:PeerToken"] = peerToken });
+        peerBuilder.Services.AddSingleton(witness);
+        await using var peerApp = peerBuilder.Build(); peerApp.MapStandbyConfirmation(); await peerApp.StartAsync();
+        using var peerHttp = peerApp.GetTestClient(); peerHttp.BaseAddress = new Uri("https://localhost");
+        var peer = new HttpConfirmationPeer(peerHttp, new Uri("https://localhost"), "server", "standby", () => peerToken);
+        var primaryStore = new FileConfirmationStore(primaryJournal);
+        var confirmation = new PostgresBusinessConfirmation(_source.DataSource, primaryStore, "server", "node", "standby", 1, resources, peer);
+        // The producer and receiver inspect actual streaming WAL. No synthetic Passed flag supplies evidence.
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            while (true)
+            {
+                try { await confirmation.ConfirmAsync(deadline.Token); break; }
+                catch (Exam.Domain.Common.DomainRuleException)
+                {
+                    var pending = primaryStore.Read();
+                    if (pending is null) throw; // Failure before the producer persisted a real boundary.
+                    // Surface the actual peer-side diagnostic in this isolated test, never in production responses.
+                    await witness.ConfirmAsync(pending.Record, deadline.Token);
+                    await Task.Delay(100, deadline.Token);
+                }
+            }
+        Assert.Equal(primaryStore.Read()!.Record, witness.Read()!.Record);
+        Assert.True(witness.Read()!.Confirmed);
+        var initialHead = witness.Read()!;
+        await Assert.ThrowsAsync<IOException>(() => witness.ConfirmAsync(initialHead.Record with { Epoch = 2 }, default));
+        await using (var pause = standbySource.CreateCommand("SELECT pg_wal_replay_pause()")) await pause.ExecuteNonQueryAsync();
+        try
+        {
+            await Assert.ThrowsAsync<IOException>(() => PostgresStandbyConfirmation.VerifyPositionAsync(standbySource,
+                initialHead.Record, "standby", default));
+        }
+        finally { await using var resume = standbySource.CreateCommand("SELECT pg_wal_replay_resume()"); await resume.ExecuteNonQueryAsync(); }
+        var standbyResource = Path.Combine(standbyResources, "synthetic-source.tex");
+        await File.WriteAllTextAsync(standbyResource, "different synthetic material");
+        await Assert.ThrowsAsync<IOException>(() => witness.ConfirmAsync(initialHead.Record, default));
+        Assert.Equal(initialHead, witness.Read());
+        File.Copy(Path.Combine(resources, "synthetic-source.tex"), standbyResource, true);
+        await using (var primaryApp = await RecoveredApiAsync(_source.ConnectionString, _certificate, _source.ConnectionString,
+            Path.Combine(_root, "no-selection.json"), confirmation: confirmation))
+        {
+            using var client = primaryApp.GetTestClient();
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-2");
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+            var response = await client.PostAsJsonAsync("/api/v1/submissions/final", Submission(2), Json);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var receipt = await response.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json);
+            Assert.Equal("submission-2", receipt!.Result!.SubmissionId);
+            Assert.Equal(primaryStore.Read(), witness.Read());
+            Assert.Equal(FileConfirmationStore.ResourcesDigest(resources), witness.Read()!.Record.ResourcesDigest);
+        }
+        var recoveredRoot = Path.Combine(Path.GetTempPath(), "f01-physical-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(recoveredRoot);
+        try
+        {
+            await using var recoveredTools = new NativePhysicalPostgresTools(_source.ConnectionString, recoveredRoot,
+                _source.DataSource, collectionSource.DataSource);
+            var recoveredOptions = options with { AllowedBackupRoot = Path.Combine(recoveredRoot, "backups"),
+                RestoreStagingRoot = Path.Combine(recoveredRoot, "staging") };
+            var recoveredBackups = new PostgresBackupCoordinator(recoveredOptions, recoveredTools);
+            var latest = await recoveredBackups.CreateAsync(new("confirmed-backup", Path.Combine(recoveredOptions.AllowedBackupRoot, "latest"), "operator"), default);
+            var latestRestore = new RestoreRequest("confirmed-restore", latest.BackupId, latest.DestinationDirectory, "operator");
+            await recoveredBackups.RestoreAsync(latestRestore, default);
+            Directory.CreateDirectory(Path.Combine(recoveredRoot, "working"));
+            var recoveredWorking = await recoveredBackups.PrepareRecoveryWorkingCopyAsync(latestRestore, Path.Combine(recoveredRoot, "working"), default);
+            await recoveredTools.StartRestoredAsync(Path.Combine(recoveredWorking.WorkingDirectory, "database"));
+            var recoveredSettings = new NpgsqlConnectionStringBuilder(_source.ConnectionString) { Port = recoveredTools.RestoredPort };
+            await using var recovered = NpgsqlDataSource.Create(recoveredSettings.ConnectionString);
+            await WaitForDatabaseAsync(recovered);
+            await standbyTools.PauseSourceAsync();
+            try
+            {
+                var configuration = new ServiceConfiguration("server", "node", "127.0.0.1", 8443, _root, true, 1);
+                Assert.False((await new PostgresRecoveryStateComparison(_source.ConnectionString, recoveredSettings.ConnectionString, 1)
+                    .RunAsync(configuration, default)).Passed);
+                var evidence = new PostgresConfirmedRecoveryEvidence(primaryStore, peer, standbySettings.ConnectionString,
+                    recoveredSettings.ConnectionString, 1, recoveredSettings.ConnectionString, recoveredTools.NativeBinDirectory);
+                var result = await evidence.RunAsync(configuration, Path.Combine(recoveredWorking.WorkingDirectory, "resources"), default);
+                Assert.True(result.Passed, result.Message);
+                string preservedRow;
+                await using (var read = standbySource.CreateCommand("SELECT row_to_json(s)::text FROM exam.submission_idempotency s WHERE candidate_id='candidate-2'"))
+                    preservedRow = (string)(await read.ExecuteScalarAsync())!;
+                await using (var tamper = recovered.CreateCommand("DELETE FROM exam.submission_idempotency WHERE candidate_id='candidate-2'"))
+                    await tamper.ExecuteNonQueryAsync();
+                Assert.False((await evidence.RunAsync(configuration, Path.Combine(recoveredWorking.WorkingDirectory, "resources"), default)).Passed);
+                await using (var repair = recovered.CreateCommand("INSERT INTO exam.submission_idempotency SELECT (json_populate_record(NULL::exam.submission_idempotency,$1::json)).*"))
+                { repair.Parameters.AddWithValue(preservedRow); await repair.ExecuteNonQueryAsync(); }
+                // Ready/HTTP can resume only after an actual operator rebuild of streaming replication.
+                var restoredConfirmation = new PostgresBusinessConfirmation(recovered, primaryStore, "server", "node", "standby", 1,
+                    Path.Combine(recoveredWorking.WorkingDirectory, "resources"), peer,
+                    recoveredSettings.ConnectionString, recoveredTools.NativeBinDirectory);
+                await Assert.ThrowsAsync<Exam.Domain.Common.DomainRuleException>(() => restoredConfirmation.ConfirmAsync(default));
+                await standbyTools.RebuildRestoredStandbyAsync(recoveredSettings.ConnectionString, recoveredRoot,
+                    Path.Combine(recoveredWorking.WorkingDirectory, "database"));
+                standbySource.Clear();
+                await WaitForDatabaseAsync(standbySource);
+                await restoredConfirmation.ConfirmAsync(default);
+                var recoveredSelection = Path.Combine(recoveredRoot, "deployment-selection.json");
+                await new FileRecoveryDeploymentSelection(recoveredSelection).SelectAsync(new("server", "node",
+                    latestRestore.RequestId, latestRestore.ActorId, latest.BackupId, recoveredWorking.WorkingDirectory, 1, "ExamRecovery"), default);
+                await using (var restoredApp = await RecoveredApiAsync(recoveredSettings.ConnectionString, _certificate,
+                    _source.ConnectionString, recoveredSelection, confirmation: restoredConfirmation))
+                {
+                    using var client = restoredApp.GetTestClient();
+                    client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-2");
+                    client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+                    var response = await client.PostAsJsonAsync("/api/v1/submissions/final", Submission(2), Json);
+                    Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+                    Assert.Equal(primaryStore.Read(), witness.Read());
+                }
+                using (primaryStore.Lock()) await primaryStore.SaveAsync(primaryStore.Read()! with { Confirmed = false }, default);
+                Assert.False((await evidence.RunAsync(configuration, Path.Combine(recoveredWorking.WorkingDirectory, "resources"), default)).Passed);
+                // A real emergency transition creates a local-only latest head, never covered by the older standby head.
+                await using (var emergency = recovered.CreateCommand("UPDATE exam.server_state SET protection_mode='EmergencySingleNode',state_version=state_version+1"))
+                    await emergency.ExecuteNonQueryAsync();
+                await restoredConfirmation.ConfirmAsync(default);
+                Assert.Equal(ProtectionMode.EmergencySingleNode, primaryStore.Read()!.Record.Mode);
+                Assert.NotEqual(primaryStore.Read(), witness.Read());
+                Assert.False((await evidence.RunAsync(configuration, Path.Combine(recoveredWorking.WorkingDirectory, "resources"), default)).Passed);
+            }
+            finally { await standbyTools.ResumeSourceAsync(); }
+        }
+        finally { PhysicalPostgresTestPaths.RequireWorkingRoot(recoveredRoot); Directory.Delete(recoveredRoot, true); }
+    }
+
+    private sealed class NodeUnwrapper(string nodeId, X509Certificate2 certificate) : IPackageKeyUnwrapper
+    { public byte[] Unwrap(EncryptedPackageEnvelope envelope) => PackageEncryptionService.UnwrapDataKey(envelope, nodeId, certificate); }
+
+    private sealed class UnavailableConfirmationPeer : IDurableConfirmationPeer
+    {
+        public Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token) =>
+            throw new IOException("合成单机应急测试不允许访问备节点。");
+        public Task<ConfirmationHead?> ReadAsync(CancellationToken token) => throw new IOException("无备节点证据。");
+    }
 
     [PhysicalPostgresFact]
     public async Task RealPhysicalBackupRestoresOriginalReceiptAndRemainingCollection_WithoutChangingSource()
@@ -185,7 +376,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         await new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(selectionPath), 1).SelectAsync(
             new("synthetic-enable", "server", "node", "operator", ManagementOperationKind.Restore, new string('A', 64),
                 ManagementOperationPhase.Staged, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
-                Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory), default);
+                Restore: new(backup.BackupId, true, true, false), RecoveryWorkingDirectory: workingCopy.WorkingDirectory,
+                Checks: [.. targetChecks, completeState]), default);
         await using (var app = await RecoveredApiAsync(connection.ConnectionString, restoredKey, _source.ConnectionString,
             selectionPath, expectReady: !OperatingSystem.IsWindows() || tools.IsNative))
         {
@@ -340,6 +532,15 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
             """)) await pending.ExecuteNonQueryAsync();
         await sourceStore.SetAuthorizationStateAsync(new("synthetic-exam", "candidate-3", "participation-3", 1,
             "device-3", 1, ParticipationBusinessState.Answering, 1, 1));
+        FileConfirmationStore? confirmationStore = null;
+        if (tools.IsNative)
+        {
+            var confirmationDirectory = Path.Combine(_root, "archive-confirmations"); Directory.CreateDirectory(confirmationDirectory);
+            confirmationStore = new(confirmationDirectory);
+            await new PostgresBusinessConfirmation(_source.DataSource, confirmationStore, "server", "node", "standby", 1,
+                resources, new UnavailableConfirmationPeer()).ConfirmAsync(default);
+            Assert.Equal(1, confirmationStore.Read()!.Record.Timeline);
+        }
         ulong systemIdentifier;
         string target;
         string sourceDirectory;
@@ -404,8 +605,28 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
             "server", "node", restore.RequestId, restore.ActorId, backup.BackupId, working.WorkingDirectory, 1, "ExamRecovery")
             { ArchiveRecovery = true }, default);
         Assert.True((await replay.VerifyReplayedAsync(working, restore, recovered, default)).Passed);
+        IBusinessConfirmation? restoredConfirmation = tools.IsNative ? new PostgresBusinessConfirmation(recovered,
+            confirmationStore!, "server", "node", "standby", 1, Path.Combine(working.WorkingDirectory, "resources"),
+            new UnavailableConfirmationPeer(), recoveredConnection.ConnectionString, tools.NativeBinDirectory) : null;
+        if (restoredConfirmation is not null)
+        {
+            await VerifiedTimelineContinuation.ReadAsync(recovered, confirmationStore!.Read()!.Record, 2,
+                recoveredConnection.ConnectionString, tools.NativeBinDirectory, default);
+            // Real server history must reject an uncovered boundary and a different cluster.
+            var actualPrevious = confirmationStore.Read()!.Record;
+            await Assert.ThrowsAsync<IOException>(() => VerifiedTimelineContinuation.ReadAsync(recovered,
+                actualPrevious with { FlushLsn = "FFFFFFFF/FFFFFFFF" }, 2,
+                recoveredConnection.ConnectionString, tools.NativeBinDirectory, default));
+            await Assert.ThrowsAsync<IOException>(() => VerifiedTimelineContinuation.ReadAsync(recovered,
+                actualPrevious with { SystemIdentifier = "1" }, 2,
+                recoveredConnection.ConnectionString, tools.NativeBinDirectory, default));
+            // Production confirmation must survive the actual PostgreSQL recovery fork, not a development no-op.
+            await restoredConfirmation.ConfirmAsync(default);
+            Assert.True(confirmationStore!.Read()!.Record.Timeline > 1);
+        }
         await using (var selected = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
-            _source.ConnectionString, selectedPath, replay.Options, expectReady: !OperatingSystem.IsWindows() || tools.IsNative))
+            _source.ConnectionString, selectedPath, replay.Options, expectReady: !OperatingSystem.IsWindows() || tools.IsNative,
+            confirmation: restoredConfirmation))
         {
             var snapshot = selected.Services.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
             if (OperatingSystem.IsWindows() && !tools.IsNative)
@@ -457,6 +678,22 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         var due = await new PostgresCommandEventStore(recovered).ClaimDueForDeviceAsync(
             "participation-3", 1, "device-3", 1, DateTimeOffset.UtcNow.AddHours(4));
         Assert.Contains(due, item => item.EventType == CommandEventType.End);
+        if (tools.IsNative)
+        {
+            await using var resumed = await RecoveredApiAsync(recoveredConnection.ConnectionString, _certificate,
+                _source.ConnectionString, selectedPath, replay.Options, confirmation: restoredConfirmation);
+            using var client = resumed.GetTestClient();
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Id", "device-3");
+            client.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-credential");
+            var response = await client.PostAsJsonAsync("/api/v1/submissions/final", Submission(3), Json);
+            Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+            var saved = await response.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json);
+            var retry = await client.PostAsJsonAsync("/api/v1/submissions/final", Submission(3), Json);
+            Assert.Equal(saved!.Result, (await retry.Content.ReadFromJsonAsync<ApiEnvelope<SubmissionReceipt>>(Json))!.Result);
+            Assert.True(confirmationStore!.Read()!.Confirmed);
+            Assert.Equal(2, confirmationStore.Read()!.Record.Timeline);
+            Assert.Null(await sourceStore.FindSubmissionAsync("synthetic-exam", "candidate-3"));
+        }
         Assert.Equal(backup, await coordinator.VerifyAvailableBackupAsync(backup.DestinationDirectory, backup.BackupId, default));
     }
 
@@ -471,7 +708,7 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private async Task<SubmissionReceipt> SeedAsync()
+    private async Task<SubmissionReceipt> SeedAsync(X509Certificate2? standbyCertificate = null)
     {
         var now = DateTimeOffset.UtcNow;
         await using (var authority = _source.DataSource.CreateCommand(
@@ -482,7 +719,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         Assert.True(versioning.CreateExam(new("synthetic-exam", new(now.AddHours(1), now.AddHours(2)), now, "create")).Succeeded);
         using var plain = new MemoryStream(SyntheticRecoveryPaper.Build());
         using var cipher = new MemoryStream();
-        var envelope = await new PackageEncryptionService(4096).EncryptAsync(plain, cipher, "synthetic-resource", 1, [new("node", _certificate)]);
+        var envelope = await new PackageEncryptionService(4096).EncryptAsync(plain, cipher, "synthetic-resource", 1,
+            standbyCertificate is null ? [new("node", _certificate)] : [new("node", _certificate), new("standby", standbyCertificate)]);
         await using (var resource = _source.DataSource.CreateCommand("""
             INSERT INTO exam.versioned_resources VALUES ('synthetic-resource', 'synthetic-exam', 'paper-package', 1, $1, $2::jsonb, now(), 'operator')
             """))
@@ -544,7 +782,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         }
     }
     private static async Task<WebApplication> RecoveredApiAsync(string connectionString, X509Certificate2 certificate,
-        string originalConnection, string selectionPath, PostgresArchiveRecoveryOptions? walOptions = null, bool expectReady = true)
+        string originalConnection, string selectionPath, PostgresArchiveRecoveryOptions? walOptions = null, bool expectReady = true,
+        IBusinessConfirmation? confirmation = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -573,8 +812,11 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         builder.Services.AddPostgresExamRuntime(builder.Configuration, new() { ServerId = "server", NodeId = "node", ServerEpoch = 1 }, true);
         builder.Services.AddSingleton<IPackageKeyUnwrapper>(new TestUnwrapper(certificate));
         builder.Services.AddSingleton<IDeviceCredentialValidator, SyntheticDeviceCredentials>();
+        if (confirmation is not null) builder.Services.AddSingleton(confirmation);
         var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<ExamApiAccessMiddleware>();
+        if (confirmation is not null) app.UseMiddleware<BusinessConfirmationMiddleware>();
         app.MapGroup("/api/v1").MapSubmissionApi();
         try
         {
@@ -599,8 +841,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
     private sealed class SyntheticDeviceCredentials : IDeviceCredentialValidator
     {
         public ValueTask<bool> ValidateActiveDeviceAsync(string deviceId, string credential, CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(deviceId is "device-1" or "device-2" && credential == "synthetic-device-credential");
-        public ValueTask<bool> IsActiveDeviceAsync(string deviceId, CancellationToken cancellationToken = default) => ValueTask.FromResult(deviceId is "device-1" or "device-2");
+            ValueTask.FromResult(deviceId is "device-1" or "device-2" or "device-3" && credential == "synthetic-device-credential");
+        public ValueTask<bool> IsActiveDeviceAsync(string deviceId, CancellationToken cancellationToken = default) => ValueTask.FromResult(deviceId is "device-1" or "device-2" or "device-3");
     }
 
     private sealed class PhysicalRecoveryService(IPhysicalPostgresTools tools, string directory, string command, PostgresArchiveRecoveryOptions? archiveReplay = null)
@@ -686,6 +928,9 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         }
         public async Task StartRestoredAsync(string verifiedDatabaseDirectory, PostgresArchiveRecoveryOptions? archiveReplay = null)
         {
+            var standalone = archiveReplay is null && !File.Exists(Path.Combine(verifiedDatabaseDirectory, "standby.signal"));
+            if (standalone && !File.Exists(Path.Combine(verifiedDatabaseDirectory, "recovery.signal")))
+                File.WriteAllText(Path.Combine(verifiedDatabaseDirectory, "recovery.signal"), "");
             var image = Environment.GetEnvironmentVariable("EXAM_TEST_POSTGRES_IMAGE") ?? "postgres:18";
             var selectedPort = RestoredPort;
             await DockerAsync(["create", "--name", _restoredContainer, "--label", "codex.f01.synthetic=true", "--publish", $"127.0.0.1:{selectedPort}:{selectedPort}",
@@ -707,7 +952,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
             }
             // The replay switches contain no archive path. Validate the real host archive before using
             // these switches inside the Linux test container.
-            var replayOptions = archiveReplay is null ? "" : ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay);
+            var replayOptions = archiveReplay is not null ? ControlledRecoveryDatabase.BuildArchiveReplayOptions(archiveReplay)
+                : standalone ? ControlledRecoveryDatabase.BuildStandaloneReplayOptions() : "";
             await DockerAsync(["exec", "--user", "postgres", _restoredContainer, "pg_ctl", "--pgdata=" + remoteDatabase,
                 "--log=/tmp/codex-f01-recovery.log", $"--options=-p {selectedPort} -h 0.0.0.0{replayOptions}", "--wait", "start"]);
             var port = (await DockerAsync(["port", _restoredContainer, selectedPort + "/tcp"])).StandardOutput.Trim();

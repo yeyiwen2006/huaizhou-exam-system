@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" />
+    <InternalsVisibleTo Include="Exam.IntegrationTests" />
   </ItemGroup>
 
   <PropertyGroup>

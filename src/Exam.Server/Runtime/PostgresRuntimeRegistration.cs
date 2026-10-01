@@ -74,6 +74,7 @@ public static class PostgresRuntimeRegistration
         services.AddExamCapacity(configuration, capacity);
         var dataSource = connectionOptions.CreateDataSource();
         services.AddSingleton(dataSource);
+        services.AddBusinessConfirmation(configuration, identity, allowUninitializedFailoverState);
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
         services.AddSingleton<BusinessRecoveryGuard>();
@@ -182,7 +183,8 @@ public static class PostgresRuntimeRegistration
                 connectionString,
                 Required(configuration, "Backup:AllowedBackupRoot"),
                 Required(configuration, "Backup:RestoreStagingRoot"),
-                Required(configuration, "Backup:VersionedResourcesDirectory"),
+                FileRecoveryDeploymentSelection.ResolveResources(key => configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch)
+                    ?? throw new InvalidOperationException("备份资源未配置。"),
                 Required(configuration, "Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60)));
             services.AddSingleton(backupOptions);

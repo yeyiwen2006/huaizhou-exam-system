@@ -131,6 +131,23 @@ public sealed class FileRecoveryDeploymentSelection
             throw new InvalidOperationException("被选择的受保护恢复连接未配置，拒绝回退原库。");
         return result;
     }
+
+    public static string? ResolveResources(Func<string, string?> get, string serverId, string nodeId, long epoch)
+    {
+        var selection = ReadConfigured(get, serverId, nodeId, epoch);
+        if (selection is not { ConnectionReference: "ExamRecovery" }) return get("Backup:VersionedResourcesDirectory");
+        var resources = Path.GetFullPath(Path.Combine(selection.WorkingDirectory, "resources"));
+        PathBoundary.RejectExistingReparsePoints(selection.WorkingDirectory, resources);
+        if (!Directory.Exists(resources)) throw new IOException("被选择的恢复资源缺失，拒绝回退旧目录。");
+        return resources;
+    }
+
+    public static string? ResolveTimelineConnection(Func<string, string?> get, string serverId, string nodeId, long epoch)
+    {
+        var selection = ReadConfigured(get, serverId, nodeId, epoch);
+        var reference = selection?.ConnectionReference == "ExamRecovery" ? "ExamRecoveryTimeline" : "ExamTimeline";
+        return get("ConnectionStrings:" + reference) ?? ResolveConnection(get, serverId, nodeId, epoch);
+    }
 }
 
 public sealed class FileRecoveryDeploymentSwitch(FileRecoveryDeploymentSelection store, long epoch,
@@ -141,6 +158,9 @@ public sealed class FileRecoveryDeploymentSwitch(FileRecoveryDeploymentSelection
     {
         if (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
             { IsolationStaged: true, RecoveryVerified: true, BusinessReady: false } ||
+            operation.Checks?.Any(check => check.Name == "recovery-target" && check.Passed && check.BlocksWrites) != true ||
+            operation.Checks?.Any(check => check.Name == "recovery-confirmed-state" && check.Passed && check.BlocksWrites) != true ||
+            operation.Checks?.All(check => check.Passed || !check.BlocksWrites) != true ||
             operation.RecoveryWorkingDirectory is null)
             throw new InvalidOperationException("恢复操作尚未核对，不能选择部署。");
         return new RecoveryDeploymentSelection(operation.ServerId, operation.NodeId, operation.RequestId, operation.ActorId,

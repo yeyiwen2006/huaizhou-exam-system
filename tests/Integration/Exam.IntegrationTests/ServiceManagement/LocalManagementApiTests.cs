@@ -7,6 +7,7 @@ using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.Management;
+using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -85,8 +86,56 @@ public sealed class LocalManagementApiTests : IDisposable
     {
         await using var app = await AppAsync();
         using var client = Client(app, token);
-        foreach (var path in new[] { "/service/status", "/service/configuration", "/operations/id" })
+        foreach (var path in new[] { "/service/status", "/service/configuration", "/service/logs?limit=10", "/service/runtime-logs?limit=10", "/operations/id" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/management/v1" + path)).StatusCode);
+    }
+
+    [Fact]
+    public async Task RuntimeLogContainsOnlyFixedMetadataAndRemainsAvailableWhenBusinessIsStopped()
+    {
+        var path = Path.Combine(_directory, "business-events.jsonl");
+        using (var provider = new ProtectedRuntimeLogProvider(path))
+            provider.CreateLogger("Exam.Server.Runtime.GradingWorker").LogError(
+                new IOException("synthetic-secret-in-exception"), "synthetic-secret-in-message {Password}", "synthetic-password");
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.GetAsync("/management/v1/service/runtime-logs?limit=10");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Exam.Server.Runtime.GradingWorker", body);
+        Assert.DoesNotContain("synthetic-secret", body);
+        Assert.DoesNotContain("synthetic-password", body);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/management/v1/service/runtime-logs?limit=0")).StatusCode);
+    }
+
+    [Fact]
+    public async Task CorruptRuntimeLogFailsClosedWithoutLeakingContentsOrBlockingStatus()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_directory, "business-events.jsonl"), "synthetic-private-log-content");
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.GetAsync("/management/v1/service/runtime-logs?limit=10");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.DoesNotContain("synthetic-private-log-content", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/management/v1/service/status")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ProtectedOperationLogShowsOnlyBoundedNonSensitiveSummary()
+    {
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/stop",
+            new ManagementServiceRequest("synthetic-log-request", "server", "node"), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var logs = await client.GetAsync("/management/v1/service/logs?limit=10");
+        Assert.Equal(HttpStatusCode.OK, logs.StatusCode);
+        var text = await logs.Content.ReadAsStringAsync();
+        Assert.Contains("synthetic-log-request", text);
+        Assert.DoesNotContain("requestJson", text);
+        Assert.DoesNotContain("contentHash", text);
+        Assert.DoesNotContain("recoveryWorkingDirectory", text);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/management/v1/service/logs?limit=101")).StatusCode);
     }
 
     [Fact]
@@ -324,7 +373,10 @@ public sealed class LocalManagementApiTests : IDisposable
                 RecoveryActivation = RecoveryActivationPhase.BusinessReady, Restore = op.Restore! with { BusinessReady = true }, Error = null });
         }
         Task<IReadOnlyList<StartupCheckResult>> Verify(RestoreRequest _, ServiceConfiguration __, CancellationToken ___) =>
-            Task.FromResult<IReadOnlyList<StartupCheckResult>>([new("recovery-target", true, "合成目标", true)]);
+            Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成目标", true),
+                new("recovery-confirmed-state", true, "合成最新确认状态", true)
+            ]);
         await using (var first = await AppAsync(failCompletion: loseTerminal, failOnlyTerminal: true, prepareWorkingCopy: (_, _) => Task.CompletedTask,
             verifyTarget: Verify, workingDirectory: () => _directory, activateRecovery: true))
         {
@@ -366,7 +418,11 @@ public sealed class LocalManagementApiTests : IDisposable
             prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory,
             activateRecovery: activateRecovery ? (op, token) => new RecoveryActivationRunner(_host, () => _host,
                 new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
-                .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery));
+                .ActivateAsync(op, token) : null, observeRecoveryActivation: observeRecovery,
+            readAudit: (limit, token) => new FileManagementOperationStore(Path.Combine(_directory, "operations"))
+                .ReadAuditAsync(limit, token),
+            readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
+                Path.Combine(_directory, "business-events.jsonl"), "business", limit, token)));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
@@ -428,6 +484,68 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.False(result.Restore.BusinessReady);
         var persisted = await new FileManagementOperationStore(Path.Combine(_directory, "operations")).FindAsync("verify-target", default);
         Assert.Equal(result.Restore, persisted!.Restore);
+        Assert.Equal(0, _host.StartCalls);
+    }
+
+    [Fact]
+    public async Task MissingLatestConfirmationStaysNeedsVerification_AndOriginalRequestCanRecheckSyntheticProbe()
+    {
+        // This tests orchestration only. The boolean is not a production F02 confirmation record.
+        var confirmed = false;
+        var preparations = 0;
+        Task Prepare(RestoreRequest _, CancellationToken __) { preparations++; return Task.CompletedTask; }
+        Task<IReadOnlyList<StartupCheckResult>> Verify(RestoreRequest _, ServiceConfiguration __, CancellationToken ___) =>
+            Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成恢复目标可读", true),
+                new("recovery-confirmed-state", confirmed, "合成备节点确认记录", true)
+            ]);
+        var request = new RestoreRequest("offline-confirmation", "synthetic-backup", "synthetic-source", "operator");
+        await using var app = await AppAsync(prepareWorkingCopy: Prepare, verifyTarget: Verify);
+        using var client = Client(app);
+        var first = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, first.StatusCode);
+        var pending = (await first.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, pending.Phase);
+        Assert.True(pending.Restore!.IsolationStaged);
+        Assert.False(pending.Restore.RecoveryVerified);
+        Assert.False(pending.Restore.BusinessReady);
+        Assert.Equal(0, _host.StartCalls);
+        Assert.Equal(1, _backups.RestoreCalls);
+        Assert.Equal(1, preparations);
+
+        var query = await client.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>(
+            "/management/v1/operations/offline-confirmation", _json.Options);
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, query!.Result!.Phase);
+        Assert.Equal(1, preparations); // Query never retries the recovery side effect.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsJsonAsync("/management/v1/service/start",
+            new ManagementServiceRequest("bypass", "server", "node"), _json.Options)).StatusCode);
+
+        confirmed = true;
+        var retry = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        var result = (await retry.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Staged, result.Phase);
+        Assert.True(result.Restore!.RecoveryVerified);
+        Assert.False(result.Restore.BusinessReady);
+        Assert.Equal(1, _backups.RestoreCalls); // Bound staging is not repeated.
+        Assert.Equal(2, preparations);
+    }
+
+    [Fact]
+    public async Task MissingConfirmationCheckCannotActivateRecovery()
+    {
+        await using var app = await AppAsync(prepareWorkingCopy: (_, _) => Task.CompletedTask,
+            verifyTarget: (_, _, _) => Task.FromResult<IReadOnlyList<StartupCheckResult>>([
+                new("recovery-target", true, "合成目标可读", true)
+            ]), workingDirectory: () => _directory, activateRecovery: true);
+        using var client = Client(app);
+        var response = await client.PostAsJsonAsync("/management/v1/service/restores",
+            new RestoreRequest("missing-confirmation-check", "synthetic-backup", _directory, "operator"), _json.Options);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var operation = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, operation.Phase);
+        Assert.False(operation.Restore!.RecoveryVerified);
+        Assert.Contains(operation.Checks!, check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites);
         Assert.Equal(0, _host.StartCalls);
     }
 

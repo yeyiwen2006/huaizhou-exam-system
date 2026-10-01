@@ -29,7 +29,12 @@ public sealed class ManagementOperationRunner(
             if (previous.ServerId != serverId || previous.NodeId != nodeId || previous.ActorId != actorId ||
                 previous.Kind != kind || previous.ContentHash != hash)
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "requestId 已绑定不同的节点、操作者或操作内容。");
-            if (!(resumeStagedRestore && kind == ManagementOperationKind.Restore && previous.Phase == ManagementOperationPhase.Staged))
+            var resumeMissingConfirmation = resumeStagedRestore && kind == ManagementOperationKind.Restore &&
+                previous is { Phase: ManagementOperationPhase.NeedsVerification,
+                    Restore.IsolationStaged: true, RecoveryActivation: null } &&
+                previous.Checks?.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites) == true;
+            if (!(resumeStagedRestore && kind == ManagementOperationKind.Restore &&
+                previous.Phase == ManagementOperationPhase.Staged || resumeMissingConfirmation))
                 return await ReconcileUnderLockAsync(previous, cancellationToken);
         }
 
@@ -57,9 +62,13 @@ public sealed class ManagementOperationRunner(
             try
             {
                 result = await execute(accepted, cancellationToken);
+                var pendingConfirmation = kind == ManagementOperationKind.Restore &&
+                    result is { Phase: ManagementOperationPhase.NeedsVerification, Restore.IsolationStaged: true,
+                        RecoveryActivation: null } &&
+                    result.Checks?.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites) == true;
                 if (result.RequestId != accepted.RequestId || result.ContentHash != hash ||
                     result.ServerId != serverId || result.NodeId != nodeId || result.ActorId != actorId || result.Kind != kind ||
-                    result.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Staged))
+                    result.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Staged) && !pendingConfirmation)
                     throw new InvalidOperationException("管理执行结果不完整。");
             }
             catch (DomainRuleException error)
