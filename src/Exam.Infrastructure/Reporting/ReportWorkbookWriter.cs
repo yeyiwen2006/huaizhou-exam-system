@@ -35,13 +35,13 @@ public sealed class ReportWorkbookWriter
 
     private static void WriteStudentTotals(IXLWorksheet sheet, ReportCalculationResult report)
     {
-        var headers = new List<string> { "总分排名", "准考证号", "姓名", "班级" };
+        var headers = new List<string> { "总分排名", "准考证号", "姓名", "班级",
+            "总分（满分" + ScoreText(report.TotalMaximumScore) + "）" };
         foreach (var subject in report.Subjects)
         {
             headers.Add(subject.Subject.DisplayName + "成绩（满分" + ScoreText(subject.Subject.MaximumScore) + "）");
             headers.Add(subject.Subject.DisplayName + "排名");
         }
-        headers.Add("总分（满分" + ScoreText(report.TotalMaximumScore) + "）");
         Header(sheet, headers);
         for (var index = 0; index < report.StudentTotals.Count; index++)
         {
@@ -49,20 +49,20 @@ public sealed class ReportWorkbookWriter
             var row = index + 2;
             sheet.Cell(row, 1).Value = source.TotalRank;
             Identity(sheet, row, source.Participant);
+            Score(sheet.Cell(row, 5), source.TotalScore);
             for (var subjectIndex = 0; subjectIndex < source.Subjects.Count; subjectIndex++)
             {
                 var subject = source.Subjects[subjectIndex];
-                Score(sheet.Cell(row, 5 + 2 * subjectIndex), subject.Score);
-                sheet.Cell(row, 6 + 2 * subjectIndex).Value = subject.Rank;
+                Score(sheet.Cell(row, 6 + 2 * subjectIndex), subject.Score);
+                sheet.Cell(row, 7 + 2 * subjectIndex).Value = subject.Rank;
             }
-            Score(sheet.Cell(row, headers.Count), source.TotalScore);
         }
         var footer = report.StudentTotals.Count + 2;
         MeanFooter(sheet, footer, headers.Count);
+        MeanCell(sheet.Cell(footer, 5), report.TotalMean);
         for (var index = 0; index < report.Subjects.Count; index++)
-            MeanCell(sheet.Cell(footer, 5 + 2 * index), report.Subjects[index].SubjectMean);
-        MeanCell(sheet.Cell(footer, headers.Count), report.TotalMean);
-        Finish(sheet, headers.Count);
+            MeanCell(sheet.Cell(footer, 6 + 2 * index), report.Subjects[index].SubjectMean);
+        Finish(sheet, headers.Count, footer);
     }
 
     private static void WriteSubjectScores(IXLWorksheet sheet, SubjectTables subject)
@@ -80,14 +80,14 @@ public sealed class ReportWorkbookWriter
         var footer = subject.Scores.Count + 2;
         MeanFooter(sheet, footer, 5);
         MeanCell(sheet.Cell(footer, 5), subject.SubjectMean);
-        Finish(sheet, 5);
+        Finish(sheet, 5, footer);
     }
 
     private static void WriteSubjectAnswers(IXLWorksheet sheet, SubjectTables subject)
     {
-        var headers = new List<string> { "排名", "准考证号", "姓名", "班级" };
+        var headers = new List<string> { "排名", "准考证号", "姓名", "班级",
+            "成绩（满分" + ScoreText(subject.Subject.MaximumScore) + "）" };
         headers.AddRange(subject.Subject.Questions.Select(question => "第" + question.QuestionNo + "题答案"));
-        headers.Add("成绩（满分" + ScoreText(subject.Subject.MaximumScore) + "）");
         Header(sheet, headers);
         for (var index = 0; index < subject.Answers.Count; index++)
         {
@@ -95,24 +95,24 @@ public sealed class ReportWorkbookWriter
             var row = index + 2;
             sheet.Cell(row, 1).Value = source.Rank;
             Identity(sheet, row, source.Participant);
+            Score(sheet.Cell(row, 5), source.Score);
             for (var questionIndex = 0; questionIndex < source.Answers.Count; questionIndex++)
             {
-                var cell = sheet.Cell(row, questionIndex + 5);
+                var cell = sheet.Cell(row, questionIndex + 6);
                 Text(cell, source.Answers[questionIndex].Text);
                 cell.Style.Font.FontColor = source.Answers[questionIndex].IsCompletelyCorrect
                     ? XLColor.Black : XLColor.Red;
             }
-            Score(sheet.Cell(row, headers.Count), source.Score);
         }
-        Finish(sheet, headers.Count);
+        Finish(sheet, headers.Count, subject.Answers.Count + 1);
     }
 
     private static void WriteQuestionScores(IXLWorksheet sheet, SubjectTables subject)
     {
-        var headers = new List<string> { "排名", "准考证号", "姓名", "班级" };
+        var headers = new List<string> { "排名", "准考证号", "姓名", "班级",
+            "成绩（满分" + ScoreText(subject.Subject.MaximumScore) + "）" };
         headers.AddRange(subject.Subject.Questions.Select(question => "第" + question.QuestionNo +
             "题得分（满分" + ScoreText(question.MaximumScore) + "）"));
-        headers.Add("成绩（满分" + ScoreText(subject.Subject.MaximumScore) + "）");
         Header(sheet, headers);
         for (var index = 0; index < subject.QuestionScores.Count; index++)
         {
@@ -120,50 +120,49 @@ public sealed class ReportWorkbookWriter
             var row = index + 2;
             sheet.Cell(row, 1).Value = source.Rank;
             Identity(sheet, row, source.Participant);
+            Score(sheet.Cell(row, 5), source.Score);
             for (var questionIndex = 0; questionIndex < source.Questions.Count; questionIndex++)
             {
-                var cell = sheet.Cell(row, questionIndex + 5);
+                var cell = sheet.Cell(row, questionIndex + 6);
                 Score(cell, source.Questions[questionIndex].Score);
                 cell.Style.Font.FontColor = source.Questions[questionIndex].IsFullScore
                     ? XLColor.Black : XLColor.Red;
             }
-            Score(sheet.Cell(row, headers.Count), source.Score);
         }
         var footer = subject.QuestionScores.Count + 2;
         MeanFooter(sheet, footer, headers.Count);
+        MeanCell(sheet.Cell(footer, 5), subject.SubjectMean);
         for (var questionIndex = 0; questionIndex < subject.QuestionMeans.Count; questionIndex++)
-            MeanCell(sheet.Cell(footer, questionIndex + 5), subject.QuestionMeans[questionIndex].Mean);
-        MeanCell(sheet.Cell(footer, headers.Count), subject.SubjectMean);
-        Finish(sheet, headers.Count);
+            MeanCell(sheet.Cell(footer, questionIndex + 6), subject.QuestionMeans[questionIndex].Mean);
+        Finish(sheet, headers.Count, footer);
     }
 
     private static void WriteClassAverages(IXLWorksheet sheet, ReportCalculationResult report)
     {
-        var headers = new List<string> { "班级" };
+        var headers = new List<string> { "班级",
+            "总平均分（满分" + ScoreText(report.TotalMaximumScore) + "）", "总平均分排名" };
         foreach (var subject in report.Subjects)
         {
             headers.Add(subject.Subject.DisplayName + "平均分（满分" +
                 ScoreText(subject.Subject.MaximumScore) + "）");
             headers.Add(subject.Subject.DisplayName + "排名");
         }
-        headers.Add("总平均分（满分" + ScoreText(report.TotalMaximumScore) + "）");
-        headers.Add("总平均分排名");
         Header(sheet, headers);
         for (var index = 0; index < report.ClassAverages.Count; index++)
         {
             var source = report.ClassAverages[index];
             var row = index + 2;
             Text(sheet.Cell(row, 1), source.ClassNumber);
+            MeanCell(sheet.Cell(row, 2), source.TotalMean);
+            if (source.TotalRank is { } totalRank) sheet.Cell(row, 3).Value = totalRank;
             for (var subjectIndex = 0; subjectIndex < source.Subjects.Count; subjectIndex++)
             {
-                MeanCell(sheet.Cell(row, 2 + 2 * subjectIndex), source.Subjects[subjectIndex].Mean);
+                MeanCell(sheet.Cell(row, 4 + 2 * subjectIndex), source.Subjects[subjectIndex].Mean);
                 if (source.Subjects[subjectIndex].Rank is { } rank)
-                    sheet.Cell(row, 3 + 2 * subjectIndex).Value = rank;
+                    sheet.Cell(row, 5 + 2 * subjectIndex).Value = rank;
             }
-            MeanCell(sheet.Cell(row, headers.Count - 1), source.TotalMean);
-            if (source.TotalRank is { } totalRank) sheet.Cell(row, headers.Count).Value = totalRank;
         }
-        Finish(sheet, headers.Count);
+        Finish(sheet, headers.Count, report.ClassAverages.Count + 1);
     }
 
     private static void Identity(IXLWorksheet sheet, int row, ReportParticipant participant)
@@ -247,10 +246,14 @@ public sealed class ReportWorkbookWriter
         cell.Value = value.StartsWith('\'') ? "'" + value : value;
     }
 
-    private static void Finish(IXLWorksheet sheet, int lastColumn)
+    private static void Finish(IXLWorksheet sheet, int lastColumn, int lastRow)
     {
         sheet.Columns(1, lastColumn).Width = 18;
         sheet.Column(3).Width = 22;
+        // 表头、数据与平均分行的文字一律水平、垂直居中（requirements.md 成绩统计一节）。
+        var used = sheet.Range(1, 1, Math.Max(1, lastRow), lastColumn).Style.Alignment;
+        used.Horizontal = XLAlignmentHorizontalValues.Center;
+        used.Vertical = XLAlignmentVerticalValues.Center;
     }
 
     private static string SheetName(string requested, HashSet<string> used)

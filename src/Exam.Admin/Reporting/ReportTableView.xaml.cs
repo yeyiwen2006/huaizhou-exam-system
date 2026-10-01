@@ -75,7 +75,7 @@ public partial class ReportTableView : UserControl
                 Header = column.Header,
                 HeaderTemplate = HeaderTemplate(i),
                 Width = new DataGridLength(column.Width),
-                CellTemplate = CellTemplate(i, i == table.Columns.Count - 1),
+                CellTemplate = CellTemplate(i, i == EmphasisColumn(table)),
                 ClipboardContentBinding = new Binding($"Cells[{i}].Text"),
                 CanUserSort = false
             });
@@ -90,13 +90,13 @@ public partial class ReportTableView : UserControl
         {
             if (table.Columns.Count < 4)
                 throw new ArgumentException("固定均分行至少需要前四列。", nameof(Table));
-            var label = FooterCell("平均分", false);
+            var label = FooterCell("平均分");
             Grid.SetColumn(label, 0);
             Grid.SetColumnSpan(label, 4);
             FooterGrid.Children.Add(label);
             for (var i = 4; i < table.MeanFooter.Count; i++)
             {
-                var value = FooterCell(table.MeanFooter[i], true);
+                var value = FooterCell(table.MeanFooter[i]);
                 Grid.SetColumn(value, i);
                 FooterGrid.Children.Add(value);
             }
@@ -139,13 +139,16 @@ public partial class ReportTableView : UserControl
         return style;
     }
 
+    // 加粗总分（学生成绩表）、科目成绩（各科三类表）或总平均分（班级表）所在列。
+    private static int EmphasisColumn(ReportTable table) => table.Kind == ReportTableKind.ClassAverages ? 1 : 4;
+
     private static DataTemplate CellTemplate(int index, bool emphasis)
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
         text.SetBinding(TextBlock.TextProperty, new Binding($"Cells[{index}].Text"));
         text.SetBinding(FrameworkElement.ToolTipProperty, new Binding($"Cells[{index}].Text"));
         text.SetValue(FrameworkElement.StyleProperty, CellStyle(index));
-        text.SetValue(TextBlock.TextAlignmentProperty, index == 0 ? TextAlignment.Center : index >= 4 ? TextAlignment.Right : TextAlignment.Left);
+        text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
         if (emphasis) text.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
         text.SetValue(FrameworkElement.MarginProperty, new Thickness(12, 0, 12, 0));
         text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
@@ -158,11 +161,11 @@ public partial class ReportTableView : UserControl
         text.SetBinding(TextBlock.TextProperty, new Binding());
         text.SetBinding(FrameworkElement.ToolTipProperty, new Binding());
         text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
-        text.SetValue(TextBlock.TextAlignmentProperty, index == 0 ? TextAlignment.Center : index >= 4 ? TextAlignment.Right : TextAlignment.Left);
+        text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
         return new DataTemplate { VisualTree = text };
     }
 
-    private static Border FooterCell(string text, bool numeric) => new()
+    private static Border FooterCell(string text) => new()
     {
         BorderBrush = Brushes.LightGray,
         BorderThickness = new Thickness(0, 0, 1, 0),
@@ -172,7 +175,7 @@ public partial class ReportTableView : UserControl
             ToolTip = text,
             Foreground = Brushes.Black,
             Padding = new Thickness(12, 10, 12, 10),
-            TextAlignment = numeric ? TextAlignment.Right : TextAlignment.Left,
+            TextAlignment = TextAlignment.Center,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis
         }

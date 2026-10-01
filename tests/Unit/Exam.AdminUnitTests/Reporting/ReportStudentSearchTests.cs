@@ -63,7 +63,7 @@ public sealed class ReportStudentSearchTests
         var answers = session.Tables.First(table => table.Kind == ReportTableKind.SubjectAnswers);
         session.SelectedTable = answers;
         // 合成考生01 第 1 题答错，答案表仍按完整表格标红。
-        Assert.True(session.DisplayedTable!.Rows[0].Cells[4].IsRed);
+        Assert.True(session.DisplayedTable!.Rows[0].Cells[5].IsRed);
     }
 
     [Fact]

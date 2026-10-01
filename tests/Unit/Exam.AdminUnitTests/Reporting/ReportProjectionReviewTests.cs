@@ -16,8 +16,8 @@ public sealed partial class ReportTableProjectionTests
         };
         var tables = ReportTableProjection.Build(source with { Subjects = [subject], TotalMean = null });
         Assert.Equal("无有效样本", tables[0].MeanFooter![4]);
-        Assert.Equal(string.Empty, tables[0].MeanFooter![5]);
-        Assert.Equal("无有效样本", tables[0].MeanFooter![6]);
+        Assert.Equal("无有效样本", tables[0].MeanFooter![5]);
+        Assert.Equal(string.Empty, tables[0].MeanFooter![6]);
         Assert.Equal("无有效样本", tables[1].MeanFooter![4]);
         Assert.All(tables[3].MeanFooter!.Skip(4), cell => Assert.Equal("无有效样本", cell));
         Assert.Equal("无有效样本", tables[4].Rows[0].Cells[1].Text);

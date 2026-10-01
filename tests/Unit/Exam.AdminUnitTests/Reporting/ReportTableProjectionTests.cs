@@ -18,12 +18,12 @@ public sealed partial class ReportTableProjectionTests
         Assert.Equal(ReportTableKind.StudentTotals, totals.Kind);
         Assert.Equal(["总分排名", "准考证号", "姓名", "班级"],
             totals.Columns.Take(4).Select(column => column.Header));
-        Assert.Contains("满分 10", totals.Columns[^1].Header);
+        Assert.Contains("总分（满分 10", totals.Columns[4].Header);
         Assert.Equal("7", totals.Rows[0].Cells[0].Text);
-        Assert.Equal("3", totals.Rows[0].Cells[4].Text);
-        Assert.Equal("5.00", totals.MeanFooter![4]);
-        Assert.Equal("7.00", totals.MeanFooter[^1]);
-        Assert.Equal(string.Empty, totals.MeanFooter[5]);
+        Assert.Equal("3", totals.Rows[0].Cells[5].Text);
+        Assert.Equal("7.00", totals.MeanFooter![4]);
+        Assert.Equal("5.00", totals.MeanFooter[5]);
+        Assert.Equal(string.Empty, totals.MeanFooter[^1]);
 
         var scores = tables[1];
         Assert.Equal(ReportTableKind.SubjectScores, scores.Kind);
@@ -33,17 +33,18 @@ public sealed partial class ReportTableProjectionTests
         var answers = tables[2];
         Assert.Equal(ReportTableKind.SubjectAnswers, answers.Kind);
         Assert.Null(answers.MeanFooter);
-        Assert.Equal("第 1 题", answers.Columns[4].Header);
-        Assert.True(answers.Rows[0].Cells[4].IsRed);
-        Assert.False(answers.Rows[0].Cells[5].IsRed);
+        Assert.StartsWith("成绩", answers.Columns[4].Header);
+        Assert.Equal("第 1 题", answers.Columns[5].Header);
+        Assert.True(answers.Rows[0].Cells[5].IsRed);
+        Assert.False(answers.Rows[0].Cells[6].IsRed);
 
         var questionScores = tables[3];
         Assert.Equal(ReportTableKind.QuestionScores, questionScores.Kind);
-        Assert.False(questionScores.Rows[0].Cells[4].IsRed);
-        Assert.True(questionScores.Rows[0].Cells[5].IsRed);
-        Assert.Equal("4.00", questionScores.MeanFooter![4]);
-        Assert.Equal("1.00", questionScores.MeanFooter[5]);
-        Assert.Equal("5.00", questionScores.MeanFooter[6]);
+        Assert.False(questionScores.Rows[0].Cells[5].IsRed);
+        Assert.True(questionScores.Rows[0].Cells[6].IsRed);
+        Assert.Equal("5.00", questionScores.MeanFooter![4]);
+        Assert.Equal("4.00", questionScores.MeanFooter[5]);
+        Assert.Equal("1.00", questionScores.MeanFooter[6]);
 
         var classes = tables[4];
         Assert.Equal(ReportTableKind.ClassAverages, classes.Kind);
@@ -86,7 +87,7 @@ public sealed partial class ReportTableProjectionTests
 
         var table = ReportTableProjection.Build(result)[2];
 
-        Assert.Equal(answer, table.Rows[0].Cells[4].Text);
+        Assert.Equal(answer, table.Rows[0].Cells[5].Text);
     }
 
     private static ReportCalculationResult CreateResult()
