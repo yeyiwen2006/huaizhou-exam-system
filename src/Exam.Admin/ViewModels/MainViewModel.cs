@@ -16,8 +16,6 @@ public sealed class MainViewModel : IDisposable
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
         Connection.PropertyChanged += OnConnectionPropertyChanged;
-        Dependencies = new DependencyStatusViewModel();
-        ManifestPreflight = new ManifestPreflightViewModel(_api);
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
     }
 
@@ -26,8 +24,6 @@ public sealed class MainViewModel : IDisposable
     public RosterViewModel Roster { get; }
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
-    public DependencyStatusViewModel Dependencies { get; }
-    public ManifestPreflightViewModel ManifestPreflight { get; }
     public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
 
     private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
