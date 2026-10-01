@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Exam.IntegrationTests.Postgres;
 using Exam.Application.Activation;
 using Exam.Application.Scoring;
 using Exam.Contracts.Commands;
@@ -63,7 +64,7 @@ public sealed partial class PostgresSubmissionStoreTests
     }
 
     /// <summary>与报表命令用例共用同一套 CLI 进程启动方式，避免两处实现不一致。</summary>
-    private static Task<(int Exit, string Output)> RunGradingCliAsync(string server, string[] args, bool authenticated = true) =>
+    private Task<(int Exit, string Output)> RunGradingCliAsync(string server, string[] args, bool authenticated = true) =>
         RunReportCliAsync(server, args, authenticated);
 
     private async Task<WebApplication> GradingAppAsync(IGradingScope scope, IGradingInputs inputs)
@@ -81,7 +82,9 @@ public sealed partial class PostgresSubmissionStoreTests
         builder.Services.AddSingleton(inputs);
         builder.Services.AddSingleton(new GradingStatusService(inputs, scope));
         builder.Services.AddSingleton(new ServerNodeEnvelope("synthetic-grading-server", "node-a", 1));
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(ReportTestToken, "synthetic-operator"));
+        ReportTestToken = await SyntheticOperators.LoginAsync(fixture.DataSource, "synthetic-operator");
+        builder.Services.AddPostgresOperatorAccounts();
+        builder.Services.AddSingleton(fixture.DataSource);
         builder.Services.AddSingleton<IDeviceCredentialValidator, CollectionTestDeviceValidator>();
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource,
             new() { ServerId = "synthetic-grading-server", NodeId = "node-a", ServerEpoch = 1 }, true));
