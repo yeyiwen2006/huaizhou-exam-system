@@ -159,7 +159,7 @@ public sealed partial class OptionRegionMapTests
     [Fact]
     public void UnsupportedArtifactVersionFails()
     {
-        var json = ValidJson.Replace("\"artifactVersion\": 1", "\"artifactVersion\": 2");
+        var json = ValidJson.Replace("\"artifactVersion\": 1", "\"artifactVersion\": 3");
         Assert.Throws<InvalidDataException>(() =>
             OptionRegionMap.Parse(Encoding.UTF8.GetBytes(json), CreateManifest()));
     }

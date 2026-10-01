@@ -92,6 +92,27 @@ public sealed class OptionRegionExtractionTests : IDisposable
     }
 
     [Fact]
+    public async Task Extract_ChineseParenthesizedLabels_UseLetterOutlines()
+    {
+        var body = DefaultBody();
+        foreach (var id in OptionIds)
+            body = body.Replace($"{{{id}.}}", $"{{（{id}）}}", StringComparison.Ordinal);
+        var result = await ExtractAsync(body, pageAttribute: null);
+        Assert.True(result.Succeeded, Describe(result));
+        using var pdf = UglyToad.PdfPig.PdfDocument.Open(_lastPdfPath!);
+        var page = pdf.GetPage(1);
+        foreach (var option in result.Artifact!.Questions[0].Options)
+        {
+            var letter = Assert.Single(page.Letters, letter => letter.Value == option.OptionId);
+            var glyph = letter.BoundingBox;
+            Assert.Equal(glyph.Left / page.Width, option.X, 6);
+            Assert.Equal(1 - glyph.Top / page.Height, option.Y, 6);
+            Assert.Equal(glyph.Width / page.Width, option.Width, 6);
+            Assert.Equal(glyph.Height / page.Height, option.Height, 6);
+        }
+    }
+
+    [Fact]
     public async Task Extract_QuestionWithExplicitPageBreak_ReportsZeroBasedPageIndex()
     {
         // 第一页只有题干，选项被显式换页推到第二页；页索引须为题内从 0 起的 1。

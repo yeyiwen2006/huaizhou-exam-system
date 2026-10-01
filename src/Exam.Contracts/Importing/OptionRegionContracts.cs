@@ -64,7 +64,21 @@ public sealed record OptionRegion(
     double X,
     double Y,
     double Width,
-    double Height);
+    double Height,
+    OptionLabelOverlay? Overlay = null);
+
+/// <summary>
+/// 实心选项按钮的显示字母及遮盖范围。矩形包含原标签的可见字母和标点，不含链接留白，
+/// 使用同页左上角归一化坐标；圆心仍取 OptionRegion 的字形框中心。
+/// Text 只用于显示，答题绑定仍用 OptionId。旧产物或不可读字形可以没有此信息。
+/// </summary>
+public sealed record OptionLabelOverlay(string Text, double X, double Y, double Width, double Height)
+{
+    /// <summary>统一校验生产端、包读取和学生端的遮盖元数据。</summary>
+    public bool IsValid() => !string.IsNullOrWhiteSpace(Text) &&
+        double.IsFinite(X) && double.IsFinite(Y) && double.IsFinite(Width) && double.IsFinite(Height) &&
+        X >= 0 && Y >= 0 && Width > 0 && Height > 0 && X + Width <= 1 && Y + Height <= 1;
+}
 
 /// <summary>一道题的选项区域，按清单选项顺序排列。<c>PdfPath</c> 沿用学生清单的题目映射，不在此重复。</summary>
 public sealed record OptionRegionQuestion(
@@ -83,7 +97,12 @@ public sealed record OptionRegionArtifact(
     IReadOnlyList<OptionRegionQuestion> Questions)
 {
     /// <summary>当前坐标产物版本。</summary>
-    public const int CurrentArtifactVersion = 1;
+    public const int CurrentArtifactVersion = 2;
+
+    /// <summary>v1 只有定位矩形，仍可读取；新产物使用 v2 携带实心按钮的显示及遮盖信息。</summary>
+    public const int LegacyArtifactVersion = 1;
+
+    public static bool IsSupportedVersion(int version) => version is LegacyArtifactVersion or CurrentArtifactVersion;
 
     /// <summary>坐标规范名称。D03 产出的区域与 B03 的控件绑定共用此名称，任何一方不得自造。</summary>
     public const string AnchorSchemeName = "pageTopLeftNormalizedV1";

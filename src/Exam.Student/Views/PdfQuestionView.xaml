@@ -3,76 +3,58 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="Transparent">
     <UserControl.Resources>
-        <!--
-          选项圆形控件：叠加在选项字母处。圆圈半透明，字母始终可见；选中后绿色描边与浅绿填充。
-          尺寸由代码按屏幕像素设定并抵消页面缩放，任何缩放下都清晰可点（不改坐标产物）。
-        -->
-        <Style x:Key="OptionCircleStyle" TargetType="ToggleButton">
+        <!-- 所有普通选项和“不作答”共用实心蓝底白字；选中后使用深蓝色。禁用时仍不透明。 -->
+        <Style x:Key="OptionChoiceStyle" TargetType="ToggleButton">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="{DynamicResource Brush.Option.Fill}" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.OnPrimary}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Style.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Brush.Option.Selected}" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Brush.Option.Selected}" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Cursor" Value="Arrow" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="OptionCircleStyle" TargetType="ToggleButton" BasedOn="{StaticResource OptionChoiceStyle}">
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="FontFamily" Value="SimHei" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
                         <Grid Background="Transparent">
-                            <Ellipse x:Name="Ring"
-                                     Margin="3"
-                                     Fill="{DynamicResource Brush.Option.Fill}"
-                                     Stroke="{DynamicResource Brush.Primary}"
-                                     StrokeThickness="2.5" />
+                            <Ellipse x:Name="Ring" Fill="{TemplateBinding Background}" />
+                            <TextBlock x:Name="Label" Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}" FontFamily="{TemplateBinding FontFamily}"
+                                       FontSize="{TemplateBinding FontSize}" FontWeight="{TemplateBinding FontWeight}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
-                                <Setter TargetName="Ring" Property="Cursor" Value="Arrow" />
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Ring" Property="StrokeThickness" Value="3.5" />
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Ring" Property="Fill" Value="{DynamicResource Brush.Answer.Soft}" />
-                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Brush.Answer}" />
-                                <Setter TargetName="Ring" Property="StrokeThickness" Value="4" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
         <!-- “不作答”：位于原选项之后，与普通选项互斥；选择、取消及颜色反馈与普通选项一致。 -->
-        <Style x:Key="AbstainButtonStyle" TargetType="ToggleButton">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="Cursor" Value="Hand" />
+        <Style x:Key="AbstainButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource OptionChoiceStyle}">
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="Shell"
                                 CornerRadius="16"
                                 Padding="18,8"
-                                Background="{DynamicResource Brush.Surface}"
-                                BorderBrush="{DynamicResource Brush.Border.Strong}"
-                                BorderThickness="2">
+                                Background="{TemplateBinding Background}">
                             <TextBlock x:Name="Label"
                                        Text="不 作 答"
                                        FontSize="15"
                                        FontWeight="SemiBold"
-                                       Foreground="{DynamicResource Brush.Text.Primary}" />
+                                       Foreground="{TemplateBinding Foreground}" />
                         </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Shell" Property="Opacity" Value="0.5" />
-                                <Setter TargetName="Shell" Property="Cursor" Value="Arrow" />
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Brush.Primary}" />
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Brush.Answer}" />
-                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Brush.Success.Pressed}" />
-                                <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource Brush.OnPrimary}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -80,38 +62,15 @@
     </UserControl.Resources>
 
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <!-- 缩放工具行：只允许整体等比缩放。本控件可脱离应用主题单独实例化，按钮样式用 DynamicResource。 -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button x:Name="ZoomOutButton" Style="{DynamicResource Btn.Secondary}" Width="32" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False" Content="−"
-                    ToolTip="缩小" Click="OnZoomOut" />
-            <Button x:Name="ZoomResetButton" Style="{DynamicResource Btn.Secondary}" Width="52" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False"
-                    Content="100%" ToolTip="适应宽度" Click="OnZoomFit" Margin="4,0" />
-            <Button x:Name="ZoomInButton" Style="{DynamicResource Btn.Secondary}" Width="32" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False" Content="＋"
-                    ToolTip="放大" Click="OnZoomIn" />
-            <TextBlock Style="{DynamicResource CaptionText}"
-                       Text="按住 Ctrl 键滚动鼠标滚轮也可缩放"
-                       VerticalAlignment="Center" Margin="10,0,0,0" />
-        </StackPanel>
-
         <ScrollViewer x:Name="PdfScroll"
-                      Grid.Row="1"
                       Background="{DynamicResource Brush.Surface.Alt}"
                       HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Auto"
-                      PreviewMouseWheel="OnPreviewMouseWheel">
+                      VerticalScrollBarVisibility="Auto">
             <!-- 题目区至少与可视区域等大，裁去空白后的题目在其中居中；超过一屏时自然下拉。 -->
             <Grid x:Name="PageFrame"
                   MinWidth="{Binding ViewportWidth, ElementName=PdfScroll}"
                   MinHeight="{Binding ViewportHeight, ElementName=PdfScroll}">
                 <StackPanel x:Name="PagesHost" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12">
-                    <StackPanel.LayoutTransform>
-                        <ScaleTransform x:Name="ZoomTransform" ScaleX="1" ScaleY="1" />
-                    </StackPanel.LayoutTransform>
                     <!-- 动态：每题一页（裁去空白的 Image + 圆钮 Canvas），末尾“不作答” -->
                 </StackPanel>
             </Grid>

@@ -367,8 +367,12 @@ public partial class ExamInProgressPage : UserControl
         try
         {
             pdf = _runtime.ReadQuestionPdf(question.QuestionId);
+            var display = _navigator.Manifest.Questions.Single(item => item.Structure.QuestionId == question.QuestionId);
+            var captions = display.OptionCaptions is { } labels
+                ? question.OptionIds.Select((id, index) => (id, labels[index])).ToDictionary(item => item.id, item => item.Item2, StringComparer.Ordinal)
+                : null;
             await QuestionView.LoadAsync(question.QuestionId, pdf, _regionMap?.ForQuestion(question.QuestionId),
-                interactionEnabled: false, allowAbstain: question.AllowAbstain, ct);
+                interactionEnabled: false, allowAbstain: question.AllowAbstain, ct, captions);
             if (ct.IsCancellationRequested || generation != _renderGeneration || !ReferenceEquals(paper, _runtime.Paper) ||
                 question.QuestionId != _currentQuestionId) return;
             if (_runtime.Answers is { } answers)

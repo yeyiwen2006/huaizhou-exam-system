@@ -2,7 +2,6 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Exam.Contracts.Common;
@@ -15,35 +14,25 @@ namespace Exam.Student.Views;
 
 /// <summary>
 /// B03 原版题目显示：Windows.Data.Pdf 渲染逐题 PDF（保留多页），保持传入 LaTeX 的
-/// 字体、公式、图片、表格与选项排列；仅整体等比缩放与滚动。
-/// 显示前裁去页面四周空白（只按实际印刷内容的外框裁边，不裁任何内容；多页题左右裁边一致），
-/// 题目在可视区域居中并默认按宽度放大，超过一屏时下拉。
+/// 字体、公式、图片、表格与选项排列，始终按 PDF 原始尺寸显示，允许滚动。
+/// 上下按内容裁边；左右固定、对称裁去 20 毫米空白，多页题采用一致规则。
 /// 选项字母处按 option-regions.json 的归一化矩形中心叠加圆形选择控件；
 /// “不作答”位于原选项之后。控件状态由页面按 AnswerSession 快照驱动。
 /// </summary>
 public partial class PdfQuestionView : UserControl
 {
-    private const double MinZoom = 0.4;
-    private const double MaxZoom = 3.0;
-    private const double ZoomStep = 1.25;
     /// <summary>渲染基准：WinRT 页面尺寸单位为 DIP（1/96 英寸）×2（约 192 DPI），各题按其实际页面尺寸等比出图。</summary>
     private const double RenderPointsScale = 2.0;
-    /// <summary>适应宽度时的上限：避免短题被放得过大（相对渲染位图）。</summary>
-    private const double FitMaxZoom = 0.9;
-    /// <summary>选项圆圈的屏幕直径范围（像素），不随页面缩放变化。</summary>
-    private const double OptionMinDiameter = 30;
-    private const double OptionMaxDiameter = 44;
-    /// <summary>裁边后保留的余白（位图像素），保证圆圈不贴边。</summary>
-    private const int CropPadding = 36;
+    /// <summary>固定左右裁边，只去掉这段宽度内的空白，不按每题内容宽度收紧。</summary>
+    private const double HorizontalCropDip = 20 * 96 / 25.4;
+    /// <summary>上下裁边后保留的余白（DIP），保证原始内容和选项圆圈不贴边。</summary>
+    private const double VerticalPaddingDip = 18;
 
     private readonly Dictionary<string, ToggleButton> _optionButtons = new(StringComparer.Ordinal);
-    private readonly List<(ToggleButton Button, double CenterX, double CenterY, double Size)> _optionGeometry = new();
+    private readonly List<(ToggleButton Button, double CenterX, double CenterY, double CoverDiameter)> _optionGeometry = new();
     private readonly List<Canvas> _pageOverlays = new();
     private ToggleButton? _abstainButton;
     private string? _questionId;
-    private double _naturalWidth = 1;
-    private double _zoom = 1;
-    private bool _fitOnResize;
     private int _loadGeneration;
     private bool _interactionEnabled;
     private bool _regionsValidated;
@@ -60,9 +49,6 @@ public partial class PdfQuestionView : UserControl
     public PdfQuestionView()
     {
         InitializeComponent();
-        SizeChanged += (_, _) => { if (_fitOnResize) { ApplyFitWidth(); } };
-        // 纵向滚动条出现或消失会改变可视宽度；适应宽度模式下随之重算，避免出现横向滚动条。
-        PdfScroll.ScrollChanged += (_, e) => { if (_fitOnResize && e.ViewportWidthChange != 0) { ApplyFitWidth(); } };
     }
 
     public bool HasQuestion => _questionId is not null;
@@ -73,7 +59,7 @@ public partial class PdfQuestionView : UserControl
     /// </summary>
     public async Task LoadAsync(string questionId, byte[] pdf,
         IReadOnlyDictionary<string, OptionRegion>? regions, bool interactionEnabled, bool allowAbstain,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IReadOnlyDictionary<string, string>? optionCaptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(questionId);
         ArgumentNullException.ThrowIfNull(pdf);
@@ -132,27 +118,27 @@ public partial class PdfQuestionView : UserControl
             var crop = crops[index];
             var source = new CroppedBitmap(page.Bitmap, crop);
             source.Freeze();
+            var displayWidth = crop.Width * page.DisplayWidth / page.Width;
+            var displayHeight = crop.Height * page.DisplayHeight / page.Height;
             var image = new Image
             {
                 Source = source,
-                Width = crop.Width,
-                Height = crop.Height,
+                Width = displayWidth,
+                Height = displayHeight,
                 Stretch = Stretch.Fill,
                 SnapsToDevicePixels = true,
             };
-            var overlay = new Canvas { Width = crop.Width, Height = crop.Height };
-            var host = new Grid { Width = crop.Width, Height = crop.Height, Margin = new Thickness(0, 0, 0, 12) };
+            var overlay = new Canvas { Width = displayWidth, Height = displayHeight };
+            var host = new Grid { Width = displayWidth, Height = displayHeight, Margin = new Thickness(0, 0, 0, 12) };
             host.Children.Add(image);
             host.Children.Add(overlay);
             PagesHost.Children.Add(host);
             _pageOverlays.Add(overlay);
-            _naturalWidth = Math.Max(_naturalWidth, crop.Width);
         }
 
         if (regions is not null)
         {
-            // 圆心取归一化矩形中心（契约 4.3），换算到原页面位图后减去裁边偏移。
-            // 圆圈尺寸按屏幕像素设定并抵消页面缩放，见 UpdateOptionGeometry。
+            // 图像和 Canvas 都使用原始 PDF 的 DIP 尺寸，位图高分辨率只用于清晰度。
             foreach (var (optionId, region) in regions)
             {
                 if (region.PageIndex < 0 || region.PageIndex >= _pageOverlays.Count) { continue; }
@@ -163,12 +149,20 @@ public partial class PdfQuestionView : UserControl
                     Style = (Style)Resources["OptionCircleStyle"],
                     IsEnabled = _interactionEnabled && _regionsValidated,
                     Tag = optionId,
+                    Content = region.Overlay?.Text ?? DisplayLetter(optionCaptions?.GetValueOrDefault(optionId) ?? optionId),
                 };
                 button.Click += (_, _) => OptionClicked?.Invoke(optionId);
                 _pageOverlays[region.PageIndex].Children.Add(button);
                 _optionButtons[optionId] = button;
-                _optionGeometry.Add((button, region.CenterX * page.Width - crop.X, region.CenterY * page.Height - crop.Y,
-                    Math.Max(region.Width * page.Width, region.Height * page.Height)));
+                var cover = region.Overlay;
+                var halfWidth = Math.Max(Math.Abs(region.CenterX - (cover?.X ?? region.X)),
+                    Math.Abs((cover is null ? region.X + region.Width : cover.X + cover.Width) - region.CenterX)) * page.DisplayWidth;
+                var halfHeight = Math.Max(Math.Abs(region.CenterY - (cover?.Y ?? region.Y)),
+                    Math.Abs((cover is null ? region.Y + region.Height : cover.Y + cover.Height) - region.CenterY)) * page.DisplayHeight;
+                // 以字母中心为圆心，半径覆盖原标签最远角；不能仅按宽高最大值取半径，点号可能在右下角。
+                var coverDiameter = 2 * Math.Sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
+                _optionGeometry.Add((button, (region.CenterX * page.Width - crop.X) * page.DisplayWidth / page.Width,
+                    (region.CenterY * page.Height - crop.Y) * page.DisplayHeight / page.Height, coverDiameter));
             }
         }
 
@@ -185,8 +179,13 @@ public partial class PdfQuestionView : UserControl
             PagesHost.Children.Add(_abstainButton);
         }
 
-        _fitOnResize = true;
-        ApplyFitWidth();
+        UpdateOptionGeometry();
+    }
+
+    private static string DisplayLetter(string caption)
+    {
+        var letters = string.Concat(caption.Where(char.IsLetterOrDigit));
+        return letters.Length == 0 ? caption : letters;
     }
 
     /// <summary>按答案快照刷新圆钮与“不作答”状态；固定/冻结时由页面先禁用交互。</summary>
@@ -229,63 +228,33 @@ public partial class PdfQuestionView : UserControl
         _questionId = null;
         _interactionEnabled = false;
         _regionsValidated = false;
-        _naturalWidth = 1;
     }
 
-    private void OnZoomIn(object sender, RoutedEventArgs e) => ApplyZoom(_zoom * ZoomStep, keepOnResize: true);
-
-    private void OnZoomOut(object sender, RoutedEventArgs e) => ApplyZoom(_zoom / ZoomStep, keepOnResize: true);
-
-    private void OnZoomFit(object sender, RoutedEventArgs e) => ApplyFitWidth();
-
-    private void OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        if (Keyboard.Modifiers is not ModifierKeys.Control) { return; }
-        ApplyZoom(_zoom * (e.Delta > 0 ? ZoomStep : 1 / ZoomStep), keepOnResize: true);
-        e.Handled = true;
-    }
-
-    private void ApplyFitWidth()
-    {
-        // 首次加载时可能尚未布局，可用宽度退回控件自身宽度；按宽度铺满，长题允许下拉。
-        var viewport = PdfScroll.ViewportWidth > 0 ? PdfScroll.ViewportWidth : ActualWidth;
-        var available = Math.Max(1, viewport - 36);
-        ApplyZoom(Math.Min(FitMaxZoom, available / _naturalWidth), keepOnResize: false);
-    }
-
-    private void ApplyZoom(double zoom, bool keepOnResize)
-    {
-        _fitOnResize = !keepOnResize;
-        _zoom = Math.Clamp(zoom, MinZoom, MaxZoom);
-        ZoomTransform.ScaleX = _zoom;
-        ZoomTransform.ScaleY = _zoom;
-        ZoomResetButton.Content = $"{(int)Math.Round(_zoom * 100)}%";
-        UpdateOptionGeometry();
-    }
-
-    /// <summary>圆圈直径按屏幕像素取选项区域的 1.6 倍并限定在 30–44 像素，再以 1/zoom 抵消页面缩放；圆心不变。</summary>
+    /// <summary>以原始字形中心定位实心按钮，同时遮住完整原标签。</summary>
     private void UpdateOptionGeometry()
     {
-        foreach (var (button, centerX, centerY, size) in _optionGeometry)
+        foreach (var (button, centerX, centerY, coverDiameter) in _optionGeometry)
         {
-            var diameter = Math.Clamp(size * _zoom * 1.6, OptionMinDiameter, OptionMaxDiameter);
+            // 半径只额外留 0.5 DIP 吸收抗锯齿边缘，恰好盖住原标签，不另设最小圆径。
+            var diameter = coverDiameter + 1;
             button.Width = diameter;
             button.Height = diameter;
-            button.RenderTransform = new ScaleTransform(1 / _zoom, 1 / _zoom);
+            button.FontSize = diameter * .55;
             Canvas.SetLeft(button, centerX - diameter / 2);
             Canvas.SetTop(button, centerY - diameter / 2);
         }
-        if (_abstainButton is not null)
-            _abstainButton.LayoutTransform = new ScaleTransform(1 / _zoom, 1 / _zoom);
     }
 
     /// <summary>
-    /// 按实际印刷内容的外框裁去四周空白：多页题取统一的左右边界，上下按页计算；
-    /// 选项圆心始终留在裁剪范围内。空白页保持原尺寸。
+    /// 上下按实际内容裁边；左右固定各 20mm，不随题干长短变化。
+    /// 非标准页边距有印刷内容进入左右裁边区时，整道题统一保留原页宽，避免截断内容。
     /// </summary>
     private static Int32Rect[] CropRects(RenderedPage[] pages, IReadOnlyDictionary<string, OptionRegion>? regions)
     {
-        int left = int.MaxValue, right = int.MinValue;
+        var canCropHorizontally = pages.All(page => page.DisplayWidth > 2 * HorizontalCropDip &&
+            (page.Content is not { } content ||
+             content.X * page.DisplayWidth / page.Width >= HorizontalCropDip &&
+             (content.X + content.Width) * page.DisplayWidth / page.Width <= page.DisplayWidth - HorizontalCropDip));
         var vertical = new (int Top, int Bottom)?[pages.Length];
         for (var index = 0; index < pages.Length; index++)
         {
@@ -293,18 +262,13 @@ public partial class PdfQuestionView : UserControl
             var bottom = int.MinValue;
             if (pages[index].Content is { } content)
             {
-                left = Math.Min(left, content.X);
-                right = Math.Max(right, content.X + content.Width);
                 top = content.Y;
                 bottom = content.Y + content.Height;
             }
             foreach (var region in regions?.Values ?? [])
             {
                 if (region.PageIndex != index) continue;
-                var x = (int)Math.Round(region.CenterX * pages[index].Width);
                 var y = (int)Math.Round(region.CenterY * pages[index].Height);
-                left = Math.Min(left, x);
-                right = Math.Max(right, x);
                 top = Math.Min(top, y);
                 bottom = Math.Max(bottom, y);
             }
@@ -315,15 +279,16 @@ public partial class PdfQuestionView : UserControl
         {
             var width = (int)pages[index].Width;
             var height = (int)pages[index].Height;
-            if (left > right || vertical[index] is not { } span)
+            if (vertical[index] is not { } span)
             {
                 rects[index] = new Int32Rect(0, 0, width, height);
                 continue;
             }
-            var x0 = Math.Max(0, left - CropPadding);
-            var x1 = Math.Min(width, right + CropPadding);
-            var y0 = Math.Max(0, span.Top - CropPadding);
-            var y1 = Math.Min(height, span.Bottom + CropPadding);
+            var x0 = canCropHorizontally ? (int)Math.Floor(HorizontalCropDip * width / pages[index].DisplayWidth) : 0;
+            var x1 = width - x0;
+            var padding = (int)Math.Ceiling(VerticalPaddingDip * height / pages[index].DisplayHeight);
+            var y0 = Math.Max(0, span.Top - padding);
+            var y1 = Math.Min(height, span.Bottom + padding);
             rects[index] = x1 > x0 && y1 > y0
                 ? new Int32Rect(x0, y0, x1 - x0, y1 - y0)
                 : new Int32Rect(0, 0, width, height);
@@ -357,7 +322,8 @@ public partial class PdfQuestionView : UserControl
         return right < 0 ? null : new Int32Rect(left, top, right - left + 1, bottom - top + 1);
     }
 
-    private sealed record RenderedPage(BitmapSource Bitmap, double Width, double Height, Int32Rect? Content);
+    private sealed record RenderedPage(BitmapSource Bitmap, double Width, double Height,
+        double DisplayWidth, double DisplayHeight, Int32Rect? Content);
 
     private static async Task<RenderedPage[]> RenderPdfAsync(byte[] pdf, CancellationToken cancellationToken)
     {
@@ -398,8 +364,9 @@ public partial class PdfQuestionView : UserControl
             try
             {
                 var bitmap = CreateImage(bytes);
-                // 整数像素舍入与 PNG DPI 不再造成图像/Canvas 比例差；两者统一使用实际渲染位图尺寸。
-                pages[index] = new RenderedPage(bitmap, bitmap.PixelWidth, bitmap.PixelHeight, ContentBounds(bitmap));
+                // 保留页面本来的 DIP 宽高；渲染分辨率、整数像素舍入和 PNG DPI 都不改变字号或物理比例。
+                pages[index] = new RenderedPage(bitmap, bitmap.PixelWidth, bitmap.PixelHeight,
+                    size.Width, size.Height, ContentBounds(bitmap));
             }
             finally { Array.Clear(bytes); }
         }

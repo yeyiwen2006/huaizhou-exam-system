@@ -259,12 +259,14 @@ public sealed class UiScreenshotTests
         foreach (var (questionId, (file, body)) in sources)
         {
             File.WriteAllText(Path.Combine(packageRoot, file), $$$"""
-                \documentclass[UTF8]{ctexart}
+                \documentclass[UTF8,a4paper]{ctexart}
+                \usepackage[margin=25.4mm]{geometry}
                 \pagestyle{empty}
                 \usepackage{hyperref}
                 \hypersetup{hidelinks}
                 \DeclareRobustCommand{\optmark}[3]{\hypertarget{opt:#1:#2}{}\hyperlink{opt:#1:#2}{#3}}
                 \begin{document}
+                \fontsize{10.5bp}{16bp}\selectfont
                 {{{body}}}
                 \end{document}
                 """, new UTF8Encoding(false));

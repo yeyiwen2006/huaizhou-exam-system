@@ -4,6 +4,7 @@ using UglyToad.PdfPig;
 using UglyToad.PdfPig.Actions;
 using UglyToad.PdfPig.Annotations;
 using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Core;
 using UglyToad.PdfPig.Tokens;
 
 namespace Exam.Infrastructure.Compilation;
@@ -14,7 +15,7 @@ namespace Exam.Infrastructure.Compilation;
 ///
 /// 关键约定（不可自行放宽）：
 /// <list type="bullet">
-/// <item>几何取原始字典的 <c>/Rect</c>，不取 PdfPig 已应用初始矩阵的 <c>Annotation.Rectangle</c>。</item>
+/// <item>原始 <c>/Rect</c> 用于标记归属及几何校验；可读文字标签进一步取字母/数字的可见字形框，排除标点和链接留白。</item>
 /// <item>目标名取自原始动作字典的 <c>/A /D</c> 或直接 <c>/Dest</c>；<c>Annotation.Name</c> 是 <c>/NM</c>，不能充当目标名。</item>
 /// <item>只筛选 <c>page.GetAnnotations()</c> 的 Link 注解；<c>GetHyperlinks()</c> 只含外部链接，不能使用。</item>
 /// <item>标记必须解析为同一 PDF 内的 GoTo 目标，且目标页与注解页一致。</item>
@@ -176,12 +177,14 @@ public sealed class OptionRegionExtractor
 
             var expectedNames = expected.ToDictionary(item => item.Name, StringComparer.Ordinal);
             var fragments = new Dictionary<string, List<Fragment>>(StringComparer.Ordinal);
+            var pages = new Dictionary<int, Page>();
 
             for (var pageNumber = 1; pageNumber <= document.NumberOfPages; pageNumber++)
             {
                 var pageIndex = pageNumber - 1;
                 currentPageIndex = pageIndex;
                 var page = document.GetPage(pageNumber);
+                pages[pageIndex] = page;
                 var rotation = page.Rotation.Value;
 
                 if (!OptionRegionGeometry.IsSupportedRotation(rotation))
@@ -308,8 +311,12 @@ public sealed class OptionRegionExtractor
                     continue;
                 }
 
+                // 链接目标仍是唯一绑定依据。A. / （A）的链接框包含标点与字体留白，
+                // 其中心不是 A 的可见字形中心；只在已验证的标记内部精修显示区域。
+                var (anchor, label, coverage) = RefineLabelRegion(pages[first.PageIndex], region, first.DisplayBox, first.Rotation);
                 regions[item.OptionId] = new OptionRegion(
-                    item.OptionId, first.PageIndex, region.X, region.Y, region.Width, region.Height);
+                    item.OptionId, first.PageIndex, anchor.X, anchor.Y, anchor.Width, anchor.Height,
+                    label is null ? null : new OptionLabelOverlay(label, coverage.X, coverage.Y, coverage.Width, coverage.Height));
             }
         }
 
@@ -328,6 +335,74 @@ public sealed class OptionRegionExtractor
             .OfType<OptionRegion>()
             .ToList();
     }
+
+    private static (NormalizedRegion Anchor, string? Label, NormalizedRegion Coverage) RefineLabelRegion(
+        Page page, NormalizedRegion marker, PageDisplayBox displayBox, int rotation)
+    {
+        // PdfPig 的字形框已应用其页面初始矩阵。先逆变换回原始 PDF 坐标，
+        // 再按本模块解析的有效框归一化；库的 CropBox 可能遗漏页树继承，不能混用两种页框。
+        var crop = page.CropBox.Bounds;
+        NormalizedRegion? glyphs = null;
+        NormalizedRegion? coverage = null;
+        var label = new System.Text.StringBuilder();
+        foreach (var letter in page.Letters)
+        {
+            if (string.IsNullOrWhiteSpace(letter.Value) ||
+                letter.RenderingMode is TextRenderingMode.Neither or TextRenderingMode.NeitherClip)
+                continue;
+
+            var box = letter.BoundingBox;
+            var corners = new[] { box.BottomLeft, box.BottomRight, box.TopLeft, box.TopRight }
+                .Select(point => UndoPageTransform(point, crop, rotation)).ToArray();
+            var raw = new RawRect(corners.Min(point => point.X), corners.Min(point => point.Y),
+                corners.Max(point => point.X), corners.Max(point => point.Y));
+            if (OptionRegionGeometry.Normalize(raw, displayBox, rotation).Region is not { } glyph)
+                continue;
+            var left = glyph.X;
+            var right = glyph.X + glyph.Width;
+            var top = glyph.Y;
+            var bottom = glyph.Y + glyph.Height;
+            // 必须完整位于此标记内，不把旁边的选项正文或其它标记并进来。
+            if (!double.IsFinite(left) || !double.IsFinite(right) || !double.IsFinite(top) || !double.IsFinite(bottom) ||
+                right <= left || bottom <= top || left < marker.X || right > marker.X + marker.Width ||
+                top < marker.Y || bottom > marker.Y + marker.Height)
+                continue;
+
+            // 覆盖范围含可见标点，但不含链接留白；避免小字号时圆圈被字体空白撑大。
+            coverage = coverage is { } covered ? Union(covered, glyph) : glyph;
+            if (!letter.Value.All(char.IsLetterOrDigit)) continue;
+
+            if (glyphs is { } previous)
+            {
+                left = Math.Min(left, previous.X);
+                right = Math.Max(right, previous.X + previous.Width);
+                top = Math.Min(top, previous.Y);
+                bottom = Math.Max(bottom, previous.Y + previous.Height);
+            }
+            glyphs = new NormalizedRegion(left, top, right - left, bottom - top);
+            label.Append(letter.Value);
+        }
+
+        // 图片、路径绘制或不可读标签保留已有链接几何，不猜字母、不改变标识绑定。
+        return (glyphs ?? marker, glyphs is null ? null : label.ToString(), coverage ?? marker);
+    }
+
+    private static NormalizedRegion Union(NormalizedRegion first, NormalizedRegion second)
+    {
+        var left = Math.Min(first.X, second.X);
+        var top = Math.Min(first.Y, second.Y);
+        return new NormalizedRegion(left, top,
+            Math.Max(first.X + first.Width, second.X + second.Width) - left,
+            Math.Max(first.Y + first.Height, second.Y + second.Height) - top);
+    }
+
+    private static PdfPoint UndoPageTransform(PdfPoint point, PdfRectangle crop, int rotation) => rotation switch
+    {
+        90 => new PdfPoint(crop.Left + crop.Width - point.Y, crop.Bottom + point.X),
+        180 => new PdfPoint(crop.Right - point.X, crop.Top - point.Y),
+        270 => new PdfPoint(crop.Left + point.Y, crop.Bottom + crop.Height - point.X),
+        _ => new PdfPoint(crop.Left + point.X, crop.Bottom + point.Y)
+    };
 
     private static OptionRegionIssue Unresolved(string name, string questionId, string optionId, int pageIndex, string reason) =>
         new(OptionRegionIssueCode.MarkerUnresolved, $"标记 {name} 无法解析：{reason}", questionId, optionId, pageIndex);

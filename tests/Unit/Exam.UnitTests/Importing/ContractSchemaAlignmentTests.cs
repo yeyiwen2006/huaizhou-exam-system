@@ -141,8 +141,8 @@ public sealed class ContractSchemaAlignmentTests
         var option = root.GetProperty("$defs").GetProperty("option").GetProperty("properties");
 
         Assert.Equal(
-            OptionRegionArtifact.CurrentArtifactVersion,
-            root.GetProperty("properties").GetProperty("artifactVersion").GetProperty("const").GetInt32());
+            new[] { OptionRegionArtifact.LegacyArtifactVersion, OptionRegionArtifact.CurrentArtifactVersion },
+            root.GetProperty("properties").GetProperty("artifactVersion").GetProperty("enum").EnumerateArray().Select(value => value.GetInt32()));
         Assert.Equal(
             OptionRegionArtifact.AnchorSchemeName,
             root.GetProperty("properties").GetProperty("anchorScheme").GetProperty("const").GetString());
