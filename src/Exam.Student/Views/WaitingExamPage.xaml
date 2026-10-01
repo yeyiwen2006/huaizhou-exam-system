@@ -21,27 +21,53 @@
         </controls:PageHeader>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="24" MaxWidth="860" HorizontalAlignment="Center">
+            <StackPanel Margin="32,28,32,32" MaxWidth="880">
 
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Style="{StaticResource PageTitle}"
-                               Text="{Binding ExamName, RelativeSource={RelativeSource AncestorType=UserControl}}" />
-                    <controls:StatusPill x:Name="StatePill"
-                                         Text="尚未确认参试"
-                                         Level="Info"
-                                         Margin="12,0,0,0"
-                                         VerticalAlignment="Center" />
-                </StackPanel>
-
-                <TextBlock x:Name="TimeText"
-                           Style="{StaticResource BodyText}"
-                           Margin="0,8,0,0"
-                           Text="—" />
-                <TextBlock x:Name="CountdownText"
-                           Style="{StaticResource SectionTitle}"
-                           Foreground="{DynamicResource Brush.Primary}"
-                           Margin="0,8,0,0"
-                           Text="" />
+                <!-- 考试信息：名称、状态、时间与倒计时 -->
+                <Border Style="{StaticResource Card}" Padding="0">
+                    <StackPanel>
+                        <Border Style="{StaticResource BrandBand}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource BrandBand.Caption}" Text="等待考试" />
+                                    <TextBlock Style="{StaticResource BrandBand.Title}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                               Text="{Binding ExamName, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                                </StackPanel>
+                                <Border Grid.Column="1" Background="{DynamicResource Brush.Surface}" CornerRadius="{DynamicResource Radius.Pill}"
+                                        Padding="2" VerticalAlignment="Center">
+                                    <controls:StatusPill x:Name="StatePill"
+                                                         Text="尚未确认参试"
+                                                         Level="Info" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                        <Grid Margin="28,18,28,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <DockPanel VerticalAlignment="Center">
+                                <Path Data="{StaticResource Icon.Clock}" Style="{StaticResource Icon.Stroke}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="TimeText"
+                                           Style="{StaticResource BodyText}"
+                                           VerticalAlignment="Center"
+                                           Text="—" />
+                            </DockPanel>
+                            <TextBlock x:Name="CountdownText"
+                                       Grid.Column="1"
+                                       Style="{StaticResource SectionTitle}"
+                                       FontSize="{DynamicResource Font.Size.Subtitle}"
+                                       Foreground="{DynamicResource Brush.Primary}"
+                                       VerticalAlignment="Center"
+                                       Margin="16,0,0,0"
+                                       Text="" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
                 <controls:Banner Level="Info"
                                 IsOpen="True"
@@ -51,7 +77,12 @@
                 <!-- 考试说明（全部科目全部题型） -->
                 <Border Style="{StaticResource Card}" Margin="0,16,0,0">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="考试说明" />
+                        <DockPanel>
+                            <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
+                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="16" Height="16" />
+                            </Border>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="考试说明" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </DockPanel>
                         <ItemsControl x:Name="InstructionList" Margin="0,12,0,0" />
                     </StackPanel>
                 </Border>
@@ -59,7 +90,12 @@
                 <!-- B02 接入：试题下载状态、解密、自动进入考试 -->
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="试题下载" />
+                        <DockPanel>
+                            <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
+                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Download}" Width="16" Height="16" />
+                            </Border>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="试题下载" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </DockPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <controls:StatusPill x:Name="DownloadPill"
                                                  Text="正在准备下载…"
@@ -74,7 +110,12 @@
 
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="本地答题恢复" />
+                        <DockPanel>
+                            <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
+                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Refresh}" Width="16" Height="16" />
+                            </Border>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="本地答题恢复" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </DockPanel>
                         <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}" Margin="0,8,0,0"
                                    Text="正在检查本机是否有未完成的固定答卷…" />
                         <controls:Banner x:Name="LocalStateErrorBanner" Level="Danger" Margin="0,8,0,0" />
@@ -86,11 +127,16 @@
 
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="参试确认" />
+                        <DockPanel>
+                            <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
+                                <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Lock}" Width="16" Height="16" />
+                            </Border>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="参试确认" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </DockPanel>
                         <TextBlock x:Name="ConfirmHint" Style="{StaticResource BodyText}" Margin="0,8,0,0"
                                    Text="试题包与考试说明全部取得后才能确认参试。" />
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                            <Button x:Name="ConfirmButton" Style="{StaticResource Btn.Primary}" Content="确认参试"
+                            <Button x:Name="ConfirmButton" Style="{StaticResource Btn.Primary}" Content="确认参试" MinWidth="112" Padding="16,0"
                                     IsEnabled="False" Click="OnConfirmParticipation" />
                             <Button x:Name="RetryConnectionButton" Style="{StaticResource Btn.Secondary}"
                                     Content="重试连接与解锁" Margin="12,0,0,0" Visibility="Collapsed" Click="OnRetryConnection" />

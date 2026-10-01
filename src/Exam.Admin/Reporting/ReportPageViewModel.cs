@@ -6,7 +6,7 @@ using Exam.Domain.Reporting;
 
 namespace Exam.Admin.Reporting;
 
-public sealed class ReportPageViewModel : BindableBase, IDisposable
+public sealed partial class ReportPageViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
     private readonly IFileDialogService _files;
@@ -45,7 +45,7 @@ public sealed class ReportPageViewModel : BindableBase, IDisposable
     public bool ConnectionReady { get => _connected; set { if (SetProperty(ref _connected, value)) { _autoLoad = true; Reset("连接状态已变化，请刷新报表。"); UpdateTimer(); } } }
     public bool IsPageActive { get => _active; set { if (SetProperty(ref _active, value)) { _autoLoad = true; if (!value) Reset("报表页已关闭，请刷新报表。"); UpdateTimer(); } } }
     private void UpdateTimer() { if (_connected && _active && !_disposed) _timer.Start(); else _timer.Stop(); }
-    private void Commands() { RefreshCommand.RaiseCanExecuteChanged(); ExportCommand.RaiseCanExecuteChanged(); CancelCommand.RaiseCanExecuteChanged(); }
+    private void Commands() { RefreshCommand.RaiseCanExecuteChanged(); ExportCommand.RaiseCanExecuteChanged(); CancelCommand.RaiseCanExecuteChanged(); NotifyPresentation(); }
     private void ConfigurationChanged(object? sender, EventArgs e) => Reset("身份或服务器已变化，请重新加载报表。");
     private void Reset(string reason)
     {
@@ -56,6 +56,7 @@ public sealed class ReportPageViewModel : BindableBase, IDisposable
     private void ApplyStatus(ReportStatus status)
     {
         MissingParticipants = status.MissingParticipants;
+        NotifyPresentation();
         Status = $"{status.Reason} 实际参试 {status.ParticipantCount}，已回收 {status.CollectedCount}，当前版本已计分 {status.GradedCount}。";
     }
     public async Task RefreshAsync()

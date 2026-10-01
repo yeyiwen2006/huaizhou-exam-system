@@ -14,7 +14,8 @@
     <CornerRadius x:Key="Radius.SM">4</CornerRadius>
     <CornerRadius x:Key="Radius.MD">6</CornerRadius>
     <CornerRadius x:Key="Radius.LG">10</CornerRadius>
-    <CornerRadius x:Key="Radius.Pill">999</CornerRadius>
+    <!-- 胶囊圆角取控件高度的一半；WPF 中过大的半径会被画成椭圆 -->
+    <CornerRadius x:Key="Radius.Pill">11</CornerRadius>
 
     <sys:Double x:Key="Control.Height.Small">28</sys:Double>
     <sys:Double x:Key="Control.Height">36</sys:Double>
@@ -26,8 +27,10 @@
 
     <Thickness x:Key="Padding.Control">10,0</Thickness>
     <Thickness x:Key="Padding.ControlLarge">14,0</Thickness>
-    <Thickness x:Key="Padding.Card">16</Thickness>
+    <Thickness x:Key="Padding.Card">20</Thickness>
+    <Thickness x:Key="Padding.Page">28,24,28,28</Thickness>
 
     <sys:Double x:Key="Page.MaxWidth">960</sys:Double>
+    <GridLength x:Key="Nav.Width">232</GridLength>
 
 </ResourceDictionary>

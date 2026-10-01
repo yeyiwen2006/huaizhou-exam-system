@@ -63,15 +63,13 @@
                              ClientNumber="{Binding ClientNumber, Mode=OneWay}"
                              CandidateName="{Binding CandidateDisplay, Mode=OneWay}">
             <controls:PageHeader.RightContent>
-                <StackPanel Orientation="Horizontal">
-                    <ContentControl Content="{Binding ClockPillContent, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=OneWay}"
-                                    VerticalAlignment="Center" />
-                    <Button Style="{StaticResource Btn.Danger}"
-                            Content="提交答卷"
-                            IsEnabled="{Binding Submit.IsEnabled, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=OneWay}"
-                            Margin="16,0,0,0"
-                            Click="OnSubmit" />
-                </StackPanel>
+                <!-- 右上角红色“提交答卷”；服务器时间按需求显示在右下角状态条 -->
+                <Button Style="{StaticResource Btn.Danger}"
+                        Content="提交答卷"
+                        MinWidth="112"
+                        Padding="16,0"
+                        IsEnabled="{Binding Submit.IsEnabled, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=OneWay}"
+                        Click="OnSubmit" />
             </controls:PageHeader.RightContent>
         </controls:PageHeader>
 
@@ -85,37 +83,64 @@
             <Border Grid.Column="0"
                     Style="{StaticResource Card}"
                     Width="280"
-                    Padding="12">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl x:Name="NavList">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="0,0,0,14">
-                                    <TextBlock Style="{StaticResource SectionTitle}"
-                                               FontSize="{DynamicResource Font.Size.Body.Large}"
-                                               Text="{Binding SubjectName, Mode=OneWay}" />
-                                    <TextBlock Style="{StaticResource CaptionText}"
-                                               Text="{Binding GroupTitle, Mode=OneWay}"
-                                               Margin="0,6,0,8" />
-                                    <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <WrapPanel />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Button Style="{StaticResource NavBoxStyle}"
-                                                        Tag="{Binding QuestionId, Mode=OneWay}"
-                                                        Click="OnNavBoxClick" />
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                    Padding="14,14,8,12">
+                <DockPanel>
+                    <!-- 图例：颜色语义与题号方框一致 -->
+                    <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,1,0,0"
+                            Padding="0,10,0,0" Margin="0,8,6,0">
+                        <WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,4">
+                                <Border Width="14" Height="14" CornerRadius="4" Background="{DynamicResource Brush.Answer.Soft}"
+                                        BorderBrush="{DynamicResource Brush.Answer}" BorderThickness="1.5" />
+                                <TextBlock Text="已作答" Style="{StaticResource CaptionText}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,4">
+                                <Border Width="14" Height="14" CornerRadius="4" Background="{DynamicResource Brush.Surface.Alt}"
+                                        BorderBrush="{DynamicResource Brush.Primary}" BorderThickness="2" />
+                                <TextBlock Text="当前题" Style="{StaticResource CaptionText}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,4">
+                                <Border Width="14" Height="14" CornerRadius="4" Background="{DynamicResource Brush.Surface.Alt}"
+                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1.5" />
+                                <TextBlock Text="未作答" Style="{StaticResource CaptionText}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                <Ellipse Width="9" Height="9" Fill="{DynamicResource Brush.Mark}" VerticalAlignment="Center" />
+                                <TextBlock Text="已标记" Style="{StaticResource CaptionText}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </WrapPanel>
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="NavList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,14">
+                                        <TextBlock Style="{StaticResource SectionTitle}"
+                                                   FontSize="{DynamicResource Font.Size.Body.Large}"
+                                                   Text="{Binding SubjectName, Mode=OneWay}" />
+                                        <TextBlock Style="{StaticResource CaptionText}"
+                                                   Text="{Binding GroupTitle, Mode=OneWay}"
+                                                   Margin="0,6,0,8" />
+                                        <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Style="{StaticResource NavBoxStyle}"
+                                                            Tag="{Binding QuestionId, Mode=OneWay}"
+                                                            Click="OnNavBoxClick" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
 
             <!-- 右侧：原版题目显示（B03） -->
@@ -134,11 +159,13 @@
                     <Grid Grid.Row="0" Margin="4,4,4,8">
                         <TextBlock x:Name="CurrentQuestionText"
                                    Style="{StaticResource SectionTitle}"
+                                   FontSize="{DynamicResource Font.Size.Subtitle}"
                                    VerticalAlignment="Center"
                                    Text="题目尚不可用" />
                         <Button x:Name="MarkButton"
                                 Style="{StaticResource Btn.Secondary}"
                                 Content="标记本题"
+                                Padding="14,0"
                                 IsEnabled="False"
                                 HorizontalAlignment="Right"
                                 Click="OnToggleMark" />
@@ -168,18 +195,25 @@
                             BorderThickness="0,1,0,0"
                             Margin="4,10,4,2"
                             Padding="0,8,0,0">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}"
-                                       VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="420" />
-                            <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
-                                    Content="重试本地保存" Margin="12,0,0,0" Padding="12,4"
-                                    Visibility="Collapsed" Click="OnRetryLocalSave" />
-                            <TextBlock x:Name="SyncStatusText" Style="{StaticResource CaptionText}"
-                                       VerticalAlignment="Center" TextWrapping="Wrap"
-                                       Margin="16,0,0,0" Text="同步服务尚未启动。" />
-                            <TextBlock x:Name="FocusStatusText" Style="{StaticResource CaptionText}"
-                                       VerticalAlignment="Center" Margin="16,0,0,0" Text="" />
-                        </StackPanel>
+                        <DockPanel>
+                            <!-- 右下角：服务器时间 -->
+                            <ContentControl DockPanel.Dock="Right"
+                                            Content="{Binding ClockPillContent, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=OneWay}"
+                                            VerticalAlignment="Center"
+                                            Margin="16,0,0,0" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="LocalStateText" Style="{StaticResource BodyText}"
+                                           VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="420" />
+                                <Button x:Name="RetryLocalSaveButton" Style="{StaticResource Btn.Secondary}"
+                                        Content="重试本地保存" Margin="12,0,0,0" Padding="12,4"
+                                        Visibility="Collapsed" Click="OnRetryLocalSave" />
+                                <TextBlock x:Name="SyncStatusText" Style="{StaticResource CaptionText}"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Margin="16,0,0,0" Text="同步服务尚未启动。" />
+                                <TextBlock x:Name="FocusStatusText" Style="{StaticResource CaptionText}"
+                                           VerticalAlignment="Center" Margin="16,0,0,0" Text="" />
+                            </StackPanel>
+                        </DockPanel>
                     </Border>
                 </Grid>
             </Border>
@@ -188,7 +222,7 @@
         <!-- B06 设备裁决/撤权撤销遮罩：本设备被撤销后停止作答，仅允许返回选择考试 -->
         <Border x:Name="RevokedOverlay"
                 Grid.RowSpan="2"
-                Background="#F2FFFFFF"
+                Background="{DynamicResource Brush.Scrim}"
                 Visibility="Collapsed">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
                 <TextBlock Style="{StaticResource SectionTitle}"

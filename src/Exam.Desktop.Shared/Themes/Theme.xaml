@@ -6,8 +6,10 @@
         <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Colors.xaml" />
         <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Typography.xaml" />
         <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Metrics.xaml" />
+        <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Icons.xaml" />
         <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Controls.xaml" />
         <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Components.xaml" />
+        <ResourceDictionary Source="pack://application:,,,/Exam.Desktop.Shared;component/Themes/Reporting.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
 </ResourceDictionary>

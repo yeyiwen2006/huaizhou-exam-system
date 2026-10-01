@@ -185,19 +185,28 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
     public LocalStateKey Key { get; } = new("server", "exam", "candidate");
     public static AnswerSessionContext Context { get; } = new("participation", 1, 1, 1, "device", true);
     public SqliteLocalStateStore Store { get; }
-    private readonly DeviceRecord _device = new("device", "synthetic-credential", "20260924001", "127.0.0.1", 5443,
+    private DeviceRecord _device = new("device", "synthetic-credential", "20260924001", "127.0.0.1", 5443,
         DateTimeOffset.UtcNow, "server", ActivationStatus.Active, CredentialVersion: 1, ServerEpoch: 1);
-    private readonly StudentSessionResult _session = new("session", "device",
+    private StudentSessionResult _session = new("session", "device",
         new("candidate", "合成考生", "01", "001"), ["exam"], DateTimeOffset.UtcNow);
 
     private StudentPaperFixture() => Store = new SqliteLocalStateStore(Path.Combine(_root, "state.db"));
 
+    public DeviceRecord Device => _device;
+    public StudentSessionResult Session => _session;
+
+    /// <param name="questionPdfs">可选：按题目标识提供的合成 PDF 字节；未提供时仍写入只有文件头的占位 PDF。</param>
+    /// <param name="device">可选：替换合成设备记录（DeviceId 须保持 "device"）。</param>
+    /// <param name="candidate">可选：替换合成考生身份（CandidateId 须保持 "candidate"）。</param>
     public static async Task<StudentPaperFixture> CreateAsync(string manifestExamId = "exam", byte[]? plaintextOverride = null,
-        OptionRegionArtifact? optionRegions = null)
+        OptionRegionArtifact? optionRegions = null, IReadOnlyDictionary<string, byte[]>? questionPdfs = null,
+        Func<DeviceRecord, DeviceRecord>? device = null, CandidateIdentity? candidate = null)
     {
         var fixture = new StudentPaperFixture();
         try
         {
+            if (device is not null) fixture._device = device(fixture._device);
+            if (candidate is not null) fixture._session = fixture._session with { Candidate = candidate };
             using var rsa = RSA.Create(2048);
             var certificate = new CertificateRequest("CN=synthetic-pr-integration", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             fixture._node = certificate.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
@@ -209,8 +218,14 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
             await File.WriteAllTextAsync(Path.Combine(input, "manifest.json"),
                 JsonSerializer.Serialize(fixture.Manifest, ImportJson.Create()));
             foreach (var question in fixture.Manifest.Questions)
-                await File.WriteAllTextAsync(Path.Combine(compiled, Path.GetFileNameWithoutExtension(question.Source) + ".pdf"),
-                    "%PDF-1.4\n% Synthetic header-only fixture; not a rendering/TeX acceptance test.\n");
+            {
+                var pdfPath = Path.Combine(compiled, Path.GetFileNameWithoutExtension(question.Source) + ".pdf");
+                if (questionPdfs?.TryGetValue(question.QuestionId, out var pdf) == true)
+                    await File.WriteAllBytesAsync(pdfPath, pdf);
+                else
+                    await File.WriteAllTextAsync(pdfPath,
+                        "%PDF-1.4\n% Synthetic header-only fixture; not a rendering/TeX acceptance test.\n");
+            }
             var encryption = new PackageEncryptionService(4096);
             var request = new StudentPackageRequest(input, compiled,
                 Path.Combine(fixture._root, "preview"), "package", 1, Path.Combine(fixture._root, "paper.epkg"),
@@ -254,7 +269,8 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
                 StudentPackageLayout.QuestionPdfPath(q.Source), null)).ToArray(), []);
     }
 
-    public async Task<StudentExamRuntime> StartRuntimeAsync()
+    /// <param name="confirmParticipation">false 时在试题包下载完成后停止（等待页的“资料齐备，尚未参试”状态）。</param>
+    public async Task<StudentExamRuntime> StartRuntimeAsync(bool confirmParticipation = true)
     {
         var runtime = new StudentExamRuntime(new ExamPackageManager(this, Path.Combine(_root, "packages"), _device, _session, "exam"),
             _device, Store, Key.CandidateId);
@@ -262,6 +278,7 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
         {
             Assert.True(await runtime.InitializeLocalRecoveryAsync());
             Assert.True(await runtime.Manager.PrepareAndDownloadAsync());
+            if (!confirmParticipation) return runtime;
             Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
             Assert.Equal(ExamPackageManager.Phase.Unlocked, runtime.Manager.CurrentPhase);
             await runtime.SynchronizeLocalAnswersAsync();

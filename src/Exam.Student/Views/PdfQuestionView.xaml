@@ -16,8 +16,8 @@
                             <Ellipse x:Name="Ring"
                                      Width="24" Height="24"
                                      HorizontalAlignment="Center" VerticalAlignment="Center"
-                                     Fill="#FFFFFF"
-                                     Stroke="#B9C2D0"
+                                     Fill="{DynamicResource Brush.Surface}"
+                                     Stroke="{DynamicResource Brush.Border.Strong}"
                                      StrokeThickness="2" />
                         </Grid>
                         <ControlTemplate.Triggers>
@@ -31,7 +31,7 @@
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Ring" Property="Fill" Value="{DynamicResource Brush.Answer}" />
-                                <Setter TargetName="Ring" Property="Stroke" Value="#227A45" />
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Brush.Success.Pressed}" />
                                 <Setter TargetName="Ring" Property="StrokeThickness" Value="3" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -50,8 +50,8 @@
                         <Border x:Name="Shell"
                                 CornerRadius="16"
                                 Padding="18,8"
-                                Background="#FFFFFF"
-                                BorderBrush="#B9C2D0"
+                                Background="{DynamicResource Brush.Surface}"
+                                BorderBrush="{DynamicResource Brush.Border.Strong}"
                                 BorderThickness="2">
                             <TextBlock x:Name="Label"
                                        Text="不 作 答"
@@ -69,20 +69,13 @@
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Brush.Answer}" />
-                                <Setter TargetName="Shell" Property="BorderBrush" Value="#227A45" />
-                                <Setter TargetName="Label" Property="Foreground" Value="#FFFFFF" />
+                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Brush.Success.Pressed}" />
+                                <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource Brush.OnPrimary}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-        </Style>
-
-        <Style x:Key="ZoomButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="30" />
-            <Setter Property="Height" Value="26" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Focusable" Value="False" />
         </Style>
     </UserControl.Resources>
 
@@ -92,13 +85,13 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 缩放工具行：只允许整体等比缩放 -->
+        <!-- 缩放工具行：只允许整体等比缩放。本控件可脱离应用主题单独实例化，按钮样式用 DynamicResource。 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button x:Name="ZoomOutButton" Style="{StaticResource ZoomButtonStyle}" Content="−"
+            <Button x:Name="ZoomOutButton" Style="{DynamicResource Btn.Secondary}" Width="32" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False" Content="−"
                     ToolTip="缩小" Click="OnZoomOut" />
-            <Button x:Name="ZoomResetButton" Style="{StaticResource ZoomButtonStyle}" Width="52"
+            <Button x:Name="ZoomResetButton" Style="{DynamicResource Btn.Secondary}" Width="52" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False"
                     Content="100%" ToolTip="适应宽度" Click="OnZoomFit" Margin="4,0" />
-            <Button x:Name="ZoomInButton" Style="{StaticResource ZoomButtonStyle}" Content="＋"
+            <Button x:Name="ZoomInButton" Style="{DynamicResource Btn.Secondary}" Width="32" Height="{DynamicResource Control.Height.Small}" Padding="0" Focusable="False" Content="＋"
                     ToolTip="放大" Click="OnZoomIn" />
             <TextBlock Style="{DynamicResource CaptionText}"
                        Text="Ctrl+滚轮缩放；原版版式，仅等比缩放与滚动"
@@ -107,7 +100,7 @@
 
         <ScrollViewer x:Name="PdfScroll"
                       Grid.Row="1"
-                      Background="#FBFCFE"
+                      Background="{DynamicResource Brush.Surface.Alt}"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       PreviewMouseWheel="OnPreviewMouseWheel">

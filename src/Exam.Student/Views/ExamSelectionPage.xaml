@@ -20,10 +20,13 @@
         </controls:PageHeader>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="24" MaxWidth="920" HorizontalAlignment="Center">
+            <StackPanel Margin="32,28,32,32" MaxWidth="920">
 
                 <Grid>
-                    <TextBlock Style="{StaticResource PageTitle}" Text="选择考试" VerticalAlignment="Center" />
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource PageTitle}" Text="选择考试" />
+                        <TextBlock Style="{StaticResource PageSubtitle}" Text="选择考务端已开放的考试并申请进入。" />
+                    </StackPanel>
                     <controls:StatusPill x:Name="LoginPill"
                                          Text="已登录"
                                          Level="Success"
@@ -32,37 +35,48 @@
                 </Grid>
 
                 <!-- 个人登录状态 -->
-                <Border Style="{StaticResource Card}" Margin="0,16,0,0">
-                    <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="个人登录状态" />
-                        <TextBlock x:Name="CandidateText"
-                                   Style="{StaticResource BodyText}"
-                                   Margin="0,8,0,0"
-                                   Text="—" />
-                    </StackPanel>
+                <Border Style="{StaticResource Card}" Margin="0,20,0,0" Padding="20,16">
+                    <DockPanel>
+                        <Border Style="{StaticResource IconTile}" VerticalAlignment="Center">
+                            <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Users}" />
+                        </Border>
+                        <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="个人登录状态" Margin="0,0,0,2" />
+                            <TextBlock x:Name="CandidateText"
+                                       Style="{StaticResource BodyText}"
+                                       Text="—" />
+                        </StackPanel>
+                    </DockPanel>
                 </Border>
 
                 <controls:Banner x:Name="EntryBanner"
                                 Level="Danger"
                                 Margin="0,16,0,0" />
 
-                <Button Style="{StaticResource Btn.Secondary}"
-                        Content="刷新考试列表"
-                        HorizontalAlignment="Left"
-                        Margin="0,12,0,0"
-                        Click="OnRefresh" />
+                <DockPanel Margin="0,24,0,0">
+                    <Button DockPanel.Dock="Right"
+                            Style="{StaticResource Btn.Secondary}"
+                            Content="刷新考试列表"
+                            Padding="14,0"
+                            Click="OnRefresh" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="可参加的考试" VerticalAlignment="Center" />
+                </DockPanel>
 
                 <!-- 可供选择的考试 -->
-                <ItemsControl x:Name="ExamList" Margin="0,16,0,0">
+                <ItemsControl x:Name="ExamList" Margin="0,12,0,0">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
+                                    <Border Grid.Column="0" Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="11" Margin="0,0,16,0">
+                                        <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="22" Height="22" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Name}" />
                                             <controls:StatusPill Text="{Binding StateText}"
@@ -80,9 +94,11 @@
                                                    Text="{Binding SubjectsText}"
                                                    Margin="0,4,0,0" />
                                     </StackPanel>
-                                    <Button Grid.Column="1"
+                                    <Button Grid.Column="2"
                                             Style="{StaticResource Btn.Primary}"
                                             Content="进入考试"
+                                            MinWidth="112"
+                                            Height="{StaticResource Control.Height.Large}"
                                             VerticalAlignment="Center"
                                             Margin="16,0,0,0"
                                             Click="OnEnterExam"

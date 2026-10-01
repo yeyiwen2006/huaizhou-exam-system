@@ -76,9 +76,9 @@ public sealed class WpfBindingSmokeTests
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
-                    if ((string)tab.Header == "C03 激活与房间组")
+                    if ((string)tab.Header == "激活与房间组")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名草稿") && button.Command is not null);
-                    if ((string)tab.Header == "C04 监控与处置")
+                    if ((string)tab.Header == "监控与处置")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐事件") && button.Command is not null);
@@ -102,7 +102,7 @@ public sealed class WpfBindingSmokeTests
                         }
                     }
                     else Assert.False(viewModel.Monitoring.IsPageActive);
-                    if ((string)tab.Header == "C05 清单静态预检")
+                    if ((string)tab.Header == "清单静态预检")
                     {
                         Assert.Contains(Descendants<Button>(window), button =>
                             Equals(button.Content, "选择 manifest.json 并静态预检") &&

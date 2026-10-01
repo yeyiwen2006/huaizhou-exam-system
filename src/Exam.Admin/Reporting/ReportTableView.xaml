@@ -3,9 +3,17 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              MinHeight="180">
     <Grid>
-        <TextBlock x:Name="UnavailableText" Text="报表尚未开放" TextAlignment="Center"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                   Style="{DynamicResource CaptionText}" />
+        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,12">
+            <Border Background="{DynamicResource Brush.Primary.Soft}" CornerRadius="14" Width="48" Height="48"
+                    HorizontalAlignment="Center" Margin="0,0,0,10">
+                <Path Data="{DynamicResource Report.DocumentIcon}" Stroke="{DynamicResource Brush.Primary}"
+                      StrokeThickness="1.6" Stretch="Uniform" Width="22" Height="26"/>
+            </Border>
+            <TextBlock x:Name="UnavailableText" Text="报表尚未开放" TextAlignment="Center"
+                       Style="{DynamicResource SectionTitle}"/>
+            <TextBlock Text="考试结束、答卷收齐并完成计分后，成绩将在这里呈现。" TextAlignment="Center"
+                       Style="{DynamicResource CaptionText}" Margin="0,6,0,0" MaxWidth="400"/>
+        </StackPanel>
         <ScrollViewer x:Name="HorizontalScroller" Visibility="Collapsed"
                       HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
             <Grid x:Name="TableBody">
@@ -14,14 +22,17 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <DataGrid x:Name="RowsGrid" Grid.Row="0" AutoGenerateColumns="False" BorderThickness="0"
-                          ColumnHeaderHeight="NaN"
+                          ColumnHeaderHeight="NaN" RowHeight="40" AlternationCount="2"
+                          ColumnHeaderStyle="{DynamicResource Report.ColumnHeader}" CellStyle="{DynamicResource Report.Cell}"
+                          RowBackground="{DynamicResource Brush.Surface}" AlternatingRowBackground="{DynamicResource Brush.Background}"
+                          GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{DynamicResource Brush.Surface.Alt}"
                           IsReadOnly="True" CanUserSortColumns="False" CanUserReorderColumns="False"
                           CanUserResizeColumns="False" CanUserAddRows="False"
                           CanUserDeleteRows="False" HeadersVisibility="Column"
                           HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
                           SelectionUnit="CellOrRowHeader" ClipboardCopyMode="IncludeHeader" />
                 <Border x:Name="FooterBorder" Grid.Row="1" Style="{DynamicResource TableFooterRow}"
-                        Padding="0" BorderThickness="0,1,0,0" Visibility="Collapsed">
+                        Padding="0" BorderThickness="0,1,0,0" Background="{DynamicResource Brush.Primary.Soft}" Visibility="Collapsed">
                     <Grid x:Name="FooterGrid" />
                 </Border>
             </Grid>
