@@ -26,11 +26,17 @@
             </DockPanel>
         </Border>
         <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
-            <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
+            <StackPanel>
+                <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
+                <TextBlock Text="{Binding Message}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,12,0,12"/>
+                <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}" Margin="0,0,0,12">
+                    <TextBlock x:Name="PersistentPendingText" Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                </StackPanel>
+            </StackPanel>
         </Border>
         <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="{StaticResource Padding.Page}">
-                <TextBlock Text="{Binding Message}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,16"/>
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding IsSignedOut, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <TextBlock Text="独立管理登录" Style="{StaticResource SectionTitle}"/>
@@ -78,13 +84,11 @@
                                 <Button Content="运行自检" Style="{StaticResource Management.Action}" Command="{Binding ChecksCommand}"/>
                                 <Button Content="取消等待" Style="{StaticResource Management.Action}" Command="{Binding CancelWaitCommand}"/>
                             </WrapPanel>
-                            <TextBlock Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,4,0,8"/>
                             <WrapPanel>
                                 <Button Content="查询原请求" Style="{StaticResource Management.Action}" Command="{Binding QueryCommand}"/>
                                 <Button Content="按原内容重试" Style="{StaticResource Management.Action}" Command="{Binding RetryOriginalCommand}"/>
                                 <Button Content="续办原恢复" Style="{StaticResource Management.Action}" Command="{Binding ResumeRestoreCommand}"/>
                             </WrapPanel>
-                            <TextBlock Text="{Binding OperationText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,4,0,12"/>
                             <ItemsControl ItemsSource="{Binding Checks}">
                                 <ItemsControl.ItemTemplate><DataTemplate>
                                     <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>

@@ -75,6 +75,12 @@ public sealed class ManagementViewTests
             Assert.True(scroller.ScrollableHeight > 0); Assert.Equal(0, scroller.ScrollableWidth);
             Save(view, scale, width, height, "service");
             scroller.ScrollToEnd(); Drain(); window.UpdateLayout(); Save(view, scale, width, height, "recovery");
+            var pending = (TextBlock)view.FindName("PersistentPendingText");
+            var operation = (TextBlock)view.FindName("PersistentOperationText");
+            Assert.True(pending.IsVisible && operation.IsVisible);
+            Assert.DoesNotContain(scroller, Ancestors(pending));
+            Assert.DoesNotContain(scroller, Ancestors(operation));
+            Assert.True(pending.TranslatePoint(new Point(), view).Y < scroller.TranslatePoint(new Point(), view).Y);
             listener.Flush(); Assert.DoesNotContain("Error:", output.ToString());
             window.Content = null; Drain(); Assert.False(model.IsPageActive);
             Assert.Equal(string.Empty, ((PasswordBox)view.FindName("LoginPassword")).Password);
@@ -100,6 +106,11 @@ public sealed class ManagementViewTests
     {
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
         { var child = VisualTreeHelper.GetChild(root, i); if (child is T item) yield return item; foreach (var nested in Descendants<T>(child)) yield return nested; }
+    }
+    private static IEnumerable<DependencyObject> Ancestors(DependencyObject child)
+    {
+        for (var parent = VisualTreeHelper.GetParent(child); parent is not null; parent = VisualTreeHelper.GetParent(parent))
+            yield return parent;
     }
     private static void Drain() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
     private static Task Sta(Action action)
