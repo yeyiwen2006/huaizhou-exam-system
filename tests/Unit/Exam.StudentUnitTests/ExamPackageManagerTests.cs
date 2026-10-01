@@ -19,6 +19,76 @@ namespace Exam.StudentUnitTests;
 public sealed class ExamPackageManagerTests
 {
     [Fact]
+    public async Task ScheduleUpdates_AreVersionedDurableAndRejectChangedReplay()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var start = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.FromHours(8));
+        var latest = fixture.Api.Start() with
+        {
+            EventId = "schedule-v3", EventType = CommandEventType.ScheduleChanged, StateVersion = 3,
+            ProtectedUnlockReference = null, NewScheduledStart = start, NewScheduledEnd = start.AddHours(3)
+        };
+        using (var manager = fixture.Manager())
+        {
+            Assert.True(await manager.PrepareAndDownloadAsync());
+            Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
+            Assert.True(await manager.HandleCommandAsync(latest));
+            Assert.Equal(start.AddHours(3), manager.OverriddenScheduledEnd);
+            Assert.True(await manager.HandleCommandAsync(latest with
+            { EventId = "schedule-v2", StateVersion = 2, NewScheduledEnd = start.AddHours(2) }));
+            Assert.Equal(start.AddHours(3), manager.OverriddenScheduledEnd);
+            Assert.Equal(CommandProcessingResult.RejectedAsStale, fixture.Api.Acks[^1].ProcessingResult);
+            await Assert.ThrowsAsync<InvalidDataException>(() => manager.HandleCommandAsync(latest with
+            { NewScheduledEnd = start.AddHours(4) }));
+        }
+        using var restored = fixture.Manager();
+        Assert.Equal(start, restored.OverriddenScheduledStart);
+        Assert.Equal(start.AddHours(3), restored.OverriddenScheduledEnd);
+        Assert.True(await restored.PrepareAndDownloadAsync());
+        Assert.True((await restored.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await restored.HandleCommandAsync(latest with
+        { EventId = "schedule-v4", StateVersion = 4, NewScheduledStart = null, NewScheduledEnd = start.AddHours(4) }));
+        Assert.Equal(start, restored.OverriddenScheduledStart);
+        Assert.Equal(start.AddHours(4), restored.OverriddenScheduledEnd);
+        Assert.Equal(CommandProcessingResult.Applied, fixture.Api.Acks[^1].ProcessingResult);
+    }
+
+    [Fact]
+    public async Task ScheduleVersion_DoesNotInvalidateAnEarlierValidStartEvent()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        await manager.ConfirmParticipationAsync();
+        var start = DateTimeOffset.UtcNow;
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start() with
+        {
+            EventId = "schedule-after-start", EventType = CommandEventType.ScheduleChanged, StateVersion = 3,
+            ProtectedUnlockReference = null, NewScheduledStart = start, NewScheduledEnd = start.AddHours(2)
+        }));
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start()));
+        Assert.Equal(fixture.Api.Plaintext, manager.UnlockedPayload);
+        Assert.Equal(CommandProcessingResult.Applied, fixture.Api.Acks[^1].ProcessingResult);
+    }
+
+    [Fact]
+    public async Task InvalidSchedule_DoesNotOverwriteOrAcknowledge()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        await manager.ConfirmParticipationAsync();
+        var start = DateTimeOffset.UtcNow;
+        await Assert.ThrowsAsync<InvalidDataException>(() => manager.HandleCommandAsync(fixture.Api.Start() with
+        {
+            EventId = "invalid-time", EventType = CommandEventType.ScheduleChanged,
+            ProtectedUnlockReference = null, NewScheduledStart = start, NewScheduledEnd = start.AddMinutes(-1)
+        }));
+        Assert.Null(manager.OverriddenScheduledStart);
+        Assert.Empty(fixture.Api.Acks);
+    }
+
+    [Fact]
     public async Task WaitingStoresOnlyCiphertext_AndRealV2StartUnlocksThenAcknowledges()
     {
         using var fixture = await Fixture.CreateAsync();

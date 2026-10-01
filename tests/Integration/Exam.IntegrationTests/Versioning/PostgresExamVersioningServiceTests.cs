@@ -20,6 +20,56 @@ namespace Exam.IntegrationTests.Versioning;
 public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture fixture)
 {
     [Fact]
+    public async Task ScheduleChange_PersistsFullWindowAndDeliversItFromPostgresAfterRestart()
+    {
+        var examId = "schedule-delivery-" + Guid.NewGuid().ToString("N");
+        var deviceId = "device-" + Guid.NewGuid().ToString("N");
+        var participantId = "participation-" + Guid.NewGuid().ToString("N");
+        var service = new PostgresExamVersioningService(fixture.DataSource);
+        var now = InitialNow.AddYears(100);
+        Assert.True(service.CreateExam(new(examId,
+            new(now.AddHours(1), now.AddHours(2)), now, examId + "-create")).Succeeded);
+        await using (var seed = fixture.DataSource.CreateCommand("""
+            WITH device AS (
+              INSERT INTO exam.activation_devices
+                (device_id,client_number,activation_date,activation_status,protected_credential,credential_version,created_at,version)
+                VALUES ($1,$2,DATE '2026-10-02','active','synthetic-verifier-not-a-secret',1,$5,1)
+                RETURNING device_id),
+            candidate AS (
+              INSERT INTO exam.candidate_roster_entries
+                (exam_id,candidate_id,candidate_name,class_text,admission_no)
+                VALUES ($3,'synthetic-candidate','合成考生','001','000001')
+                RETURNING exam_id,candidate_id)
+            INSERT INTO exam.participations
+              (participation_id,exam_id,candidate_id,entry_version,business_state,authorized_device_id,authorization_version,version)
+              SELECT $4,candidate.exam_id,candidate.candidate_id,1,'waiting',device.device_id,1,1
+                FROM device CROSS JOIN candidate;
+            """))
+        {
+            seed.Parameters.AddWithValue(deviceId);
+            seed.Parameters.AddWithValue(Random.Shared.NextInt64(10000000000,99999999999).ToString());
+            seed.Parameters.AddWithValue(examId);
+            seed.Parameters.AddWithValue(participantId);
+            seed.Parameters.AddWithValue(now);
+            await seed.ExecuteNonQueryAsync();
+        }
+        var window = new ScheduleWindow(now.AddHours(2),now.AddHours(4));
+        Assert.True(service.UpdateSchedule(new(examId,1,window,now,examId+"-update")).Succeeded);
+        var commands = new Exam.Application.Commands.ReliableCommandService(
+            new("synthetic-server","synthetic-node",1),
+            new Exam.Infrastructure.Postgres.Commands.PostgresCommandEventStore(fixture.DataSource),
+            new Exam.Infrastructure.Postgres.Commands.PostgresParticipationAccessReader(fixture.DataSource));
+        var due = await commands.GetDueForDeviceAsync(participantId,1,deviceId,1,"synthetic-server",1);
+        Assert.True(due.IsSuccess,due.Message);
+        var delivery = Assert.Single(due.Value!);
+        Assert.Equal(CommandEventType.ScheduleChanged,delivery.EventType);
+        Assert.Equal(2,delivery.StateVersion);
+        Assert.Equal(window.StartsAt,delivery.NewScheduledStart);
+        Assert.Equal(window.EndsAt,delivery.NewScheduledEnd);
+        Assert.Equal(TimeSpan.FromHours(8),delivery.NewScheduledEnd!.Value.Offset);
+    }
+
+    [Fact]
     public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots()
     {
         var examId = "imported-rules-" + Guid.NewGuid().ToString("N");

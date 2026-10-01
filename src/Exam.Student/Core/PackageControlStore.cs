@@ -50,6 +50,7 @@ internal sealed record PackageControlState
     public bool Ended { get; init; }
     public bool Revoked { get; init; }
     public long LifecycleStateVersion { get; init; }
+    public long ScheduleStateVersion { get; init; }
     public long NewestPaperVersion { get; init; }
     public PaperUpdateTransfer? UpdateTransfer { get; init; }
     public PendingPaperInstallation? PendingPaperInstallation { get; init; }

@@ -484,7 +484,21 @@ public sealed class ReliableCommandService
                 : null,
             commandEvent.Metadata,
             commandEvent.CreatedAt,
-            commandEvent.DeliveryAttempts);
+            commandEvent.DeliveryAttempts)
+        {
+            NewScheduledStart = ReadScheduleTime(commandEvent, "scheduledStart"),
+            NewScheduledEnd = ReadScheduleTime(commandEvent, "scheduledEnd")
+        };
+
+    private static DateTimeOffset? ReadScheduleTime(PersistentCommandEvent commandEvent, string key)
+    {
+        if (commandEvent.EventType != CommandEventType.ScheduleChanged ||
+            !commandEvent.Metadata.TryGetValue(key, out var value)) return null;
+        if (!DateTimeOffset.TryParseExact(value, "O", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var time))
+            throw new InvalidDataException("持久化时间调整指令中的时间格式无效，未发送不完整时间计划。");
+        return time.ToOffset(TimeSpan.FromHours(8));
+    }
 
     private static CommandEventView ToView(PersistentCommandEvent commandEvent) =>
         new(
