@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "runtimeIdentifier": "win-x64",
+  "configuration": "Release",
+  "selfContained": true,
+  "components": ["Exam.Server", "Exam.Management", "Exam.Student", "Exam.Admin", "Exam.Cli"],
+  "externalDependencies": {
+    "Exam.Server": ["PostgreSQL 18", "Provisioned node certificate and protected service configuration"],
+    "Exam.Management": ["Protected management configuration and operator certificate"],
+    "Exam.Student": ["Windows 10 19041 or later", "Provisioned server trust configuration"],
+    "Exam.Admin": ["Windows desktop", "XeLaTeX for real paper compilation"],
+    "Exam.Cli": ["Configured business or management endpoint and its existing authentication"]
+  }
+}

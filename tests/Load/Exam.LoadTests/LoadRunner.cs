@@ -88,7 +88,7 @@ public sealed partial class LoadRunner : IAsyncDisposable
                 "No dual-host synchronous replication, physical-device or venue-network certification.",
                 "Progress verifies persistence response; independent database audit is still required.",
                 "Commands measure transport/receipt only, not student business application or START/END timing acceptance.",
-                "Download checks byte length and server/version headers, not package decryption, image rendering or instructions completeness.",
+                "Download checks byte length and server/version headers plus SHA256 when the fixture declares it; package decryption, image rendering and instructions completeness are outside this scenario.",
                 "No automatic retries: normal-load failures remain visible; final replay and receipt lookup are separate checks.",
                 "No full-duration/monitoring/export/failover certification unless separately executed and documented."
             }
@@ -241,13 +241,18 @@ public sealed partial class LoadRunner : IAsyncDisposable
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         var buffer = new byte[64 * 1024];
         long bytes = 0;
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         int read;
         while ((read = await stream.ReadAsync(buffer, ct)) != 0)
         {
             bytes += read;
+            hash.AppendData(buffer.AsSpan(0, read));
             if (bytes > s.ExpectedResourceBytes) throw new InvalidDataException("download-length-mismatch");
         }
         if (bytes != s.ExpectedResourceBytes) throw new InvalidDataException("download-length-mismatch");
+        if (s.ExpectedResourceSha256 is not null &&
+            !string.Equals(Convert.ToHexString(hash.GetHashAndReset()),s.ExpectedResourceSha256,StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("download-hash-mismatch");
     }
 
     private async Task MeasureAsync(string operation, int index, double due, Func<CancellationToken, Task> action, CancellationToken ct)

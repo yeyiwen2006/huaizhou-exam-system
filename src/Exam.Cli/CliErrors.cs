@@ -1,0 +1,111 @@
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using Exam.Contracts.Common;
+using Exam.Contracts.Importing;
+
+internal static partial class ExamCli
+{
+    // The boundary owns errors only. Successful business output stays byte-compatible.
+    public static async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken)
+    {
+        var original = Console.Error;
+        using var errors = new ControlledErrors(original);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var json = Enumerable.Range(0, Math.Max(0, arguments.Length - 1))
+            .Any(index => arguments[index] == "--error-format" && arguments[index + 1] == "json");
+        var exit = 6;
+        var localImport = false;
+        Console.SetError(errors);
+        try
+        {
+            var args = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                var value = arguments[i];
+                if (value == "--help") { args.Add(value); continue; }
+                if (!value.StartsWith("--", StringComparison.Ordinal)) { args.Add(value); continue; }
+                if (!seen.Add(value) || i + 1 >= arguments.Length ||
+                    arguments[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException("选项重复或缺少值。");
+                if (value == "--error-format")
+                {
+                    var format = arguments[++i];
+                    json = format == "json";
+                    if (format is not ("json" or "text")) throw new ArgumentException("错误格式无效。");
+                }
+                else if (value == "--timeout-seconds")
+                {
+                    if (!int.TryParse(arguments[++i], out var seconds) || seconds is < 1 or > 3900)
+                        throw new ArgumentException("超时无效。");
+                    deadline.CancelAfter(TimeSpan.FromSeconds(seconds));
+                }
+                else { args.Add(value); args.Add(arguments[++i]); }
+            }
+            // Validate shared address semantics even for commands with their own parser.
+            localImport = args.Count > 0 && args[0] == "import";
+            var serverIndex = args.IndexOf("--server");
+            var server = serverIndex >= 0 ? args[serverIndex + 1] : Environment.GetEnvironmentVariable(ServerEnvironment);
+            if (args.Count > 0 && args[0] is not ("import" or "management" or "version" or "artifact-info" or "help" or "--help" or "-h" or "error-codes") &&
+                server is not null && !TryResolveServer(server, out _)) throw new ArgumentException("服务地址无效。");
+            exit = await DispatchAsync(args.ToArray(), deadline.Token);
+            if (deadline.IsCancellationRequested) exit = cancellationToken.IsCancellationRequested ? 130 : 5;
+        }
+        catch (OperationCanceledException) { exit = cancellationToken.IsCancellationRequested ? 130 : 5; }
+        catch (ArgumentException) { exit = 2; }
+        catch (Exception) { exit = 6; }
+        finally { Console.SetError(original); }
+        if (exit == 0) return 0;
+        var (code, message) = exit switch
+        {
+            2 => ("INVALID_INPUT", "命令、选项、配置或输入文件无效；运行 help 查看用法。"),
+            3 => ("ACCESS_DENIED", "身份未认证或没有操作权限。"),
+            4 => ("BUSINESS_REJECTED", "对象不存在、状态冲突或业务条件未满足。"),
+            5 => ("NETWORK_UNAVAILABLE", "连接失败或请求超时。"),
+            130 => ("CANCELLED", "操作已取消。"),
+            _ => ("CLI_ERROR", "执行失败；请检查服务状态及受保护的本机诊断。")
+        };
+        if (localImport && exit is 3 or 4)
+        {
+            // Preserve the local importer contract, exposing only declared public issue IDs.
+            var declared = exit == 3
+                ? typeof(ManifestRuleIds).GetFields(BindingFlags.Public | BindingFlags.Static)
+                    .Where(f => f.IsLiteral && f.FieldType == typeof(string)).Select(f => (string)f.GetRawConstantValue()!)
+                : Enum.GetNames<OptionRegionIssueCode>().Where(value => value != nameof(OptionRegionIssueCode.None));
+            var diagnostic = errors.Lines.ToString();
+            var publicIssues = declared.Where(value => diagnostic.Contains(value, StringComparison.Ordinal)).Distinct().Order(StringComparer.Ordinal);
+            code = exit == 3 ? "IMPORT_VALIDATION_FAILED" : "IMPORT_COMPILATION_FAILED";
+            message = "导入核对未通过。 " + string.Join(" ", publicIssues);
+        }
+        // Only contract constants may cross the error boundary; never echo a response body.
+        var contractCodes = typeof(ErrorCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string)).Select(f => (string)f.GetRawConstantValue()!);
+        try
+        {
+            using var body = JsonDocument.Parse(errors.Lines.ToString());
+            if (body.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+                error.TryGetProperty("code", out var field) && field.ValueKind == JsonValueKind.String &&
+                contractCodes.Contains(field.GetString(), StringComparer.Ordinal)) code = field.GetString()!;
+        }
+        catch (JsonException) { }
+        original.WriteLine(json
+            ? JsonSerializer.Serialize(new { schemaVersion = 1, code, message, exitCode = exit }, JsonDefaults.Create())
+            : $"{code}: {message}");
+        return exit;
+    }
+
+    private sealed class ControlledErrors(TextWriter terminal) : TextWriter
+    {
+        public StringBuilder Lines { get; } = new();
+        public override Encoding Encoding => Encoding.UTF8;
+        public override void WriteLine(string? value)
+        {
+            if (Lines.Length + (value?.Length ?? 0) < 65536) Lines.AppendLine(value);
+        }
+        public override void WriteLine() => terminal.WriteLine();
+        // Interactive labels are fixed strings owned by the account commands.
+        public override void Write(string? value) => terminal.Write(value);
+        public override void Write(char value) => terminal.Write(value);
+    }
+}

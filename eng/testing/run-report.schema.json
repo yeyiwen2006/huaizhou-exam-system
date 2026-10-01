@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "E01 sanitized run evidence v1",
+  "type": "object",
+  "required": ["schemaVersion", "runId", "sourceCommit", "sourceFingerprint", "workingTreeDirty", "requestedProfile", "environment", "suites", "notExecuted", "status", "startedAt", "finishedAt"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "runId": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "sourceCommit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "sourceFingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "workingTreeDirty": {"type": "boolean"},
+    "requestedProfile": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["core", "wpf", "postgres", "postgres-physical", "latex"]}},
+    "environment": {"type": "object"},
+    "suites": {"type": "array", "minItems": 2, "items": {"type": "object", "required": ["id", "status", "counts", "exitCode"]}},
+    "notExecuted": {"type": "array", "items": {"type": "object", "required": ["profile", "reason"]}},
+    "status": {"enum": ["passed", "failed"]},
+    "startedAt": {"type": "string"},
+    "finishedAt": {"type": "string"}
+  },
+  "$comment": "validate_results.py additionally verifies exact discovered suites, filters, TRX counters, process exit, evidence hash and ownership. JSON structure alone is insufficient."
+}

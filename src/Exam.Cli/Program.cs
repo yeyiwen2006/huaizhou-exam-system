@@ -17,13 +17,14 @@ internal static partial class ExamCli
     private const string DeviceCredentialEnvironment = "EXAM_DEVICE_CREDENTIAL";
     private const string InsecureLoopbackEnvironment = "EXAM_ALLOW_INSECURE_LOOPBACK";
 
-    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+    private static async Task<int> DispatchAsync(string[] args, CancellationToken cancellationToken)
     {
         try
         {
             return args switch
             {
                 ["version"] => PrintVersion(),
+                ["artifact-info", var file] => PrintArtifactInfo(file),
                 ["error-codes"] => PrintErrorCodes(),
                 [] or ["help"] or ["--help"] or ["-h"] => PrintHelp(),
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
@@ -51,19 +52,24 @@ internal static partial class ExamCli
             Console.Error.WriteLine("操作已取消。");
             return 130;
         }
-        catch (HttpRequestException exception)
+        catch (ArgumentException)
         {
-            Console.Error.WriteLine($"NETWORK_UNAVAILABLE: {exception.Message}");
+            return 2;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException or JsonException)
+        {
+            return 2;
+        }
+        catch (HttpRequestException)
+        {
             return 5;
         }
-        catch (TaskCanceledException exception)
+        catch (TaskCanceledException)
         {
-            Console.Error.WriteLine($"NETWORK_UNAVAILABLE: {exception.Message}");
             return 5;
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            Console.Error.WriteLine($"CLI_ERROR: {exception.Message}");
             return 6;
         }
     }
@@ -107,14 +113,18 @@ internal static partial class ExamCli
         Console.WriteLine("  exams visibility 名称 on|off          设置是否在学生端显示");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
+        Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");
         Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore）");
         Console.WriteLine("  version                               显示当前程序版本");
+        Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");
         Console.WriteLine();
         Console.WriteLine("API 选项：");
         Console.WriteLine("  --server URL                          服务地址；默认读取 EXAM_SERVER_URL");
         Console.WriteLine("  --input FILE|-                        从 UTF-8 JSON 文件或标准输入读取请求体");
         Console.WriteLine("  --request-id VALUE                    设置 X-Request-Id 请求头");
+        Console.WriteLine("  --error-format text|json               公共错误格式（默认 text，写入 stderr）");
+        Console.WriteLine("  --timeout-seconds 1..3900              本次命令的总超时；不改变业务命令原有较短时限");
         Console.WriteLine();
         Console.WriteLine("管理选项：--management-url HTTPS_URL --server-id ID --node-id ID；写操作用 --input FILE|-，operation 用 --request-id ID。");
         Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；先执行 management login 用考务账号登录本机服务管理。");
@@ -134,35 +144,23 @@ internal static partial class ExamCli
     {
         var options = ParseOptions(arguments);
         var server = options.Server ?? Environment.GetEnvironmentVariable(ServerEnvironment);
-        if (string.IsNullOrWhiteSpace(server) || !Uri.TryCreate(server, UriKind.Absolute, out var baseUri))
+        if (!TryResolveServer(server, out var baseUri))
         {
             Console.Error.WriteLine($"必须用 --server 或 {ServerEnvironment} 提供有效的 HTTPS 服务地址。");
             return 2;
         }
 
-        var insecureLoopback = baseUri.Scheme == Uri.UriSchemeHttp &&
-                               IPAddress.TryParse(baseUri.Host, out var address) &&
-                               IPAddress.IsLoopback(address) &&
-                               string.Equals(
-                                   Environment.GetEnvironmentVariable(InsecureLoopbackEnvironment),
-                                   "true",
-                                   StringComparison.OrdinalIgnoreCase);
-        if (baseUri.Scheme != Uri.UriSchemeHttps && !insecureLoopback)
-        {
-            Console.Error.WriteLine(
-                $"拒绝通过明文 HTTP 发送考务或设备凭据。仅本机调试可显式设置 {InsecureLoopbackEnvironment}=true。");
-            return 2;
-        }
-
         if (!path.StartsWith("/", StringComparison.Ordinal) ||
+            path.StartsWith("//", StringComparison.Ordinal) || path.Contains('\\') ||
             !Uri.TryCreate(baseUri, path, out var requestUri) ||
-            requestUri.Host != baseUri.Host || requestUri.Port != baseUri.Port)
+            requestUri.Scheme != baseUri.Scheme || requestUri.Host != baseUri.Host || requestUri.Port != baseUri.Port)
         {
             Console.Error.WriteLine("API PATH 必须是以 / 开头、且仍指向同一服务的相对路径。");
             return 2;
         }
 
-        using var client = new HttpClient { BaseAddress = baseUri, Timeout = TimeSpan.FromMinutes(65) };
+        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            { BaseAddress = baseUri, Timeout = TimeSpan.FromMinutes(65) };
         using var request = new HttpRequestMessage(method, requestUri);
         AddCredentials(request);
         if (!string.IsNullOrWhiteSpace(options.RequestId))
@@ -221,17 +219,18 @@ internal static partial class ExamCli
         for (var index = 0; index < arguments.Count; index++)
         {
             var name = arguments[index];
-            if (name is not ("--server" or "--input" or "--request-id") || index + 1 >= arguments.Count)
+            if (name is not ("--server" or "--input" or "--request-id") || index + 1 >= arguments.Count ||
+                arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
-                throw new ArgumentException($"无法识别或缺少值的选项：{name}");
+                throw new ArgumentException("选项无法识别或缺少值。");
             }
 
             var value = arguments[++index];
             switch (name)
             {
-                case "--server": server = value; break;
-                case "--input": input = value; break;
-                case "--request-id": requestId = value; break;
+                case "--server": server = SetOptionOnce(server, value); break;
+                case "--input": input = SetOptionOnce(input, value); break;
+                case "--request-id": requestId = SetOptionOnce(requestId, value); break;
             }
         }
 
@@ -279,10 +278,13 @@ internal static partial class ExamCli
 
     private static int UnknownCommand(IReadOnlyList<string> arguments)
     {
-        Console.Error.WriteLine($"未知命令：{string.Join(' ', arguments)}");
+        Console.Error.WriteLine("未知命令。");
         Console.Error.WriteLine("运行 exam-cli help 查看可用命令。");
         return 2;
     }
 
     private sealed record CliOptions(string? Server, string? Input, string? RequestId);
+
+    private static string SetOptionOnce(string? previous, string value) =>
+        previous is null && !string.IsNullOrWhiteSpace(value) ? value : throw new ArgumentException("选项重复或为空。");
 }

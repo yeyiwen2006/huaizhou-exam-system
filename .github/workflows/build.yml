@@ -1,4 +1,4 @@
-name: Windows build and test
+name: E01 build, scoped tests and package evidence
 
 on:
   pull_request:
@@ -13,46 +13,47 @@ permissions:
 jobs:
   build-test:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
           cache: true
-          cache-dependency-path: "**/packages.lock.json"
-
+          cache-dependency-path: |
+            **/packages.lock.json
+            **/packages.win-x64.lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Restore locked dependencies
         run: dotnet restore Huaizhou.ExamSystem.sln --locked-mode
-
-      - name: Build
+      - name: Build Release
         run: dotnet build Huaizhou.ExamSystem.sln --configuration Release --no-restore
-
-      # Category=Latex 的测试需要本机安装 XeLaTeX（项目要求 XeLaTeX 发行版），
-      # 运行机上没有 TeX，因此在这里排除；它们由 D 组在装有 TeX 的主机上单独执行并记录结果。
-      # Keep GUI cold startup separate from SQLite fsync/crypto tests. Concurrency tests
-      # still create their own concurrent connections; no test or assertion is skipped.
-      - name: Test non-GUI modules
-        id: core_tests
-        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build -m:1 --filter "Category!=Postgres&Category!=Latex&Category!=Wpf" --logger "trx;LogFileName=tests.trx" --blame-hang-timeout 90s --blame-hang-dump-type none
-
-      - name: Test WPF on isolated test hosts
-        if: success() || steps.core_tests.outcome == 'failure'
-        run: dotnet test Huaizhou.ExamSystem.sln --configuration Release --no-build -m:1 --filter "Category=Wpf" --logger "trx;LogFileName=wpf-tests.trx" --blame-hang-timeout 90s --blame-hang-dump-type none
-
-      - name: Upload test logs on failure
-        if: failure()
+      - name: Core and WPF in separate test hosts
+        if: always()
+        run: python eng/testing/run_checks.py --profile core --profile wpf --output .artifacts/checks
+      - name: Validate required evidence
+        if: always()
+        run: python eng/testing/validate_results.py .artifacts/checks/run-report.json
+      - name: Preserve sanitized evidence on success and failure
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: "**/TestResults/**/*.trx"
+          name: windows-e01-evidence
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .artifacts/checks/run-report.json
+            .artifacts/checks/tools.json
+            .artifacts/checks/summary.md
+            .artifacts/checks/*/result.trx
 
   postgres-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:18
@@ -69,28 +70,109 @@ jobs:
     env:
       EXAM_TEST_POSTGRES: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=exam-ci-${{ github.run_id }};SSL Mode=Disable
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
           cache: true
-          cache-dependency-path: "**/packages.lock.json"
-
+          cache-dependency-path: |
+            **/packages.lock.json
+            **/packages.win-x64.lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Restore locked dependencies
         run: dotnet restore tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --locked-mode
-
       - name: Build integration tests
         run: dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-restore
-
-      - name: Test PostgreSQL adapters
-        run: dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-build --filter "Category=Postgres" --logger "trx;LogFileName=postgres-tests.trx"
-
-      - name: Upload PostgreSQL test logs on failure
-        if: failure()
+      - name: Test real PostgreSQL adapters
+        if: always()
+        run: python eng/testing/run_checks.py --profile postgres --output .artifacts/checks
+      - name: Validate required evidence
+        if: always()
+        run: python eng/testing/validate_results.py .artifacts/checks/run-report.json
+      - name: Preserve sanitized PostgreSQL evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: postgres-test-results
-          path: "**/TestResults/**/*.trx"
+          name: postgres-e01-evidence
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .artifacts/checks/run-report.json
+            .artifacts/checks/tools.json
+            .artifacts/checks/summary.md
+            .artifacts/checks/*/result.trx
+
+  package-check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/packages.lock.json
+            **/packages.win-x64.lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish five components twice with locked win-x64 assets
+        run: |
+          python eng/packaging/package.py build --output .artifacts/package-a
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python eng/packaging/package.py build --output .artifacts/package-b
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python eng/packaging/package.py compare .artifacts/package-a .artifacts/package-b --output .artifacts/rebuild.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python eng/packaging/package.py smoke .artifacts/package-a --output .artifacts/package-smoke.json
+      - name: Preserve package evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-e01-evidence
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .artifacts/package-a/package-manifest.json
+            .artifacts/package-a/complete.json
+            .artifacts/package-b/package-manifest.json
+            .artifacts/package-b/complete.json
+            .artifacts/rebuild.json
+            .artifacts/package-smoke.json
+
+  aggregate:
+    if: always()
+    needs: [build-test, postgres-integration, package-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-e01-evidence'
+          path: .artifacts/jobs
+      - name: Require all jobs and exact current-source profiles
+        env:
+          JOB_RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          python -c "import os; assert all(x=='success' for x in os.environ['JOB_RESULTS'].split(','))"
+          python eng/testing/validate_ci.py .artifacts/jobs --output .artifacts/ci-summary.json
+      - name: Preserve aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e01-ci-summary
+          if-no-files-found: error
+          include-hidden-files: true
+          path: .artifacts/ci-summary.json

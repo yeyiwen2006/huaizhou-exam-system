@@ -7,5 +7,11 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <NuGetLockFilePath Condition="'$(RuntimeIdentifier)' == 'win-x64' Or '$(RuntimeIdentifiers)' == 'win-x64'">$(MSBuildProjectDirectory)/packages.win-x64.lock.json</NuGetLockFilePath>
   </PropertyGroup>
+  <ItemGroup Condition="'$(E01SourceCommit)' != ''">
+    <AssemblyMetadata Include="E01SourceCommit" Value="$(E01SourceCommit)" />
+    <AssemblyMetadata Include="E01SourceFingerprint" Value="$(E01SourceFingerprint)" />
+    <AssemblyMetadata Include="E01LockFingerprint" Value="$(E01LockFingerprint)" />
+  </ItemGroup>
 </Project>

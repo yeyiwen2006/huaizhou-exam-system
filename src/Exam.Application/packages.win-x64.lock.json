@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "exam.contracts": {
+        "type": "Project"
+      },
+      "exam.domain": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Contracts": "[1.0.0, )"
+        }
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

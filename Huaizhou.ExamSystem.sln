@@ -49,6 +49,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.LoadTests.Tests", "tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.Management", "src\Exam.Management\Exam.Management.csproj", "{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Exam.SyntheticHost", "tests\Load\Exam.SyntheticHost\Exam.SyntheticHost.csproj", "{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -275,6 +277,18 @@ Global
 		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x64.Build.0 = Release|Any CPU
 		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x86.ActiveCfg = Release|Any CPU
 		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA}.Release|x86.Build.0 = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|x64.Build.0 = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Debug|x86.Build.0 = Debug|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|x64.ActiveCfg = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|x64.Build.0 = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|x86.ActiveCfg = Release|Any CPU
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -301,5 +315,6 @@ Global
 		{26E908EC-0C4C-4807-9EAE-7F758793D1BA} = {C758EBF9-8BAE-00CC-2D4F-8BB514476281}
 		{CDA60CC8-3969-4155-8657-771F8CB1D979} = {C758EBF9-8BAE-00CC-2D4F-8BB514476281}
 		{308308D2-B6FE-4F61-B186-F2B08FCB5BFA} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{A5735350-91A3-4E37-8E2C-EFE2CFD94A14} = {C758EBF9-8BAE-00CC-2D4F-8BB514476281}
 	EndGlobalSection
 EndGlobal

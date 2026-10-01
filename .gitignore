@@ -5,6 +5,9 @@
 
 # dotenv files
 .env
+.artifacts/
+__pycache__/
+*.pyc
 .env.*
 !.env.example
 
