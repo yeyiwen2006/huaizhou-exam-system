@@ -26,11 +26,11 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
 {
     // HTTP and SignalR carry the same contracts, including string-valued enums.
     // HTTP JSON options do not apply to hub argument binding.
-    options.PayloadSerializerOptions = JsonDefaults.Create();
+    options.PayloadSerializerOptions = JsonDefaults.CreateServerTransport();
 });
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
-    var defaults = JsonDefaults.Create();
+    var defaults = JsonDefaults.CreateServerTransport();
     options.SerializerOptions.PropertyNamingPolicy = defaults.PropertyNamingPolicy;
     options.SerializerOptions.PropertyNameCaseInsensitive = defaults.PropertyNameCaseInsensitive;
     foreach (var converter in defaults.Converters)

@@ -46,6 +46,19 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     [Fact]
+    public async Task ManagementOperationReturnsUtc8Times()
+    {
+        await using var app = await AppAsync();
+        using var client = Client(app);
+        using var response = await client.PostAsJsonAsync("/management/v1/service/stop",
+            new ManagementServiceRequest("utc8-stop", "server", "node"), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var envelope = await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options);
+        Assert.Equal(TimeSpan.FromHours(8), envelope!.Result!.AcceptedAt.Offset);
+        Assert.Equal(TimeSpan.FromHours(8), envelope.Result.UpdatedAt.Offset);
+    }
+
+    [Fact]
     public async Task CorruptBusinessConfigurationDoesNotPreventStatusOrStop()
     {
         await using var app = await AppAsync();

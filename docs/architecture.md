@@ -22,6 +22,12 @@ Exam.Domain       Exam.Contracts
 
 服务器响应封套包含稳定 `serverId`、当前 `nodeId`、`serverEpoch` 和 `correlationId`。客户端拒绝错误逻辑服务器或过期服务代次。SignalR 只负责传送，命令是否完成由服务器持久事件、客户端确认和状态查询共同判断。
 
+面向学生端与考务端的 HTTP、SignalR 及本机服务管理响应，所有 `DateTimeOffset` 时间均以带
+`+08:00` 的 ISO 8601 格式返回，包括服务器当前时间、考试起止时间及操作时间。
+传输边界使用 `JsonDefaults.CreateServerTransport()`，请求中的带偏移时间按同一时刻归一为 UTC；
+内部时钟、数据库及文件序列化继续使用原有 UTC/`JsonDefaults.Create()` 约定，不平移时间点，
+不改变考试时长、事件排序或持久化内容。客户端不能再把收到的时间数值额外加八小时。
+
 ## 持久化边界
 
 生产服务已通过 `PostgresRuntimeRegistration` 接入 PostgreSQL 18：激活、参试、指令、最终交卷及版本发布使用持久化实现，缺少数据库配置时不会退回内存。仓库中的内存实现用于规则参考、状态重放或测试，不能把内存锁当作跨进程一致性机制。成功响应必须发生在事务及当前保护模式要求的持久确认之后；提交结果未明时使用原标识查询或重试。
