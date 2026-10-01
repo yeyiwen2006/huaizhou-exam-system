@@ -24,7 +24,7 @@
         </Style>
         <Style x:Key="OptionCircleStyle" TargetType="ToggleButton" BasedOn="{StaticResource OptionChoiceStyle}">
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="FontFamily" Value="SimHei" />
+            <Setter Property="FontFamily" Value="Arial" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">

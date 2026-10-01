@@ -272,7 +272,7 @@ public sealed class PdfQuestionViewReviewTests
                 Assert.Equal(originalSize, new Size(image.Width, image.Height));
                 var box = button.TransformToAncestor(view).TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
                 Assert.True(box.Width > 0);
-                Assert.Equal("SimHei", button.FontFamily.Source);
+                Assert.Equal("Arial", button.FontFamily.Source);
                 Assert.Equal(box.Width, box.Height, 5);
                 var labelPoint = image.TransformToAncestor(view).Transform(new Point(
                     (x * shown.Source.PixelWidth - shown.SourceRect.X) * image.Width / shown.SourceRect.Width,

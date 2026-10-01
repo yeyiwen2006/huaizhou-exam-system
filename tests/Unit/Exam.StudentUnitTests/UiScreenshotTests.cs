@@ -48,6 +48,7 @@ public sealed class UiScreenshotTests
         try
         {
             var (pdfs, regions) = await CreateQuestionPdfsAsync(work, notes);
+            File.WriteAllBytes(Path.Combine(directory, "synthetic-question.pdf"), pdfs["q1"]);
             Func<DeviceRecord, DeviceRecord> device = record => record with { ClientNumber = "A-017", Port = 9 };
             var candidate = new CandidateIdentity("candidate", "合成考生01", "01", "2027017");
             using var waitingFixture = await StudentPaperFixture.CreateAsync(optionRegions: regions, questionPdfs: pdfs,
@@ -224,24 +225,20 @@ public sealed class UiScreenshotTests
         var sources = new Dictionary<string, (string File, string Body)>
         {
             ["q1"] = ("questions/衔接合成考试_1.tex", """
-                合成单选题：设 $x+2=5$，则 $x$ 等于（\quad）。
+                \noindent 合成示例：设 $f(x)=2x^2-x+1$，则 $f(3)$ 的值为（\quad）。
 
-                \begin{enumerate}
-                  \item[\optmark{q1}{A}{A.}] $1$
-                  \item[\optmark{q1}{B}{B.}] $3$
-                  \item[\optmark{q1}{C}{C.}] $5$
-                  \item[\optmark{q1}{D}{D.}] $7$
-                \end{enumerate}
+                \noindent\optmark{q1}{A}{A.} $14$\\
+                \optmark{q1}{B}{B.} $16$\\
+                \optmark{q1}{C}{C.} $18$\\
+                \optmark{q1}{D}{D.} $20$
                 """),
             ["q2"] = ("questions/衔接合成考试_2.tex", """
-                合成多选题：下列各数中，属于偶数的有（\quad）。
+                \noindent 合成多选题：下列各数中，属于偶数的有（\quad）。
 
-                \begin{enumerate}
-                  \item[\optmark{q2}{A}{A.}] $2$
-                  \item[\optmark{q2}{B}{B.}] $4$
-                  \item[\optmark{q2}{C}{C.}] $7$
-                  \item[\optmark{q2}{D}{D.}] $9$
-                \end{enumerate}
+                \noindent\optmark{q2}{A}{A.} $2$\\
+                \optmark{q2}{B}{B.} $4$\\
+                \optmark{q2}{C}{C.} $7$\\
+                \optmark{q2}{D}{D.} $9$
                 """)
         };
         var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
@@ -259,14 +256,17 @@ public sealed class UiScreenshotTests
         foreach (var (questionId, (file, body)) in sources)
         {
             File.WriteAllText(Path.Combine(packageRoot, file), $$$"""
-                \documentclass[UTF8,a4paper]{ctexart}
-                \usepackage[margin=25.4mm]{geometry}
+                \documentclass{ctexart}
+                \usepackage{amsmath}
+                \usepackage{unicode-math}
+                \setmainfont{Times New Roman}
+                \setmathfont{XITS Math}
+                \usepackage[a4paper,margin=1in]{geometry}
                 \pagestyle{empty}
                 \usepackage{hyperref}
                 \hypersetup{hidelinks}
                 \DeclareRobustCommand{\optmark}[3]{\hypertarget{opt:#1:#2}{}\hyperlink{opt:#1:#2}{#3}}
                 \begin{document}
-                \fontsize{10.5bp}{16bp}\selectfont
                 {{{body}}}
                 \end{document}
                 """, new UTF8Encoding(false));
