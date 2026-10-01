@@ -58,7 +58,10 @@ class OwnedRun:
     def __init__(self,prefix='exam-e01-'):
         if prefix not in ('exam-e01-','codex-f01-native-'): raise ValueError('Unknown isolation prefix')
         self.run_id=uuid.uuid4().hex
-        self.root=reject_links(Path(tempfile.mkdtemp(prefix=prefix)))
+        # Native recovery accepts a constrained source-directory name, not tempfile's underscores.
+        temporary=reject_links(Path(tempfile.gettempdir()))
+        self.root=reject_links(temporary/(prefix+self.run_id))
+        self.root.mkdir(mode=0o700)
         self.marker=self.root/'.owner.json'
         self.marker.write_text(json.dumps({'runId':self.run_id}),encoding='ascii')
         self.handles=[]; self.streams=[]; self.events=[]; self.closed=False;self.jobs={}

@@ -28,6 +28,12 @@ class IsolationTests(unittest.TestCase):
         self.assertTrue(run.root.exists())
         run.marker.write_text(json.dumps({'runId':run.run_id})); run.close()
 
+    def test_native_directory_matches_source_guard_and_owner_identity(self):
+        with OwnedRun('codex-f01-native-') as run:
+            self.assertEqual('codex-f01-native-'+run.run_id,run.root.name)
+            self.assertRegex(run.root.name,r'^codex-f01-native-[a-zA-Z0-9-]+$')
+            self.assertEqual({'runId':run.run_id},json.loads(run.marker.read_text()))
+
     def test_production_environment_is_not_inherited(self):
         from unittest.mock import patch
         with patch.dict('os.environ',{'EXAM_OPERATOR_TOKEN':'synthetic-sensitive','Kestrel__Endpoints__X__Url':'https://example.invalid'}):
