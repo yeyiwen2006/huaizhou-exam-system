@@ -84,6 +84,9 @@ public sealed class ActivationApprovalBoundaryTests
         var viewModel = new ActivationRoomViewModel(api) { ActivationRequestId = "synthetic-request" };
 
         await ExecuteAsync(viewModel);
+        Assert.Empty(viewModel.ActivationRequestId);
+        // 审批成功会清空输入框；模拟再次查询并重放同一申请，不能把空输入当作重复审批。
+        viewModel.ActivationRequestId = "synthetic-request";
         await ExecuteAsync(viewModel);
 
         Assert.Equal(2, handler.Calls);
