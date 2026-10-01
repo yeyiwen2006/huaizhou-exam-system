@@ -223,8 +223,6 @@ public sealed partial class PostgresGradingPersistenceTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Exam"] = fixture.ConnectionString,
-            ["ExamSecurity:OperatorToken"] = new string('x', 32),
-            ["ExamSecurity:OperatorId"] = "synthetic-operator",
             ["Database:MaximumPoolSize"] = "16",
             ["Database:Capacity:PostgresMaxConnections"] = "100",
             ["Database:Capacity:PostgresReservedConnections"] = "3",

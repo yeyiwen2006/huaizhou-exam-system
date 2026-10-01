@@ -232,12 +232,13 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     [Fact]
     public async Task ActualBusinessMiddlewareBlocksUntilRecoveryPasses_AndKeepsActiveNodeGate()
     {
-        const string token = "synthetic-recovery-operator-token-32-chars";
+        var token = await SyntheticOperators.LoginAsync(_database.DataSource, "operator");
         var identity = new ServerIdentityOptions { ServerId = "server", NodeId = "node", ServerEpoch = 1 };
         var guard = new BusinessRecoveryGuard();
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(token, "operator"));
+        builder.Services.AddSingleton(_database.DataSource);
+        builder.Services.AddPostgresOperatorAccounts();
         builder.Services.AddSingleton<IDeviceCredentialValidator, NoDeviceCredentials>();
         builder.Services.AddSingleton(new ServerNodeEnvelope("server", "node", 1));
         builder.Services.AddSingleton(new ActiveNodeGuard(_database.DataSource, identity, true));
@@ -273,8 +274,6 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Exam"] = _database.ConnectionString,
-            ["ExamSecurity:OperatorToken"] = "synthetic-runtime-registration-token-32-chars",
-            ["ExamSecurity:OperatorId"] = "operator",
             ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1"
         });
         builder.Services.AddSingleton(TimeProvider.System);

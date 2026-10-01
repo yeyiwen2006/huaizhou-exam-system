@@ -1,3 +1,4 @@
+using Exam.IntegrationTests.Postgres;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -85,7 +86,9 @@ public sealed partial class PostgresSubmissionStoreTests
         builder.Services.AddSingleton<ReportExportService>();
         builder.Services.AddSingleton(confirmation);
         builder.Services.AddSingleton(new ServerNodeEnvelope("synthetic-report-server", "node-a", 1));
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(ReportTestToken, "synthetic-operator"));
+        ReportTestToken = await SyntheticOperators.LoginAsync(fixture.DataSource, "synthetic-operator");
+        builder.Services.AddPostgresOperatorAccounts();
+        builder.Services.AddSingleton(fixture.DataSource);
         builder.Services.AddSingleton<IDeviceCredentialValidator, CollectionTestDeviceValidator>();
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource,
             new() { ServerId = "synthetic-report-server", NodeId = "node-a", ServerEpoch = 1 }, true));

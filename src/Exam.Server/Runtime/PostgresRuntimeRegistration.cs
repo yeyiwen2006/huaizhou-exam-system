@@ -48,21 +48,10 @@ public static class PostgresRuntimeRegistration
             throw new InvalidOperationException("ExamServer 的 serverId、nodeId 和 serverEpoch 必须有效。");
         }
 
-        var operatorToken = configuration[$"{ExamApiSecurityOptions.SectionName}:OperatorToken"];
-        var operatorId = configuration[$"{ExamApiSecurityOptions.SectionName}:OperatorId"];
-        if (string.IsNullOrWhiteSpace(operatorToken) || operatorToken.Length < 32)
-        {
-            throw new InvalidOperationException(
-                "ExamSecurity:OperatorToken 必须通过受保护配置提供，且至少 32 个字符；不会使用仓库默认口令。");
-        }
-
-        if (string.IsNullOrWhiteSpace(operatorId))
-        {
-            throw new InvalidOperationException(
-                "ExamSecurity:OperatorId 必须通过受保护配置提供，用于不可伪造的审计身份。");
-        }
-
-        services.AddSingleton(new ExamApiSecurityOptions(operatorToken, operatorId));
+        // 考务身份来自数据库中的考务账号与登录会话（见 PostgresOperatorAccounts），不再配置共享口令。
+        services.AddSingleton<Exam.Infrastructure.Postgres.Operators.PostgresOperatorAccounts>();
+        services.AddSingleton<Exam.Application.Security.IOperatorAuthenticator>(provider =>
+            provider.GetRequiredService<Exam.Infrastructure.Postgres.Operators.PostgresOperatorAccounts>());
 
         var timeout = configuration.GetValue("Database:CommandTimeoutSeconds", 30);
         var connectionOptions = new PostgresConnectionOptions(connectionString, timeout,

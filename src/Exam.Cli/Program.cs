@@ -29,6 +29,11 @@ internal static partial class ExamCli
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
                 ["time", .. var options] => await SendAsync(HttpMethod.Get, "/api/v1/commands/time", options, cancellationToken),
                 ["exams", .. var options] => await RunExamsAsync(options, cancellationToken),
+                [var account, .. var options] when account is "register" or "login" or "logout" or "whoami" =>
+                    await RunAccountAsync(account, options, cancellationToken),
+                ["operators", "list", .. var options] => await RunAccountAsync("list", options, cancellationToken),
+                ["operators", var change, .. var options] when change is "approve" or "disable" or "enable" =>
+                    await RunAccountAsync(change, options, cancellationToken),
                 ["reports", var action, var examId, .. var options] => await RunReportAsync(action, examId, options, cancellationToken),
                 ["management", var command, .. var options] => await ManagementCli.RunAsync(command, options, cancellationToken),
                 ["api", var method, var path, .. var options] => await SendAsync(
@@ -88,6 +93,11 @@ internal static partial class ExamCli
         Console.WriteLine("  health [--server URL]                 检查业务服务及数据库是否就绪");
         Console.WriteLine("  time [--server URL]                   获取带服务身份的服务器时间");
         Console.WriteLine("  api METHOD PATH [选项]                调用任意正式 HTTP API");
+        Console.WriteLine("  register [--username 用户名 --name 姓名]  注册考务账号（第一个账号为管理员，其余需批准）");
+        Console.WriteLine("  login [--username 用户名]             登录考务账号，会话加密保存在本机供后续命令使用");
+        Console.WriteLine("  logout | whoami                       退出登录 / 查看当前登录账号");
+        Console.WriteLine("  operators list                        列出考务账号（管理员）");
+        Console.WriteLine("  operators approve|disable|enable 用户名  批准、停用或重新启用考务账号（管理员）");
         Console.WriteLine("  exams list                            列出全部考试（名称、时间、状态、是否在学生端显示）");
         Console.WriteLine("  exams show 名称                       查看考试设置与考试说明");
         Console.WriteLine("  exams create --input FILE             新建考试（name、schedule、settings）");
@@ -105,9 +115,9 @@ internal static partial class ExamCli
         Console.WriteLine("  --request-id VALUE                    设置 X-Request-Id 请求头");
         Console.WriteLine();
         Console.WriteLine("管理选项：--management-url HTTPS_URL --server-id ID --node-id ID；写操作用 --input FILE|-，operation 用 --request-id ID。");
-        Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；令牌仍由 EXAM_OPERATOR_TOKEN 提供。");
+        Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；先执行 management login 用考务账号登录本机服务管理。");
         Console.WriteLine();
-        Console.WriteLine("考务令牌只从 EXAM_OPERATOR_TOKEN 读取；设备身份只从 EXAM_DEVICE_ID 和");
+        Console.WriteLine("考务身份来自 login 保存的会话（也可用 EXAM_OPERATOR_TOKEN 指定会话令牌）；设备身份只从 EXAM_DEVICE_ID 和");
         Console.WriteLine("EXAM_DEVICE_CREDENTIAL 读取，不接受命令行明文，以免进入命令历史和进程列表。");
         Console.WriteLine();
         Console.WriteLine("示例：exam-cli api POST /api/v1/activation/approve --input approve.json");
@@ -228,7 +238,7 @@ internal static partial class ExamCli
 
     private static void AddCredentials(HttpRequestMessage request)
     {
-        var operatorToken = Environment.GetEnvironmentVariable(OperatorTokenEnvironment);
+        var operatorToken = OperatorToken();
         if (!string.IsNullOrWhiteSpace(operatorToken))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);

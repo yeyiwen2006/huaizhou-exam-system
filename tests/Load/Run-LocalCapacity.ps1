@@ -53,7 +53,7 @@ try {
     }
     if (!$ready) { throw 'Isolated server did not become ready.' }
     $allSessions = $manifest.sessions
-    $diagnosticHeaders = @{ Authorization = 'Bearer ' + $configuration.ExamSecurity.OperatorToken }
+    $diagnosticHeaders = @{ Authorization = 'Bearer ' + $manifest.operatorToken }
     function Invoke-Scenario([string]$Scenario, [int]$Count, [string]$Label) {
         $script:version += 10000
         $manifest.sessions = @($allSessions | Select-Object -First $Count)
@@ -93,7 +93,7 @@ try {
         Invoke-Scenario download $allSessions.Count 'download'
         Invoke-Scenario final $allSessions.Count 'final'
     }
-    $headers = @{ Authorization = 'Bearer ' + $configuration.ExamSecurity.OperatorToken }
+    $headers = @{ Authorization = 'Bearer ' + $manifest.operatorToken }
     $diagnostics = Invoke-RestMethod "$target/api/v1/diagnostics/runtime" -Headers $headers -TimeoutSec 5
     $diagnostics | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $report 'server-diagnostics.json') -Encoding UTF8
     $collection = Invoke-RestMethod "$target/api/v1/submissions/collection/events?examId=$($setup.examId)&afterRosterVersion=0" -Headers $headers -TimeoutSec 5

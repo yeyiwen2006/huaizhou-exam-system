@@ -130,7 +130,7 @@ public sealed class UiScreenshotTests
     private static void Populate(MainViewModel viewModel)
     {
         viewModel.Connection.ServerAddress = "https://synthetic-server.invalid:5001/";
-        viewModel.Connection.OperatorId = "synthetic-operator";
+        viewModel.Connection.Username = "synthetic-admin";
 
         // 主页卡片与当前考试（合成数据）；进入考试会尝试读取服务器，离线时只在设置页显示读取失败。
         var start = new DateTimeOffset(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
@@ -205,6 +205,17 @@ public sealed class UiScreenshotTests
         var completedAt = new DateTimeOffset(2027, 1, 15, 11, 2, 30, TimeSpan.FromHours(8));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-1", "synthetic-exam", 1, 3, completedAt));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-2", "synthetic-exam", 2, 4, completedAt.AddMinutes(6)));
+
+        // 考务账号页（管理员可见）：合成账号，覆盖已启用、等待批准和已停用三种状态。
+        var created = new DateTimeOffset(2026, 10, 1, 9, 0, 0, TimeSpan.FromHours(8));
+        foreach (var account in new[]
+                 {
+                     new Exam.Contracts.Operators.OperatorAccount("synthetic-admin", "合成管理员", Exam.Contracts.Operators.OperatorStatus.Active, true, created, null),
+                     new Exam.Contracts.Operators.OperatorAccount("synthetic-staff-01", "合成考务人员甲", Exam.Contracts.Operators.OperatorStatus.Active, false, created.AddMinutes(20), "synthetic-admin"),
+                     new Exam.Contracts.Operators.OperatorAccount("synthetic-staff-02", "合成考务人员乙", Exam.Contracts.Operators.OperatorStatus.Pending, false, created.AddMinutes(45), null),
+                     new Exam.Contracts.Operators.OperatorAccount("synthetic-staff-03", "合成考务人员丙", Exam.Contracts.Operators.OperatorStatus.Disabled, false, created.AddMinutes(50), "synthetic-admin"),
+                 })
+            viewModel.Accounts.Accounts.Add(new OperatorAccountRowViewModel(account, "synthetic-admin", _ => Task.CompletedTask, _ => { }));
 
     }
 

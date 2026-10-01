@@ -210,6 +210,9 @@ internal static class ApiEndpointResults
 
     private static int StatusForParticipation(string code) => code switch
     {
+        Exam.Contracts.Operators.OperatorErrorCodes.InvalidCredentials => StatusCodes.Status401Unauthorized,
+        Exam.Contracts.Operators.OperatorErrorCodes.PendingApproval or Exam.Contracts.Operators.OperatorErrorCodes.Disabled or
+            Exam.Contracts.Operators.OperatorErrorCodes.NotAdministrator => StatusCodes.Status403Forbidden,
         ParticipationErrorCodes.InvalidRequest => StatusCodes.Status400BadRequest,
         ParticipationErrorCodes.NotActivated or ParticipationErrorCodes.AuthorizationRevoked or
             ParticipationErrorCodes.RosterMismatch =>

@@ -24,7 +24,9 @@ public sealed class LocalManagementApiTests : IDisposable
     private readonly JsonSerializerOptionsProvider _json = new();
     private readonly ControlledHost _host = new();
     private readonly StagingBackups _backups = new();
-    private const string Token = "synthetic-local-management-token-32-characters";
+    private const string Password = "synthetic-management-password";
+    // 合成考务账号登录服务管理后取得的会话令牌（每个测试一个新实例）。
+    private string Token = "not-logged-in";
     private ServiceConfiguration Configuration => new("server", "node", "127.0.0.1", 8443, _directory, false, 1);
     public LocalManagementApiTests() => Directory.CreateDirectory(Path.Combine(_directory, "operations"));
 
@@ -77,6 +79,54 @@ public sealed class LocalManagementApiTests : IDisposable
             new ManagementConfigurationRequest("repaired-configuration", "server", "node", 1, Configuration with { HttpsPort = 9444 }), _json.Options);
         Assert.Equal(HttpStatusCode.OK, configured.StatusCode);
         Assert.Equal(2, (await configured.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!.Configuration!.Version);
+    }
+
+    [Fact]
+    public async Task LoginRejectsWrongPassword_AndLogoutRevokesSession()
+    {
+        await using var app = await AppAsync();
+        using (var anonymous = Client(app, null))
+        using (var wrong = await anonymous.PostAsJsonAsync("/management/v1/login",
+                   new Exam.Contracts.Operators.LoginOperatorRequest("operator", "wrong-password"), _json.Options))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
+            Assert.DoesNotContain(Password, await wrong.Content.ReadAsStringAsync());
+        }
+        using var client = Client(app);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/management/v1/service/status")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/management/v1/logout", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/management/v1/service/status")).StatusCode);
+    }
+
+    [Fact]
+    public async Task LoginUsesEncryptedLocalCacheWhenDatabaseIsUnavailable()
+    {
+        if (!OperatingSystem.IsWindows()) return; // 缓存使用 Windows 本机加密；服务管理只在 Windows 上运行。
+        var cache = Path.Combine(_directory, "fallback-operators.cache");
+        var hash = Exam.Application.Security.OperatorPasswordHasher.Hash(Password);
+        var online = new ManagementOperatorSessions(() => null, cache, loadFromDatabase: _ =>
+            Task.FromResult<IReadOnlyList<Exam.Infrastructure.Postgres.Operators.CachedOperatorCredential>>([new("operator", hash, true)]));
+        Assert.NotNull(await online.LoginAsync("operator", Password));
+        var stored = await File.ReadAllBytesAsync(cache);
+        Assert.DoesNotContain(hash, System.Text.Encoding.UTF8.GetString(stored));
+        Assert.DoesNotContain("operator", System.Text.Encoding.UTF8.GetString(stored));
+
+        var offline = new ManagementOperatorSessions(() => null, cache, loadFromDatabase: _ =>
+            throw new Npgsql.NpgsqlException("synthetic database unavailable"));
+        var session = await offline.LoginAsync("OPERATOR", Password);
+        Assert.NotNull(session);
+        Assert.Equal("operator", offline.Authenticate(session.Value.Token)!.Username);
+        Assert.Null(await offline.LoginAsync("operator", "wrong-password"));
+        Assert.True(offline.Logout(session.Value.Token));
+        Assert.Null(offline.Authenticate(session.Value.Token));
+
+        // 数据库恢复后以数据库为准：账号停用（不在已启用列表中）后，缓存也随之刷新。
+        var disabled = new ManagementOperatorSessions(() => null, cache, loadFromDatabase: _ =>
+            Task.FromResult<IReadOnlyList<Exam.Infrastructure.Postgres.Operators.CachedOperatorCredential>>([]));
+        Assert.Null(await disabled.LoginAsync("operator", Password));
+        Assert.Null(await offline.LoginAsync("operator", Password));
+        await File.WriteAllTextAsync(cache, "corrupt");
+        Assert.Null(await offline.LoginAsync("operator", Password));
     }
 
     [Theory]
@@ -409,8 +459,7 @@ public sealed class LocalManagementApiTests : IDisposable
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
         var builder = deploymentBuilder ? ManagementEntryPoint.CreateHostBuilder([]) : WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        { ["ExamSecurity:OperatorToken"] = credentials ? Token : null, ["ExamSecurity:OperatorId"] = credentials ? "operator" : null });
+        builder.Services.AddSingleton(Sessions(credentials));
         IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
         if (failCompletion) journal = new FailCompletionStore(journal, failOnlyTerminal);
         builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, _ => _host,
@@ -426,7 +475,24 @@ public sealed class LocalManagementApiTests : IDisposable
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
+        if (credentials) Token = await LoginAsync(app);
         return app;
+    }
+
+    /// <summary>服务管理登录：数据库部分由合成账号代替；缓存写在本测试的临时目录。</summary>
+    private ManagementOperatorSessions Sessions(bool credentials) => new(() => null, Path.Combine(_directory, "operators.cache"),
+        loadFromDatabase: _ => Task.FromResult<IReadOnlyList<Exam.Infrastructure.Postgres.Operators.CachedOperatorCredential>>(credentials
+            ? [new("operator", Exam.Application.Security.OperatorPasswordHasher.Hash(Password), true)]
+            : []));
+
+    private async Task<string> LoginAsync(WebApplication app, string password = Password)
+    {
+        using var client = Client(app, null);
+        using var response = await client.PostAsJsonAsync("/management/v1/login",
+            new Exam.Contracts.Operators.LoginOperatorRequest("operator", password), _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var envelope = await response.Content.ReadFromJsonAsync<ManagementEnvelope<System.Text.Json.JsonElement>>(_json.Options);
+        return envelope!.Result.GetProperty("token").GetString()!;
     }
 
     [Fact]
@@ -759,13 +825,13 @@ public sealed class LocalManagementApiTests : IDisposable
             ["Recovery:WalTimeline"] = "not-a-timeline",
             ["Recovery:WalTargetLsn"] = "invalid-replay-position",
             ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
-            ["ExamSecurity:OperatorToken"] = credentials ? Token : null,
-            ["ExamSecurity:OperatorId"] = credentials ? "operator" : null
         });
         ManagementEntryPoint.AddManagementRuntime(builder);
+        builder.Services.AddSingleton(Sessions(credentials));
         await using var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
+        if (credentials) Token = await LoginAsync(app);
         using var client = Client(app);
         var response = await client.GetAsync("/management/v1/service/status");
         Assert.Equal(credentials ? HttpStatusCode.OK : HttpStatusCode.Unauthorized, response.StatusCode);
@@ -800,13 +866,14 @@ public sealed class LocalManagementApiTests : IDisposable
             ["Management:ServiceConfigurationPath"] = path,
             ["Management:OperationDirectory"] = Path.Combine(_directory, "operations"),
             ["ConnectionStrings:Exam"] = "synthetic-invalid-connection-secret",
-            ["Backup:ToolTimeoutMinutes"] = "not-an-integer",
-            ["ExamSecurity:OperatorToken"] = Token, ["ExamSecurity:OperatorId"] = "operator"
+            ["Backup:ToolTimeoutMinutes"] = "not-an-integer"
         });
         ManagementEntryPoint.AddManagementRuntime(builder);
+        builder.Services.AddSingleton(Sessions(credentials: true));
         await using var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
+        Token = await LoginAsync(app);
         using var client = Client(app);
         var response = await client.PostAsJsonAsync("/management/v1/service/checks",
             new ManagementServiceRequest("production-backup-check", "server", "node"), _json.Options);
@@ -823,7 +890,9 @@ public sealed class LocalManagementApiTests : IDisposable
         await app.StopAsync();
     }
 
-    private static HttpClient Client(WebApplication app, string? token = Token)
+    private HttpClient Client(WebApplication app) => Client(app, Token);
+
+    private static HttpClient Client(WebApplication app, string? token)
     {
         var client = app.GetTestClient();
         client.BaseAddress = new Uri("https://localhost");

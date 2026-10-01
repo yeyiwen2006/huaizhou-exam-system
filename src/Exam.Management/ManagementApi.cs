@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Exam.Application.Security;
+using Exam.Contracts.Operators;
+using Exam.Infrastructure.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
@@ -16,14 +18,43 @@ public static class ManagementApi
             var runtime = context.RequestServices.GetRequiredService<ManagementRuntime>();
             try
             {
-                var configuration = context.RequestServices.GetRequiredService<IConfiguration>();
-                var actor = configuration["ExamSecurity:OperatorId"];
-                if (!context.Request.IsHttps || !OperatorIdentityValidator.Authenticate(
-                    context.Request.Headers.Authorization.ToString(), configuration["ExamSecurity:OperatorToken"], actor))
+                var sessions = context.RequestServices.GetRequiredService<ManagementOperatorSessions>();
+                if (!context.Request.IsHttps)
                 {
-                    await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "缺少有效的本机考务操作令牌或 HTTPS 连接。"), 401);
+                    await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "服务管理只接受本机 HTTPS 连接。"), 401);
                     return;
                 }
+                // 登录接口本身不需要会话：凭考务账号用户名和口令换取本机管理会话。
+                if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/login")
+                {
+                    await BufferRequestAsync(context);
+                    var login = await JsonSerializer.DeserializeAsync<LoginOperatorRequest>(context.Request.Body, json, context.RequestAborted);
+                    var result = await sessions.LoginAsync(login?.Username, login?.Password, context.RequestAborted);
+                    if (result is null)
+                    {
+                        await WriteAsync(context, runtime, null, new ApiError(OperatorErrorCodes.InvalidCredentials,
+                            "用户名或口令不正确，或账号尚未启用。"), 401);
+                        return;
+                    }
+                    await WriteAsync(context, runtime, new { token = result.Value.Token, username = result.Value.Operator.Username,
+                        isAdministrator = result.Value.Operator.IsAdministrator });
+                    return;
+                }
+                var authorization = context.Request.Headers.Authorization.ToString();
+                var token = authorization.StartsWith("Bearer ", StringComparison.Ordinal) ? authorization[7..] : null;
+                if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/logout")
+                {
+                    sessions.Logout(token);
+                    await WriteAsync(context, runtime, new { loggedOut = true });
+                    return;
+                }
+                var session = sessions.Authenticate(token);
+                if (session is null)
+                {
+                    await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "请先用考务账号登录服务管理，或登录已失效。"), 401);
+                    return;
+                }
+                var actor = session.Username;
                 context.Items["Management.Actor"] = actor;
                 if (HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method))
                 {

@@ -35,6 +35,7 @@ public sealed partial class AdminApiClient : IDisposable
         var previous = _httpClient;
         _httpClient = CreateClient();
         _operatorId = string.Empty;
+        _account = null;
         ResetConnectionState();
         previous.Dispose();
     }
@@ -84,6 +85,21 @@ public sealed partial class AdminApiClient : IDisposable
 
     public void Configure(string baseAddress, string operatorToken, string operatorId)
     {
+        var normalized = NormalizeAddress(baseAddress);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operatorToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operatorId);
+        var configuredClient = CreateClient();
+        configuredClient.BaseAddress = normalized;
+        configuredClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);
+        var previousClient = Interlocked.Exchange(ref _httpClient, configuredClient);
+        previousClient.Dispose();
+        _operatorId = operatorId.Trim();
+        _account = null;
+        ResetConnectionState();
+    }
+
+    private static Uri NormalizeAddress(string baseAddress)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseAddress);
         if (!Uri.TryCreate(baseAddress.Trim(), UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
@@ -92,20 +108,7 @@ public sealed partial class AdminApiClient : IDisposable
         {
             throw new ArgumentException("服务器地址必须使用 HTTPS（仅本机测试允许 HTTP），且不能含用户信息、查询参数或片段。", nameof(baseAddress));
         }
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(operatorToken);
-        ArgumentException.ThrowIfNullOrWhiteSpace(operatorId);
-
-        var normalized = uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
-            ? uri
-            : new Uri(uri.AbsoluteUri + '/', UriKind.Absolute);
-        var configuredClient = CreateClient();
-        configuredClient.BaseAddress = normalized;
-        configuredClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);
-        var previousClient = Interlocked.Exchange(ref _httpClient, configuredClient);
-        previousClient.Dispose();
-        _operatorId = operatorId.Trim();
-        ResetConnectionState();
+        return uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(uri.AbsoluteUri + '/', UriKind.Absolute);
     }
 
     public async Task CheckConnectionAsync(CancellationToken cancellationToken = default)
@@ -120,34 +123,16 @@ public sealed partial class AdminApiClient : IDisposable
             throw new AdminApiException("SERVICE_NOT_READY", $"服务器就绪检查失败：HTTP {(int)response.StatusCode}。", response.StatusCode);
         }
 
-        // The health endpoint is public. A missing exam on the operator-only route must carry
-        // the official error envelope; a proxy's generic 404 does not prove authentication.
-        using var authResponse = await client.GetAsync(
-            $"api/v1/versioning/exams/{Guid.NewGuid():N}", cancellationToken);
-        ApiEnvelope<JsonElement>? authEnvelope = null;
-        if (authResponse.StatusCode == HttpStatusCode.NotFound)
+        // 健康检查是公开接口；再读取当前登录账号，确认会话仍然有效。
+        try
         {
-            try
-            {
-                authEnvelope = await authResponse.Content.ReadFromJsonAsync<ApiEnvelope<JsonElement>>(
-                    _json, cancellationToken);
-            }
-            catch (JsonException)
-            {
-                // An intermediary may return an HTML/plain-text 404 page.
-            }
+            _account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get, "api/v1/operators/me", null, cancellationToken);
         }
-
-        EnsureCurrentConnection(generation);
-        if (authResponse.StatusCode != HttpStatusCode.NotFound ||
-            authEnvelope?.Error?.Code != "EXAM_NOT_FOUND")
+        catch (AdminApiException error) when (error.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
         {
-            throw new AdminApiException(
-                "OPERATOR_AUTH_FAILED",
-                $"考务身份验证失败：HTTP {(int)authResponse.StatusCode}。",
-                authResponse.StatusCode);
+            // 代理返回的 404 或登录失效都不能证明当前会话有效。
+            throw new AdminApiException("OPERATOR_AUTH_FAILED", "考务账号登录已失效，请重新登录。", error.StatusCode);
         }
-        ValidateEnvelope(authEnvelope!);
     }
 
     /// <summary>Null expectedVersion means create-only; updates use the version the operator loaded.
@@ -323,7 +308,7 @@ public sealed partial class AdminApiClient : IDisposable
     {
         if (!IsConfigured)
         {
-            throw new InvalidOperationException("请先填写服务器地址、考务身份和令牌并连接服务器。");
+            throw new InvalidOperationException("请先登录考务账号。");
         }
     }
 

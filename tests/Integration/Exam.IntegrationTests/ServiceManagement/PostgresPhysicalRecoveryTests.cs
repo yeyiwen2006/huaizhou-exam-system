@@ -790,8 +790,8 @@ public sealed class PostgresPhysicalRecoveryTests(PostgresDatabaseFixture collec
         var settings = new Dictionary<string, string?>
         {
             ["ConnectionStrings:Exam"] = originalConnection, ["ConnectionStrings:ExamRecovery"] = connectionString,
-            ["Recovery:SelectionPath"] = selectionPath, ["ExamSecurity:OperatorToken"] = "synthetic-physical-recovery-operator-token",
-            ["ExamSecurity:OperatorId"] = "operator", ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1"
+            ["Recovery:SelectionPath"] = selectionPath, 
+            ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1"
         };
         if (walOptions is not null)
         {

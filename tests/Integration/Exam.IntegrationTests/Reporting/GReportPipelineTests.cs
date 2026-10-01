@@ -1,3 +1,4 @@
+using Exam.IntegrationTests.Postgres;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -157,7 +158,8 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.Equal(2,current.Status.CollectedCount); Assert.Equal(2,ReportJson.Read(current.Result).StudentTotals.Count);
     }
 
-    private const string ReportTestToken = "synthetic-report-operator-0123456789abcdef";
+    // 合成考务账号的会话令牌；建立测试服务时登录取得（每个测试一个新实例）。
+    private string ReportTestToken = string.Empty;
     private PostgresReportSource ReportSource() => new(fixture.DataSource,
         new PostgresActiveNodeWriteGuard(new("synthetic-report-server", "node-a", 1), allowUninitializedState: true));
     private async Task<(ParticipationContext Context, PostgresExamVersioningService Versions)> SeedReportExamAsync()
@@ -207,7 +209,9 @@ public sealed partial class PostgresSubmissionStoreTests
         { foreach (var converter in JsonDefaults.Create().Converters) options.SerializerOptions.Converters.Add(converter); });
         builder.Services.AddSingleton(reports); builder.Services.AddSingleton<ReportExportService>();
         builder.Services.AddSingleton(new ServerNodeEnvelope("synthetic-report-server", "node-a", 1));
-        builder.Services.AddSingleton(new ExamApiSecurityOptions(ReportTestToken, "synthetic-operator"));
+        ReportTestToken = await SyntheticOperators.LoginAsync(fixture.DataSource, "synthetic-operator");
+        builder.Services.AddPostgresOperatorAccounts();
+        builder.Services.AddSingleton(fixture.DataSource);
         builder.Services.AddSingleton<IDeviceCredentialValidator, CollectionTestDeviceValidator>();
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource,
             new() { ServerId="synthetic-report-server", NodeId="node-a", ServerEpoch=1 }, true));
