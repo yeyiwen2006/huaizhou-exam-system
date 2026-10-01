@@ -71,6 +71,10 @@ public static class StudentPaperPackage
             RejectDuplicateProperties(document.RootElement);
             manifest = JsonSerializer.Deserialize<StudentPaperManifest>(metadata, ImportJson.Create())
                 ?? throw new InvalidDataException("缺少学生显示清单。");
+            if (manifest.SchemaVersion != NavigationSchemaVersion &&
+                (HasFieldInItems(document.RootElement, "subjects", "maxScoreText") ||
+                 HasFieldInItems(document.RootElement, "groups", "perQuestionScoreText")))
+                throw new InvalidDataException("旧版学生清单不得包含新版导航显示字段。");
         }
         finally { CryptographicOperations.ZeroMemory(metadata); }
         ValidateManifest(manifest, examId, paperVersion);
@@ -277,6 +281,10 @@ public static class StudentPaperPackage
 
     private static bool ValidNavigationText(string? text, int schemaVersion) =>
         schemaVersion == NavigationSchemaVersion ? !string.IsNullOrWhiteSpace(text) : text is null;
+
+    private static bool HasFieldInItems(JsonElement root, string collection, string field) =>
+        root.TryGetProperty(collection, out var items) && items.ValueKind == JsonValueKind.Array &&
+        items.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(field, out _));
 
     private static void RejectDuplicateProperties(JsonElement node)
     {

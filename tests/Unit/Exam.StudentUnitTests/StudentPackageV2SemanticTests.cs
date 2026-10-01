@@ -96,6 +96,7 @@ public sealed class StudentPackageV2SemanticTests
     [InlineData("missing-subject")]
     [InlineData("empty-group")]
     [InlineData("legacy-version")]
+    [InlineData("legacy-null")]
     public void NavigationMetadata_RequiresV3AndCompleteDisplayFields(string defect)
     {
         var source = Manifest();
@@ -109,10 +110,15 @@ public sealed class StudentPackageV2SemanticTests
         {
             "missing-subject" => manifest with { Subjects = manifest.Subjects.Select(s => s with { MaxScoreText = null }).ToArray() },
             "empty-group" => manifest with { Groups = manifest.Groups.Select(g => g with { PerQuestionScoreText = " " }).ToArray() },
-            "legacy-version" => manifest with { SchemaVersion = StudentPaperPackage.OptionRegionSchemaVersion },
+            "legacy-version" or "legacy-null" => manifest with { SchemaVersion = StudentPaperPackage.OptionRegionSchemaVersion },
             _ => manifest
         };
-        var bytes = Package(JsonSerializer.Serialize(Artifact(), ImportJson.Create()), manifest);
+        var bytes = Package(JsonSerializer.Serialize(Artifact(), ImportJson.Create()), manifest,
+            defect == "legacy-null" ? json =>
+            {
+                foreach (var subject in json["subjects"]!.AsArray()) subject!["maxScoreText"] = null;
+                foreach (var group in json["groups"]!.AsArray()) group!["perQuestionScoreText"] = null;
+            } : null);
         if (defect != "valid")
         {
             Assert.Throws<InvalidDataException>(() => StudentPaperPackage.ReadManifest(bytes, "exam", 1));
@@ -174,13 +180,15 @@ public sealed class StudentPackageV2SemanticTests
         Manifest().Questions.Select(question => new OptionRegionQuestion(question.Structure.QuestionId,
             question.Structure.OptionIds.Select(id => new Exam.Contracts.Importing.OptionRegion(id, 0, 0.1, 0.1, 0.1, 0.1)).ToArray())).ToArray());
 
-    private static byte[] Package(string json, StudentPaperManifest? manifest = null)
+    private static byte[] Package(string json, StudentPaperManifest? manifest = null, Action<JsonObject>? amendManifest = null)
     {
         manifest ??= Manifest();
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            Write(StudentPaperPackage.ManifestPath, JsonSerializer.SerializeToUtf8Bytes(manifest, ImportJson.Create()));
+            var metadata = JsonSerializer.SerializeToNode(manifest, ImportJson.Create())!.AsObject();
+            amendManifest?.Invoke(metadata);
+            Write(StudentPaperPackage.ManifestPath, Encoding.UTF8.GetBytes(metadata.ToJsonString()));
             Write(OptionRegionArtifact.FileName, Encoding.UTF8.GetBytes(json));
             foreach (var question in manifest.Questions)
                 Write(question.PdfPath, "%PDF-1.4\n% Synthetic header-only boundary fixture.\n"u8.ToArray());
