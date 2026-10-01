@@ -26,16 +26,16 @@ public sealed partial class ManifestPreflightViewModelTests
     }
 
     [Fact]
-    public async Task Review_CancellingSelectionRetainsPreviousValidatedResultWithoutReading()
+    public async Task Review_CancellingSelectionClearsPreviousValidatedResultWithoutReading()
     {
         using var api = new AdminApiClient();
         var files = new ControlledManifestFiles("manifest.json") { SelectedPath = null };
         var viewModel = new ManifestPreflightViewModel(api, files) { ExamId = "synthetic-minimal" };
         viewModel.ValidateManifestJson(File.ReadAllText(SampleManifest("minimal")));
-        var previous = viewModel.Status;
         await viewModel.SelectManifestAsync();
-        Assert.True(viewModel.StaticPreflightPassed);
-        Assert.Equal(previous, viewModel.Status);
+        Assert.False(viewModel.StaticPreflightPassed);
+        Assert.Null(viewModel.StructurePreview);
+        Assert.Contains("已取消选择", viewModel.Status, StringComparison.Ordinal);
         Assert.False(files.WasRead);
     }
 

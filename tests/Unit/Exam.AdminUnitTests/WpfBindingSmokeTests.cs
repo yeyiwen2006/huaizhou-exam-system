@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -50,6 +51,12 @@ public sealed class WpfBindingSmokeTests
                 var tabsAtStart = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal(MainViewModel.HomePage, tabsAtStart.SelectedIndex);
                 Assert.False(((TabItem)tabsAtStart.Items[MainViewModel.SettingsPage]).IsEnabled);
+                var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
+                Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
+                // 仅在合成数据的视觉测试中展示已登录区域；认证本身另由服务端测试覆盖。
+                typeof(MainWindow).GetMethod("ShowMainArea", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(window, null);
+                DrainDispatcher();
                 var start = DateTimeOffset.UtcNow.AddDays(1);
                 viewModel.OpenExam(new Exam.Contracts.Exams.ExamSummary("synthetic-exam", "合成考试", start, start.AddHours(2),
                     Exam.Contracts.Common.ExamLifecycle.Scheduled, false, false, 0, 0, 1));
@@ -57,8 +64,6 @@ public sealed class WpfBindingSmokeTests
                 window.UpdateLayout();
                 Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
                 Assert.All(tabsAtStart.Items.Cast<TabItem>(), tab => Assert.True(tab.IsEnabled));
-                var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
-                Assert.Equal((Thickness)application.FindResource("Padding.Control"), connect.Padding);
                 var subjectGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.Subjects));
                 Assert.Same(application.FindResource("Brush.Surface.Alt"), subjectGrid.AlternatingRowBackground);
                 var horizontalBar = new ScrollBar { Style = (Style)application.FindResource(typeof(ScrollBar)), Orientation = Orientation.Horizontal, Minimum = 0, Maximum = 100, ViewportSize = 10 };
@@ -81,6 +86,25 @@ public sealed class WpfBindingSmokeTests
                 var instructions = Assert.Single(Descendants<TextBox>(window), box =>
                     BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Exam.InstructionsText");
                 Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);
+                var previewControl = Assert.Single(Descendants<ContentControl>(window), control =>
+                    BindingOperations.GetBinding(control, ContentControl.ContentProperty)?.Path.Path ==
+                    "ManifestPreflight.StructurePreview");
+                Assert.Null(previewControl.Content);
+                var sampleRoot = new DirectoryInfo(AppContext.BaseDirectory);
+                while (sampleRoot is not null && !Directory.Exists(Path.Combine(sampleRoot.FullName, "samples", "synthetic")))
+                    sampleRoot = sampleRoot.Parent;
+                Assert.NotNull(sampleRoot);
+                var sample = File.ReadAllText(Path.Combine(sampleRoot.FullName, "samples", "synthetic", "minimal", "manifest.json"))
+                    .Replace("synthetic-minimal", "synthetic-exam", StringComparison.Ordinal);
+                viewModel.ManifestPreflight.ValidateManifestJson(sample);
+                DrainDispatcher();
+                window.UpdateLayout();
+                var structure = Assert.IsType<ManifestStructurePreview>(previewControl.Content);
+                Assert.Contains(Descendants<DataGrid>(window), grid =>
+                    ReferenceEquals(grid.ItemsSource, structure.Questions) && grid.IsReadOnly);
+                viewModel.ManifestPreflight.ValidateManifestJson("{");
+                DrainDispatcher();
+                Assert.Null(previewControl.Content);
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 foreach (var tab in tabs.Items.Cast<TabItem>())

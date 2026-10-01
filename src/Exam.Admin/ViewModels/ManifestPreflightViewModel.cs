@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Text;
 using System.Text.Json;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
@@ -14,9 +13,12 @@ public sealed class ManifestPreflightViewModel : BindableBase
     public const long MaxManifestBytes = 10 * 1024 * 1024;
 
     private readonly IManifestFileDialogService _manifestFiles;
+    private readonly Func<string, ImportValidationReport> _validateManifest;
     private string _examId = string.Empty;
     private bool _isPreflighting;
     private bool _staticPreflightPassed;
+    private ManifestStructurePreview? _structurePreview;
+    private string _selectedManifestPath = string.Empty;
     private string _status = "请选择导入源包的 manifest.json，而非 D03 学生包清单；静态预检不代表可以编译、计分、发布或完成客户端更新。";
     private long _contextVersion;
     private long _preflightSequence;
@@ -24,8 +26,17 @@ public sealed class ManifestPreflightViewModel : BindableBase
     public ManifestPreflightViewModel(
         AdminApiClient api,
         IManifestFileDialogService? manifestFiles = null)
+        : this(api, manifestFiles, json => new ExamManifestValidator().ValidateJson(json))
+    {
+    }
+
+    internal ManifestPreflightViewModel(
+        AdminApiClient api,
+        IManifestFileDialogService? manifestFiles,
+        Func<string, ImportValidationReport> validateManifest)
     {
         _manifestFiles = manifestFiles ?? new FileDialogService();
+        _validateManifest = validateManifest ?? throw new ArgumentNullException(nameof(validateManifest));
         api.ConfigurationChanged += (_, _) =>
             Reset("连接已变更；旧预检结果已清除，请重新选择并校验清单。");
         SelectManifestCommand = new AsyncRelayCommand(SelectManifestAsync, onError: SetPreflightError);
@@ -62,20 +73,48 @@ public sealed class ManifestPreflightViewModel : BindableBase
     }
 
     public ObservableCollection<ImportIssue> Issues { get; } = [];
+    public ManifestStructurePreview? StructurePreview
+    {
+        get => _structurePreview;
+        private set => SetProperty(ref _structurePreview, value);
+    }
+
+    public string SelectedManifestPath
+    {
+        get => _selectedManifestPath;
+        private set => SetProperty(ref _selectedManifestPath, value);
+    }
+
     public AsyncRelayCommand SelectManifestCommand { get; }
 
     public async Task SelectManifestAsync()
     {
-        var path = _manifestFiles.OpenManifestFile();
-        if (path is null)
-        {
-            return;
-        }
-
         var context = _contextVersion;
         var sequence = ++_preflightSequence;
         ClearResult();
         IsPreflighting = false;
+        SelectedManifestPath = string.Empty;
+
+        string? path;
+        try
+        {
+            path = _manifestFiles.OpenManifestFile();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            SetPreflightError(exception);
+            return;
+        }
+        if (context != _contextVersion || sequence != _preflightSequence)
+        {
+            return;
+        }
+        if (path is null)
+        {
+            Status = "已取消选择；旧检查结果和结构预览已清除。";
+            return;
+        }
+        SelectedManifestPath = path;
 
         if (string.IsNullOrWhiteSpace(ExamId))
         {
@@ -107,11 +146,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
             }
             ApplyManifestResult(result);
         }
-        catch (Exception exception) when (exception is IOException
-            or InvalidDataException
-            or UnauthorizedAccessException
-            or ArgumentException
-            or DecoderFallbackException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             if (context == _contextVersion && sequence == _preflightSequence)
             {
@@ -139,18 +174,24 @@ public sealed class ManifestPreflightViewModel : BindableBase
             return;
         }
 
-        ApplyManifestResult(InspectManifestJson(json));
+        try
+        {
+            ApplyManifestResult(InspectManifestJson(json));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            SetPreflightError(exception);
+        }
     }
 
-    private static (ImportValidationReport Report, string? ExamId) InspectManifestJson(string json)
+    private (ImportValidationReport Report, ExamManifest? Manifest) InspectManifestJson(string json)
     {
-        var report = new ExamManifestValidator().ValidateJson(json);
+        var report = _validateManifest(json);
         if (!report.IsValid) return (report, null);
-        using var document = JsonDocument.Parse(json);
-        return (report, document.RootElement.GetProperty("examId").GetString());
+        return (report, JsonSerializer.Deserialize<ExamManifest>(json, ImportJson.Create()));
     }
 
-    private void ApplyManifestResult((ImportValidationReport Report, string? ExamId) result)
+    private void ApplyManifestResult((ImportValidationReport Report, ExamManifest? Manifest) result)
     {
         var report = result.Report;
         foreach (var issue in report.Issues)
@@ -164,14 +205,15 @@ public sealed class ManifestPreflightViewModel : BindableBase
             return;
         }
 
-        if (!string.Equals(result.ExamId, ExamId.Trim(), StringComparison.Ordinal))
+        if (!string.Equals(result.Manifest?.ExamId, ExamId.Trim(), StringComparison.Ordinal))
         {
             Status = "清单考试 ID 与当前考试 ID 不一致；未接受此预检结果。";
             return;
         }
 
+        StructurePreview = ManifestStructurePreview.FromValidatedManifest(result.Manifest!);
         StaticPreflightPassed = true;
-        Status = "清单静态预检通过；这不等于编译、计分、发布或客户端更新完成。未读取独立答案，答案关联和逐题满分核对仍未完成。";
+        Status = "清单静态预检通过，可查看本地只读结构；这不等于编译、计分、发布或客户端更新完成。未读取独立答案，声明满分尚未按答案核对。";
     }
 
     private void Reset(string message)
@@ -179,6 +221,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
         _contextVersion++;
         _preflightSequence++;
         ClearResult();
+        SelectedManifestPath = string.Empty;
         IsPreflighting = false;
         Status = message;
     }
@@ -187,6 +230,7 @@ public sealed class ManifestPreflightViewModel : BindableBase
     {
         Issues.Clear();
         StaticPreflightPassed = false;
+        StructurePreview = null;
     }
 
     private void SetPreflightError(Exception exception)

@@ -284,6 +284,66 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                    <Border Style="{StaticResource CardGap}" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="试题清单检查与只读预览" Style="{StaticResource CardHeading}" />
+                            <TextBlock Text="选择当前考试的导入源清单 manifest.json。这里仅核对清单结构，不读取独立答案，也不会编译或发布试卷。"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap" />
+                            <Button Content="选择清单并检查" Style="{StaticResource ActionButton}"
+                                    IsEnabled="{Binding HasCurrentExam}" HorizontalAlignment="Left"
+                                    Command="{Binding ManifestPreflight.SelectManifestCommand}" />
+                            <TextBlock Text="{Binding ManifestPreflight.SelectedManifestPath, StringFormat='本次选择：{0}'}"
+                                       Style="{StaticResource CaptionText}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding ManifestPreflight.Status}" Style="{StaticResource StatusLine}"
+                                       TextWrapping="Wrap" Margin="0,8,0,8" />
+                            <DataGrid ItemsSource="{Binding ManifestPreflight.Issues}" IsReadOnly="True"
+                                      AutoGenerateColumns="False" CanUserAddRows="False" MaxHeight="160" Margin="0,0,0,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="检查项" Binding="{Binding Rule}" Width="2*" />
+                                    <DataGridTextColumn Header="位置" Binding="{Binding Location}" Width="2*" />
+                                    <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="4*" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <ContentControl Content="{Binding ManifestPreflight.StructurePreview}">
+                                <ContentControl.ContentTemplate>
+                                    <DataTemplate>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding ExamName, StringFormat='清单考试：{0}'}" Style="{StaticResource SectionTitle}" />
+                                            <TextBlock Text="{Binding QuestionCount, StringFormat='只读结构预览：共 {0} 道题（未核对答案）'}"
+                                                       Style="{StaticResource CaptionText}" Margin="0,4,0,8" />
+                                            <DataGrid ItemsSource="{Binding Subjects}" IsReadOnly="True" AutoGenerateColumns="False"
+                                                      CanUserAddRows="False" MaxHeight="140" Margin="0,0,0,8">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="科目" Binding="{Binding Name}" Width="2*" />
+                                                    <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount}" Width="*" />
+                                                    <DataGridTextColumn Header="清单声明满分" Binding="{Binding DeclaredMaxScore}" Width="*" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <DataGrid ItemsSource="{Binding Groups}" IsReadOnly="True" AutoGenerateColumns="False"
+                                                      CanUserAddRows="False" MaxHeight="160" Margin="0,0,0,8">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="科目" Binding="{Binding SubjectName}" Width="*" />
+                                                    <DataGridTextColumn Header="题组" Binding="{Binding Name}" Width="2*" />
+                                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="*" />
+                                                    <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount}" Width="*" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <DataGrid ItemsSource="{Binding Questions}" IsReadOnly="True" AutoGenerateColumns="False"
+                                                      CanUserAddRows="False" MaxHeight="220">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="*" />
+                                                    <DataGridTextColumn Header="题目 ID" Binding="{Binding QuestionId}" Width="*" />
+                                                    <DataGridTextColumn Header="科目" Binding="{Binding SubjectName}" Width="*" />
+                                                    <DataGridTextColumn Header="题组" Binding="{Binding GroupName}" Width="2*" />
+                                                    <DataGridTextColumn Header="选项" Binding="{Binding OptionIds}" Width="*" />
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ContentControl.ContentTemplate>
+                            </ContentControl>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
@@ -375,7 +435,7 @@
                                 <Button DockPanel.Dock="Right" Content="查询收齐记录" Style="{StaticResource ActionButton}" Margin="0" Command="{Binding Monitoring.RefreshCollectionEventsCommand}"/>
                                 <StackPanel>
                                     <TextBlock Text="答卷收齐记录" Style="{StaticResource CardHeading}"/>
-                                    <TextBlock Text="打开本页时每 20 秒自动刷新一次。" Style="{StaticResource CardNote}" />
+                                    <TextBlock Text="打开本页时每 20 秒查询一次历史收齐记录；这不是实时连接监测。" Style="{StaticResource CardNote}" />
                                 </StackPanel>
                             </DockPanel>
                             <TextBlock Text="{Binding Monitoring.CollectionStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,8"/>

@@ -30,6 +30,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _api = api;
         Connection = new ConnectionViewModel(_api);
         Exam = new ExamConfigurationViewModel(_api);
+        ManifestPreflight = new ManifestPreflightViewModel(_api);
         Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService());
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
@@ -83,6 +84,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         SetCreating(false);
         CurrentExam = exam;
         Monitoring.ExamId = exam.ExamId;
+        ManifestPreflight.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
         Reports.ExamName = exam.Name;
         SelectedPage = SettingsPage;
@@ -93,6 +95,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         CurrentExam = null;
         Monitoring.ExamId = string.Empty;
+        ManifestPreflight.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SetCreating(true);
@@ -105,6 +108,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         SetCreating(false);
         CurrentExam = detail.Summary;
         Monitoring.ExamId = detail.Summary.ExamId;
+        ManifestPreflight.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
         Reports.ExamName = detail.Summary.Name;
         if (Home.RefreshCommand.CanExecute(null)) Home.RefreshCommand.Execute(null);
@@ -114,6 +118,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         SetCreating(false);
         CurrentExam = null;
+        ManifestPreflight.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
@@ -128,6 +133,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
 
     public ConnectionViewModel Connection { get; }
     public ExamConfigurationViewModel Exam { get; }
+    public ManifestPreflightViewModel ManifestPreflight { get; }
     public RosterViewModel Roster { get; }
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
