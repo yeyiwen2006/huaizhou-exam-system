@@ -14,7 +14,7 @@ public sealed class AdminWpfCollection;
 
 [Collection("Admin WPF")]
 [Trait("Category", "Wpf")]
-public sealed class ReportViewReviewTests
+public sealed partial class ReportViewReviewTests
 {
     [Fact]
     public async Task Review_ReportControlsCanRenderOnSuccessiveUiThreads()

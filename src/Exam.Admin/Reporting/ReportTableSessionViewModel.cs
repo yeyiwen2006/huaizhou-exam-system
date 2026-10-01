@@ -90,7 +90,19 @@ public sealed class ReportTableSessionViewModel : BindableBase, IDisposable
         ArgumentNullException.ThrowIfNull(result);
         if (!IsCurrent(ticket)) return false;
 
-        var tables = ReportTableProjection.Build(result);
+        IReadOnlyList<ReportTable> tables;
+        try
+        {
+            ReportResultShapeValidator.Validate(result);
+            tables = ReportTableProjection.Build(result);
+        }
+        catch (ArgumentException)
+        {
+            CompletePending();
+            ClearTables();
+            UnavailableReason = "报表结果无效";
+            return false;
+        }
         CompletePending();
         Tables = tables;
         SelectedTable = tables.FirstOrDefault(table => table.Kind == _preferredKind &&

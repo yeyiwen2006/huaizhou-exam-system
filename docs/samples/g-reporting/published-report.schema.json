@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "G PublishedReport schema 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "result"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    },
+    "result": {
+      "$ref": "#/$defs/Result"
+    }
+  },
+  "$defs": {
+    "Participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "examNumber",
+        "displayName",
+        "classNumber"
+      ],
+      "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examNumber": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "classNumber": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      }
+    },
+    "Mean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact",
+        "sampleCount",
+        "display"
+      ],
+      "properties": {
+        "exact": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "sampleCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "display": {
+          "type": "string",
+          "pattern": "^-?[0-9]+\\.[0-9]{2}$"
+        }
+      }
+    },
+    "Question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "questionNo",
+        "maximumScore"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "questionNo": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maximumScore": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        }
+      }
+    },
+    "Subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subjectId",
+        "displayName",
+        "order",
+        "maximumScore",
+        "questions"
+      ],
+      "properties": {
+        "subjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maximumScore": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Question"
+          }
+        }
+      }
+    },
+    "StudentSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subjectId",
+        "score",
+        "rank"
+      ],
+      "properties": {
+        "subjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "StudentTotal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "participant",
+        "totalScore",
+        "totalRank",
+        "subjects"
+      ],
+      "properties": {
+        "participant": {
+          "$ref": "#/$defs/Participant"
+        },
+        "totalScore": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "totalRank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StudentSubject"
+          }
+        }
+      }
+    },
+    "SubjectScore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "participant",
+        "score",
+        "rank"
+      ],
+      "properties": {
+        "participant": {
+          "$ref": "#/$defs/Participant"
+        },
+        "score": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "AnswerCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "text",
+        "isCompletelyCorrect"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "isCompletelyCorrect": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AnswerRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "participant",
+        "rank",
+        "answers",
+        "score"
+      ],
+      "properties": {
+        "participant": {
+          "$ref": "#/$defs/Participant"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnswerCell"
+          }
+        },
+        "score": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        }
+      }
+    },
+    "QuestionCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "score",
+        "isFullScore"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "isFullScore": {
+          "type": "boolean"
+        }
+      }
+    },
+    "QuestionRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "participant",
+        "rank",
+        "questions",
+        "score"
+      ],
+      "properties": {
+        "participant": {
+          "$ref": "#/$defs/Participant"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionCell"
+          }
+        },
+        "score": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        }
+      }
+    },
+    "QuestionMean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "mean"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SubjectTables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "scores",
+        "answers",
+        "questionScores",
+        "subjectMean",
+        "questionMeans"
+      ],
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        },
+        "scores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectScore"
+          }
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnswerRow"
+          }
+        },
+        "questionScores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionRow"
+          }
+        },
+        "subjectMean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "questionMeans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionMean"
+          }
+        }
+      }
+    },
+    "ClassSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subjectId",
+        "mean",
+        "rank"
+      ],
+      "properties": {
+        "subjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ClassAverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classNumber",
+        "sampleCount",
+        "subjects",
+        "totalMean",
+        "totalRank"
+      ],
+      "properties": {
+        "classNumber": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "sampleCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClassSubject"
+          }
+        },
+        "totalMean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalRank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "studentTotals",
+        "subjects",
+        "classAverages",
+        "totalMaximumScore",
+        "totalMean",
+        "commonSampleCount"
+      ],
+      "properties": {
+        "studentTotals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StudentTotal"
+          }
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectTables"
+          }
+        },
+        "classAverages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClassAverage"
+          }
+        },
+        "totalMaximumScore": {
+          "type": "string",
+          "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$|^-?[0-9]+/[1-9][0-9]*$"
+        },
+        "totalMean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commonSampleCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "examId",
+        "state",
+        "reason",
+        "participantCount",
+        "collectedCount",
+        "gradedCount",
+        "rosterVersion",
+        "paperVersion",
+        "gradingVersion",
+        "snapshotId",
+        "missingParticipants"
+      ],
+      "properties": {
+        "examId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "enum": [
+            "examNotEnded",
+            "noParticipants",
+            "collecting",
+            "grading",
+            "invalidSource",
+            "ready"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "participantCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collectedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gradedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rosterVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "paperVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gradingVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snapshotId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missingParticipants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Participant"
+          }
+        }
+      },
+      "description": "Counts must satisfy graded <= collected <= participants. Missing members are unique and equal participants minus collected. Ready requires positive participants, equal counts, positive paper/grading versions and a nonempty snapshot; other states have no snapshot. Published result row count equals participants. Consumers enforce these relationships in code."
+    }
+  }
+}

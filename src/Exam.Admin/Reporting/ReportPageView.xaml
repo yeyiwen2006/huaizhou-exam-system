@@ -1,0 +1,26 @@
+<UserControl x:Class="Exam.Admin.Reporting.ReportPageView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:reporting="clr-namespace:Exam.Admin.Reporting"
+ Background="{DynamicResource Brush.Background}">
+ <UserControl.Resources><BooleanToVisibilityConverter x:Key="MissingVisibility"/></UserControl.Resources>
+ <Grid Margin="12">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <WrapPanel Margin="0,0,0,10">
+   <TextBlock Text="考试标识" VerticalAlignment="Center" Margin="0,0,8,0"/>
+   <TextBox Width="240" Text="{Binding ExamId, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0"/>
+   <Button Content="刷新报表" Command="{Binding RefreshCommand}" Style="{DynamicResource ActionButton}"/>
+   <Button Content="导出 Excel" Command="{Binding ExportCommand}" Style="{DynamicResource ActionButton}"/>
+   <Button Content="取消" Command="{Binding CancelCommand}" Style="{DynamicResource ActionButton}"/>
+  </WrapPanel>
+  <TextBlock Grid.Row="1" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+  <DataGrid Grid.Row="2" ItemsSource="{Binding MissingParticipants}" Visibility="{Binding HasMissingParticipants, Converter={StaticResource MissingVisibility}}" AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="150" Margin="0,0,0,8">
+   <DataGrid.Columns>
+    <DataGridTextColumn Header="未回收准考证号" Binding="{Binding ExamNumber}" Width="*"/>
+    <DataGridTextColumn Header="姓名" Binding="{Binding DisplayName}" Width="*"/>
+    <DataGridTextColumn Header="班级" Binding="{Binding ClassNumber}" Width="*"/>
+   </DataGrid.Columns>
+  </DataGrid>
+  <reporting:ReportWorkspaceView Grid.Row="3" DataContext="{Binding Session}"/>
+ </Grid>
+</UserControl>

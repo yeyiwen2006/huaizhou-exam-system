@@ -71,6 +71,7 @@ public partial class ReportTableView : UserControl
             RowsGrid.Columns.Add(new DataGridTemplateColumn
             {
                 Header = column.Header,
+                HeaderTemplate = HeaderTemplate(),
                 Width = new DataGridLength(column.Width),
                 CellTemplate = CellTemplate(i),
                 ClipboardContentBinding = new Binding($"Cells[{i}].Text"),
@@ -126,6 +127,15 @@ public partial class ReportTableView : UserControl
         text.SetValue(FrameworkElement.StyleProperty, CellStyle(index));
         text.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 0, 8, 0));
         text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        return new DataTemplate { VisualTree = text };
+    }
+
+    private static DataTemplate HeaderTemplate()
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding());
+        text.SetBinding(FrameworkElement.ToolTipProperty, new Binding());
+        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         return new DataTemplate { VisualTree = text };
     }
 

@@ -11,6 +11,7 @@ public sealed class ReportWorkbookWriter
     public byte[] Write(ReportCalculationResult report)
     {
         ArgumentNullException.ThrowIfNull(report);
+        ReportResultShapeValidator.Validate(report);
         using var workbook = new XLWorkbook();
         workbook.Properties.Author = string.Empty;
         workbook.Properties.LastModifiedBy = string.Empty;
