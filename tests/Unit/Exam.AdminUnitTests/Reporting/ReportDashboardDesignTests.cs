@@ -72,6 +72,17 @@ public sealed partial class ReportViewReviewTests
             var footerBottom = footer.TransformToAncestor(view).Transform(new Point(0, footer.ActualHeight)).Y;
             Assert.True(footerBottom <= view.ActualHeight + 1, "The fixed average row must remain in the viewport.");
             SaveDashboardScreenshot(view, scale, "ready");
+            page.Session.SearchText = "合成考生 07";
+            page.Session.SearchCommand.Execute(null);
+            Drain(); window.UpdateLayout();
+            Assert.Single(rows.Items);
+            Assert.True(footer.Children.Count > 0, "查询时仍须显示固定平均分行。");
+            var searchFooterBottom = footer.TransformToAncestor(view).Transform(new Point(0, footer.ActualHeight)).Y;
+            Assert.True(searchFooterBottom <= view.ActualHeight + 1, "查询时固定平均分行仍须在可视区域内。");
+            SaveDashboardScreenshot(view, scale, "search");
+            page.Session.ClearSearchCommand.Execute(null);
+            Drain(); window.UpdateLayout();
+            Assert.Equal(24, rows.Items.Count);
             Assert.True(page.Session.TrySelect(ReportTableKind.SubjectAnswers, "design-subject-1"));
             Drain(); window.UpdateLayout();
             SaveDashboardScreenshot(view, scale, "answers");

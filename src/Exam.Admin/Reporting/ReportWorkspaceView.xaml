@@ -3,6 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:reporting="clr-namespace:Exam.Admin.Reporting"
              UseLayoutRounding="True">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="VisibleWhenTrue" />
+    </UserControl.Resources>
     <Border Style="{DynamicResource Report.Panel}">
         <Grid>
             <Grid.RowDefinitions>
@@ -17,15 +20,31 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="查看表格" VerticalAlignment="Center" Margin="0,0,12,0" Style="{DynamicResource SectionTitle}" />
-                    <ComboBox x:Name="TableChooser" Grid.Column="1" MaxWidth="380" HorizontalAlignment="Left" MinWidth="240"
+                    <ComboBox x:Name="TableChooser" Grid.Column="1" MaxWidth="380" HorizontalAlignment="Left" MinWidth="200"
                               MinHeight="34" ItemsSource="{Binding Tables}" DisplayMemberPath="Title"
                               SelectedItem="{Binding SelectedTable, Mode=TwoWay}" IsEnabled="{Binding HasTables}"
                               AutomationProperties.Name="选择表格" />
-                    <TextBlock Grid.Column="2" Text="与导出的 Excel 内容一致" Style="{DynamicResource CaptionText}"
-                               VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <!-- 按姓名或准考证号查询：只显示匹配学生，底部平均分不变；“返回”恢复完整表格。班级表不可查询。 -->
+                    <DockPanel Grid.Column="2" Margin="12,0,0,0" IsEnabled="{Binding CanSearch}">
+                        <TextBlock DockPanel.Dock="Left" Text="查询学生" Style="{DynamicResource FieldLabel}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                        <TextBox x:Name="SearchBox" DockPanel.Dock="Left" Width="200"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="输入姓名或准考证号"
+                                 ToolTip="输入姓名或准考证号，可只输入一部分；按回车查询。">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding SearchCommand}" />
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Button DockPanel.Dock="Left" Content="查询" Command="{Binding SearchCommand}" Style="{DynamicResource Btn.Primary}"
+                                MinWidth="64" Margin="8,0,0,0" />
+                        <Button DockPanel.Dock="Left" Content="返回" Command="{Binding ClearSearchCommand}" Style="{DynamicResource Btn.Secondary}"
+                                MinWidth="64" Margin="8,0,0,0" Visibility="{Binding IsSearching, Converter={StaticResource VisibleWhenTrue}}" />
+                        <TextBlock Text="{Binding SearchResultText}" Style="{DynamicResource CaptionText}"
+                                   Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="220" />
+                    </DockPanel>
                 </Grid>
             </Border>
-            <reporting:ReportTableView Grid.Row="1" Table="{Binding SelectedTable}" UnavailableReason="{Binding UnavailableReason}" />
+            <reporting:ReportTableView Grid.Row="1" Table="{Binding DisplayedTable}" UnavailableReason="{Binding UnavailableReason}" />
         </Grid>
     </Border>
 </UserControl>

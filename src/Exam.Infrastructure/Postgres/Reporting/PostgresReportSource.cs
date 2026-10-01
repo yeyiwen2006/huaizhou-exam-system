@@ -87,18 +87,18 @@ public sealed class PostgresReportSource(NpgsqlDataSource dataSource, PostgresAc
                 rosterVersion, paperVersion, gradingVersion, null, missing), null);
         if (lifecycle != "Ended") return Unavailable(ReportState.ExamNotEnded, "考试尚未结束。");
         if (members.Length == 0) return Unavailable(ReportState.NoParticipants, "本场考试没有实际参试者。");
-        if (missing.Length != 0) return Unavailable(ReportState.Collecting, "实际参试答卷尚未收齐。");
+        if (missing.Length != 0) return Unavailable(ReportState.Collecting, "实际参试考生的答卷尚未全部回收。");
         if (gradingVersion <= 0 || graded != members.Length)
-            return Unavailable(ReportState.Grading, "当前规则计分未完成或正在重算。");
+            return Unavailable(ReportState.Grading, "计分尚未完成或正在重新计分。");
         try
         {
             var publication = rulesJson is null ? null : JsonSerializer.Deserialize<PublishGradingRulesRequest>(rulesJson, Json);
             if (publication is null || publication.ExamId != examId || publication.ExpectedVersion != gradingVersion-1)
-                return Unavailable(ReportState.InvalidSource, "当前规则发布源与版本不一致。");
+                return Unavailable(ReportState.InvalidSource, "计分规则与当前试卷版本不一致，请核对后重新发布计分规则。");
             var rules = ImportedGradingRules.Create(publication.ManifestJson, publication.AnswerKeyJson);
             var version = JsonSerializer.Deserialize<ExamVersionSnapshot>(stateJson, Json);
             if (rules.ExamId != examId || version?.Paper is null || !rules.Matches(version.Paper.Structure))
-                return Unavailable(ReportState.InvalidSource, "题目结构与当前规则不一致。");
+                return Unavailable(ReportState.InvalidSource, "试卷题目与计分规则不一致，请核对后重新发布计分规则。");
             var manifest = JsonSerializer.Deserialize<ExamManifest>(publication.ManifestJson!, ImportJson.Create())!;
             var questions = rules.Questions.ToDictionary(question => question.QuestionId, StringComparer.Ordinal);
             var subjects = manifest.Subjects.Select((subject, index) => new ReportSubject(subject.SubjectId,
@@ -139,12 +139,12 @@ public sealed class PostgresReportSource(NpgsqlDataSource dataSource, PostgresAc
             ReportCalculator.Validate(input);
             var token = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                 examId+"\n"+revision+"\n"+rosterVersion+"\n"+stateJson+"\n"+rulesJson+"\n"+membersJson)));
-            return new(new(examId, ReportState.Ready, "报表已开放。", members.Length, members.Length, graded,
+            return new(new(examId, ReportState.Ready, "成绩已生成。", members.Length, members.Length, graded,
                 rosterVersion, paperVersion, gradingVersion, token, []), input);
         }
         catch (Exception error) when (error is ArgumentException or JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            return Unavailable(ReportState.InvalidSource, "报表源数据未通过完整性检查。");
+            return Unavailable(ReportState.InvalidSource, "成绩数据核对未通过，请联系系统管理员。");
         }
     }
 
