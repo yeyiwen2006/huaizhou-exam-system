@@ -36,6 +36,7 @@ internal static partial class ExamCli
                     await RunAccountAsync(change, options, cancellationToken),
                 ["reports", var action, var examId, .. var options] => await RunReportAsync(action, examId, options, cancellationToken),
                 ["grading", var action, var examId, .. var options] => await RunGradingAsync(action, examId, options, cancellationToken),
+                ["import", var action, var packageRoot, .. var options] => await RunImportAsync(action, packageRoot, options, cancellationToken),
                 ["management", var command, .. var options] => await ManagementCli.RunAsync(command, options, cancellationToken),
                 ["api", var method, var path, .. var options] => await SendAsync(
                     new HttpMethod(method.ToUpperInvariant()),
