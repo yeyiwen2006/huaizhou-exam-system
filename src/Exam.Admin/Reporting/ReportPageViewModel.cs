@@ -57,7 +57,7 @@ public sealed partial class ReportPageViewModel : BindableBase, IDisposable
     {
         MissingParticipants = status.MissingParticipants;
         NotifyPresentation();
-        Status = $"{status.Reason} 实际参试 {status.ParticipantCount}，已回收 {status.CollectedCount}，当前版本已计分 {status.GradedCount}。";
+        Status = $"{status.Reason} 实际参试 {status.ParticipantCount}，已回收 {status.CollectedCount}，已完成计分 {status.GradedCount}。";
     }
     public async Task RefreshAsync()
     {

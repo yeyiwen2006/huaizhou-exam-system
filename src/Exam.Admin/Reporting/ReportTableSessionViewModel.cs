@@ -21,6 +21,45 @@ public sealed class ReportTableSessionViewModel : BindableBase, IDisposable
     private ReportTableKind _preferredKind = ReportTableKind.StudentTotals;
     private string? _preferredSubjectId;
     private bool _disposed;
+    private string _searchText = string.Empty;
+    private string? _appliedQuery;
+
+    public ReportTableSessionViewModel()
+    {
+        SearchCommand = new RelayCommand(ApplySearch, () => CanSearch && !string.IsNullOrWhiteSpace(SearchText));
+        ClearSearchCommand = new RelayCommand(ClearSearch, () => IsSearching);
+    }
+
+    public RelayCommand SearchCommand { get; }
+    /// <summary>“返回”：恢复当前表格的完整内容。</summary>
+    public RelayCommand ClearSearchCommand { get; }
+
+    /// <summary>查询框内容：姓名或准考证号（可只填一部分）。</summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (SetProperty(ref _searchText, value ?? string.Empty)) SearchCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool IsSearching => _appliedQuery is not null;
+
+    /// <summary>班级平均分表没有学生行，不提供查询。</summary>
+    public bool CanSearch => SelectedTable is { Kind: not ReportTableKind.ClassAverages };
+
+    /// <summary>
+    /// 实际显示的表格：未查询时为完整表格；查询时只保留姓名或准考证号匹配的行，
+    /// 列、排名、着色与完整表格一致，底部平均分仍为全部合格样本的结果。
+    /// </summary>
+    public ReportTable? DisplayedTable => _appliedQuery is { } query && SelectedTable is { Kind: not ReportTableKind.ClassAverages } table
+        ? table with { Rows = Array.AsReadOnly(table.Rows.Where(row => Matches(row, query)).ToArray()) }
+        : SelectedTable;
+
+    public string SearchResultText => _appliedQuery is null || DisplayedTable is null ? string.Empty
+        : DisplayedTable.Rows.Count == 0 ? "未找到匹配的学生。"
+        : $"找到 {DisplayedTable.Rows.Count} 名学生。";
 
     public IReadOnlyList<ReportTable> Tables
     {
@@ -40,10 +79,15 @@ public sealed class ReportTableSessionViewModel : BindableBase, IDisposable
         {
             VerifyAccess();
             if (value is not null && !Tables.Contains(value)) return;
-            if (SetProperty(ref _selectedTable, value) && value is not null)
+            if (SetProperty(ref _selectedTable, value))
             {
-                _preferredKind = value.Kind;
-                _preferredSubjectId = value.SubjectId;
+                if (value is not null)
+                {
+                    _preferredKind = value.Kind;
+                    _preferredSubjectId = value.SubjectId;
+                }
+                // 切换表格时保留当前查询，便于在各表之间查看同一名学生；班级表不过滤。
+                NotifySearch();
             }
         }
     }
@@ -158,8 +202,45 @@ public sealed class ReportTableSessionViewModel : BindableBase, IDisposable
 
     private void ClearTables()
     {
+        // 任何失效、重新加载或切换考试都同时清除查询，避免把旧结果带到新数据上。
+        _appliedQuery = null;
+        SearchText = string.Empty;
         SelectedTable = null;
         Tables = Array.Empty<ReportTable>();
+        NotifySearch();
+    }
+
+    private void ApplySearch()
+    {
+        VerifyAccess();
+        var query = SearchText.Trim();
+        if (query.Length == 0 || !CanSearch) return;
+        _appliedQuery = query;
+        NotifySearch();
+    }
+
+    private void ClearSearch()
+    {
+        VerifyAccess();
+        _appliedQuery = null;
+        SearchText = string.Empty;
+        NotifySearch();
+    }
+
+    // 学生表前四列固定为排名、准考证号、姓名、班级。
+    private static bool Matches(ReportTableRow row, string query) =>
+        row.Cells.Count > 2 &&
+        (row.Cells[1].Text.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+         row.Cells[2].Text.Contains(query, StringComparison.OrdinalIgnoreCase));
+
+    private void NotifySearch()
+    {
+        OnPropertyChanged(nameof(DisplayedTable));
+        OnPropertyChanged(nameof(IsSearching));
+        OnPropertyChanged(nameof(CanSearch));
+        OnPropertyChanged(nameof(SearchResultText));
+        SearchCommand.RaiseCanExecuteChanged();
+        ClearSearchCommand.RaiseCanExecuteChanged();
     }
 
     private void CancelPending()
