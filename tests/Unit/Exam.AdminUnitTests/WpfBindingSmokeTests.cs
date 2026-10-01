@@ -46,6 +46,17 @@ public sealed class WpfBindingSmokeTests
                 window.Top = -2000;
                 window.UpdateLayout();
                 var viewModel = Assert.IsType<MainViewModel>(window.DataContext);
+                // 启动时停在“全部考试”主页，考试相关页面不可用；进入一场合成考试后再检查各页绑定。
+                var tabsAtStart = Assert.Single(Descendants<TabControl>(window));
+                Assert.Equal(MainViewModel.HomePage, tabsAtStart.SelectedIndex);
+                Assert.False(((TabItem)tabsAtStart.Items[MainViewModel.SettingsPage]).IsEnabled);
+                var start = DateTimeOffset.UtcNow.AddDays(1);
+                viewModel.OpenExam(new Exam.Contracts.Exams.ExamSummary("synthetic-exam", "合成考试", start, start.AddHours(2),
+                    Exam.Contracts.Common.ExamLifecycle.Scheduled, false, false, 0, 0, 1));
+                DrainDispatcher();
+                window.UpdateLayout();
+                Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
+                Assert.All(tabsAtStart.Items.Cast<TabItem>(), tab => Assert.True(tab.IsEnabled));
                 var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
                 Assert.Equal((Thickness)application.FindResource("Padding.Control"), connect.Padding);
                 var subjectGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.Subjects));

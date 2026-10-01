@@ -28,6 +28,7 @@ internal static partial class ExamCli
                 [] or ["help"] or ["--help"] or ["-h"] => PrintHelp(),
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
                 ["time", .. var options] => await SendAsync(HttpMethod.Get, "/api/v1/commands/time", options, cancellationToken),
+                ["exams", .. var options] => await RunExamsAsync(options, cancellationToken),
                 ["reports", var action, var examId, .. var options] => await RunReportAsync(action, examId, options, cancellationToken),
                 ["management", var command, .. var options] => await ManagementCli.RunAsync(command, options, cancellationToken),
                 ["api", var method, var path, .. var options] => await SendAsync(
@@ -87,6 +88,11 @@ internal static partial class ExamCli
         Console.WriteLine("  health [--server URL]                 检查业务服务及数据库是否就绪");
         Console.WriteLine("  time [--server URL]                   获取带服务身份的服务器时间");
         Console.WriteLine("  api METHOD PATH [选项]                调用任意正式 HTTP API");
+        Console.WriteLine("  exams list                            列出全部考试（名称、时间、状态、是否在学生端显示）");
+        Console.WriteLine("  exams show 名称                       查看考试设置与考试说明");
+        Console.WriteLine("  exams create --input FILE             新建考试（name、schedule、settings）");
+        Console.WriteLine("  exams update 名称 --input FILE        修改考试名称及科目题组设置（开考前）");
+        Console.WriteLine("  exams visibility 名称 on|off          设置是否在学生端显示");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
         Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore）");

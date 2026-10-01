@@ -178,6 +178,7 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<PostgresPackageUnlockService>();
         services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentDirectory>();
         services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentExamMetadataService>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Exams.PostgresExamCatalog>();
 
         if (configuration.GetValue("Backup:Enabled", false))
         {

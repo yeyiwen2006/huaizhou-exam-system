@@ -29,14 +29,22 @@ public sealed class PostgresStudentDirectory(NpgsqlDataSource dataSource)
                    AND d.activation_status = 'active'
               LEFT JOIN LATERAL
               (
-                  SELECT e.exam_id, COALESCE(m.display_name, e.exam_id) AS display_name,
+                  SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id) AS display_name,
                          e.scheduled_start, e.scheduled_end,
                          COALESCE(m.subjects, '[]'::jsonb)::text AS subjects,
                          e.lifecycle, m.category_name
                     FROM exam.candidate_roster_entries r
                     JOIN exam.exam_entry_access e ON e.exam_id = r.exam_id
                     LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
+                    LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
                    WHERE r.exam_id = ANY(s.exam_ids)
+                     -- 考务端设置为不显示的考试不列出；但只要仍有已确认参试、尚无最终答卷的考生，就继续显示。
+                     AND (c.exam_id IS NULL OR c.visible_to_students OR EXISTS (
+                          SELECT 1 FROM exam.participations p
+                           WHERE p.exam_id = e.exam_id
+                             AND p.business_state IN ('waiting', 'answering', 'submitted')
+                             AND NOT EXISTS (SELECT 1 FROM exam.final_submissions f
+                                              WHERE f.participation_id = p.participation_id)))
                      AND r.candidate_id = s.candidate_ids_by_exam ->> r.exam_id
                      AND r.candidate_name = s.candidate_name
                      AND r.class_text = s.class_text

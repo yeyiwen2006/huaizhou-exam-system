@@ -7,6 +7,10 @@ namespace Exam.Admin.Reporting;
 public sealed partial class ReportPageViewModel
 {
     public bool IsBusy => _busy;
+    private string _examName = string.Empty;
+
+    /// <summary>当前考试名称，仅用于显示；考试由主页进入时设定。</summary>
+    public string ExamName { get => _examName; set => SetProperty(ref _examName, value ?? string.Empty); }
     public string ParticipantCountText => Count(_observedStatus?.ParticipantCount);
     public string CollectedCountText => Count(_observedStatus?.CollectedCount);
     public string GradedCountText => Count(_observedStatus?.GradedCount);

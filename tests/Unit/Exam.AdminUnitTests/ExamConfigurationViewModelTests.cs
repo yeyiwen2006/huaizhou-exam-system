@@ -30,7 +30,7 @@ public sealed class ExamConfigurationViewModelTests
     [InlineData("CON")]
     [InlineData("exam:name")]
     [InlineData("考试.")]
-    [InlineData("考试 ")]
+    [InlineData("  ")]
     public void Validate_RejectsWindowsInvalidExamName(string name)
     {
         using var api = new AdminApiClient();
