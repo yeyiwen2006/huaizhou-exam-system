@@ -115,7 +115,7 @@
                             <Button Content="新建考试" Style="{StaticResource PrimaryAction}" Margin="0" Command="{Binding Home.NewExamCommand}"/>
                         </StackPanel>
                         <HeaderedContentControl Style="{StaticResource PageHeading}" Header="全部考试" Tag="{StaticResource Icon.Layers}" Margin="0"
-                                                Content="考试名称即考试类别，是区分考试的唯一依据。点击考试进入设置、监控和成绩统计。" />
+                                                Content="点击考试进入设置、监控和成绩统计，或新建考试。" />
                     </DockPanel>
                     <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                     <ItemsControl ItemsSource="{Binding Home.Exams}">
@@ -175,7 +175,7 @@
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="考试名称（即考试类别，不能与已有考试相同）" Style="{StaticResource FormLabel}"/>
+                                    <TextBlock Text="考试名称" Style="{StaticResource FormLabel}"/>
                                     <TextBox Style="{StaticResource FormTextBox}" IsEnabled="{Binding Exam.IsSettingsEditable}"
                                              Text="{Binding Exam.Name, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>

@@ -84,7 +84,7 @@
                                                                  Margin="12,0,0,0"
                                                                  VerticalAlignment="Center" />
                                         </StackPanel>
-                                        <!-- 考试名称即考试类别；只有旧数据另设类别时才显示本行。 -->
+                                        <!-- 只有旧数据另设类别且与名称不同时才显示本行。 -->
                                         <TextBlock Style="{StaticResource CaptionText}"
                                                    Text="{Binding CategoryText}"
                                                    Visibility="{Binding HasCategory, Converter={StaticResource BoolToVis}}"

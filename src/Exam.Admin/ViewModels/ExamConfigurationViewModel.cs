@@ -18,7 +18,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private string _scheduledStartText = DateTimeOffset.Now.AddHours(1).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private string _scheduledEndText = DateTimeOffset.Now.AddHours(3).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private SubjectDraftViewModel? _selectedSubject;
-    private string _status = "目前只有考试编号和起止时间会保存到服务器；名称、类别、科目、题组和计分规则只在本机编辑，关闭考务端后不保留。";
+    private string _status = "请从“全部考试”进入一场考试，或新建考试。";
     private string _validationSummary = string.Empty;
     private string _instructionsText = string.Empty;
     private long? _expectedScheduleVersion;
@@ -234,7 +234,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
         Status = edits == _editVersion
-            ? $"考试时间已保存到服务器。名称、类别、科目、题组和计分规则仍只在本机，尚未保存到服务器。"
+            ? "考试时间已保存。"
             : $"此前填写的考试时间已保存；保存期间修改的时间尚未保存，请核对后再次保存。";
     }
 

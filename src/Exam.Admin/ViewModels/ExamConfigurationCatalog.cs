@@ -74,7 +74,7 @@ public sealed partial class ExamConfigurationViewModel
         AddSubject();
         NotifyCatalog();
         RefreshInstructions();
-        Status = "请填写考试名称、时间和科目题组，然后点击“保存考试设置”。考试名称即考试类别，不能与已有考试相同。";
+        Status = "请填写考试名称、时间和科目题组，然后点击“保存考试设置”。考试名称不能与已有考试相同。";
     }
 
     /// <summary>进入一场考试：读取服务器上的完整设置。</summary>
