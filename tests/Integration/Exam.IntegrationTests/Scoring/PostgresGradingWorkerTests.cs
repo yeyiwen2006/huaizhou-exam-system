@@ -1,4 +1,6 @@
 using Exam.Application.Scoring;
+using Exam.Contracts.Grading;
+using Exam.Domain.Scoring;
 using Exam.Infrastructure.Postgres.Scoring;
 using Exam.Server.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -107,6 +109,45 @@ public sealed partial class PostgresGradingPersistenceTests
         {
             await DeleteServerStateAsync();
         }
+    }
+
+    [Fact]
+    public async Task RecalculationProcessor_OneFailingExam_DoesNotBlockTheOthers()
+    {
+        await SeedAsync();
+        const string poison = "pg-poison-exam";
+        var processor = new RecalculationProcessor(
+            new FixedPublishedDirectory([new(poison, 1), new(ExamId, 3)]),
+            new RecalculationScheduler(
+                new PoisonScope(fixture.DataSource, poison),
+                new PostgresRecalculationQueue(fixture.DataSource)),
+            Gate("node-a", allowUninitialized: true),
+            NullLogger<RecalculationProcessor>.Instance);
+
+        // 第一场对账必然失败：不得中断本轮，后一场仍须完成入队。
+        var enqueued = await processor.ReconcileOnceAsync();
+
+        Assert.Equal(1, enqueued);
+    }
+
+    /// <summary>固定列出两场考试，用来确定性地构造「一场坏、一场好」的对账场景。</summary>
+    private sealed class FixedPublishedDirectory(IReadOnlyList<PublishedGradingVersion> published)
+        : IPublishedGradingDirectory
+    {
+        public ValueTask<IReadOnlyList<PublishedGradingVersion>> ListPublishedAsync(
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(published);
+    }
+
+    /// <summary>指定考试读取范围时抛错，其余委托真实实现。</summary>
+    private sealed class PoisonScope(Npgsql.NpgsqlDataSource dataSource, string poisonExamId) : IGradingScope
+    {
+        private readonly PostgresGradingScope _inner = new(dataSource);
+
+        public ValueTask<IReadOnlyList<SubmissionGradingState>> ListStatesAsync(
+            string examId, CancellationToken cancellationToken = default) =>
+            string.Equals(examId, poisonExamId, StringComparison.Ordinal)
+                ? throw new InvalidDataException("合成的坏数据：该考试范围记录损坏。")
+                : _inner.ListStatesAsync(examId, cancellationToken);
     }
 
     private ActiveNodeGuard Gate(string nodeId, bool allowUninitialized, long epoch = 1) =>

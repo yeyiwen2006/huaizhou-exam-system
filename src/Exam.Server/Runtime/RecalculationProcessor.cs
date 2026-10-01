@@ -1,5 +1,6 @@
 using Exam.Application.Scoring;
 using Exam.Domain.Scoring;
+using Npgsql;
 
 namespace Exam.Server.Runtime;
 
@@ -27,17 +28,40 @@ public sealed class RecalculationProcessor(
         }
 
         var enqueued = 0;
+        var failed = 0;
         foreach (var exam in await published.ListPublishedAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var run = await scheduler.RunOnceAsync(exam.ExamId, exam.GradingVersion, cancellationToken);
-            if (run.Enqueued > 0)
+            try
             {
-                logger.LogInformation(
-                    "考试 {ExamId} 已按版本 {Version} 重算入队 {Enqueued} 项，范围共 {Total} 份最终答卷。",
-                    exam.ExamId, exam.GradingVersion, run.Enqueued, run.SubmissionCount);
-                enqueued += run.Enqueued;
+                var run = await scheduler.RunOnceAsync(exam.ExamId, exam.GradingVersion, cancellationToken);
+                if (run.Enqueued > 0)
+                {
+                    logger.LogInformation(
+                        "考试 {ExamId} 已按版本 {Version} 重算入队 {Enqueued} 项，范围共 {Total} 份最终答卷。",
+                        exam.ExamId, exam.GradingVersion, run.Enqueued, run.SubmissionCount);
+                    enqueued += run.Enqueued;
+                }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 取消不伪装成业务失败。
+                throw;
+            }
+            catch (Exception exception) when (exception is InvalidDataException or NpgsqlException or TimeoutException)
+            {
+                // 一场考试的**数据损坏或数据库瞬时故障**不得阻断其余考试：记下、跳过、下轮重试；
+                // 否则同一场考试每轮都在此处失败，会把后面的考试永久饿住。
+                // 权威性异常（主备代次或节点失效）与取消除外：它们必须向上抛出使整轮失败，
+                // 不能让已失去权威的节点继续按这一轮的结果写入。
+                failed++;
+                logger.LogError(exception, "考试 {ExamId} 重算对账失败，本轮跳过并下轮重试。", exam.ExamId);
+            }
+        }
+
+        if (failed > 0)
+        {
+            logger.LogWarning("本轮有 {Failed} 场考试重算对账失败，已跳过并将在下轮重试。", failed);
         }
 
         return enqueued;
