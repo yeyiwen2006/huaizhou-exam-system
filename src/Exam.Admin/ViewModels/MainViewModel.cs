@@ -170,6 +170,7 @@ public sealed class ConnectionViewModel : BindableBase
     private string _status = "请登录考务账号。";
     private bool _isConnected;
     private bool _isRegistering;
+    private bool _showRegistrationSuccess;
 
     public ConnectionViewModel(AdminApiClient api)
     {
@@ -179,6 +180,7 @@ public sealed class ConnectionViewModel : BindableBase
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsConnected);
         ShowRegisterCommand = new RelayCommand(() => IsRegistering = true);
         CancelRegisterCommand = new RelayCommand(() => IsRegistering = false);
+        AcknowledgeRegistrationCommand = new RelayCommand(() => ShowRegistrationSuccess = false);
     }
 
     public string ServerAddress { get => _serverAddress; set => SetProperty(ref _serverAddress, value); }
@@ -190,6 +192,7 @@ public sealed class ConnectionViewModel : BindableBase
     public string ConfirmPassword { get => _confirmPassword; set => SetProperty(ref _confirmPassword, value); }
 
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
+    public bool ShowRegistrationSuccess { get => _showRegistrationSuccess; private set => SetProperty(ref _showRegistrationSuccess, value); }
 
     public bool IsRegistering
     {
@@ -253,6 +256,7 @@ public sealed class ConnectionViewModel : BindableBase
     public AsyncRelayCommand LogoutCommand { get; }
     public RelayCommand ShowRegisterCommand { get; }
     public RelayCommand CancelRegisterCommand { get; }
+    public RelayCommand AcknowledgeRegistrationCommand { get; }
 
     /// <summary>清空口令框；由界面订阅，在登录或注册结束后执行。</summary>
     public event Action? PasswordsCleared;
@@ -289,6 +293,7 @@ public sealed class ConnectionViewModel : BindableBase
         Status = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Active
             ? "注册成功。这是服务器上的第一个考务账号，已设为管理员，请输入密码登录。"
             : "注册成功，请等待管理员批准后再登录。";
+        ShowRegistrationSuccess = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Pending;
     }
 
     private async Task LogoutAsync()
