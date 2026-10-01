@@ -29,7 +29,15 @@ public sealed class ManagementViewTests
             window.Show(); Drain();
             Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
             Assert.Contains(Descendants<Button>(window), b => Equals(b.Content, "本机服务管理"));
+            var business = (MainViewModel)window.DataContext;
+            var registerLink = Descendants<TextBlock>(window).SelectMany(b => b.Inlines.OfType<System.Windows.Documents.Hyperlink>()).Single();
+            Assert.Same(business.Connection.ShowRegisterCommand, registerLink.Command);
+            registerLink.Command!.Execute(null); Drain();
+            Assert.True(business.Connection.IsRegistering);
+            foreach (var password in Descendants<PasswordBox>(window)) password.Password = "synthetic-business-password";
+            Assert.NotEmpty(business.Connection.Password); Assert.NotEmpty(business.Connection.ConfirmPassword);
             window.OpenManagement(); Drain();
+            Assert.Empty(business.Connection.Password); Assert.Empty(business.Connection.ConfirmPassword);
             Assert.Equal(AdminWorkspaceRoute.LocalManagement, window.WorkspaceRoute);
             Assert.True(model.IsPageActive); Assert.IsType<ServiceManagementView>(((ContentControl)window.FindName("PageRegion")).Content);
             Assert.Equal(Visibility.Collapsed, ((TabControl)window.FindName("MainTabArea")).Visibility);
@@ -37,6 +45,9 @@ public sealed class ManagementViewTests
             window.ReturnToBusiness(); Drain();
             Assert.False(model.IsPageActive); Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
             Assert.IsType<Exam.Admin.Views.AdminLoginPage>(((ContentControl)window.FindName("PageRegion")).Content);
+            registerLink = Descendants<TextBlock>(window).SelectMany(b => b.Inlines.OfType<System.Windows.Documents.Hyperlink>()).Single();
+            Assert.Same(business.Connection.CancelRegisterCommand, registerLink.Command);
+            registerLink.Command!.Execute(null); Drain(); Assert.False(business.Connection.IsRegistering);
             window.OpenManagement(); Drain(); Assert.True(model.IsPageActive);
         }
         finally { window.Close(); }

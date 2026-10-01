@@ -33,5 +33,10 @@ public partial class AdminLoginPage : UserControl
         ConfirmPasswordInput.Clear();
     }
 
-    public void Detach() => _vm.PasswordsCleared -= OnPasswordsCleared;
+    public void Detach()
+    {
+        PasswordInput.Clear();
+        ConfirmPasswordInput.Clear();
+        _vm.PasswordsCleared -= OnPasswordsCleared;
+    }
 }
