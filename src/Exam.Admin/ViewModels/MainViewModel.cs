@@ -199,11 +199,20 @@ public sealed class ConnectionViewModel : BindableBase
             {
                 Status = value ? "填写姓名并再次输入口令后提交注册。" : "请登录考务账号。";
                 OnPropertyChanged(nameof(ShowRegisterFields));
+                OnPropertyChanged(nameof(ToggleRegisterText));
             }
         }
     }
 
     public bool ShowRegisterFields => IsRegistering && !IsConnected;
+
+    // 登录页绑定用：主操作按钮文字与命令随注册/登录状态切换。
+    public string PrimaryActionText => IsRegistering ? "提交注册" : "登录";
+    public ICommand PrimaryActionCommand => IsRegistering ? (ICommand)RegisterCommand : ConnectCommand;
+    public bool ShowSecondaryAction => IsRegistering;
+    public string SecondaryActionText => "取消";
+    public ICommand SecondaryActionCommand => CancelRegisterCommand;
+    public string ToggleRegisterText => IsRegistering ? "已有账号？返回登录" : "注册新账号";
 
     public bool IsConnected
     {
@@ -216,6 +225,10 @@ public sealed class ConnectionViewModel : BindableBase
                 OnPropertyChanged(nameof(ShowRegisterFields));
                 OnPropertyChanged(nameof(AccountTitle));
                 OnPropertyChanged(nameof(IsAdministrator));
+                OnPropertyChanged(nameof(PrimaryActionText));
+                OnPropertyChanged(nameof(PrimaryActionCommand));
+                OnPropertyChanged(nameof(ShowSecondaryAction));
+                OnPropertyChanged(nameof(ToggleRegisterText));
                 LogoutCommand.RaiseCanExecuteChanged();
             }
         }

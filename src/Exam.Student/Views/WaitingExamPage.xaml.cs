@@ -163,7 +163,7 @@ public partial class WaitingExamPage : UserControl
             var response = await _runtime.Manager.ConfirmParticipationAsync(_lifetime.Token);
             if (response?.IsSuccess != true || response.Result is null)
             {
-                StudentMessages.ShowWithDetail(ErrorBanner, "参试确认未完成，请重新点击“确认参试”。", response?.Error?.Message ?? _runtime.Manager.LastError);
+                StudentMessages.ShowWithDetail(ErrorBanner, "参加考试确认未完成，请重新点击“确认参加考试”。", response?.Error?.Message ?? _runtime.Manager.LastError);
                 return;
             }
 
@@ -385,19 +385,19 @@ public partial class WaitingExamPage : UserControl
         (StatePill.Text, StatePill.Level, ConfirmHint.Text) = manager?.CurrentPhase switch
         {
             ExamPackageManager.Phase.ConfirmedWaiting when _runtime?.NotificationsStarted != true =>
-                ("正在恢复连接", StatusLevel.Warning, "已确认参试，正在重新连接服务器。"),
+                ("正在恢复连接", StatusLevel.Warning, "已确认参加考试，正在重新连接服务器。"),
             ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参加考试，等待开考", StatusLevel.Info, "请保持程序运行，开考后试题将自动显示。"),
             ExamPackageManager.Phase.Unlocked => ("试题已解锁", StatusLevel.Success, "即将进入答题。"),
             ExamPackageManager.Phase.Ended => ("考试已结束", StatusLevel.Warning, "考试已结束。未提交的答卷将自动提交；如有疑问，请联系监考人员。"),
             ExamPackageManager.Phase.Revoked => ("本机不能继续答题", StatusLevel.Danger, "请联系监考人员。"),
             ExamPackageManager.Phase.Withdrawn => ("已退出考试", StatusLevel.Neutral, "已退出本场考试，请返回选择考试页面。"),
             ExamPackageManager.Phase.Downloaded when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("资料已就绪", StatusLevel.Success, "已确认参试，请点击“继续参试”。"),
-            ExamPackageManager.Phase.Downloaded => ("资料已就绪", StatusLevel.Success, "请阅读考试说明后点击“确认参试”。"),
+                ("资料已就绪", StatusLevel.Success, "已确认参加考试，请点击“继续参加考试”。"),
+            ExamPackageManager.Phase.Downloaded => ("资料已就绪", StatusLevel.Success, "请阅读考试说明后点击“确认参加考试”。"),
             _ when manager?.DeviceDecisionPending == true =>
                 ("等待监考人员处理", StatusLevel.Warning, "该考生账号已在另一台设备进入本场考试，请联系监考人员。处理完成后本机将自动继续。"),
             _ when manager?.Participation is { BusinessState: not ParticipationBusinessState.NotParticipating } =>
-                ("正在恢复", StatusLevel.Warning, "已确认参试，考试资料正在准备，可点击“重新下载”。"),
+                ("正在恢复", StatusLevel.Warning, "已确认参加考试，考试资料正在准备，可点击“重新下载”。"),
             _ => ("尚未确认参加考试", StatusLevel.Info, "试题和考试说明下载完成后，才能确认参加考试。"),
         };
 
