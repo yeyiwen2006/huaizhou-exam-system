@@ -79,7 +79,7 @@ public sealed class RosterWorkbookServiceTests : IDisposable
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
-    public void ImportPreview_RejectsWholeBatchWhenAnyPositionHasError(int badIndex)
+    public async Task ImportPreview_RejectsWholeBatchWhenAnyPositionHasError(int badIndex)
     {
         var rows = new[]
         {
@@ -89,10 +89,11 @@ public sealed class RosterWorkbookServiceTests : IDisposable
         };
         rows[badIndex].Item1 = string.Empty;
         var path = CreateWorkbook(rows);
-        var viewModel = new RosterViewModel(_service, new StubDialogs(path));
+        using var rosterSession = new RosterTestSession(_service, new StubDialogs(path));
+        var viewModel = rosterSession.ViewModel;
 
         viewModel.ImportPreviewCommand.Execute(null);
-        viewModel.ConfirmImportCommand.Execute(null);
+        await viewModel.ConfirmImportAsync();
 
         Assert.Equal(3, viewModel.PreviewRows.Count);
         Assert.Equal(badIndex + 2, viewModel.PreviewRows[badIndex].RowNumber);
@@ -101,13 +102,14 @@ public sealed class RosterWorkbookServiceTests : IDisposable
     }
 
     [Fact]
-    public void RepeatedImport_DoesNotCreateDuplicateRows()
+    public async Task RepeatedImport_DoesNotCreateDuplicateRows()
     {
         var path = CreateWorkbook(("合成考生", "00125", "0000125"));
-        var viewModel = new RosterViewModel(_service, new StubDialogs(path));
+        using var rosterSession = new RosterTestSession(_service, new StubDialogs(path));
+        var viewModel = rosterSession.ViewModel;
 
         viewModel.ImportPreviewCommand.Execute(null);
-        viewModel.ConfirmImportCommand.Execute(null);
+        await viewModel.ConfirmImportAsync();
         viewModel.ImportPreviewCommand.Execute(null);
 
         var row = Assert.Single(viewModel.Entries);
@@ -118,17 +120,18 @@ public sealed class RosterWorkbookServiceTests : IDisposable
     }
 
     [Fact]
-    public void ManualEditAfterPreview_InvalidatesStaleImportApproval()
+    public async Task ManualEditAfterPreview_InvalidatesStaleImportApproval()
     {
         var path = CreateWorkbook(("合成考生甲", "001", "00001"));
-        var viewModel = new RosterViewModel(_service, new StubDialogs(path));
+        using var rosterSession = new RosterTestSession(_service, new StubDialogs(path));
+        var viewModel = rosterSession.ViewModel;
         viewModel.ImportPreviewCommand.Execute(null);
         Assert.True(viewModel.ConfirmImportCommand.CanExecute(null));
 
         viewModel.Name = "合成考生乙";
         viewModel.ClassText = "002";
         viewModel.AdmissionNo = "00002";
-        viewModel.AddManualCommand.Execute(null);
+        await viewModel.AddManualAsync();
 
         Assert.False(viewModel.ConfirmImportCommand.CanExecute(null));
         Assert.Empty(viewModel.PreviewRows);

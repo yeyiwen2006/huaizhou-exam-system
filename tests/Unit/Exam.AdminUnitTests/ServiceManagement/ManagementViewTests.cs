@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -10,6 +12,10 @@ using System.Windows.Threading;
 using Exam.Admin;
 using Exam.Admin.ServiceManagement;
 using Exam.Admin.ViewModels;
+using Exam.Admin.Services;
+using Exam.Admin.Views;
+using Exam.Contracts.Common;
+using Exam.Contracts.Operators;
 using Exam.Contracts.ServiceManagement;
 
 namespace Exam.AdminUnitTests.ServiceManagement;
@@ -18,6 +24,42 @@ namespace Exam.AdminUnitTests.ServiceManagement;
 [Trait("Category", "Wpf")]
 public sealed class ManagementViewTests
 {
+    [Fact]
+    public Task ReturningFromManagementPreservesAnUnacknowledgedRegistrationResult() => Sta(() =>
+    {
+        using var model = Synthetic();
+        var business = new MainViewModel(new AdminApiClient(new SyntheticRegistration()));
+        var window = new MainWindow(business, model); Theme(window);
+        window.ShowInTaskbar = false; window.ShowActivated = false; window.Left = -4000;
+        try
+        {
+            window.Show(); SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            business.Connection.Username = "synthetic-operator"; business.Connection.DisplayName = "合成考务账号";
+            business.Connection.Password = "synthetic"; business.Connection.ConfirmPassword = "synthetic";
+            business.Connection.RegisterCommand.Execute(null);
+            for (var i = 0; i < 200 && !business.Connection.RegisterCommand.CanExecute(null); i++)
+            { Drain(); Thread.Sleep(10); }
+            Drain(); Assert.True(business.Connection.ShowRegistrationSuccess);
+            Assert.IsType<RegistrationSuccessPage>(((ContentControl)window.FindName("PageRegion")).Content);
+            window.OpenManagement(); Drain(); Assert.True(business.Connection.ShowRegistrationSuccess);
+            window.ReturnToBusiness(); Drain();
+            Assert.IsType<RegistrationSuccessPage>(((ContentControl)window.FindName("PageRegion")).Content);
+            business.Connection.AcknowledgeRegistrationCommand.Execute(null); Drain();
+            Assert.IsType<AdminLoginPage>(((ContentControl)window.FindName("PageRegion")).Content);
+        }
+        finally { window.Close(); }
+    });
+
+    private sealed class SyntheticRegistration : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var account = new OperatorAccount("synthetic-operator", "合成考务账号", OperatorStatus.Pending, false, DateTimeOffset.UtcNow, null);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created) { Content = JsonContent.Create(
+                new ApiEnvelope<RegisterOperatorResult>("synthetic-server", "synthetic-node", 1, "synthetic-registration", new(account), null), options: JsonDefaults.Create()) });
+        }
+    }
+
     [Fact]
     public async Task RealMainWindowProvidesManagementBeforeBusinessLoginAndReturnsToProtectedLogin() => await Sta(() =>
     {

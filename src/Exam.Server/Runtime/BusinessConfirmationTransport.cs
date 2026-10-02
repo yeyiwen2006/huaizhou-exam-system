@@ -102,6 +102,18 @@ public static class BusinessConfirmationRegistration
 
     public static void MapStandbyConfirmation(this WebApplication app)
     {
+        app.MapGet("/replication/v1/readiness", async (HttpContext context, IConfiguration configuration) =>
+        {
+            var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
+            if (!context.Request.IsHttps || !Exam.Application.Security.OperatorIdentityValidator.Authenticate(
+                context.Request.Headers.Authorization.ToString(), configuration["Confirmation:PeerToken"], "replication-peer") ||
+                context.Request.Headers["X-Exam-Server-Id"] != identity.ServerId || context.Request.Headers["X-Exam-Node-Id"] != identity.NodeId)
+            { context.Response.StatusCode = 401; return; }
+            try { await context.Response.WriteAsJsonAsync(await HighAvailabilityDeployment.ReadMaterialsAsync(context, configuration),
+                JsonDefaults.Create(), context.RequestAborted); }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+            catch (Exception) { context.Response.StatusCode = 503; }
+        });
         app.MapMethods("/replication/v1/confirmation", ["GET", "POST"], async (HttpContext context, IConfiguration configuration) =>
         {
             var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();

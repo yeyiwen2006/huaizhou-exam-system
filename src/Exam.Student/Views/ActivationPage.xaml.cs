@@ -26,6 +26,7 @@ public partial class ActivationPage : UserControl
         InitializeComponent();
         DataContext = App.Services.Session;
         ApplyServerConfigState();
+        ShowRequestCode(App.Services.Device?.ActivationRequestId);
 
         Unloaded += (_, _) => _lifetime.Cancel();
         UpdateRequestEnabled();
@@ -73,7 +74,19 @@ public partial class ActivationPage : UserControl
         }
     }
 
-    private void OnInputChanged(object? sender, EventArgs e) => UpdateRequestEnabled();
+    private void OnInputChanged(object? sender, EventArgs e)
+    {
+        UpdateRequestEnabled();
+        if (!_requesting && ActivationCodeText is not null) ActivationCodeText.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowRequestCode(string? requestId)
+    {
+        var code = ActivationDisplay.RequestCode(requestId);
+        ActivationCodeText.Text = code.Length == 0 ? string.Empty : $"申请识别码：{code}（请与监考人员核对）";
+        ActivationCodeText.ToolTip = requestId;
+        ActivationCodeText.Visibility = code.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
 
     private void UpdateRequestEnabled()
     {
@@ -82,6 +95,7 @@ public partial class ActivationPage : UserControl
             return;
         }
 
+        HostInput.IsEnabled = PortInput.IsEnabled = !_requesting;
         RequestButton.IsEnabled = !_requesting
             && HostInput.Text.Trim().Length > 0
             && PortInput.Text.Trim().Length > 0;
@@ -122,6 +136,7 @@ public partial class ActivationPage : UserControl
                 Busy.IsBusy = true;
                 var result = await App.Services.Activation.RequestOrPollAsync(host, port, _lifetime.Token);
                 Busy.IsBusy = false;
+                ShowRequestCode(result.ActivationRequestId);
                 if (result.Status == ActivationStatus.Active && result.ClientNumber is not null)
                 {
                     App.Services.ConfigureDevice(result);

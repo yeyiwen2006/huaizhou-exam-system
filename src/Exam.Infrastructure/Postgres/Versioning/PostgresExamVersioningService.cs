@@ -15,7 +15,7 @@ namespace Exam.Infrastructure.Postgres.Versioning;
 /// a query projection. Mutations replay the existing domain aggregate while holding the stream row
 /// lock, so the domain remains the single source of schedule, structure and terminal-state rules.
 /// </summary>
-public sealed class PostgresExamVersioningService : IExamVersioningService
+public sealed partial class PostgresExamVersioningService : IExamVersioningService
 {
     private const string CreateOperation = "exam.create";
     private const string UpdateScheduleOperation = "schedule.update";
@@ -786,6 +786,14 @@ public sealed class PostgresExamVersioningService : IExamVersioningService
             ["scheduleVersion"] = snapshot.Versions.ScheduleVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["paperVersion"] = snapshot.Versions.PaperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
+        if (eventType == CommandEventType.ScheduleChanged)
+        {
+            // 与时间计划和可靠事件一起提交；重发只读取这份不可变事件，不读取后来修改的计划。
+            metadata["scheduledStart"] = snapshot.Schedule.StartsAt.ToOffset(TimeSpan.FromHours(8))
+                .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+            metadata["scheduledEnd"] = snapshot.Schedule.EndsAt.ToOffset(TimeSpan.FromHours(8))
+                .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        }
         if (eventType == CommandEventType.PaperUpdated && snapshot.Paper is { } paper)
         {
             metadata["changedQuestionIds"] = JsonSerializer.Serialize(

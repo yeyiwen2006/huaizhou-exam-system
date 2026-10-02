@@ -470,7 +470,8 @@ public sealed partial class ReviewRegressionTests
     {
         WithWorkbook((_, _) => { }, path =>
         {
-            var viewModel = new RosterViewModel(new RosterWorkbookService(), new Dialogs(path));
+            using var rosterSession = new RosterTestSession(new RosterWorkbookService(), new Dialogs(path));
+            var viewModel = rosterSession.ViewModel;
             viewModel.ImportPreviewCommand.Execute(null);
             Assert.True(viewModel.ConfirmImportCommand.CanExecute(null));
             viewModel.Entries.Add(new RosterEntryDraft("另一名合成考生", "002", "00001"));

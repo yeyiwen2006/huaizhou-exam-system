@@ -54,7 +54,7 @@ public sealed class ActivationApprovalBoundaryTests
 
         Assert.Equal(0, handler.Calls);
         Assert.Empty(viewModel.Devices);
-        Assert.Contains("试场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("试场尚未从服务器读取", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class ActivationApprovalBoundaryTests
             ActivationRequestId = "synthetic-request",
             NewGroupName = "合成试场"
         };
-        viewModel.AddGroupCommand.Execute(null);
+        viewModel.Groups.Add(new RoomGroupDraft("unverified-local-draft", "合成试场"));
         viewModel.ApprovalRoomGroupId = Assert.Single(viewModel.Groups).RoomGroupId;
 
         await ExecuteAsync(viewModel);

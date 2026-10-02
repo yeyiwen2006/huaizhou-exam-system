@@ -147,6 +147,14 @@ public sealed class PostgresActivationPersistence(NpgsqlDataSource dataSource) :
 
         public void SaveDevice(DeviceRegistration device)
         {
+            if (device.RoomGroupId is not null)
+            {
+                using var room = CreateCommand("SELECT group_id FROM exam.room_groups WHERE group_id=@room_id FOR KEY SHARE;");
+                room.Parameters.AddWithValue("room_id",device.RoomGroupId);
+                if (room.ExecuteScalar() is null)
+                    throw new Exam.Application.Activation.ActivationRuleException(
+                        Exam.Contracts.Activation.ActivationErrorCodes.InvalidRequest,"所选试场已不存在，请刷新分组后重新批准。");
+            }
             using var command = CreateCommand("""
                 INSERT INTO exam.activation_devices
                     (device_id, client_number, activation_date, activation_status,

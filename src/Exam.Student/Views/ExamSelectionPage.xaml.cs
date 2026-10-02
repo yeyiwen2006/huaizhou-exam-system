@@ -112,30 +112,15 @@ public partial class ExamSelectionPage : UserControl
         _navigation.GoToWaitingExam(overview);
     }
 
+    private bool _exitRequested;
+
     private async void OnExitSystem(object sender, RoutedEventArgs e)
     {
-        var window = Window.GetWindow(this);
-        if (window is null)
-        {
-            return;
-        }
-
-        var confirmed = await ConfirmDialog.ShowAsync(
-            window,
-            "退出系统",
-            "退出后下次需重新登录。确定退出系统吗？",
-            "退出",
-            "取消",
-            isDanger: true);
-        if (!confirmed)
-        {
-            return;
-        }
-
-        await App.Services.Session.ReleaseExamAsync();
-        App.Services.Session.Logout();
-        if (window is MainWindow main) main.PrepareForApplicationExit();
-        Application.Current.Shutdown();
+        if (_exitRequested || Window.GetWindow(this) is not { } window) return;
+        _exitRequested = true;
+        try { await StudentExitDialog.ShowAsync(window, App.Services.Session); }
+        catch (InvalidOperationException error) { EntryBanner.Show(error.Message); }
+        finally { _exitRequested = false; }
     }
 
     /// <summary>考试行展示模型。</summary>

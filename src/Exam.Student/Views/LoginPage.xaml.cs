@@ -28,6 +28,15 @@ public partial class LoginPage : UserControl
         }
     }
 
+    private async void OnExitSystem(object sender, RoutedEventArgs e)
+    {
+        if (_requesting || Window.GetWindow(this) is not { } window) return;
+        _requesting = true;
+        try { await StudentExitDialog.ShowAsync(window, App.Services.Session); }
+        catch (InvalidOperationException error) { ErrorBanner.Show(error.Message); }
+        finally { _requesting = false; OnInputChanged(null, EventArgs.Empty); }
+    }
+
     private void OnInputChanged(object? sender, EventArgs e)
     {
         if (LoginButton is null || NameInput is null || ClassInput is null || AdmissionInput is null)
@@ -125,7 +134,7 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(
                 ErrorBanner,
-                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
                 error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
@@ -185,7 +194,7 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(
                 ErrorBanner,
-                "服务器证书校验失败，已拒绝连接不受信任的服务器。请核对部署配置（server.json）中的地址与证书指纹。",
+                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
                 error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)

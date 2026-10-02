@@ -605,7 +605,9 @@ public partial class ExamInProgressPage : UserControl
 
         var now = App.Services.Clock.UtcNow;
         var clock = now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
-        var remain = _exam.ScheduledEnd - now;
+        // 优先使用 ScheduleChanged 指令中服务端下发的最新结束时间；未收到更新时回退到原始计划。
+        var scheduledEnd = _runtime.Manager.OverriddenScheduledEnd ?? _exam.ScheduledEnd;
+        var remain = scheduledEnd - now;
         ClockPillContent.Text = remain > TimeSpan.Zero
             ? $"{clock} · 剩余 {remain:hh\\:mm}"
             : $"{clock} · 考试时间已到";

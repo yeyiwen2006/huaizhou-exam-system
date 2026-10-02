@@ -7,6 +7,30 @@ namespace Exam.UnitTests.Commands;
 public sealed class ReliableCommandServiceTests
 {
     [Fact]
+    public async Task ScheduleDelivery_CarriesPersistedTimesAndKeepsThemAcrossRetry()
+    {
+        var fixture = new CommandFixture();
+        var start = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.FromHours(8));
+        var request = fixture.CreateRequest(CommandEventType.ScheduleChanged, unlockReference: null) with
+        {
+            Metadata = new Dictionary<string, string>
+            {
+                ["scheduledStart"] = start.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                ["scheduledEnd"] = start.AddHours(2).ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            }
+        };
+        Assert.True((await fixture.Service.CreateAsync(request)).IsSuccess);
+        var first = Assert.Single((await fixture.GetDueAsync()).Value!);
+        Assert.Equal(start, first.NewScheduledStart);
+        Assert.Equal(start.AddHours(2), first.NewScheduledEnd);
+        Assert.Equal(TimeSpan.FromHours(8), first.NewScheduledEnd!.Value.Offset);
+        fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+        var retry = Assert.Single((await fixture.GetDueAsync()).Value!);
+        Assert.Equal(first.NewScheduledStart, retry.NewScheduledStart);
+        Assert.Equal(first.NewScheduledEnd, retry.NewScheduledEnd);
+    }
+
+    [Fact]
     public void ServerTime_UsesServerClockAndIncludesNodeIdentity()
     {
         var fixture = new CommandFixture();

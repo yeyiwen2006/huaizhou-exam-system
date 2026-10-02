@@ -2,6 +2,7 @@ using System.Net;
 using Exam.Contracts.HighAvailability;
 using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.ServiceManagement;
+using Exam.Infrastructure.HighAvailability;
 using Npgsql;
 
 namespace Exam.Server.Runtime;
@@ -10,10 +11,12 @@ namespace Exam.Server.Runtime;
 public sealed class BusinessServiceConfiguration
 {
     private readonly long _serverEpoch;
+    private readonly string? _selectionPath;
+    private readonly string? _confirmationRoot;
     public ServiceConfiguration Value { get; }
 
-    private BusinessServiceConfiguration(ServiceConfiguration value, long serverEpoch)
-    { Value = value; _serverEpoch = serverEpoch; }
+    private BusinessServiceConfiguration(ServiceConfiguration value, long serverEpoch, string? selectionPath, string? confirmationRoot)
+    { Value = value; _serverEpoch = serverEpoch; _selectionPath = selectionPath; _confirmationRoot = confirmationRoot; }
 
     public static async Task<BusinessServiceConfiguration?> LoadAndApplyAsync(WebApplicationBuilder builder,
         CancellationToken cancellationToken = default)
@@ -43,7 +46,8 @@ public sealed class BusinessServiceConfiguration
             if (localhost) options.ListenLocalhost(value.HttpsPort, endpoint => endpoint.UseHttps());
             else options.Listen(IPAddress.Parse(value.BindAddress), value.HttpsPort, endpoint => endpoint.UseHttps());
         });
-        var configured = new BusinessServiceConfiguration(value, identity.ServerEpoch);
+        var configured = new BusinessServiceConfiguration(value, identity.ServerEpoch, builder.Configuration["HighAvailability:SelectionPath"],
+            builder.Configuration[$"HighAvailability:Nodes:{identity.NodeId}:ConfirmationDirectory"]);
         builder.Services.AddSingleton(configured);
         return configured;
     }
@@ -56,15 +60,34 @@ public sealed class BusinessServiceConfiguration
         {
             await using var command = source.CreateCommand("""
                 SELECT protection_mode FROM exam.server_state
-                WHERE server_id = @server AND active_node_id = @node AND server_epoch = @epoch;
+                WHERE server_id = $1 AND active_node_id = $2 AND server_epoch = $3;
                 """);
             command.CommandTimeout = 5;
-            command.Parameters.AddWithValue("server", Value.ServerId);
-            command.Parameters.AddWithValue("node", Value.NodeId);
-            command.Parameters.AddWithValue("epoch", _serverEpoch);
+            command.Parameters.AddWithValue(Value.ServerId);
+            command.Parameters.AddWithValue(Value.NodeId);
+            command.Parameters.AddWithValue(_serverEpoch);
             var mode = await command.ExecuteScalarAsync(cancellationToken) as string;
             var ready = mode == nameof(ProtectionMode.SynchronousDualNode);
-            return new("managed-protection", ready, ready ? "当前权威状态满足双机保护启动要求。" :
+            if (!ready && mode == nameof(ProtectionMode.EmergencySingleNode))
+            {
+                var selection = FileFailoverDeploymentSelection.ReadConfigured(k =>
+                    k == "HighAvailability:SelectionPath" ? _selectionPath :
+                    k == $"HighAvailability:Nodes:{Value.NodeId}:ConfirmationDirectory" ? _confirmationRoot : null, Value.ServerId, Value.NodeId);
+                if (selection is { Mode: ProtectionMode.EmergencySingleNode } && selection.ActiveNodeId == Value.NodeId && selection.Epoch == _serverEpoch)
+                {
+                    await using var proof = source.CreateCommand("""
+                        SELECT EXISTS(SELECT 1 FROM exam.failover_audit a JOIN exam.server_state s USING(server_id)
+                          WHERE a.server_id=$1 AND a.node_id=$2 AND a.server_epoch=$3
+                            AND a.action IN ($4,$5) AND s.state_version >= $6)
+                        """);
+                    proof.Parameters.AddWithValue(Value.ServerId); proof.Parameters.AddWithValue(Value.NodeId);
+                    proof.Parameters.AddWithValue(_serverEpoch); proof.Parameters.AddWithValue("F02:Takeover:" + selection.RequestId);
+                    proof.Parameters.AddWithValue("F02:Emergency:" + selection.RequestId); proof.Parameters.AddWithValue(selection.StateVersion);
+                    ready = (bool)(await proof.ExecuteScalarAsync(cancellationToken) ?? false);
+                }
+            }
+            return new("managed-protection", ready, ready ? mode == nameof(ProtectionMode.EmergencySingleNode)
+                ? "本次已授权单机应急部署与权威审计相符；业务使用单机持久确认。" : "当前权威状态满足双机保护启动要求。" :
                 "当前权威节点、代次或保护模式不满足双机启动要求；不会自动改变主备状态。", true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }

@@ -7,6 +7,7 @@ using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.Operators;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.Admin.ServiceManagement;
@@ -41,6 +42,10 @@ public interface IManagementConnection : IDisposable
     Task LoginAsync(string username, string password, CancellationToken token);
     Task LogoutAsync(CancellationToken token);
     Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token);
+    Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token) =>
+        Task.FromResult(new ManagementReply<HighAvailabilityStatus>(HttpStatusCode.ServiceUnavailable,
+            new(Target.ServerId, Target.NodeId, null, false, null, "unavailable", null,
+                new(ErrorCodes.ServiceRecovering, "正式主备管理暂不可用。"))));
     Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token);
     Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token);
     Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token);
@@ -57,6 +62,12 @@ public sealed class ManagementConnection : IManagementConnection
     private string? _credential;
     public ManagementTarget Target { get; }
     public string? Actor { get; private set; }
+    public async Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token)
+    {
+        var reply = await _reads.GetHighAvailabilityAsync(token);
+        if (reply.StatusCode == HttpStatusCode.Unauthorized) Clear();
+        return new(reply.StatusCode, reply.Envelope);
+    }
 
     public ManagementConnection(ManagementTarget target, Func<HttpMessageHandler>? transport = null,
         TimeSpan? readTimeout = null, TimeSpan? writeTimeout = null)

@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using Exam.Admin.ViewModels;
 using Exam.Admin.Views;
@@ -18,10 +18,12 @@ public partial class MainWindow : Window
 
     public MainWindow() : this(new MainViewModel(), ServiceManagementViewModel.CreateDefault()) { }
 
+    public MainWindow(MainViewModel viewModel) : this(viewModel, ServiceManagementViewModel.CreateDefault()) { }
+
     public MainWindow(MainViewModel viewModel, ServiceManagementViewModel management)
     {
-        _viewModel = viewModel;
-        Management = management;
+        _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        Management = management ?? throw new ArgumentNullException(nameof(management));
         if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
         { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
@@ -41,6 +43,13 @@ public partial class MainWindow : Window
         MainTabArea.Visibility = Visibility.Collapsed;
     }
 
+    private void ShowRegistrationSuccessPage()
+    {
+        DetachLogin();
+        PageRegion.Content = new RegistrationSuccessPage(_viewModel.Connection);
+        MainTabArea.Visibility = Visibility.Collapsed;
+    }
+
     private void ShowMainArea()
     {
         DetachLogin();
@@ -50,6 +59,15 @@ public partial class MainWindow : Window
 
     private void OnConnectionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (_router.Route == AdminWorkspaceRoute.LocalManagement) return;
+        if (e.PropertyName == nameof(ConnectionViewModel.ShowRegistrationSuccess))
+        {
+            if (_viewModel.Connection.ShowRegistrationSuccess)
+                ShowRegistrationSuccessPage();
+            else
+                ShowLoginPage();
+            return;
+        }
         if (e.PropertyName != nameof(ConnectionViewModel.IsConnected)) return;
         _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
         if (_router.Route == AdminWorkspaceRoute.LocalManagement) return;
@@ -90,6 +108,7 @@ public partial class MainWindow : Window
             _viewModel.Monitoring.IsPageActive = _viewModel.SelectedPage == 3;
             _viewModel.Reports.IsPageActive = _viewModel.SelectedPage == 4;
         }
+        else if (_viewModel.Connection.ShowRegistrationSuccess) ShowRegistrationSuccessPage();
         else ShowLoginPage();
     }
     private void DetachLogin()

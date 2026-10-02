@@ -12,7 +12,7 @@ public sealed record ManagementConfirmation(string Title, string Body, bool Dang
 public sealed record ManagementCheckRow(string Name, string Result, string WriteGate);
 public sealed record ManagementLogRow(string Time, string Source, string Kind, string Phase, string Code);
 
-public sealed class ServiceManagementViewModel : BindableBase, IDisposable
+public sealed partial class ServiceManagementViewModel : BindableBase, IDisposable
 {
     private readonly Func<ManagementTarget, IManagementConnection> _factory;
     private readonly IPendingManagementStore _store;
@@ -37,9 +37,9 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
     private bool _missingOriginal;
 
     public ServiceManagementViewModel(Func<ManagementTarget, IManagementConnection> factory,
-        IPendingManagementStore store, ManagementEndpointSettings? settings = null)
+        IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null)
     {
-        _factory = factory; _store = store; _settings = settings;
+        _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsSignedIn, OnError);
         StartCommand = OperationCommand(ManagementOperationKind.Start);
@@ -48,18 +48,24 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
         ConfigureCommand = OperationCommand(ManagementOperationKind.Configure);
         BackupCommand = OperationCommand(ManagementOperationKind.Backup);
         RestoreCommand = OperationCommand(ManagementOperationKind.Restore);
+        TakeoverCommand = OperationCommand(ManagementOperationKind.Takeover);
+        EmergencyCommand = OperationCommand(ManagementOperationKind.Emergency);
+        RebuildCommand = OperationCommand(ManagementOperationKind.Rebuild);
+        ReprotectCommand = OperationCommand(ManagementOperationKind.Reprotect);
         QueryCommand = new AsyncRelayCommand(QueryAsync, () => IsSignedIn && _pending is not null && !_readBusy, OnError);
         ResumeRestoreCommand = new AsyncRelayCommand(ResumeRestoreAsync, () => IsSignedIn && CanResumeRestore && !IsBusy, OnError);
         RetryOriginalCommand = new AsyncRelayCommand(RetryOriginalAsync, () => IsSignedIn && _pending is not null && _missingOriginal && !IsBusy && !_readBusy, OnError);
         CancelWaitCommand = new RelayCommand(CancelWaiting, () => IsBusy || _readBusy);
         LoadSettings();
+        LoadProtectionWarning();
     }
 
     public static ServiceManagementViewModel CreateDefault()
     {
         var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exam.Admin", "Management");
         return new(target => new ManagementConnection(target), new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
-            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json")));
+            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json")),
+            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")));
     }
 
     public Func<ManagementConfirmation, Task<bool>> ConfirmAsync { get; set; } = _ => Task.FromResult(false);
@@ -89,7 +95,6 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
     public string TargetText => _connection is null ? "本机服务管理" : $"{_connection.Target.ServerId} / {_connection.Target.NodeId} · 独立管理会话";
-    public string ProtectionText => "主备保护状态未核实；配置勾选不表示同步保护已经生效。";
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -105,13 +110,14 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
     public AsyncRelayCommand RetryOriginalCommand { get; }
     public RelayCommand CancelWaitCommand { get; }
     private AsyncRelayCommand OperationCommand(ManagementOperationKind kind) =>
-        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && _pending is null, OnError);
+        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && _pending is null && CanIssueHighAvailability(kind), OnError);
 
     public void Activate() { if (_disposed) return; _active = true; StartPolling(); }
     public void Deactivate()
     {
         if (!_active) return;
         _active = false; _generation++; _polling?.Cancel(); CancelWaiting();
+        MarkProtectionUnknown();
         _reads = null; _readBusy = false; IsBusy = false; UpdateCommands();
     }
     public bool IsPageActive => _active;
@@ -132,6 +138,7 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
             if (!Current(connection, generation)) return;
             // Read before allowing writes. A damaged pending file blocks this node instead of silently losing its request.
             _pending = _store.Load(target);
+            LoadProtectionWarning(target);
             _settings?.Save(target);
             IsSignedIn = true;
             Message = "已建立独立管理会话。";
@@ -169,6 +176,10 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
             if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null)
                 throw new System.IO.InvalidDataException();
             ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch);
+            var availability = await connection.HighAvailabilityAsync(reads.Token);
+            if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
+            if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
+            else MarkProtectionUnknown();
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);
@@ -300,6 +311,7 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
                 operation.Restore is { IsolationStaged: true } && operation.RecoveryActivation is null &&
                 operation.Checks?.Any(c => c.Name == "recovery-confirmed-state" && !c.Passed && c.BlocksWrites) == true);
         if (operation.Status is { } status) ApplyStatus(status, reply.Envelope.EpochVerified, reply.Envelope.ServerEpoch);
+        if (operation.HighAvailability is { } availability) ApplyHighAvailability(availability);
         if (operation.Checks is not null) SetChecks(operation.Checks);
         if (operation.Restore is { } restore) RestoreText = $"隔离暂存：{YesNo(restore.IsolationStaged)}；恢复核对：{YesNo(restore.RecoveryVerified)}；业务就绪：{YesNo(restore.BusinessReady)}";
         Message = operation.Phase switch
@@ -329,6 +341,8 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
             ManagementOperationKind.Backup => new BackupRequest(id, RequirePath(BackupDestination), actor),
             ManagementOperationKind.Restore => new RestoreRequest(id,
                 string.IsNullOrWhiteSpace(RestoreBackupId) ? throw new ArgumentException("请输入备份标识。") : RestoreBackupId.Trim(), RequirePath(RestoreSource), actor),
+            ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
+                BuildHighAvailabilityRequest(kind, target, actor, id),
             _ => new ManagementServiceRequest(id, target.ServerId, target.NodeId)
         };
         return JsonSerializer.Serialize(body, JsonDefaults.Create());
@@ -350,6 +364,9 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
             ManagementOperationKind.Configure => $"\n预期版本：{fields.GetProperty("expectedVersion")}\n目标配置：{fields.GetProperty("configuration").GetProperty("bindAddress")}:{fields.GetProperty("configuration").GetProperty("httpsPort")}\n数据目录：{fields.GetProperty("configuration").GetProperty("dataDirectory")}",
             ManagementOperationKind.Backup => $"\n备份目录：{fields.GetProperty("destinationDirectory")}",
             ManagementOperationKind.Restore => $"\n备份：{fields.GetProperty("backupId")}\n来源：{fields.GetProperty("sourceDirectory")}",
+            ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
+                $"\n目标节点：{fields.GetProperty("targetNodeId")}\n预期代次：{fields.GetProperty("expectedEpoch")}；状态版本：{fields.GetProperty("expectedVersion")}\n原因：{fields.GetProperty("reason")}" +
+                (kind == ManagementOperationKind.Takeover ? $"\n原主机：{fields.GetProperty("isolation").GetProperty("isolatedNodeId")}；断电确认：{fields.GetProperty("isolation").GetProperty("hostPoweredOff")}；业务网络隔离确认：{fields.GetProperty("isolation").GetProperty("businessNetworkIsolated")}" : ""),
             _ => string.Empty
         };
         return $"目标：{request.Target.ServerId} / {request.Target.NodeId}\n{KindText(kind)}使用稳定请求号。" + (kind switch
@@ -358,6 +375,10 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
             ManagementOperationKind.Configure => "后端核对已停止状态与当前配置版本；冲突时不覆盖。",
             ManagementOperationKind.Backup => "须先停止业务；备份结果必须包含三项完整性证据。",
             ManagementOperationKind.Restore => "须先停止业务。先隔离暂存，再核对最新持久确认；暂存不表示业务恢复。",
+            ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升本机备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
+            ManagementOperationKind.Emergency => "降低双机保护为单机持久确认。应急期间不具备双节点故障保护，请尽快重建备用节点。",
+            ManagementOperationKind.Rebuild => "停止本机服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
+            ManagementOperationKind.Reprotect => "只有实际复制、材料和双侧最新持久确认全部核实后才恢复同步保护；失败保持待核对。",
             _ => "操作结果以服务器实际检查为准。"
         }) + details;
     }
@@ -410,7 +431,7 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
         _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));
     }
-    private void MarkUnknown() { ProcessText = "当前进程状态未核实"; ReadinessText = "业务就绪未核实"; EpochText = "当前代次未核实"; }
+    private void MarkUnknown() { ProcessText = "当前进程状态未核实"; ReadinessText = "业务就绪未核实"; EpochText = "当前代次未核实"; MarkProtectionUnknown(); }
     private void StartPolling()
     {
         if (!_active || !IsSignedIn || _pending is null || _polling is { IsCancellationRequested: false }) return;
@@ -443,7 +464,8 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
     private void UpdateCommands()
     {
         foreach (var command in new[] { RefreshCommand, LogoutCommand, StartCommand, StopCommand, ChecksCommand, ConfigureCommand,
-                     BackupCommand, RestoreCommand, QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
+                     BackupCommand, RestoreCommand, TakeoverCommand, EmergencyCommand, RebuildCommand, ReprotectCommand,
+                     QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
         CancelWaitCommand?.RaiseCanExecuteChanged();
     }
     private static string SafeError(HttpStatusCode status) => status switch
@@ -452,7 +474,8 @@ public sealed class ServiceManagementViewModel : BindableBase, IDisposable
         _ => "后端依赖不可用或操作失败，不能判定成功" };
     private static string YesNo(bool value) => value ? "已确认" : "未完成";
     private static string KindText(ManagementOperationKind kind) => kind switch { ManagementOperationKind.Start => "启动", ManagementOperationKind.Stop => "停止",
-        ManagementOperationKind.Configure => "保存配置", ManagementOperationKind.Checks => "自检", ManagementOperationKind.Backup => "备份", ManagementOperationKind.Restore => "恢复", _ => "未知操作" };
+        ManagementOperationKind.Configure => "保存配置", ManagementOperationKind.Checks => "自检", ManagementOperationKind.Backup => "备份", ManagementOperationKind.Restore => "恢复",
+        ManagementOperationKind.Takeover => "接管", ManagementOperationKind.Emergency => "进入单机应急", ManagementOperationKind.Rebuild => "重建旧节点", ManagementOperationKind.Reprotect => "恢复同步保护", _ => "未知操作" };
     private static string PhaseText(ManagementOperationPhase phase) => phase switch { ManagementOperationPhase.Completed => "完成", ManagementOperationPhase.Failed => "失败",
         ManagementOperationPhase.Accepted => "已受理", ManagementOperationPhase.Staged => "仅隔离暂存", _ => "待核对" };
     public void Dispose() { if (_disposed) return; Deactivate(); ResetSession(); _disposed = true; _lifetime.Dispose(); }

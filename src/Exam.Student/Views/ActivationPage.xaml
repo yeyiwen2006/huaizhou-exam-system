@@ -59,6 +59,9 @@
                                                 HorizontalAlignment="Left" />
                         </DockPanel>
 
+                        <TextBlock x:Name="ActivationCodeText" Margin="0,12,0,0"
+                                   TextWrapping="Wrap" Visibility="Collapsed" FontWeight="SemiBold"/>
+
                         <Button x:Name="RequestButton"
                                 Style="{StaticResource Btn.Primary}"
                                 Content="请求激活"

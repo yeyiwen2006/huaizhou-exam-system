@@ -19,6 +19,7 @@ if (serviceMode)
         throw new InvalidOperationException("缺少有效的业务 Windows 服务名称。");
     builder.Services.AddWindowsService(options => options.ServiceName = name);
 }
+HighAvailabilityDeployment.Apply(builder);
 var managedServiceConfiguration = await BusinessServiceConfiguration.LoadAndApplyAsync(builder);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddSingleton(TimeProvider.System);

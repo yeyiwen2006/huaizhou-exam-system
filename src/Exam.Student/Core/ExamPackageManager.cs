@@ -87,6 +87,10 @@ public sealed partial class ExamPackageManager : IDisposable
     public string? LastError { get; private set; }
     /// <summary>已收到的最新试卷版本（PaperUpdated 事件推进）；高于当前描述符版本表示有待应用的更新。</summary>
     public long NewestPaperVersion => _state.NewestPaperVersion;
+    /// <summary>ScheduleChanged 事件携带的最新开考时间；null 表示未收到过时间更新。</summary>
+    public DateTimeOffset? OverriddenScheduledStart => _state.OverriddenScheduledStart;
+    /// <summary>ScheduleChanged 事件携带的最新结束时间；null 表示未收到过时间更新。</summary>
+    public DateTimeOffset? OverriddenScheduledEnd => _state.OverriddenScheduledEnd;
     /// <summary>B06 设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
     public bool DeviceDecisionPending =>
         !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
@@ -329,19 +333,37 @@ public sealed partial class ExamPackageManager : IDisposable
                 LastError = "设备授权已调整，请重新进入以核对当前授权。";
                 return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
             }
-            if (delivery.EventType is CommandEventType.PaperUpdated or CommandEventType.ScheduleChanged)
+            if (delivery.EventType == CommandEventType.ScheduleChanged)
             {
+                // 计划版本与试卷版本分开；旧消息晚到、重连和重启均不能把新时间改回去。
+                var previousVersion = Math.Max(_state.ScheduleStateVersion, _state.Commands
+                    .Where(item => item.Delivery.EventType == CommandEventType.ScheduleChanged &&
+                                   item.Acknowledgement.ProcessingResult != CommandProcessingResult.RejectedAsStale)
+                    .Select(item => item.Delivery.StateVersion).DefaultIfEmpty(0).Max());
+                if (delivery.StateVersion <= previousVersion)
+                    return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.RejectedAsStale, ct);
+                if (delivery.NewScheduledStart is null && delivery.NewScheduledEnd is null)
+                {
+                    LastError = "时间调整指令缺少起止时间，请重新同步考试信息。";
+                    return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
+                }
+                var startsAt = delivery.NewScheduledStart ?? _state.OverriddenScheduledStart;
+                var endsAt = delivery.NewScheduledEnd ?? _state.OverriddenScheduledEnd;
+                if (startsAt is { } start && endsAt is { } end && start >= end)
+                    throw new InvalidDataException("时间调整指令的结束时间必须晚于开始时间。");
                 Save(_state with
                 {
-                    NewestPaperVersion = delivery.EventType == CommandEventType.PaperUpdated
-                        ? Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion!.Value)
-                        : _state.NewestPaperVersion,
-                    LifecycleStateVersion = delivery.EventType == CommandEventType.ScheduleChanged
-                        ? Math.Max(_state.LifecycleStateVersion, delivery.StateVersion) : _state.LifecycleStateVersion
+                    ScheduleStateVersion = delivery.StateVersion,
+                    OverriddenScheduledStart = startsAt,
+                    OverriddenScheduledEnd = endsAt
                 });
-                LastError = delivery.EventType == CommandEventType.PaperUpdated
-                    ? "已收到试卷更新，当前版本尚未完成更新，请重新同步。"
-                    : "已收到考试时间更新，请重新同步考试信息。";
+                LastError = null;
+                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Applied, ct);
+            }
+            if (delivery.EventType == CommandEventType.PaperUpdated)
+            {
+                Save(_state with { NewestPaperVersion = Math.Max(_state.NewestPaperVersion, delivery.ResourceVersion!.Value) });
+                LastError = "已收到试卷更新，当前版本尚未完成更新，请重新同步。";
                 return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
             }
             LastError = "当前页面不能处理该指令。";
@@ -592,7 +614,9 @@ public sealed partial class ExamPackageManager : IDisposable
         first.ExamId == next.ExamId && first.ParticipationId == next.ParticipationId && first.EntryVersion == next.EntryVersion &&
         first.EventType == next.EventType && first.StateVersion == next.StateVersion && first.TargetDeviceId == next.TargetDeviceId &&
         first.TargetAuthorizationVersion == next.TargetAuthorizationVersion && first.ResourceVersion == next.ResourceVersion &&
-        first.ProtectedUnlockReference == next.ProtectedUnlockReference && first.Metadata.Count == next.Metadata.Count &&
+        first.ProtectedUnlockReference == next.ProtectedUnlockReference &&
+        first.NewScheduledStart == next.NewScheduledStart && first.NewScheduledEnd == next.NewScheduledEnd &&
+        first.Metadata.Count == next.Metadata.Count &&
         first.Metadata.All(pair => next.Metadata.TryGetValue(pair.Key, out var value) && pair.Value == value);
     private void ValidateParticipation(ParticipationResult participation)
     {

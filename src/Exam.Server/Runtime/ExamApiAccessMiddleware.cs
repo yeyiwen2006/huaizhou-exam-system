@@ -109,6 +109,11 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
 
     private static bool IsDeviceRoute(string method, string route)
     {
+        if (HttpMethods.IsPost(method) && route is "/student/presence/open" or "/student/presence")
+        {
+            return true;
+        }
+
         if (HttpMethods.IsGet(method) && (route is "/student/exams" or "/student/instructions"))
         {
             return true;

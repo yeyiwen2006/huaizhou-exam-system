@@ -1,10 +1,11 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Exam.Contracts.Common;
+using Exam.Contracts.Participation;
 using Exam.Desktop.Shared.Controls;
 using Exam.Student.Core;
 
@@ -34,7 +35,7 @@ public partial class WaitingExamPage : UserControl
         _exam = exam;
         InitializeComponent();
         DataContext = App.Services.Session;
-        TimeText.Text = $"开始时间：{exam.ScheduledStart:yyyy-MM-dd HH:mm}    结束时间：{exam.ScheduledEnd:yyyy-MM-dd HH:mm}";
+        RefreshTimeText();
         _timer.Tick += (_, _) => UpdateCountdown();
         _timer.Start();
         UpdateCountdown();
@@ -131,7 +132,10 @@ public partial class WaitingExamPage : UserControl
 
             if (!prepared)
             {
-                StudentMessages.ShowWithDetail(ErrorBanner, "试题获取失败！请点击“重新下载”。", _runtime.Manager.LastError);
+                var msg = _runtime.Manager.HasPackage
+                    ? "考试说明获取失败！请点击“重新下载”。"
+                    : "试题获取失败！请点击“重新下载”。";
+                StudentMessages.ShowWithDetail(ErrorBanner, msg, _runtime.Manager.LastError);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -163,7 +167,15 @@ public partial class WaitingExamPage : UserControl
             var response = await _runtime.Manager.ConfirmParticipationAsync(_lifetime.Token);
             if (response?.IsSuccess != true || response.Result is null)
             {
-                StudentMessages.ShowWithDetail(ErrorBanner, "参加考试确认未完成，请重新点击“确认参加考试”。", response?.Error?.Message ?? _runtime.Manager.LastError);
+                var code = response?.Error?.Code;
+                var definitive = code is ParticipationErrorCodes.EntryNotAllowed
+                    or ParticipationErrorCodes.RosterMismatch
+                    or ParticipationErrorCodes.NotActivated
+                    or ParticipationErrorCodes.AlreadySubmitted;
+                var main = definitive
+                    ? "当前不可进入该考试！"
+                    : "参加考试确认未完成，请重新点击“确认参加考试”。";
+                StudentMessages.ShowWithDetail(ErrorBanner, main, response?.Error?.Message ?? _runtime.Manager.LastError);
                 return;
             }
 
@@ -419,6 +431,7 @@ public partial class WaitingExamPage : UserControl
         RetryLocalSaveButton.IsEnabled = !_busy && _runtime?.CanRetryLocalSave == true;
         RetryLocalSaveButton.Visibility = _runtime?.CanRetryLocalSave == true ? Visibility.Visible : Visibility.Collapsed;
         RefreshRuntimeError();
+        RefreshTimeText();
 
         if (!_busy && manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true &&
             !_runtime.HasFixedSubmission && _runtime.Answers?.Status == AnswerSessionStatus.Active)
@@ -438,10 +451,18 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        var remain = _exam.ScheduledStart - App.Services.Clock.UtcNow;
+        var scheduledStart = _runtime?.Manager.OverriddenScheduledStart ?? _exam.ScheduledStart;
+        var remain = scheduledStart - App.Services.Clock.UtcNow;
         CountdownText.Text = remain > TimeSpan.Zero ? $"距开考 {remain:hh\\:mm\\:ss}" : "已到开考时间，请等待试题解锁";
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
         MaybeRetryArbitration();
+    }
+
+    private void RefreshTimeText()
+    {
+        var start = _runtime?.Manager.OverriddenScheduledStart ?? _exam.ScheduledStart;
+        var end = _runtime?.Manager.OverriddenScheduledEnd ?? _exam.ScheduledEnd;
+        TimeText.Text = $"开始时间：{start:yyyy-MM-dd HH:mm}    结束时间：{end:yyyy-MM-dd HH:mm}";
     }
 
     /// <summary>B06 设备裁决：待裁决状态每 15 秒自动重试准备，裁决通过后自动继续。</summary>
@@ -467,10 +488,10 @@ public partial class WaitingExamPage : UserControl
 
     private void RefreshRuntimeError()
     {
-        var error = _runtime?.ConnectionError ?? _runtime?.Manager.LastError;
-        if (!string.IsNullOrWhiteSpace(error))
+        var connectionError = _runtime?.ConnectionError;
+        if (!string.IsNullOrWhiteSpace(connectionError))
         {
-            StudentMessages.ShowWithDetail(ErrorBanner, StudentMessages.ConnectionProblem, error);
+            StudentMessages.ShowWithDetail(ErrorBanner, StudentMessages.ConnectionProblem, connectionError);
             _lastRuntimeError = StudentMessages.ConnectionProblem;
         }
         else if (_lastRuntimeError is not null && ErrorBanner.Message == _lastRuntimeError)

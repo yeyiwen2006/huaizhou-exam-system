@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Exam.Application.ServiceManagement;
+using Exam.Application.HighAvailability;
 using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Domain.Common;
@@ -46,30 +47,46 @@ public static class ManagementEntryPoint
         if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler
             { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(5) });
-        builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>()));
+        builder.Services.AddSingleton<DurableFailoverCoordinator>(provider =>
+        {
+            var nodes = configuration.GetSection("HighAvailability:Nodes").GetChildren().ToDictionary(section => section.Key,
+                section => new FailoverNodeDeployment(section.Key, Required(section.Path + ":ConnectionString"),
+                    Required(section.Path + ":ResourcesDirectory"), Required(section.Path + ":CertificateThumbprint"),
+                    Required(section.Path + ":ConfirmationDirectory"), Required(section.Path + ":BusinessHttpsUrl")), StringComparer.Ordinal);
+            var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, Required("HighAvailability:SelectionPath"),
+                configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
+                configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
+                Required("Management:BusinessServiceName"), Required("Confirmation:PeerToken"), configuration["HighAvailability:PostgresConfigurationPath"] ?? "");
+            var journal = new FileManagementOperationStore(Required("Management:OperationDirectory"));
+            return new(serverId, nodeId, new PostgresHighAvailabilityManagementPlatform(options,
+                provider.GetRequiredService<HttpClient>()), journal, new SystemClock());
+        });
+        builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>(),
+            () => provider.GetRequiredService<DurableFailoverCoordinator>()));
         // 考务账号登录：以数据库为准，数据库不可用时按本机加密缓存核对。
         builder.Services.AddSingleton(_ => new ManagementOperatorSessions(
             () => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId,
                 long.TryParse(configuration["ExamServer:ServerEpoch"], out var cachedEpoch) ? cachedEpoch : 0),
             configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache")));
 
-        ManagementRuntime CreateRuntime(HttpClient http)
+        ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)
         {
             var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
             var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
-            var epoch = long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0;
-            string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId, epoch);
+            long CurrentEpoch() => FileFailoverDeploymentSelection.ReadConfigured(k => configuration[k], serverId, nodeId)?.Epoch ??
+                (long.TryParse(configuration["ExamServer:ServerEpoch"], out var configuredEpoch) ? configuredEpoch : 0);
+            string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(key => configuration[key], serverId, nodeId, CurrentEpoch());
             ReadyCheckedBusinessHost ReadyHost(ServiceConfiguration expected) => new(process, http,
-                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, epoch, expectedConfiguration: expected);
-            FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), epoch,
+                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, CurrentEpoch(), expectedConfiguration: expected);
+            FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), CurrentEpoch(),
                 async (_, token) => (await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
-                    Required("ConnectionStrings:ExamRecovery"), epoch).RunAsync(await store.LoadAsync(token), token)).Passed,
+                    Required("ConnectionStrings:ExamRecovery"), CurrentEpoch()).RunAsync(await store.LoadAsync(token), token)).Passed,
                 ArchiveReplay() is not null);
             PostgresBackupCoordinator CreateBackups() => new(new PostgresBackupOptions(
                 Required("Backup:PostgresBinDirectory"), SelectedConnection() ?? "", Required("Backup:AllowedBackupRoot"),
                 Required("Backup:RestoreStagingRoot"),
-                FileRecoveryDeploymentSelection.ResolveResources(key => configuration[key], serverId, nodeId, epoch)
+                FileRecoveryDeploymentSelection.ResolveResources(key => configuration[key], serverId, nodeId, CurrentEpoch())
                     ?? throw new InvalidOperationException("备份资源未配置。"), Required("Backup:ProtectedConfigurationDirectory"),
                 TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner());
             PostgresArchiveRecovery? ArchiveReplay()
@@ -84,7 +101,7 @@ public static class ManagementEntryPoint
             IStartupReadinessProbe Preflight(string? target = null) => new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
                 new NodeCertificateStartupReadinessProbe(configuration["PackageSecurity:CertificateThumbprint"] ?? ""),
-                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), epoch)),
+                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), CurrentEpoch())),
                 new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(target ?? SelectedConnection(), configuration["PackageSecurity:CertificateThumbprint"] ?? "")),
                 new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
@@ -95,7 +112,7 @@ public static class ManagementEntryPoint
             async Task<StartupCheckResult> ConfirmedState(ServiceConfiguration expected, RecoveryWorkingCopy working, CancellationToken token)
             {
                 var original = await new PostgresRecoveryStateComparison(Required("ConnectionStrings:Exam"),
-                    Required("ConnectionStrings:ExamRecovery"), epoch).ObserveAsync(expected, token);
+                    Required("ConnectionStrings:ExamRecovery"), CurrentEpoch()).ObserveAsync(expected, token);
                 if (original.Status != RecoveryComparisonStatus.OriginalUnavailable ||
                     string.IsNullOrWhiteSpace(configuration["Confirmation:Directory"])) return original.Check;
                 try
@@ -103,7 +120,7 @@ public static class ManagementEntryPoint
                     return await new PostgresConfirmedRecoveryEvidence(new FileConfirmationStore(Required("Confirmation:Directory")),
                         new HttpConfirmationPeer(http, new Uri(Required("Confirmation:StandbyHttpsUrl")), serverId,
                             Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]),
-                        Required("ConnectionStrings:ExamStandby"), Required("ConnectionStrings:ExamRecovery"), epoch,
+                        Required("ConnectionStrings:ExamStandby"), Required("ConnectionStrings:ExamRecovery"), CurrentEpoch(),
                         configuration.GetConnectionString("ExamRecoveryTimeline") ?? Required("ConnectionStrings:ExamRecovery"),
                         configuration["Backup:PostgresBinDirectory"], configuration.GetConnectionString("ExamStandbyTimeline"))
                         .RunAsync(expected, Path.Combine(working.WorkingDirectory, "resources"), token);
@@ -138,7 +155,7 @@ public static class ManagementEntryPoint
                         var working = await CreateBackups().FindPreparedRecoveryWorkingCopyAsync(request, Required("Recovery:WorkingRoot"), token)
                             ?? throw new IOException("恢复工作副本尚未准备。");
                         var checks = (await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
-                            Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
+                            Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", CurrentEpoch())
                             .RunAsync(serviceConfiguration, working, token)).ToList();
                         if (ArchiveReplay() is { } replay)
                             checks.Add(await replay.VerifyReplayedAsync(working, request, Required("ConnectionStrings:ExamRecovery"), token));
@@ -183,7 +200,7 @@ public static class ManagementEntryPoint
                          File.Exists(Path.Combine(working.WorkingDirectory, "wal-recovery.json")))) return null;
                     var expected = await store.LoadAsync(token);
                     var checks = await new PostgresWorkingCopyReadinessProbe(Required("ConnectionStrings:Exam"),
-                        Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", epoch)
+                        Required("ConnectionStrings:ExamRecovery"), configuration["PackageSecurity:CertificateThumbprint"] ?? "", CurrentEpoch())
                         .RunAsync(expected, working, token);
                     if (!checks.Any(c => c.Name == "recovery-target" && c.Passed && c.BlocksWrites) ||
                         checks.Any(c => !c.Passed && c.BlocksWrites) ||
@@ -196,7 +213,7 @@ public static class ManagementEntryPoint
                 readAudit: (limit, token) => new FileManagementOperationStore(Required("Management:OperationDirectory"))
                     .ReadAuditAsync(limit, token),
                 readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
-                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token));
+                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token), failover: failover);
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

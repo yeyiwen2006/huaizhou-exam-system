@@ -1,4 +1,6 @@
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
+using Exam.Infrastructure.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.IntegrationTests.Postgres;
 using Exam.Server.Runtime;
@@ -47,7 +49,37 @@ public sealed class ManagedProtectionReadinessTests : IAsyncLifetime
             Assert.Equal("EmergencySingleNode", await read.ExecuteScalarAsync());
     }
 
-    private async Task<BusinessServiceConfiguration> ConfigureAsync(bool requireDual, string filename)
+    [Fact]
+    public async Task ExplicitEmergencyRequiresProtectedCurrentSelectionAndMatchingActualAudit()
+    {
+        await using (var create = _database.DataSource.CreateCommand("""
+            BEGIN;
+            INSERT INTO exam.server_state VALUES ('server','node',1,'EmergencySingleNode',1,clock_timestamp());
+            INSERT INTO exam.server_nodes VALUES ('server','node','Primary',true,false,0,true,true,clock_timestamp());
+            COMMIT;
+            """))
+            await create.ExecuteNonQueryAsync();
+        var confirmation = Path.Combine(_directory, "confirmation");
+        var selectionPath = Path.Combine(_directory, "selection.json");
+        var selection = new FailoverDeploymentSelection("server", "node", "node", "peer", 1, 1,
+            ProtectionMode.EmergencySingleNode, "synthetic-emergency", Path.Combine(confirmation, "epochs", "1", "node"));
+        await new FileFailoverDeploymentSelection(selectionPath).SaveAsync(selection, default);
+        var service = await ConfigureAsync(true, "synthetic-emergency-config.json", selectionPath, confirmation);
+        Assert.False((await service.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var audit = _database.DataSource.CreateCommand("""
+            INSERT INTO exam.failover_audit(server_id,action,actor_id,reason,node_id,server_epoch,occurred_at)
+            VALUES('server','F02:Emergency:synthetic-emergency','synthetic-operator','synthetic authorized decision','node',1,clock_timestamp())
+            """)) await audit.ExecuteNonQueryAsync();
+        Assert.True((await service.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var stale = _database.DataSource.CreateCommand("UPDATE exam.server_state SET server_epoch=2 WHERE server_id='server'"))
+            await stale.ExecuteNonQueryAsync();
+        Assert.False((await service.CheckProtectionAsync(_database.DataSource, default)).Passed);
+        await using (var read = _database.DataSource.CreateCommand("SELECT protection_mode FROM exam.server_state WHERE server_id='server'"))
+            Assert.Equal("EmergencySingleNode", await read.ExecuteScalarAsync());
+    }
+
+    private async Task<BusinessServiceConfiguration> ConfigureAsync(bool requireDual, string filename,
+        string? selectionPath = null, string? confirmationRoot = null)
     {
         var path = Path.Combine(_directory, filename);
         await new FileServiceConfigurationStore(path).SaveAsync(new ServiceConfiguration("server", "node", "127.0.0.1", 8443,
@@ -58,7 +90,9 @@ public sealed class ManagedProtectionReadinessTests : IAsyncLifetime
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ExamServer:ServerId"] = "server", ["ExamServer:NodeId"] = "node", ["ExamServer:ServerEpoch"] = "1",
-            ["Management:ServiceConfigurationPath"] = path, ["Management:MinimumAvailableBytes"] = "1"
+            ["Management:ServiceConfigurationPath"] = path, ["Management:MinimumAvailableBytes"] = "1",
+            ["HighAvailability:SelectionPath"] = selectionPath,
+            ["HighAvailability:Nodes:node:ConfirmationDirectory"] = confirmationRoot
         });
         return (await BusinessServiceConfiguration.LoadAndApplyAsync(builder))!;
     }

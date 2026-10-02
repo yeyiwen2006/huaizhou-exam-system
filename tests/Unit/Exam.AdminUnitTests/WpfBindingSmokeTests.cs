@@ -25,6 +25,7 @@ public sealed class WpfBindingSmokeTests
             Exception? failure = null;
             App? application = null;
             MainWindow? window = null;
+            AdminUiFixture? fixture = null;
             using var output = new StringWriter();
             using var listener = new TextWriterTraceListener(output);
             var source = PresentationTraceSources.DataBindingSource;
@@ -40,33 +41,22 @@ public sealed class WpfBindingSmokeTests
                 application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 // Exercise the real App.xaml StartupUri instead of creating a second window.
                 DrainDispatcher();
-                window = Assert.IsType<MainWindow>(application.MainWindow);
-                window.ShowInTaskbar = false;
-                window.Left = -2000;
-                window.Top = -2000;
-                window.UpdateLayout();
-                var viewModel = Assert.IsType<MainViewModel>(window.DataContext);
-                // 启动时停在“全部考试”主页，考试相关页面不可用；进入一场合成考试后再检查各页绑定。
+                fixture = new AdminUiFixture(application);
+                window = fixture.Window;
+                var viewModel = fixture.ViewModel;
                 var tabsAtStart = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal(MainViewModel.HomePage, tabsAtStart.SelectedIndex);
                 Assert.False(((TabItem)tabsAtStart.Items[MainViewModel.SettingsPage]).IsEnabled);
-                var start = DateTimeOffset.UtcNow.AddDays(1);
-                viewModel.OpenExam(new Exam.Contracts.Exams.ExamSummary("synthetic-exam", "合成考试", start, start.AddHours(2),
-                    Exam.Contracts.Common.ExamLifecycle.Scheduled, false, false, 0, 0, 1));
-                DrainDispatcher();
+                Assert.Equal(Visibility.Collapsed, tabsAtStart.Visibility);
+                var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
+                Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
+                fixture.Login();
+                fixture.OpenExam();
                 window.UpdateLayout();
+                Assert.Equal(Visibility.Visible, tabsAtStart.Visibility);
+                Assert.Null(((ContentControl)window.FindName("PageRegion")).Content);
                 Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
                 Assert.All(tabsAtStart.Items.Cast<TabItem>(), tab => Assert.True(tab.IsEnabled));
-                var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
-                // 登录页主操作明确使用 14 DIP 的水平留白，覆盖通用控件默认值。
-                Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
-                // 本测试只验证主界面绑定；账号登录已有单独测试。新登录页会折叠主区域，
-                // 在测试夹具中显式展示主区域后，DataGrid/ComboBox 的模板才会实际加载。
-                Assert.Equal(Visibility.Collapsed, tabsAtStart.Visibility);
-                ((ContentControl)window.FindName("PageRegion")).Content = null;
-                tabsAtStart.Visibility = Visibility.Visible;
-                DrainDispatcher();
-                window.UpdateLayout();
                 var subjectGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.Subjects));
                 Assert.Same(application.FindResource("Brush.Surface.Alt"), subjectGrid.AlternatingRowBackground);
                 var horizontalBar = new ScrollBar { Style = (Style)application.FindResource(typeof(ScrollBar)), Orientation = Orientation.Horizontal, Minimum = 0, Maximum = 100, ViewportSize = 10 };
@@ -130,7 +120,7 @@ public sealed class WpfBindingSmokeTests
             catch (Exception exception) { failure = exception; }
             finally
             {
-                try { window?.Close(); application?.Shutdown(); }
+                try { fixture?.Dispose(); window?.Close(); application?.Shutdown(); }
                 catch (Exception error) { failure ??= error; }
                 finally
                 {

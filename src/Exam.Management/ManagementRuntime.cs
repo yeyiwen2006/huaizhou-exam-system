@@ -1,4 +1,6 @@
 using Exam.Application.ServiceManagement;
+using Exam.Application.HighAvailability;
+using Exam.Contracts.HighAvailability;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
@@ -19,10 +21,22 @@ public sealed class ManagementRuntime(
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation>>? activateRecovery = null,
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecoveryActivation = null,
     Func<int, CancellationToken, Task<IReadOnlyList<ManagementAuditEntry>>>? readAudit = null,
-    Func<int, CancellationToken, Task<IReadOnlyList<ProtectedRuntimeLogEntry>>>? readRuntimeLogs = null)
+    Func<int, CancellationToken, Task<IReadOnlyList<ProtectedRuntimeLogEntry>>>? readRuntimeLogs = null,
+    Func<DurableFailoverCoordinator>? failover = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
+    private DurableFailoverCoordinator Failover => failover?.Invoke() ?? throw new InvalidOperationException("正式主备管理未配置。");
+    public Task<HighAvailabilityStatus> GetHighAvailabilityAsync(CancellationToken token) => Failover.GetStatusAsync(token);
+    public Task<ManagementOperation> ExecuteHighAvailabilityAsync(HighAvailabilityRequest request, string actor,
+        ManagementOperationKind kind, CancellationToken token)
+    {
+        RequireTarget(request.ServerId, request.NodeId);
+        if (request.ActorId != actor || !DurableFailoverCoordinator.IsFailover(kind))
+            throw new DomainRuleException(ErrorCodes.Forbidden, "主备操作者必须来自当前已认证的考务会话。");
+        return Operations.ExecuteAsync(request.RequestId, actor, kind, request,
+            (operation, cancellation) => Failover.ExecuteAsync(operation, request, cancellation), token);
+    }
     public Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token) =>
         readAudit is null ? throw new InvalidOperationException("受保护操作日志未配置。") : readAudit(limit, token);
     public Task<IReadOnlyList<ProtectedRuntimeLogEntry>> ReadRuntimeLogsAsync(int limit, CancellationToken token) =>
@@ -36,6 +50,7 @@ public sealed class ManagementRuntime(
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)
     {
+        if (DurableFailoverCoordinator.IsFailover(operation.Kind)) return await Failover.ReconcileAsync(operation, token);
         if (operation.Kind == ManagementOperationKind.Restore && operation.Phase == ManagementOperationPhase.NeedsVerification &&
             operation.Checks?.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites) == true)
             return null; // Read-only queries cannot replace a missing confirmation with mere staging evidence.

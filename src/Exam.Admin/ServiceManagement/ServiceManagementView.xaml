@@ -100,6 +100,47 @@
                             </ItemsControl>
                         </StackPanel>
                     </Border>
+                    <Border x:Name="HighAvailabilityCard" Style="{StaticResource Management.Section}">
+                        <Expander Header="主备状态与手动接管" IsExpanded="True">
+                            <StackPanel Margin="0,16,0,0">
+                                <TextBlock Text="{Binding HighAvailabilityVersionText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <DataGrid ItemsSource="{Binding Nodes}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                          Height="138" HeadersVisibility="Column" HorizontalScrollBarVisibility="Auto" Margin="0,0,0,16">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="节点" Binding="{Binding NodeId}" Width="*"/>
+                                        <DataGridTextColumn Header="角色" Binding="{Binding Role}" Width="84"/>
+                                        <DataGridTextColumn Header="连接" Binding="{Binding Reachability}" Width="100"/>
+                                        <DataGridTextColumn Header="数据库" Binding="{Binding Recovery}" Width="100"/>
+                                        <DataGridTextColumn Header="重放差值/字节" Binding="{Binding ReplayLag}" Width="125"/>
+                                        <DataGridTextColumn Header="解锁材料" Binding="{Binding Keys}" Width="100"/>
+                                        <DataGridTextColumn Header="证书" Binding="{Binding Certificate}" Width="100"/>
+                                        <DataGridTextColumn Header="观察时间" Binding="{Binding ObservedAt}" Width="110"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="本次目标节点" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding HighAvailabilityTarget, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="操作原因（写入审计）" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding HighAvailabilityReason, UpdateSourceTrigger=PropertyChanged}" MaxLength="500"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="接管仅可提升本机备用节点。须在现场确认原主机已隔离；失联和心跳超时不能替代隔离。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <WrapPanel Margin="0,0,0,12">
+                                    <CheckBox Content="确认原主机已断电" IsChecked="{Binding OldPrimaryPoweredOff}" Margin="0,0,24,8"/>
+                                    <CheckBox Content="确认原主机业务网络已隔离" IsChecked="{Binding OldPrimaryNetworkIsolated}" Margin="0,0,24,8"/>
+                                    <CheckBox Content="确认重建本机旧数据并保持隔离" IsChecked="{Binding ConfirmDestructiveRebuild}" Margin="0,0,0,8"/>
+                                </WrapPanel>
+                                <WrapPanel>
+                                    <Button Content="手动接管本机" Style="{StaticResource Management.Action}" Command="{Binding TakeoverCommand}"/>
+                                    <Button Content="进入单机应急" Style="{StaticResource Management.Action}" Command="{Binding EmergencyCommand}"/>
+                                    <Button Content="重建本机旧节点" Style="{StaticResource Management.Action}" Command="{Binding RebuildCommand}"/>
+                                    <Button Content="恢复同步保护" Style="{StaticResource Management.Action}" Command="{Binding ReprotectCommand}"/>
+                                </WrapPanel>
+                                <TextBlock Text="保护状态未知时禁止主备变更。新主机不会自动接受旧主机回写；恢复保护须核实完整材料和双侧最新持久确认。" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
                     <Border Style="{StaticResource Management.Section}">
                         <Expander Header="本机业务配置" IsExpanded="True">
                             <StackPanel Margin="0,16,0,0">

@@ -1,4 +1,5 @@
 using Exam.Contracts.Common;
+using Exam.Contracts.HighAvailability;
 using System.Text.Json.Serialization;
 
 namespace Exam.Contracts.ServiceManagement;
@@ -17,7 +18,7 @@ public sealed record ManagementServiceRequest(string RequestId, string ServerId,
 public sealed record ManagementConfigurationRequest(
     string RequestId, string ServerId, string NodeId, long ExpectedVersion, ServiceConfiguration Configuration);
 
-public enum ManagementOperationKind { Start, Stop, Configure, Checks, Backup, Restore }
+public enum ManagementOperationKind { Start, Stop, Configure, Checks, Backup, Restore, Takeover, Emergency, Rebuild, Reprotect }
 public enum ManagementOperationPhase { Accepted, Completed, Failed, NeedsVerification, Staged }
 public enum BusinessReadiness { Unknown, NotReady, Ready }
 public enum RecoveryActivationPhase { SelectionPending, Selected, StartingBusiness, BusinessReady, RollbackPending, RolledBack }
@@ -46,4 +47,6 @@ public sealed record ManagementOperation(
     ManagementRestoreOutcome? Restore = null, ApiError? Error = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestJson = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryWorkingDirectory = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryActivationPhase? RecoveryActivation = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryActivationPhase? RecoveryActivation = null,
+    HighAvailabilityStatus? HighAvailability = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FailoverExecutionPlan? FailoverPlan = null);
