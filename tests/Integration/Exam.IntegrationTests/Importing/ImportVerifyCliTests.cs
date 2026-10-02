@@ -78,6 +78,28 @@ public sealed class ImportVerifyCliTests : IDisposable
         Assert.Contains("MarkerMissing", result.Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Preview_WithoutRequiredOptions_IsUsageError()
+    {
+        // 服务端命令要求 --exam/--version/--compile/--reason；缺任何一项都属用法错误，不发请求。
+        var result = await RunCliAsync(["import", "preview", _root]);
+
+        // 退出码 2 由 CLI 统一映射为 INVALID_INPUT（命令自己的文案会被该层替换）。
+        Assert.Equal(2, result.Exit);
+        Assert.Contains("INVALID_INPUT", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Publish_WithoutNodeCertificate_IsUsageError()
+    {
+        var result = await RunCliAsync(["import", "publish", _root,
+            "--exam", "import-verify-exam", "--version", "1",
+            "--compile", _root, "--output", _root, "--reason", "合成用例",
+            "--server", "http://127.0.0.1:1"]);
+
+        Assert.Equal(2, result.Exit);
+    }
+
     private void WritePackage(string sourceFileName, bool markOptions = true)
     {
         Directory.CreateDirectory(Path.Combine(_root, "questions"));
