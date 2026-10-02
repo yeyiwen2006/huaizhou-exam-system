@@ -51,6 +51,43 @@ public sealed class DurableFailoverCoordinatorTests : IDisposable
         Assert.Equal(1, _platform.Effects);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidationFailureAfterDurableIntentStillBlocksWritesUntilOriginalReconciliation(bool argument)
+    {
+        _platform.AfterEffectError = argument ? new ArgumentException("synthetic post-effect failure") :
+            new DomainRuleException(ErrorCodes.ServiceRecovering, "synthetic confirmation unavailable", true);
+        var request = Request();
+        var result = await Execute(request);
+        Assert.Equal(ManagementOperationPhase.NeedsVerification, result.Phase);
+        Assert.NotNull(result.FailoverPlan);
+        Assert.True(await _store.HasUnverifiedOperationsAsync(default));
+        var blocked = await Assert.ThrowsAsync<DomainRuleException>(() => Execute(Request("other-request")));
+        Assert.Equal(ErrorCodes.ServiceRecovering, blocked.Code);
+        var reconciled = await Runner().FindAsync(request.RequestId, "operator", default);
+        Assert.Equal(ManagementOperationPhase.Completed, reconciled.Phase);
+        Assert.Equal(1, _platform.Effects);
+    }
+
+    [Theory]
+    [InlineData(ManagementOperationKind.Reprotect)]
+    [InlineData(ManagementOperationKind.Rebuild)]
+    public async Task EmergencyStandbyCanBeReprotectedOrExplicitlyRebuilt(ManagementOperationKind kind)
+    {
+        var active = kind == ManagementOperationKind.Reprotect ? "standby" : "primary";
+        var replica = active == "primary" ? "standby" : "primary";
+        _platform.State = _platform.State with { ActiveNodeId = active, ProtectionMode = ProtectionMode.EmergencySingleNode,
+            Nodes = new Dictionary<string, NodeState>(_platform.State.Nodes) {
+                [active] = _platform.State.Nodes[active] with { Role = DeploymentNodeRole.Primary, DatabaseInRecovery = false },
+                [replica] = _platform.State.Nodes[replica] with { Role = DeploymentNodeRole.Standby, DatabaseInRecovery = true } } };
+        var request = Request() with { TargetNodeId = kind == ManagementOperationKind.Reprotect ? "primary" : "standby",
+            Isolation = null, ConfirmDestructiveRebuild = true };
+        var result = await Execute(request, kind);
+        Assert.Equal(ManagementOperationPhase.Completed, result.Phase);
+        Assert.Equal(1, _platform.Effects);
+    }
+
     [Fact]
     public async Task LostFinalDurableWriteLeavesIntentForRestartReconciliation()
     {
@@ -168,6 +205,7 @@ public sealed class DurableFailoverCoordinatorTests : IDisposable
             new Dictionary<string, NodeState> { ["primary"] = new("primary", DeploymentNodeRole.Primary, true, false, 0, true, true, clock.UtcNow),
                 ["standby"] = new("standby", DeploymentNodeRole.Standby, true, true, 0, true, true, clock.UtcNow) }, 3, []);
         public bool Verified = true, FailAfterEffect, FailBeforeEffect, ReconcileProof = true;
+        public Exception? AfterEffectError;
         public int Attempts, Effects;
         public Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token) => Task.FromResult(new HighAvailabilityStatus("server", "standby", State,
             Verified ? clock.UtcNow : null, State.ProtectionMode == ProtectionMode.SynchronousDualNode && ReconcileProof, []));
@@ -179,6 +217,7 @@ public sealed class DurableFailoverCoordinatorTests : IDisposable
             Assert.NotNull((await store.FindAsync(plan.RequestId, token))!.FailoverPlan); Attempts++;
             if (FailBeforeEffect) throw new IOException("synthetic interrupted operation");
             State = plan.After; Effects++; if (FailAfterEffect) throw new IOException("synthetic lost response");
+            if (AfterEffectError is not null) throw AfterEffectError;
         }
         public Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token) =>
             Task.FromResult(ReconcileProof && State.Version == plan.After.Version && State.ServerEpoch == plan.After.ServerEpoch);

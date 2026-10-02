@@ -86,6 +86,64 @@ public sealed class HighAvailabilityWorkspaceTests
     }
 
     [Fact]
+    public async Task DisplayedProtectionExpiresWithoutAnotherNetworkResponse()
+    {
+        var clock = new ManualTime(); var connection = new HaGuiConnection();
+        using var model = new ServiceManagementViewModel(_ => connection, new HaPendingStore(), time: clock) {
+            Address = connection.Target.Address, ServerId = connection.Target.ServerId, NodeId = connection.Target.NodeId,
+            Username = connection.Actor! };
+        await model.LoginAsync("synthetic");
+        Assert.Contains("同步双机保护已核实", model.ProtectionText);
+        var expired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        model.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(model.ProtectionText) && model.ProtectionText.Contains("未核实")) expired.TrySetResult(); };
+        clock.Advance(TimeSpan.FromSeconds(11));
+        await expired.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Empty(model.Nodes);
+        Assert.False(model.TakeoverCommand.CanExecute(null));
+        Assert.DoesNotContain("同步双机保护已核实", model.ProtectionText);
+        Assert.Equal(0, connection.Writes);
+    }
+
+    [Fact]
+    public async Task RestartCannotClearPersistedEmergencyWarningUsingAnOlderStateVersion()
+    {
+        var connection = new HaGuiConnection();
+        var memory = new HaWarningMemory { Value = new(connection.Target.Key, 3, 9, DateTimeOffset.UtcNow, true) };
+        using var model = Model(connection, warning: memory);
+        await model.LoginAsync("synthetic"); // Server returns version 8 with apparently healthy nodes.
+        Assert.True(model.ShowProtectionWarning);
+        Assert.Contains("未核实", model.ProtectionText);
+        Assert.Empty(model.Nodes);
+        Assert.False(model.ReprotectCommand.CanExecute(null));
+        Assert.Equal(9, memory.Value.Version);
+    }
+
+    private sealed class ManualTime : TimeProvider
+    {
+        private DateTimeOffset _now = DateTimeOffset.UtcNow;
+        private readonly List<ManualTimer> _timers = [];
+        public override DateTimeOffset GetUtcNow() => _now;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(callback, state, _now + dueTime); _timers.Add(timer); return timer;
+        }
+        public void Advance(TimeSpan elapsed)
+        {
+            _now += elapsed;
+            foreach (var timer in _timers.ToArray()) if (!timer.Disposed && timer.Due <= _now) timer.Fire();
+        }
+        private sealed class ManualTimer(TimerCallback callback, object? state, DateTimeOffset due) : ITimer
+        {
+            public DateTimeOffset Due { get; } = due;
+            public bool Disposed { get; private set; }
+            public void Fire() { Disposed = true; callback(state); }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+            public void Dispose() => Disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
+    [Fact]
     public async Task ForgedFullProtectionWithMissingCertificateIsRejected()
     {
         var connection = new HaGuiConnection { Mode = ProtectionMode.EmergencySingleNode }; using var model = Model(connection); await model.LoginAsync("synthetic");

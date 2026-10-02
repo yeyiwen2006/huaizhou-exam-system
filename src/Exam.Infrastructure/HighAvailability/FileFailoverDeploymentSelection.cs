@@ -86,4 +86,30 @@ public sealed class FileFailoverDeploymentSelection(string path)
         }
         return value;
     }
+
+    public static IReadOnlyDictionary<string, string?> ReadConfigurationOverrides(Func<string, string?> configuration,
+        string serverId, string nodeId)
+    {
+        var selection = ReadConfigured(configuration, serverId, nodeId);
+        if (selection is null) return new Dictionary<string, string?>();
+        string Node(string id, string key) => configuration($"HighAvailability:Nodes:{id}:{key}") is { Length: > 0 } value
+            ? value : throw new IOException("主备部署选择所引用的受保护节点配置不完整。");
+        var local = Node(nodeId, "ConnectionString");
+        var other = Node(selection.OtherNodeId, "ConnectionString");
+        var standby = selection.ActiveNodeId == nodeId ? selection.OtherNodeId : nodeId;
+        return new Dictionary<string, string?> {
+            ["ExamServer:ServerEpoch"] = selection.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["ConnectionStrings:Exam"] = local,
+            ["ConnectionStrings:ExamStandby"] = selection.ActiveNodeId == nodeId ? other : local,
+            // An old separately configured timeline connection must not observe the previous primary.
+            ["ConnectionStrings:ExamTimeline"] = configuration($"HighAvailability:Nodes:{nodeId}:TimelineConnectionString") ?? local,
+            ["ConnectionStrings:ExamStandbyTimeline"] = configuration($"HighAvailability:Nodes:{standby}:TimelineConnectionString") ??
+                (standby == nodeId ? local : other),
+            ["Backup:VersionedResourcesDirectory"] = Node(nodeId, "ResourcesDirectory"),
+            ["PackageSecurity:CertificateThumbprint"] = Node(nodeId, "CertificateThumbprint"),
+            ["Confirmation:Directory"] = selection.ConfirmationDirectory,
+            ["Confirmation:PrimaryNodeId"] = selection.ActiveNodeId,
+            ["Confirmation:StandbyNodeId"] = standby,
+            ["Confirmation:StandbyHttpsUrl"] = Node(standby, "BusinessHttpsUrl") };
+    }
 }

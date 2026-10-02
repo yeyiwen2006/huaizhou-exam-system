@@ -23,6 +23,46 @@ public sealed class ManagedProtectionReadinessTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RunningManagementHostChecksNewlySelectedDatabaseAndEpochWithoutRestart()
+    {
+        await using (var state = _database.DataSource.CreateCommand("""
+            BEGIN;
+            INSERT INTO exam.server_state VALUES ('server', 'node', 2, 'EmergencySingleNode', 2, clock_timestamp());
+            INSERT INTO exam.server_nodes VALUES ('server', 'node', 'Primary', true, false, 0, true, true, clock_timestamp());
+            COMMIT;
+            """)) await state.ExecuteNonQueryAsync();
+        var configurationPath = Path.Combine(_directory, "service.json");
+        var selectionPath = Path.Combine(_directory, "selected.json");
+        var confirmationRoot = Path.Combine(_directory, "confirmation");
+        Directory.CreateDirectory(Path.Combine(_directory, "operations"));
+        await new FileServiceConfigurationStore(configurationPath).SaveAsync(new("server", "node", "127.0.0.1", 8443, _directory, true, 1), 0);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders(); builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> {
+            ["Management:ServerId"] = "server", ["Management:NodeId"] = "node", ["Management:HttpsPort"] = "9443",
+            ["Management:ServiceConfigurationPath"] = configurationPath, ["Management:OperationDirectory"] = Path.Combine(_directory, "operations"),
+            ["Management:MinimumAvailableBytes"] = "1", ["ExamServer:ServerEpoch"] = "1",
+            ["ConnectionStrings:Exam"] = "synthetic-invalid-old-database", ["HighAvailability:SelectionPath"] = selectionPath,
+            ["HighAvailability:Nodes:node:ConnectionString"] = _database.ConnectionString,
+            ["HighAvailability:Nodes:node:ResourcesDirectory"] = _directory,
+            ["HighAvailability:Nodes:node:CertificateThumbprint"] = "synthetic-unavailable-certificate",
+            ["HighAvailability:Nodes:node:ConfirmationDirectory"] = confirmationRoot,
+            ["HighAvailability:Nodes:peer:ConnectionString"] = "Host=synthetic-peer.example.test;Database=synthetic",
+            ["HighAvailability:Nodes:peer:BusinessHttpsUrl"] = "https://synthetic-peer.example.test/" });
+        Exam.Management.ManagementEntryPoint.AddManagementRuntime(builder);
+        await using var app = builder.Build();
+        var runtime = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Exam.Management.ManagementRuntime>(app.Services);
+        var before = await runtime.ExecuteServiceAsync(new("before", "server", "node"), "synthetic-operator", ManagementOperationKind.Checks, default);
+        Assert.Contains(before.Checks!, c => c.Name == "database" && !c.Passed);
+        await new Exam.Infrastructure.HighAvailability.FileFailoverDeploymentSelection(selectionPath).SaveAsync(
+            new("server", "node", "node", "peer", 2, 2, Exam.Contracts.HighAvailability.ProtectionMode.EmergencySingleNode,
+                "synthetic-takeover", Path.Combine(confirmationRoot, "epochs", "2", "node")), default);
+        var after = await runtime.ExecuteServiceAsync(new("after", "server", "node"), "synthetic-operator", ManagementOperationKind.Checks, default);
+        Assert.Equal(ManagementOperationPhase.Completed, after.Phase);
+        Assert.Contains(after.Checks!, c => c.Name == "database" && c.Passed);
+        Assert.Contains(after.Checks!, c => c.Name == "database-node-epoch" && c.Passed);
+    }
+
+    [Fact]
     public async Task EveryReadinessObservationUsesCurrentProtectionAndNeverChangesAuthority()
     {
         await using (var create = _database.DataSource.CreateCommand("""

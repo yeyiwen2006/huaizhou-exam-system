@@ -17,6 +17,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private readonly Func<ManagementTarget, IManagementConnection> _factory;
     private readonly IPendingManagementStore _store;
     private readonly ManagementEndpointSettings? _settings;
+    private readonly TimeProvider _time;
     private IManagementConnection? _connection;
     private CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _reads;
@@ -37,9 +38,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private bool _missingOriginal;
 
     public ServiceManagementViewModel(Func<ManagementTarget, IManagementConnection> factory,
-        IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null)
+        IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null,
+        TimeProvider? time = null)
     {
-        _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory;
+        _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory; _time = time ?? TimeProvider.System;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsSignedIn, OnError);
         StartCommand = OperationCommand(ManagementOperationKind.Start);
@@ -194,7 +196,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             {
                 if (entries.Count > 50 || entries.Any(e => !Enum.IsDefined(e.Kind) || !Enum.IsDefined(e.Phase) || e.UpdatedAt == default))
                     throw new System.IO.InvalidDataException("限定操作日志无效。");
-                foreach (var entry in entries) Logs.Add(new(entry.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm:ss"), "操作", KindText(entry.Kind), PhaseText(entry.Phase), entry.ErrorCode is null ? "—" : "操作未完成"));
+                foreach (var entry in entries) Logs.Add(new(entry.UpdatedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"), "操作", KindText(entry.Kind), PhaseText(entry.Phase), entry.ErrorCode is null ? "—" : "操作未完成"));
             }
             if (logs.Envelope.Result is { } runtime && logs.Envelope.Error is null)
             {
@@ -203,7 +205,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                     e.Category.Length is < 1 or > 200 || !e.Category.StartsWith("Exam.", StringComparison.Ordinal) ||
                     e.Category.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '+'))))
                     throw new System.IO.InvalidDataException("限定运行日志无效。");
-                foreach (var entry in runtime) Logs.Add(new(entry.Timestamp.ToLocalTime().ToString("MM-dd HH:mm:ss"), entry.Source, entry.Category, entry.Level, entry.EventId.ToString(CultureInfo.InvariantCulture)));
+                foreach (var entry in runtime) Logs.Add(new(entry.Timestamp.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
+                    entry.Source == "business" ? "业务服务" : "本机管理", "运行记录",
+                    entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, $"事件编号：{entry.EventId.ToString(CultureInfo.InvariantCulture)}"));
             }
             Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "本机状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
         }
@@ -366,7 +370,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Restore => $"\n备份：{fields.GetProperty("backupId")}\n来源：{fields.GetProperty("sourceDirectory")}",
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
                 $"\n目标节点：{fields.GetProperty("targetNodeId")}\n预期代次：{fields.GetProperty("expectedEpoch")}；状态版本：{fields.GetProperty("expectedVersion")}\n原因：{fields.GetProperty("reason")}" +
-                (kind == ManagementOperationKind.Takeover ? $"\n原主机：{fields.GetProperty("isolation").GetProperty("isolatedNodeId")}；断电确认：{fields.GetProperty("isolation").GetProperty("hostPoweredOff")}；业务网络隔离确认：{fields.GetProperty("isolation").GetProperty("businessNetworkIsolated")}" : ""),
+                (kind == ManagementOperationKind.Takeover ? $"\n原主机：{fields.GetProperty("isolation").GetProperty("isolatedNodeId")}；断电确认：{YesNo(fields.GetProperty("isolation").GetProperty("hostPoweredOff").GetBoolean())}；业务网络隔离确认：{YesNo(fields.GetProperty("isolation").GetProperty("businessNetworkIsolated").GetBoolean())}" : ""),
             _ => string.Empty
         };
         return $"目标：{request.Target.ServerId} / {request.Target.NodeId}\n{KindText(kind)}使用稳定请求号。" + (kind switch
@@ -376,7 +380,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Backup => "须先停止业务；备份结果必须包含三项完整性证据。",
             ManagementOperationKind.Restore => "须先停止业务。先隔离暂存，再核对最新持久确认；暂存不表示业务恢复。",
             ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升本机备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
-            ManagementOperationKind.Emergency => "降低双机保护为单机持久确认。应急期间不具备双节点故障保护，请尽快重建备用节点。",
+            ManagementOperationKind.Emergency => "停止本机业务并切换为单机持久确认。完成后请自检并启动业务；应急期间保护降低，请尽快恢复备用节点。",
             ManagementOperationKind.Rebuild => "停止本机服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
             ManagementOperationKind.Reprotect => "只有实际复制、材料和双侧最新持久确认全部核实后才恢复同步保护；失败保持待核对。",
             _ => "操作结果以服务器实际检查为准。"
@@ -404,9 +408,20 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void SetChecks(IReadOnlyList<StartupCheckResult> checks)
     {
         Checks.Clear();
-        foreach (var check in checks.Take(100)) Checks.Add(new(check.Name, check.Passed ? "通过" : "失败", check.BlocksWrites && !check.Passed ? "阻止写入" : "—"));
+        foreach (var check in checks.Take(100)) Checks.Add(new(CheckName(check.Name), check.Passed ? "通过" : "失败", check.BlocksWrites && !check.Passed ? "阻止写入" : "—"));
         if (checks.Count == 0) Checks.Add(new("尚无有效检查结果", "未核实", "不能据此判定就绪"));
     }
+    private static string CheckName(string name) => name.StartsWith("activation-", StringComparison.Ordinal)
+        ? "启动前：" + CheckName(name[11..]) : name switch {
+            "database" => "数据库连接", "database-migrations" => "数据库版本", "database-role" => "数据库角色",
+            "database-node-epoch" => "活动节点与服务代次", "node-certificate-private-key" => "节点证书与私钥",
+            "backup-integrity" => "备份完整性", "recovery-snapshot" => "恢复数据核对", "recovery-target" => "恢复目标",
+            "recovery-working-copy" => "隔离恢复副本", "recovery-confirmed-state" => "最新持久确认",
+            "failover-state" => "主备状态", "synchronous-protection" => "双机同步保护", "service-configuration" => "业务配置",
+            "data-directory" => "数据目录", "data-free-space" => "可用空间", "data-write" => "持久写入",
+            "activation-sequences" => "设备编号记录", "version-projections" => "试卷版本记录", "published-resources" => "已发布试卷资源",
+            "submission-receipts" => "答卷与交卷回执", "reliable-events" => "考试指令记录", "recovery-wal-replay" => "数据库恢复进度",
+            _ => "服务完整性检查" };
     private bool Current(IManagementConnection connection, long generation) => !_disposed && ReferenceEquals(_connection, connection) && _generation == generation;
     private bool Accept(IManagementConnection connection, long generation, bool unauthorized)
     {

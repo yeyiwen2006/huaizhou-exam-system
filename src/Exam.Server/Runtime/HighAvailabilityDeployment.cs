@@ -11,21 +11,8 @@ public static class HighAvailabilityDeployment
     {
         var configuration = builder.Configuration;
         var serverId = configuration["ExamServer:ServerId"] ?? ""; var nodeId = configuration["ExamServer:NodeId"] ?? "";
-        var selection = FileFailoverDeploymentSelection.ReadConfigured(k => configuration[k], serverId, nodeId);
-        if (selection is null) return;
-        string Node(string id, string key) => configuration[$"HighAvailability:Nodes:{id}:{key}"]
-            ?? throw new IOException("主备部署选择所引用的受保护节点配置不完整。");
-        _ = Node(nodeId, "ConfirmationDirectory");
-        _ = Node(selection.OtherNodeId, "ConnectionString");
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> {
-            ["ExamServer:ServerEpoch"] = selection.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["ConnectionStrings:Exam"] = Node(nodeId, "ConnectionString"),
-            ["Backup:VersionedResourcesDirectory"] = Node(nodeId, "ResourcesDirectory"),
-            ["PackageSecurity:CertificateThumbprint"] = Node(nodeId, "CertificateThumbprint"),
-            ["Confirmation:Directory"] = selection.ConfirmationDirectory,
-            ["Confirmation:PrimaryNodeId"] = selection.ActiveNodeId,
-            ["Confirmation:StandbyNodeId"] = selection.ActiveNodeId == nodeId ? selection.OtherNodeId : nodeId,
-            ["Confirmation:StandbyHttpsUrl"] = Node(selection.ActiveNodeId == nodeId ? selection.OtherNodeId : nodeId, "BusinessHttpsUrl") });
+        builder.Configuration.AddInMemoryCollection(
+            FileFailoverDeploymentSelection.ReadConfigurationOverrides(k => configuration[k], serverId, nodeId));
     }
 
     public static async Task<HighAvailabilityMaterialProof> ReadMaterialsAsync(HttpContext context, IConfiguration configuration)

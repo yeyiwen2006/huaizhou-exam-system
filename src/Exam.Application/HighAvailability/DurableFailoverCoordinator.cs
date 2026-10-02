@@ -70,13 +70,16 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
                 break;
             case ManagementOperationKind.Rebuild:
                 if (request.TargetNodeId != nodeId || nodeId == active || !request.ConfirmDestructiveRebuild ||
-                    target.Role is not (DeploymentNodeRole.Isolated or DeploymentNodeRole.Rebuilding))
+                    !(target.Role is DeploymentNodeRole.Isolated or DeploymentNodeRole.Rebuilding ||
+                      target.Role == DeploymentNodeRole.Standby && before.ProtectionMode == ProtectionMode.EmergencySingleNode))
                     throw new DomainRuleException(ErrorCodes.InvalidInput, "只能明确确认后重建本机隔离旧节点；禁止重建活动主节点。");
                 nodes[nodeId] = target with { Role = DeploymentNodeRole.Rebuilding, Reachable = false };
                 mode = ProtectionMode.Recovering;
                 break;
             case ManagementOperationKind.Reprotect:
-                if (active != nodeId || target.NodeId == active || target.Role != DeploymentNodeRole.Rebuilding)
+                if (active != nodeId || target.NodeId == active ||
+                    !(target.Role == DeploymentNodeRole.Rebuilding ||
+                      target.Role == DeploymentNodeRole.Standby && before.ProtectionMode == ProtectionMode.EmergencySingleNode))
                     throw new DomainRuleException(ErrorCodes.InvalidInput, "须在当前主节点核对已重建备节点后恢复同步保护。");
                 nodes[target.NodeId] = target with { Role = DeploymentNodeRole.Standby };
                 mode = ProtectionMode.SynchronousDualNode;

@@ -47,6 +47,40 @@ public sealed class HighAvailabilityDeploymentTests : IDisposable
         Assert.Equal(Path.Combine(_root, "resources"), builder.Configuration["Backup:VersionedResourcesDirectory"]);
     }
 
+    [Fact]
+    public async Task RoleSwitchRebindsBothDatabaseAndTimelineConnectionsWithoutRetainingOldPrimary()
+    {
+        var builder = Builder();
+        builder.Configuration["ConnectionStrings:ExamTimeline"] = "Host=synthetic-old-primary.example.test";
+        builder.Configuration["ConnectionStrings:ExamStandby"] = "Host=synthetic-wrong-standby.example.test";
+        builder.Configuration["ConnectionStrings:ExamStandbyTimeline"] = "Host=synthetic-old-timeline.example.test";
+        Assert.Empty(FileFailoverDeploymentSelection.ReadConfigurationOverrides(k => builder.Configuration[k], "server", "node-b"));
+        await new FileFailoverDeploymentSelection(SelectionPath).SaveAsync(Selection, default);
+        var resolved = FileFailoverDeploymentSelection.ReadConfigurationOverrides(k => builder.Configuration[k], "server", "node-b");
+        Assert.Equal("2", resolved["ExamServer:ServerEpoch"]);
+        Assert.Equal(builder.Configuration["HighAvailability:Nodes:node-b:ConnectionString"], resolved["ConnectionStrings:ExamTimeline"]);
+        Assert.Equal(builder.Configuration["HighAvailability:Nodes:node-a:ConnectionString"], resolved["ConnectionStrings:ExamStandby"]);
+        Assert.Equal(resolved["ConnectionStrings:ExamStandby"], resolved["ConnectionStrings:ExamStandbyTimeline"]);
+        Assert.Equal(Selection.ConfirmationDirectory, resolved["Confirmation:Directory"]);
+        HighAvailabilityDeployment.Apply(builder);
+        Assert.All(resolved, entry => Assert.Equal(entry.Value, builder.Configuration[entry.Key]));
+    }
+
+    [Fact]
+    public void RebuildServiceKeepsNetworkListenerFromProtectedPostgresConfiguration()
+    {
+        var nodes = new Dictionary<string, FailoverNodeDeployment> {
+            ["node-b"] = new("node-b", "Host=127.0.0.1;Port=5444;Database=synthetic", Path.Combine(_root, "resources"),
+                "synthetic", ConfirmationRoot, "https://node-b.example.test/") };
+        var options = new HighAvailabilityManagementOptions("server", "node-b", nodes, SelectionPath, Path.Combine(_root, "rebuild"),
+            Path.Combine(_root, "bin"), Path.Combine(_root, "data"), "SyntheticPostgres", "SyntheticBusiness", "synthetic-peer-token",
+            Path.Combine(_root, "postgresql.conf"));
+        var command = PostgresHighAvailabilityManagementPlatform.BuildPostgresServiceCommand(options);
+        Assert.DoesNotContain("listen_addresses=127.0.0.1", command);
+        Assert.Contains("config_file=", command);
+        Assert.Contains("-c port=5444", command);
+    }
+
     [Theory]
     [InlineData("identity")]
     [InlineData("directory")]

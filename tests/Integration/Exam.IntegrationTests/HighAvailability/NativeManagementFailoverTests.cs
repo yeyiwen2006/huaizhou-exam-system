@@ -53,10 +53,11 @@ public sealed class NativeManagementFailoverTests
         // pg_basebackup, pg_verifybackup, promotion and HTTP management effects below are actual.
         var materialsA = Materials(sourceA); var materialsB = Materials(sourceB);
         var optionsA = Options("node-a", dataA); var optionsB = Options("node-b", dataB);
+        var businessA = new Listener(); var businessB = new Listener();
         var platformA = new PostgresHighAvailabilityManagementPlatform(optionsA, peers, materialsA, runner,
-            new Listener(), hostA, verifyDeployment: hostA.VerifyBinding);
+            businessA, hostA, verifyDeployment: hostA.VerifyBinding);
         var platformB = new PostgresHighAvailabilityManagementPlatform(optionsB, peers, materialsB, runner,
-            new Listener(), hostB, verifyDeployment: hostB.VerifyBinding);
+            businessB, hostB, verifyDeployment: hostB.VerifyBinding);
         peerTransport.Ready = async (node, token) =>
         {
             var options = node == "node-a" ? optionsA : optionsB; var deployment = deployments[node]; var source = node == "node-a" ? sourceA : sourceB;
@@ -90,30 +91,43 @@ public sealed class NativeManagementFailoverTests
             var initial = await platformB.ObserveAsync(default);
             Assert.True(initial.SynchronousProtectionVerified, JsonSerializer.Serialize(initial, JsonDefaults.Create()));
 
+            // A repaired standby can restore protection after emergency without an unnecessary destructive rebuild.
+            await using var apiA = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "a-management"), platformA, nodeId: "node-a");
+            using var clientA = apiA.Client();
+            await businessA.StartAsync(default);
+            await Operation(clientA, "emergency", new("initial-emergency", "server", "node-a", "operator", 1, 1, "node-a", "synthetic emergency"));
+            Assert.Equal(BusinessServiceStatus.Stopped, businessA.Status);
+            await businessA.StartAsync(default); // Explicit operator start loads the new selection.
+            var repaired = await Operation(clientA, "reprotect", new("initial-reprotect", "server", "node-a", "operator", 1, 2, "node-b", "synthetic repaired standby"));
+            Assert.True(repaired.HighAvailability!.SynchronousProtectionVerified);
+
             // The old database is truly stopped; its independent, latest protected confirmation head remains readable.
             await hostA.StopAsync(default);
+            var unavailableOldResources = nodeA.ResourcesDirectory + ".offline";
+            Directory.Move(nodeA.ResourcesDirectory, unavailableOldResources);
             await Wait(async () => (await platformB.ObserveAsync(default)).State?.Nodes["node-b"].ReplayLagBytes == 0);
             await using var apiB = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "b-management"), platformB);
             using var clientB = apiB.Client();
-            var takeover = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 1, "node-b", "synthetic old primary stopped",
+            var takeover = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 3, "node-b", "synthetic old primary stopped",
                 new("node-a", true, false, "operator", "synthetic old primary stopped")));
             Assert.Equal(2, takeover.HighAvailability!.State!.ServerEpoch);
             Assert.False(await Recovery(sourceB)); Assert.Equal(ProtectionMode.EmergencySingleNode, takeover.HighAvailability.State.ProtectionMode);
-            var replay = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 1, "node-b", "synthetic old primary stopped",
+            var replay = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 3, "node-b", "synthetic old primary stopped",
                 new("node-a", true, false, "operator", "synthetic old primary stopped")));
             Assert.Equal(takeover.ContentHash, replay.ContentHash);
-            await Operation(clientB, "emergency", new("emergency", "server", "node-b", "operator", 2, 2, "node-b", "synthetic local confirmation"));
+            await Operation(clientB, "emergency", new("emergency", "server", "node-b", "operator", 2, 4, "node-b", "synthetic local confirmation"));
             var selectedB = new FileFailoverDeploymentSelection(optionsB.SelectionPath).Read()!;
             await new PostgresBusinessConfirmation(sourceB, new(selectedB.ConfirmationDirectory), "server", "node-b", "node-a", 2, nodeB.ResourcesDirectory, peer).ConfirmAsync(default);
-            await using var apiA = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "a-management"), platformA, nodeId: "node-a");
-            using var clientA = apiA.Client();
-            var rebuilt = await Operation(clientA, "rebuild", new("rebuild", "server", "node-a", "operator", 2, 3, "node-a", "synthetic isolated node rebuild", ConfirmDestructiveRebuild: true));
+            Directory.Move(unavailableOldResources, nodeA.ResourcesDirectory);
+            var rebuilt = await Operation(clientA, "rebuild", new("rebuild", "server", "node-a", "operator", 2, 5, "node-a", "synthetic isolated node rebuild", ConfirmDestructiveRebuild: true));
             Assert.Equal(ProtectionMode.Recovering, rebuilt.HighAvailability!.State!.ProtectionMode);
             Assert.True(await Recovery(sourceA)); Assert.NotEmpty(Directory.GetDirectories(root, "a-database.quarantine.*"));
-            var protectedAgain = await Operation(clientB, "reprotect", new("reprotect", "server", "node-b", "operator", 2, 4, "node-a", "synthetic restore dual protection"));
+            peerTransport.RejectNextConfirmation = true;
+            var protectedAgain = await Operation(clientB, "reprotect", new("reprotect", "server", "node-b", "operator", 2, 6, "node-a", "synthetic restore dual protection"));
             Assert.True(protectedAgain.HighAvailability!.SynchronousProtectionVerified);
             Assert.Equal(ProtectionMode.SynchronousDualNode, protectedAgain.HighAvailability.State!.ProtectionMode);
-            Assert.Equal(5, protectedAgain.HighAvailability.State.Version);
+            Assert.Equal(7, protectedAgain.HighAvailability.State.Version);
+            Assert.Equal(1, peerTransport.RejectedConfirmations);
             Assert.Equal(DeploymentNodeRole.Standby, protectedAgain.HighAvailability.State.Nodes["node-a"].Role);
             Assert.Equal(new FileConfirmationStore(new FileFailoverDeploymentSelection(optionsA.SelectionPath).Read()!.ConfirmationDirectory).Read(),
                 new FileConfirmationStore(new FileFailoverDeploymentSelection(optionsB.SelectionPath).Read()!.ConfirmationDirectory).Read());
@@ -224,6 +238,8 @@ public sealed class NativeManagementFailoverTests
     }
     private sealed class PeerTransport : HttpMessageHandler
     {
+        public bool RejectNextConfirmation;
+        public int RejectedConfirmations;
         public Func<string, CancellationToken, Task<HighAvailabilityMaterialProof>> Ready = null!;
         public Func<string, PostgresStandbyConfirmation> Witness = null!;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -235,7 +251,11 @@ public sealed class NativeManagementFailoverTests
             {
                 if (request.RequestUri!.AbsolutePath == "/replication/v1/readiness") result = await Ready(node, token);
                 else if (request.Method == HttpMethod.Get) result = Witness(node).Read();
-                else result = await Witness(node).ConfirmAsync((await request.Content!.ReadFromJsonAsync<DurableConfirmation>(JsonDefaults.Create(), token))!, token);
+                else
+                {
+                    if (RejectNextConfirmation) { RejectNextConfirmation = false; RejectedConfirmations++; return new(HttpStatusCode.ServiceUnavailable); }
+                    result = await Witness(node).ConfirmAsync((await request.Content!.ReadFromJsonAsync<DurableConfirmation>(JsonDefaults.Create(), token))!, token);
+                }
             }
             catch (Exception) { return new(HttpStatusCode.ServiceUnavailable); }
             return new(HttpStatusCode.OK) { Content = JsonContent.Create(result, options: JsonDefaults.Create()) };

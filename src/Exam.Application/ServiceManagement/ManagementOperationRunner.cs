@@ -76,14 +76,15 @@ public sealed class ManagementOperationRunner(
             catch (DomainRuleException error)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification || error.Code == ErrorCodes.PersistenceFailed
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification ||
+                        accepted.FailoverPlan is not null || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(error.Code, error.Message, Retryable: error.Retryable) };
             }
             catch (ArgumentException)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification || accepted.FailoverPlan is not null
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
             }

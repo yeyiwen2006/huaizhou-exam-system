@@ -89,7 +89,8 @@ public sealed class ManagementHttpTests : IAsyncLifetime
     {
         using var vm = Workspace(Connection()); await vm.LoginAsync("synthetic-password"); await vm.RequestAsync(ManagementOperationKind.Checks);
         Assert.Contains("阻止业务写入", vm.Message); Assert.Contains(vm.Checks, c => c.WriteGate == "阻止写入");
-        await vm.RefreshAsync(); Assert.InRange(vm.Logs.Count, 1, 100); Assert.Contains(vm.Logs, row => row.Code == "42");
+        await vm.RefreshAsync(); Assert.InRange(vm.Logs.Count, 1, 100); Assert.Contains(vm.Logs, row => row.Code == "事件编号：42");
+        Assert.Contains(vm.Logs, row => row.Source == "业务服务" && row.Phase == "警告");
         Assert.DoesNotContain("synthetic-private-detail", JsonSerializer.Serialize(vm.Logs));
     }
     [Fact]
@@ -127,7 +128,7 @@ public sealed class ManagementHttpTests : IAsyncLifetime
         {
             await vm.LoginAsync("synthetic-password"); vm.RestoreBackupId = "synthetic-backup"; vm.RestoreSource = Path.Combine(_root, "synthetic-backup");
             await vm.RequestAsync(ManagementOperationKind.Restore); id = vm.Pending!.RequestId;
-            Assert.Contains(vm.Checks, c => c.Name == "recovery-confirmed-state" && c.WriteGate == "阻止写入");
+            Assert.Contains(vm.Checks, c => c.Name == "最新持久确认" && c.WriteGate == "阻止写入");
         }
         await _app.StopAsync(); await _app.DisposeAsync(); await StartAsync(missingConfirmation: true);
         using var resumed = Workspace(Connection()); await resumed.LoginAsync("synthetic-password"); await resumed.QueryAsync();

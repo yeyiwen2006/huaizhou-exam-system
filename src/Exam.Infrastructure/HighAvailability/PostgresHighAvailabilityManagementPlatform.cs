@@ -240,7 +240,8 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         }
         return new(operation.RequestId, operation.ContentHash, operation.Kind, before, after,
             reference.Value.System, reference.Value.Database, reference.Value.Timeline,
-            FileConfirmationStore.ResourcesDigest(_options.Nodes[before.ActiveNodeId].ResourcesDirectory));
+            FileConfirmationStore.ResourcesDigest(operation.Kind == ManagementOperationKind.Rebuild
+                ? _options.Nodes[before.ActiveNodeId].ResourcesDirectory : Local.ResourcesDirectory));
     }
 
     public async Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token)
@@ -252,7 +253,12 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             await PublishAsync(plan, token); await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token);
         }
         else if (plan.Kind == ManagementOperationKind.Emergency)
-        { await PublishAsync(plan, token); await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token); }
+        {
+            // The running business host holds its confirmation directory for its lifetime.
+            // Stop it before selecting a different protected directory, as for takeover.
+            await _business.StopAsync(token);
+            await PublishAsync(plan, token); await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token);
+        }
         else if (plan.Kind == ManagementOperationKind.Rebuild)
         { await _business.StopAsync(token); await PublishAsync(plan, token); await RebuildLocalAsync(plan, token); }
         else if (plan.Kind == ManagementOperationKind.Reprotect)
@@ -405,7 +411,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (!relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !Path.IsPathFullyQualified(relative))
             throw new IOException("受控配置必须位于被替换数据库目录之外。");
         var arguments = $"-c config_file=\"{config.Replace('\\', '/')}\" -c data_directory=\"{data.Replace('\\', '/')}\" " +
-            $"-c listen_addresses=127.0.0.1 -c port={settings.Port} -c archive_mode=off -c shared_preload_libraries=\"\" " +
+            $"-c port={settings.Port} -c archive_mode=off -c shared_preload_libraries=\"\" " +
             "-c session_preload_libraries=\"\" -c local_preload_libraries=\"\" -c restore_command=\"exit 1\" " +
             "-c archive_cleanup_command=\"\" -c recovery_end_command=\"\"";
         return $"\"{Path.Combine(Path.GetFullPath(options.PostgresBinDirectory), "pg_ctl.exe")}\" runservice -N \"{options.PostgresServiceName}\" " +
