@@ -15,9 +15,27 @@ public interface IManifestFileDialogService
     Task<string> ReadManifestAsync(string path, long maxBytes, CancellationToken cancellationToken = default);
 }
 
-public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService
+public interface IExamImportSourceDialog
+{
+    string? OpenDirectory();
+    string? OpenZip();
+}
+
+public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService, IExamImportSourceDialog
 {
     private const string ExcelFilter = "Excel 工作簿 (*.xlsx)|*.xlsx";
+
+    public string? OpenDirectory()
+    {
+        var dialog = new OpenFolderDialog { Title = "选择逐题试题包目录" };
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
+
+    public string? OpenZip()
+    {
+        var dialog = new OpenFileDialog { Filter = "试题 ZIP 包 (*.zip)|*.zip", CheckFileExists = true };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
 
     public string? OpenExcelFile()
     {
