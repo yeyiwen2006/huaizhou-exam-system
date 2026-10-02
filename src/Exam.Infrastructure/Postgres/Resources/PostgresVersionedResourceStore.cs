@@ -115,6 +115,21 @@ public sealed class PostgresVersionedResourceStore(
         return await reader.ReadAsync(cancellationToken) ? ReadResource(reader) : null;
     }
 
+    internal static void SaveInTransaction(NpgsqlConnection connection,NpgsqlTransaction transaction,VersionedEncryptedResource resource)
+    {
+        Validate(resource,ManagedNodeEncryptionPolicy.None);
+        using var command=new NpgsqlCommand("""
+            INSERT INTO exam.versioned_resources(resource_id,exam_id,resource_kind,resource_version,encrypted_content,
+                encryption_envelope,created_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8);
+            """,connection,transaction);
+        command.Parameters.AddWithValue(resource.ResourceId);command.Parameters.AddWithValue(resource.ExamId);
+        command.Parameters.AddWithValue(resource.ResourceKind);command.Parameters.AddWithValue(resource.Version);
+        command.Parameters.AddWithValue(resource.EncryptedContent);
+        command.Parameters.AddWithValue(NpgsqlDbType.Jsonb,JsonSerializer.Serialize(resource.Envelope,JsonOptions));
+        command.Parameters.AddWithValue(resource.CreatedAt);command.Parameters.AddWithValue(resource.CreatedBy);
+        command.ExecuteNonQuery();
+    }
+
     private static VersionedEncryptedResource ReadResource(NpgsqlDataReader reader)
     {
         var envelope = JsonSerializer.Deserialize<EncryptedPackageEnvelope>(reader.GetString(5), JsonOptions)

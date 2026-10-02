@@ -15,7 +15,7 @@ namespace Exam.Infrastructure.Postgres.Versioning;
 /// a query projection. Mutations replay the existing domain aggregate while holding the stream row
 /// lock, so the domain remains the single source of schedule, structure and terminal-state rules.
 /// </summary>
-public sealed class PostgresExamVersioningService : IExamVersioningService
+public sealed partial class PostgresExamVersioningService : IExamVersioningService
 {
     private const string CreateOperation = "exam.create";
     private const string UpdateScheduleOperation = "schedule.update";

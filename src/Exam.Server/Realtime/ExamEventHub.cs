@@ -157,7 +157,8 @@ public sealed class ExamEventHub(
     RealtimeDeviceAuthorizer authorizer,
     RealtimeConnectionRegistry connections,
     ReliableCommandService commands,
-    Exam.Application.HighAvailability.IBusinessConfirmation? confirmation = null) : Hub
+    Exam.Application.HighAvailability.IBusinessConfirmation? confirmation = null,
+    Exam.Infrastructure.Postgres.Administration.PostgresDevicePresenceService? presence = null) : Hub
 {
     private const string CredentialHeader = "X-Exam-Device-Credential";
 
@@ -191,13 +192,18 @@ public sealed class ExamEventHub(
             Context.ConnectionId,
             GroupName(request.ParticipationId),
             Context.ConnectionAborted);
+        if (presence is not null)
+            await presence.HubConnectedAsync(request.DeviceId, Context.ConnectionId, Context.ConnectionAborted);
         await SendDueAsync(connection, Context.ConnectionAborted);
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        connections.TryGet(Context.ConnectionId, out var disconnected);
         connections.Remove(Context.ConnectionId);
+        if (presence is not null && disconnected is not null)
+            await presence.HubDisconnectedAsync(disconnected.Identity.DeviceId, Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
     }
 

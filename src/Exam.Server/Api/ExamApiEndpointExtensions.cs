@@ -30,6 +30,7 @@ public static class ExamApiEndpointExtensions
         api.MapGradingApi();
         api.MapExamCatalogApi();
         api.MapOperatorAccountApi();
+        api.MapAdministrationApi();
         return endpoints;
     }
 

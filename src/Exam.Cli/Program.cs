@@ -30,6 +30,8 @@ internal static partial class ExamCli
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
                 ["time", .. var options] => await SendAsync(HttpMethod.Get, "/api/v1/commands/time", options, cancellationToken),
                 ["exams", .. var options] => await RunExamsAsync(options, cancellationToken),
+                [var administration, .. var options] when administration is "roster" or "rooms" or "devices" or "monitor" or "publications" =>
+                    await RunAdministrationAsync(administration, options, cancellationToken),
                 [var account, .. var options] when account is "register" or "login" or "logout" or "whoami" =>
                     await RunAccountAsync(account, options, cancellationToken),
                 ["operators", "list", .. var options] => await RunAccountAsync("list", options, cancellationToken),
@@ -111,6 +113,16 @@ internal static partial class ExamCli
         Console.WriteLine("  exams create --input FILE             新建考试（name、schedule、settings）");
         Console.WriteLine("  exams update 名称 --input FILE        修改考试名称及科目题组设置（开考前）");
         Console.WriteLine("  exams visibility 名称 on|off          设置是否在学生端显示");
+        Console.WriteLine("  roster list 名称                     查询已保存名册（保留班级与准考证号前导零）");
+        Console.WriteLine("  roster import 名称 --input FILE      整批校验并原子导入，失败输出逐行问题且退出码非零");
+        Console.WriteLine("  roster update|delete 名称 准考证号   更正或删除尚未入场的考生；update 使用 --input FILE");
+        Console.WriteLine("  rooms list|create 名称               查询试场或创建试场");
+        Console.WriteLine("  rooms rename 原名称 新名称           按版本重命名试场");
+        Console.WriteLine("  rooms delete 名称                    仅允许删除没有设备的试场");
+        Console.WriteLine("  rooms move 名称|未分组 --input FILE  按公开学生端编号整批转组（clientNumbers、reason）");
+        Console.WriteLine("  devices list [试场]|show 编号|history 编号  查询设备、当前考生、连接状态或转组历史");
+        Console.WriteLine("  monitor show|missing 名称            查询权威监控快照或未回收名单");
+        Console.WriteLine("  publications publish 名称 --input FILE  原子激活已验证的试卷及计分规则");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
         Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");

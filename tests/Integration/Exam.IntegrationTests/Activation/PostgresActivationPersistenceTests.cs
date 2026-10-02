@@ -99,7 +99,9 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
         var protector = new FastCredentialProtector();
         var service = CreateService(clock, protector);
         var pending = await service.SubmitRequestAsync(new("own-apply", "own-device", "own-secret"));
-        var active = await service.ApproveAsync(new("own-approve", pending.ActivationRequestId, "room-a"));
+        var room=await new Exam.Infrastructure.Postgres.Administration.PostgresRoomService(fixture.DataSource)
+            .CreateAsync(new(Guid.NewGuid().ToString("N"),"合成取消激活试场-"+Guid.NewGuid().ToString("N")),"synthetic-test");
+        var active = await service.ApproveAsync(new("own-approve", pending.ActivationRequestId, room.GroupId));
         var request = new CancelOwnActivationRequest("own-cancel", active.DeviceId, "own-secret");
 
         var wrongCredential = await Assert.ThrowsAsync<ActivationRuleException>(() =>

@@ -63,6 +63,11 @@ public static class PostgresRuntimeRegistration
         services.AddExamCapacity(configuration, capacity);
         var dataSource = connectionOptions.CreateDataSource();
         services.AddSingleton(dataSource);
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresCandidateRosterService>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresRoomService>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresDevicePresenceService>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresDeviceDirectory>();
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresMonitoringService>();
         services.AddBusinessConfirmation(configuration, identity, allowUninitializedFailoverState);
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
@@ -147,7 +152,9 @@ public static class PostgresRuntimeRegistration
         services.AddHostedService<RecoveryGatedWorker<GradingWorker>>();
         services.AddSingleton<RecalculationWorker>();
         services.AddHostedService<RecoveryGatedWorker<RecalculationWorker>>();
-        services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();
+        services.AddSingleton<PostgresExamVersioningService>();
+        services.AddSingleton<IExamVersioningService>(provider=>provider.GetRequiredService<PostgresExamVersioningService>());
+        services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresBundlePublicationService>();
         services.AddSingleton<PostgresScheduleProcessor>();
         services.AddSingleton<PostgresScheduleWorker>();
         services.AddHostedService<RecoveryGatedWorker<PostgresScheduleWorker>>();
@@ -164,6 +171,10 @@ public static class PostgresRuntimeRegistration
         var encryptionPolicy = new ManagedNodeEncryptionPolicy(
             requiredNodeIds.ToHashSet(StringComparer.Ordinal));
         services.AddSingleton(encryptionPolicy);
+        services.AddSingleton<Exam.Server.Api.PublicationUploadGate>();
+        services.AddSingleton<IPublicationCertificateProvider>(new CertificateStorePublicationProvider(
+            requiredNodeIds.ToDictionary(node=>node,node=>configuration[$"PackageSecurity:RecipientCertificates:{node}"]
+                ??(node==identity.NodeId?configuration["PackageSecurity:CertificateThumbprint"]:null)??string.Empty,StringComparer.Ordinal),encryptionPolicy));
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
         services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
