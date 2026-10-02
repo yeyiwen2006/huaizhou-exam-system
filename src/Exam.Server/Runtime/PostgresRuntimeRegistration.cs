@@ -177,6 +177,13 @@ public static class PostgresRuntimeRegistration
                 ??(node==identity.NodeId?configuration["PackageSecurity:CertificateThumbprint"]:null)??string.Empty,StringComparer.Ordinal),encryptionPolicy));
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
+        // C05 导入流水线：D03 安全发布 + 版本资源入库 + A06 试卷版本发布。
+        services.AddSingleton<Exam.Infrastructure.Packaging.StudentPackagePublisher>();
+        services.AddSingleton(provider => new Exam.Infrastructure.Packaging.ImportPipeline(
+            provider.GetRequiredService<Exam.Infrastructure.Packaging.StudentPackagePublisher>(),
+            provider.GetRequiredService<PostgresVersionedResourceStore>(),
+            provider.GetRequiredService<IExamVersioningService>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
         services.AddSingleton<IPackageKeyUnwrapper>(new CertificateStorePackageKeyUnwrapper(
             identity.NodeId,
