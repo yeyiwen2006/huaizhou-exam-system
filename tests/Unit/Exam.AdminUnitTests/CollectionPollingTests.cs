@@ -87,24 +87,43 @@ public sealed partial class CollectionPollingTests
     {
         var all = Enumerable.Range(1, 1001).Select(index => Event("exam-a", index)).ToArray();
         var cursors = new List<long>();
-        using var handler = new Handler((request, _) =>
+        var nextPollStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextPollResponse = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new Handler((request, token) =>
         {
             var cursor = Cursor(request);
             lock (cursors) cursors.Add(cursor);
+            if (cursor == 1001)
+            {
+                nextPollStarted.TrySetResult();
+                return nextPollResponse.Task.WaitAsync(token);
+            }
             return Task.FromResult(Success(all.Where(item => item.RosterVersion > cursor).Take(100).ToArray()));
         });
         using var api = Configured(handler);
         using var vm = new MonitoringViewModel(api, TimeSpan.FromMilliseconds(20))
         {
-            ExamId = "exam-a", IsPageActive = true, ConnectionReady = true
+            ExamId = "exam-a"
         };
+        var completed = new TaskCompletionSource<(long[] Versions, string Status)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.CollectionCompleted += notification =>
+        {
+            if (notification.RosterVersion != 1001) return;
+            // Capture this completed batch before the next timer tick changes the live status.
+            completed.TrySetResult((vm.CollectionEvents.Select(item => item.RosterVersion).ToArray(), vm.CollectionStatus));
+        };
+        vm.IsPageActive = true;
+        vm.ConnectionReady = true;
 
-        await UntilAsync(() => vm.CollectionEvents.Count == 500 && vm.CollectionEvents[^1].RosterVersion == 1001);
+        var result = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Keep the following read in flight: the live status must no longer describe the completed batch.
+        await nextPollStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(Enumerable.Range(502, 500).Select(value => (long)value),
-            vm.CollectionEvents.Select(item => item.RosterVersion));
-        lock (cursors) Assert.Contains(1000L, cursors);
-        Assert.Contains("最近 500 条", vm.CollectionStatus, StringComparison.Ordinal);
+            result.Versions);
+        lock (cursors) Assert.Equal(Enumerable.Range(0, 11).Select(page => page * 100L), cursors.Take(11));
+        Assert.Contains("最近 500 条", result.Status, StringComparison.Ordinal);
+        Assert.Equal("正在查询收齐记录…", vm.CollectionStatus);
     }
 
     [Fact]
