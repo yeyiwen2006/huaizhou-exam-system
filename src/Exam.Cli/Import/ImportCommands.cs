@@ -16,6 +16,11 @@ internal static partial class ExamCli
     private static async Task<int> RunImportAsync(string action, string packageRoot, string[] arguments,
         CancellationToken cancellationToken)
     {
+        if (action is "preview" or "publish")
+        {
+            return await RunImportRemoteAsync(action, packageRoot, arguments, cancellationToken);
+        }
+
         if (action is not "verify") return 2;
         var options = ParseOptions(arguments);
         var keepOutput = options.Input is not null;

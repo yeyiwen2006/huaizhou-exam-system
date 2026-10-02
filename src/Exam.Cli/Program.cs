@@ -126,6 +126,11 @@ internal static partial class ExamCli
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
         Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");
+        Console.WriteLine("  import verify 包目录                  本地校验并逐题编译、抽取选项坐标（不连服务器）");
+        Console.WriteLine("  import preview 包目录 --exam X --version N --compile 目录 --reason 说明 [--server URL]");
+        Console.WriteLine("                                        服务端预检：校验、编译与坐标抽取，返回逐题摘要");
+        Console.WriteLine("  import publish 包目录 --exam X --version N --compile 目录 --output 目录 --reason 说明 \\");
+        Console.WriteLine("                                        --node-cert 节点=证书文件 服务端发布：组包加密、入库并发布版本");
         Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");
