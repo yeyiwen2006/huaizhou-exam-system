@@ -88,6 +88,17 @@ public sealed class WpfBindingSmokeTests
                     window.UpdateLayout();
                     if ((string)tab.Header == "激活与试场分组")
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);
+                    if ((string)tab.Header == "试卷导入与发布")
+                    {
+                        Assert.Equal(viewModel.CurrentExam!.Name, viewModel.Import.ExamName);
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "选择目录") && ReferenceEquals(button.Command, viewModel.Import.SelectDirectoryCommand));
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "选择 ZIP") && ReferenceEquals(button.Command, viewModel.Import.SelectZipCommand));
+                        Assert.Contains(Descendants<Button>(window), button =>
+                            Equals(button.Content, "确认并正式发布") && ReferenceEquals(button.Command, viewModel.Import.PublishCommand));
+                        Assert.False(viewModel.Import.CanPublish);
+                    }
                     if ((string)tab.Header == "设备监控")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);

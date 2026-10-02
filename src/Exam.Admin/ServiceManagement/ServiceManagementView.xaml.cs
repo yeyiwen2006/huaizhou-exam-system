@@ -11,7 +11,7 @@ public partial class ServiceManagementView : UserControl
     public ServiceManagementView(ServiceManagementViewModel viewModel)
     {
         _viewModel = viewModel;
-        if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
+        if (System.Windows.Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
         { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent(); DataContext = viewModel;
         Loaded += OnLoaded;
