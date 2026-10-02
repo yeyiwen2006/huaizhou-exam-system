@@ -296,6 +296,80 @@
             </ScrollViewer>
         </TabItem>
 
+        <TabItem Header="试题导入" Tag="{StaticResource Icon.Download}" IsEnabled="{Binding HasCurrentExam}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="试题导入" Tag="{StaticResource Icon.Download}"
+                                            Content="选择材料包目录后先预检：服务端会校验清单与答案、逐题编译并定位每个选项，通过后才可发布。" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding PaperImport.SelectPackageCommand}"
+                                IsEnabled="{Binding PaperImport.CanPreview}" />
+                        <TextBlock Text="{Binding PaperImport.PackageRoot}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition /><RowDefinition />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="目标试卷版本" VerticalAlignment="Center" Margin="0,0,8,8" />
+                        <TextBox Grid.Column="1" Margin="0,0,16,8" Text="{Binding PaperImport.TargetVersionText, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Text="发布原因" VerticalAlignment="Center" Margin="0,0,8,8" />
+                        <TextBox Grid.Column="3" Margin="0,0,0,8" Text="{Binding PaperImport.Reason, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1" Text="服务端编译目录" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,16,0" Text="{Binding PaperImport.CompilationDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="服务端包输出目录" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding PaperImport.PackageOutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                    </Grid>
+                    <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap" Margin="0,6,0,0"
+                               Text="目标试卷版本＝本次发布出的版本。服务器按「当前版本＝目标版本−1」校验并发冲突，对不上会整场拒绝发布；不确定时先点「读取当前版本」。" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button Content="读取当前版本" Style="{StaticResource ActionButton}" Command="{Binding PaperImport.LoadTargetVersionCommand}"
+                                IsEnabled="{Binding PaperImport.CanReadCurrentVersion}" />
+                        <Button Content="预检" Style="{StaticResource ActionButton}" Margin="8,0,0,0" Command="{Binding PaperImport.PreviewCommand}"
+                                IsEnabled="{Binding PaperImport.CanPreview}" />
+                        <Button Content="发布" Style="{StaticResource PrimaryAction}" Margin="8,0,0,0" Command="{Binding PaperImport.PublishCommand}"
+                                IsEnabled="{Binding PaperImport.CanPublish}" />
+                        <Button Content="刷新客户端更新" Style="{StaticResource ActionButton}" Margin="8,0,0,0"
+                                Command="{Binding PaperImport.RefreshClientUpdatesCommand}"
+                                IsEnabled="{Binding PaperImport.CanRefreshClientUpdates}" />
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding PaperImport.Status}" Margin="0,12,0,0" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding PaperImport.Stage, StringFormat=当前阶段：{0}}" Style="{StaticResource CardNote}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding PaperImport.ClientUpdateSummary}" TextWrapping="Wrap" />
+
+                    <TextBlock Text="逐题预检结果" Style="{StaticResource CardHeading}" Margin="0,16,0,0" />
+                    <ListView ItemsSource="{Binding PaperImport.Questions}" MaxHeight="220">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="题目标识" Width="220" DisplayMemberBinding="{Binding QuestionId}" />
+                                <GridViewColumn Header="已编译" Width="80" DisplayMemberBinding="{Binding Compiled}" />
+                                <GridViewColumn Header="选项数" Width="80" DisplayMemberBinding="{Binding OptionCount}" />
+                                <GridViewColumn Header="定位到的区域数" Width="140" DisplayMemberBinding="{Binding RegionCount}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <TextBlock Text="问题" Style="{StaticResource CardHeading}" Margin="0,16,0,0" />
+                    <ListView ItemsSource="{Binding PaperImport.Issues}" MaxHeight="180">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="问题码" Width="220" DisplayMemberBinding="{Binding Code}" />
+                                <GridViewColumn Header="题目" Width="160" DisplayMemberBinding="{Binding QuestionId}" />
+                                <GridViewColumn Header="说明" Width="520" DisplayMemberBinding="{Binding Message}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
+
         <TabItem Header="考生名单" Tag="{StaticResource Icon.Users}" IsEnabled="{Binding HasCurrentExam}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">

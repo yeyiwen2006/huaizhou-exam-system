@@ -37,6 +37,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
         Home = new ExamHomeViewModel(_api);
         Accounts = new OperatorAccountsViewModel(_api);
+        PaperImport = new PaperImportViewModel(_api);
         Home.ExamOpened += OpenExam;
         Home.NewExamRequested += NewExam;
         Exam.ExamSaved += OnExamSaved;
@@ -45,6 +46,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     public ExamHomeViewModel Home { get; }
+    public PaperImportViewModel PaperImport { get; }
     public OperatorAccountsViewModel Accounts { get; }
     public RelayCommand BackToHomeCommand { get; }
 
@@ -85,6 +87,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
+        PaperImport.ExamId = exam.ExamId;
         Reports.ExamName = exam.Name;
         SelectedPage = SettingsPage;
         Exam.OpenCommand(exam.ExamId).Execute(null);
@@ -96,6 +99,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Roster.Reset();
         Monitoring.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
+        PaperImport.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SetCreating(true);
         Exam.ResetForNew();
@@ -110,6 +114,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
             _ = Roster.OpenAsync(detail.Summary.ExamId);
         Monitoring.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
+        PaperImport.ExamId = detail.Summary.ExamId;
         Reports.ExamName = detail.Summary.Name;
         if (Home.RefreshCommand.CanExecute(null)) Home.RefreshCommand.Execute(null);
     }
