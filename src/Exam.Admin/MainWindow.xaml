@@ -314,19 +314,24 @@
                             <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition /><RowDefinition />
+                            <RowDefinition /><RowDefinition /><RowDefinition />
                         </Grid.RowDefinitions>
                         <TextBlock Text="目标试卷版本" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBox Grid.Column="1" Margin="0,0,16,8" Text="{Binding PaperImport.TargetVersionText, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Column="2" Text="发布原因" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBox Grid.Column="3" Margin="0,0,0,8" Text="{Binding PaperImport.Reason, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="1" Text="服务端编译目录" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,16,0" Text="{Binding PaperImport.CompilationDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="1" Grid.Column="2" Text="服务端包输出目录" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding PaperImport.PackageOutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1" Text="服务端编译目录" VerticalAlignment="Center" Margin="0,0,8,8" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,16,8" Text="{Binding PaperImport.CompilationDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="服务端包输出目录" VerticalAlignment="Center" Margin="0,0,8,8" />
+                        <TextBox Grid.Row="1" Grid.Column="3" Margin="0,0,0,8" Text="{Binding PaperImport.PackageOutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2" Text="变更题号" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3"
+                                 Text="{Binding PaperImport.DeclaredChangedQuestions, UpdateSourceTrigger=PropertyChanged}" />
                     </Grid>
                     <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap" Margin="0,6,0,0"
                                Text="目标试卷版本＝本次发布出的版本。服务器按「当前版本＝目标版本−1」校验并发冲突，对不上会整场拒绝发布；不确定时先点「读取当前版本」。" />
+                    <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap" Margin="0,0,0,4"
+                               Text="变更题号：首次导入不用填（整卷都是新题）。该考试已发布过试卷版本时，开考后修订必须逐题填写本次改动过的题号（空格、逗号或顿号分隔）——填少了，改动过的题不会提示学生复核。发布时服务器会按声明逐题核对，对不上会拒绝发布。" />
 
                     <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                         <Button Content="读取当前版本" Style="{StaticResource ActionButton}" Command="{Binding PaperImport.LoadTargetVersionCommand}"

@@ -33,6 +33,7 @@ public sealed class PaperImportViewModel : BindableBase
     private string _compilationDirectory = string.Empty;
     private string _packageOutputDirectory = string.Empty;
     private string _reason = string.Empty;
+    private string _declaredChangedQuestions = string.Empty;
     private string _targetVersionText = "1";
     private string _status = IdleStatus;
     private string _stage = string.Empty;
@@ -131,6 +132,17 @@ public sealed class PaperImportViewModel : BindableBase
     {
         get => _reason;
         set => SetProperty(ref _reason, value);
+    }
+
+    /// <summary>
+    /// 本次变更的题号（开考后修订必填，用空格、逗号或顿号分隔）。
+    /// 首次发布不需要填：服务器按整卷都是新题处理。
+    /// 不改变将要发布的包本身，因此改动不作废预检结论；服务器会在发布时按声明逐题核对。
+    /// </summary>
+    public string DeclaredChangedQuestions
+    {
+        get => _declaredChangedQuestions;
+        set => SetProperty(ref _declaredChangedQuestions, value);
     }
 
     public string Status
@@ -269,25 +281,14 @@ public sealed class PaperImportViewModel : BindableBase
             return;
         }
 
-        var certificates = _dialogs.OpenNodeCertificates();
-        if (certificates.Count == 0)
-        {
-            Status = "发布需要选择学生包的加密接收节点公钥证书（文件名即节点标识）。";
-            return;
-        }
-
-        var recipients = certificates
-            .Select(path => new PackageRecipient(Path.GetFileNameWithoutExtension(path), File.ReadAllBytes(path)))
-            .ToList();
-
         ClearResults();
         IsBusy = true;
-        Status = "正在发布：组包加密、版本资源入库、试卷版本发布…";
+        Status = "正在发布：组包加密、版本资源入库、整体发布试卷版本与计分规则…";
         try
         {
             var result = await _api.PublishPaperImportAsync(
                 PackageRoot, ExamId, targetVersion, CompilationDirectory, PackageOutputDirectory,
-                recipients, Reason);
+                Reason, ParseDeclaredChangedQuestionIds());
             Apply(result);
             if (!result.Succeeded)
             {
@@ -384,6 +385,18 @@ public sealed class PaperImportViewModel : BindableBase
         PaperUpdateState.Updated => "已装",
         _ => state.ToString()
     };
+
+    /// <summary>把界面里填写的变更题号切成题号列表；空表示未声明（首次发布不需要声明）。</summary>
+    internal IReadOnlyList<string> ParseDeclaredChangedQuestionIds() =>
+        _declaredChangedQuestions
+            .Split(DeclaredQuestionSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>变更题号的分隔符：空格、逗号、顿号与分号的中英文写法都接受。</summary>
+    private static readonly char[] DeclaredQuestionSeparators =
+        [' ', '\t', '\r', '\n', ',', '，', '、', ';', '；'];
+
 
     private bool EnsureReady(bool forPublish, out long targetVersion)
     {

@@ -8,7 +8,11 @@ internal static partial class ExamCli
 {
     /// <summary>
     /// 走服务端的导入预检与发布。材料位于**服务器本机**可读的目录：编译、组包、加密与版本发布都在服务端完成，
-    /// 客户端只提交参数与加密收件人证书，因此大材料不必经网络搬运。
+    /// 客户端只提交参数，因此大材料不必经网络搬运。
+    ///
+    /// 加密收件人是**服务器受管节点**，本命令不传证书：主备任一台都必须能解密。
+    /// 该考试已发布过试卷版本时（开考后修订）必须用 --changed 逐题声明本次变更的题号：
+    /// 不声明整卷都变、让全体考生复核全卷；漏报则该题考生收不到复核提示。
     ///
     /// 预检只到编译与坐标抽取为止；发布在同一准备结果上继续。服务端把失败停在具体阶段并逐条给出问题码，
     /// 本命令据此退出非零，不把「已提交」当成「已发布」。
@@ -30,22 +34,6 @@ internal static partial class ExamCli
         var server = options.Server ?? Environment.GetEnvironmentVariable(ServerEnvironment);
         if (!TryResolveServer(server, out var address)) return 2;
 
-        IReadOnlyList<PackageRecipient> recipients = [];
-        if (action == "publish")
-        {
-            if (!TryReadRecipients(options.NodeCertificates, out recipients, out var recipientError))
-            {
-                Console.Error.WriteLine(recipientError);
-                return 2;
-            }
-
-            if (recipients.Count == 0)
-            {
-                Console.Error.WriteLine("发布需要至少一个 --node-cert <节点标识>=<证书文件>。");
-                return 2;
-            }
-        }
-
         using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
             BaseAddress = address,
@@ -63,7 +51,9 @@ internal static partial class ExamCli
                     expectedPaperVersion = options.ExpectedPaperVersion,
                     compilationOutputDirectory = options.CompilationDirectory,
                     packageOutputDirectory = options.PackageOutputDirectory,
-                    recipients,
+                    declaredChangedQuestionIds = options.ChangedQuestionIds.Count == 0
+                        ? null
+                        : options.ChangedQuestionIds,
                     reason = options.Reason,
                     requestId = options.RequestId
                 }
@@ -144,7 +134,7 @@ internal static partial class ExamCli
                     break;
                 case "--compile": options.CompilationDirectory = value; break;
                 case "--output": options.PackageOutputDirectory = value; break;
-                case "--node-cert": options.NodeCertificates.Add(value); break;
+                case "--changed": options.ChangedQuestionIds.Add(value); break;
                 case "--reason": options.Reason = value; break;
                 case "--request-id": options.RequestId = value; break;
                 case "--server": options.Server = value; break;
@@ -158,36 +148,7 @@ internal static partial class ExamCli
         if (options.ExpectedPaperVersion < 1) { error = "缺少 --version <试卷版本>。"; return false; }
         if (string.IsNullOrWhiteSpace(options.CompilationDirectory)) { error = "缺少 --compile <编译输出目录>。"; return false; }
         if (string.IsNullOrWhiteSpace(options.Reason)) { error = "缺少 --reason <修改原因>。"; return false; }
-        return true;
-    }
-
-    private static bool TryReadRecipients(IReadOnlyList<string> certificates,
-        out IReadOnlyList<PackageRecipient> recipients, out string error)
-    {
-        var parsed = new List<PackageRecipient>();
-        recipients = parsed;
-        error = string.Empty;
-        foreach (var item in certificates)
-        {
-            var separator = item.IndexOf('=', StringComparison.Ordinal);
-            if (separator <= 0 || separator == item.Length - 1)
-            {
-                error = $"--node-cert 需要 <节点标识>=<证书文件>，实际为 {item}。";
-                return false;
-            }
-
-            var nodeId = item[..separator];
-            var path = item[(separator + 1)..];
-            if (!File.Exists(path))
-            {
-                error = $"找不到节点证书：{path}。";
-                return false;
-            }
-
-            parsed.Add(new PackageRecipient(nodeId, File.ReadAllBytes(path)));
-        }
-
-        recipients = parsed;
+        if (string.IsNullOrWhiteSpace(options.PackageOutputDirectory)) { error = "缺少 --output <包输出目录>。"; return false; }
         return true;
     }
 
@@ -200,7 +161,7 @@ internal static partial class ExamCli
         public string? PackageOutputDirectory { get; set; }
         public string? Reason { get; set; }
         public string? RequestId { get; set; }
-        public List<string> NodeCertificates { get; } = [];
+        public List<string> ChangedQuestionIds { get; } = [];
     }
 
     private sealed class ImportCliException(HttpStatusCode status) : Exception

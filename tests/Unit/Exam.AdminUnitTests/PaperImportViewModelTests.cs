@@ -94,35 +94,9 @@ public sealed partial class PaperImportViewModelTests
     }
 
     [Fact]
-    public async Task Publish_WithoutARecipientCertificateDoesNotCallTheServer()
-    {
-        var requests = new List<string>();
-        using var handler = new Handler((request, _) =>
-        {
-            requests.Add(request.RequestUri!.AbsolutePath);
-            return Task.FromResult(Success(PreviewPassed));
-        });
-        using var api = Configured(handler);
-        var dialogs = new FakeDialogs { Certificates = [] };
-        var vm = new PaperImportViewModel(api, dialogs) { ExamId = ExamId };
-        await vm.SelectPackageAsync();
-        vm.Reason = "合成发布";
-        await vm.PreviewAsync();
-
-        await vm.PublishAsync();
-
-        Assert.Equal("/api/v1/imports/preview", Assert.Single(requests));
-        Assert.Contains("证书", vm.Status, StringComparison.Ordinal);
-        // 只是没选证书、发布没执行：已通过的预检结论不受影响，可以选好证书后直接发布。
-        Assert.True(vm.PreviewPassed);
-        Assert.True(vm.CanPublish);
-    }
-
-    [Fact]
-    public async Task Publish_SendsTheRecipientsAndTargetVersionThenReportsSuccess()
+    public async Task Publish_SendsTheTargetVersionAndNoCertificates_ThenReportsSuccess()
     {
         JsonNode? published = null;
-        using var certificate = new TempFile("synthetic-node.cer", [1, 2, 3, 4]);
         using var handler = new Handler(async (request, _) =>
         {
             if (request.RequestUri!.AbsolutePath == "/api/v1/imports/publish")
@@ -136,7 +110,7 @@ public sealed partial class PaperImportViewModelTests
                 : Success(PreviewPassed);
         });
         using var api = Configured(handler);
-        var vm = new PaperImportViewModel(api, new FakeDialogs { Certificates = [certificate.FilePath] }) { ExamId = ExamId };
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
         await vm.SelectPackageAsync();
         vm.Reason = "合成发布";
         vm.TargetVersionText = "2";
@@ -145,16 +119,49 @@ public sealed partial class PaperImportViewModelTests
         await vm.PublishAsync();
 
         Assert.NotNull(published);
-        var recipient = Assert.Single(published["recipients"]!.AsArray());
-        Assert.Equal("synthetic-node", recipient!["nodeId"]!.GetValue<string>());
-        Assert.Equal(new byte[] { 1, 2, 3, 4 }, Convert.FromBase64String(recipient["certificateDer"]!.GetValue<string>()));
         Assert.Equal(2, published["expectedPaperVersion"]!.GetValue<long>());
+        // 加密收件人取服务器受管节点：界面不传证书，也不该出现 recipients 字段。
+        Assert.False(published.AsObject().ContainsKey("recipients"));
+        // 首次导入不需要声明变更题号：字段可以为缺省，也可以显式为 null，但不能带出题号。
+        Assert.True(published["declaredChangedQuestionIds"] is null);
         Assert.Contains("试卷版本 2 已生效", vm.Status, StringComparison.Ordinal);
         // 发布成功后自动核对客户端更新（同一份考试版本快照口径）；
         // 本例快照里有参试者还没装到版本 2，所以必须如实报「尚未全部更新」，不能报成功。
-        Assert.Contains("试卷版本 2 已生效", vm.Status, StringComparison.Ordinal);
         Assert.Contains("客户端尚未全部更新", vm.ClientUpdateSummary, StringComparison.Ordinal);
         Assert.Contains("已装到版本 2 的 1/3 名", vm.ClientUpdateSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Publish_SubmitsTheDeclaredChangedQuestionsForAMidExamRevision()
+    {
+        JsonNode? published = null;
+        using var handler = new Handler(async (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/v1/imports/publish")
+            {
+                published = Body(request);
+                return Success(PublishPassed);
+            }
+
+            return request.RequestUri!.AbsolutePath.EndsWith("/versioning/exams/" + ExamId, StringComparison.Ordinal)
+                ? Success(Snapshot(2))
+                : Success(PreviewPassed);
+        });
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+        await vm.SelectPackageAsync();
+        vm.Reason = "合成修订";
+        vm.TargetVersionText = "2";
+        await vm.PreviewAsync();
+
+        // 空格、半角逗号、顿号、分号混用，且重复题号只提交一次。
+        vm.DeclaredChangedQuestions = "synthetic-q1, synthetic-q2、synthetic-q3;synthetic-q1";
+        await vm.PublishAsync();
+
+        Assert.NotNull(published);
+        Assert.Equal(
+            new[] { "synthetic-q1", "synthetic-q2", "synthetic-q3" },
+            published["declaredChangedQuestionIds"]!.AsArray().Select(item => item!.GetValue<string>()));
     }
 
     [Fact]
@@ -236,32 +243,12 @@ public sealed partial class PaperImportViewModelTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => route(request, token);
     }
 
-    /// <summary>只提供合成路径与合成证书，不接触任何真实材料。</summary>
+    /// <summary>只提供合成路径，不接触任何真实材料；加密收件人由服务器受管节点决定，界面不选证书。</summary>
     internal sealed class FakeDialogs : IPaperImportFileDialogService
     {
         public string? Directory { get; set; } = PackageRoot;
-        public IReadOnlyList<string> Certificates { get; set; } = [];
 
         public string? OpenPackageDirectory() => Directory;
-        public IReadOnlyList<string> OpenNodeCertificates() => Certificates;
     }
 
-    internal sealed class TempFile : IDisposable
-    {
-        public TempFile(string name, byte[] content)
-        {
-            FilePath = Path.Combine(Path.GetTempPath(),
-                "huaizhou-import-test-" + Guid.NewGuid().ToString("N"), name);
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllBytes(FilePath, content);
-        }
-
-        public string FilePath { get; }
-
-        public void Dispose()
-        {
-            try { Directory.Delete(Path.GetDirectoryName(FilePath)!, recursive: true); }
-            catch (IOException) { }
-        }
-    }
 }

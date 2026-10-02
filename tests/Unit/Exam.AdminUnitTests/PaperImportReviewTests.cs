@@ -67,8 +67,7 @@ public sealed partial class PaperImportViewModelTests
             return Task.FromResult(Success(PreviewPassed));
         });
         using var api = Configured(handler);
-        using var other = new TempFile("other-package.cer", [9]);
-        var dialogs = new FakeDialogs { Certificates = [other.FilePath] };
+        var dialogs = new FakeDialogs();
         var vm = new PaperImportViewModel(api, dialogs) { ExamId = ExamId };
         await vm.SelectPackageAsync();
         vm.Reason = "合成发布";
@@ -101,8 +100,7 @@ public sealed partial class PaperImportViewModelTests
             return Task.FromResult(Success(PreviewPassed));
         });
         using var api = Configured(handler);
-        using var certificate = new TempFile("synthetic-node.cer", [7]);
-        var vm = new PaperImportViewModel(api, new FakeDialogs { Certificates = [certificate.FilePath] }) { ExamId = ExamId };
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
         await vm.SelectPackageAsync();
         vm.Reason = "合成发布";
 
@@ -158,8 +156,7 @@ public sealed partial class PaperImportViewModelTests
                     ? new ImportPipelineResult(false, stage, [new ImportPipelineIssue("SyntheticStageFailure", "合成阶段失败。")])
                     : PreviewPassed)));
             using var api = Configured(handler);
-            using var certificate = new TempFile("synthetic-node.cer", [7]);
-            var vm = new PaperImportViewModel(api, new FakeDialogs { Certificates = [certificate.FilePath] }) { ExamId = ExamId };
+            var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
             await vm.SelectPackageAsync();
             vm.Reason = "合成发布";
             await vm.PreviewAsync();
@@ -220,8 +217,7 @@ public sealed partial class PaperImportViewModelTests
             return Task.FromResult(Success(PreviewPassed));
         });
         using var api = Configured(handler);
-        using var certificate = new TempFile("synthetic-node.cer", [7]);
-        var vm = new PaperImportViewModel(api, new FakeDialogs { Certificates = [certificate.FilePath] }) { ExamId = ExamId };
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
         await vm.SelectPackageAsync();
         vm.Reason = "合成发布";
         await vm.PreviewAsync();

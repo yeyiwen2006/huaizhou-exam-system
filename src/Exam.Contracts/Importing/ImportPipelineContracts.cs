@@ -18,14 +18,14 @@ public enum ImportStage
 public sealed record ImportPipelineIssue(string Code, string Message, string? QuestionId = null, string? Path = null);
 
 /// <summary>
-/// 学生包的加密接收节点：节点标识与其**公钥证书**的 DER 字节。
-/// 用字节而不是证书对象，便于经 HTTP/JSON 传输；服务端在校验后转成加密层使用的收件人。
-/// </summary>
-public sealed record PackageRecipient(string NodeId, byte[] CertificateDer);
-
-/// <summary>
 /// 一次真实导入的输入。材料以**服务器本机可读的目录**给出（单机部署下即考务端所选目录）；
 /// 编译产物与包产物一律写到调用方指定的目录，不写回材料目录。
+///
+/// 加密收件人**不在这里**：学生包的接收节点取自服务器受管节点及其公钥，
+/// 主备任一台都必须能解密，不能由操作者给一组自选证书。
+///
+/// <paramref name="ExpectedPaperVersion"/> 是**本次发布出的版本**；
+/// 该考试已发布过试卷版本时（开考后修订）必须逐题声明 <paramref name="DeclaredChangedQuestionIds"/>。
 /// </summary>
 public sealed record ImportPipelineRequest(
     string PackageRoot,
@@ -33,10 +33,10 @@ public sealed record ImportPipelineRequest(
     long ExpectedPaperVersion,
     string CompilationOutputDirectory,
     string PackageOutputDirectory,
-    IReadOnlyList<PackageRecipient> Recipients,
     string Operator,
     string Reason,
-    string RequestId = "");
+    string RequestId = "",
+    IReadOnlyList<string>? DeclaredChangedQuestionIds = null);
 
 /// <summary>
 /// 预检的逐题摘要，供导入预览逐题显示：是否编译成功、清单声明的选项数、实际抽到的区域数。

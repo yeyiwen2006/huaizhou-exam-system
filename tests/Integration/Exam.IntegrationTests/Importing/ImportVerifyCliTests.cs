@@ -90,11 +90,13 @@ public sealed class ImportVerifyCliTests : IDisposable
     }
 
     [Fact]
-    public async Task Publish_WithoutNodeCertificate_IsUsageError()
+    public async Task Publish_WithoutOutputDirectory_IsUsageError()
     {
+        // 发布要按 --output 写加密包；缺它在编译之前就是用法错误，不发请求、不必等编译完才发现。
+        // 加密收件人由服务器受管节点决定，命令不再需要传节点证书。
         var result = await RunCliAsync(["import", "publish", _root,
             "--exam", "import-verify-exam", "--version", "1",
-            "--compile", _root, "--output", _root, "--reason", "合成用例",
+            "--compile", _root, "--reason", "合成用例",
             "--server", "http://127.0.0.1:1"]);
 
         Assert.Equal(2, result.Exit);

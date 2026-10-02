@@ -177,12 +177,16 @@ public static class PostgresRuntimeRegistration
                 ??(node==identity.NodeId?configuration["PackageSecurity:CertificateThumbprint"]:null)??string.Empty,StringComparer.Ordinal),encryptionPolicy));
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
-        // C05 导入流水线：D03 安全发布 + 版本资源入库 + A06 试卷版本发布。
+        // C05 导入流水线：D03 安全发布 + 版本资源入库 + A06 原子整体发布（试卷版本与计分规则同一事务）。
+        // 收件人取受管节点公钥；发布走 A06 既有整体入口，不自己拼两步发布。
         services.AddSingleton<Exam.Infrastructure.Packaging.StudentPackagePublisher>();
         services.AddSingleton(provider => new Exam.Infrastructure.Packaging.ImportPipeline(
             provider.GetRequiredService<Exam.Infrastructure.Packaging.StudentPackagePublisher>(),
             provider.GetRequiredService<PostgresVersionedResourceStore>(),
             provider.GetRequiredService<IExamVersioningService>(),
+            provider.GetRequiredService<Exam.Infrastructure.Postgres.Administration.PostgresBundlePublicationService>(),
+            provider.GetRequiredService<Exam.Infrastructure.Security.IPublicationCertificateProvider>(),
+            provider.GetRequiredService<Exam.Infrastructure.Security.ManagedNodeEncryptionPolicy>(),
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
         services.AddSingleton<IPackageKeyUnwrapper>(new CertificateStorePackageKeyUnwrapper(

@@ -2,7 +2,9 @@ using System.Text;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Versioning;
 using Exam.Infrastructure.Packaging;
+using Exam.Infrastructure.Postgres.Administration;
 using Exam.Infrastructure.Postgres.Resources;
+using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
 using Exam.IntegrationTests.Postgres;
 
@@ -76,45 +78,125 @@ public sealed class ImportPipelineEarlyStageTests(PostgresDatabaseFixture fixtur
     }
 
     [Fact]
-    public async Task RunAsync_WithoutRecipients_StopsAtPackageBeforeCompiling()
+    public async Task RunAsync_WithoutConfiguredPublicationCertificate_StopsAtPackageBeforeCompiling()
     {
-        // 没有可用收件人就不必编译：阶段报 Package，且不产生任何产物目录内容。
+        // 服务器没有配置发布公钥：没有可用的加密收件人，阶段报 Package，且不产生任何产物目录内容。
         WritePackage(sourceFileName: $"{ExamName}_1.tex");
 
-        var result = await Pipeline().RunAsync(Request(recipients: []));
+        var result = await Pipeline(new UnconfiguredCertificates()).RunAsync(Request());
 
         Assert.False(result.Succeeded);
         Assert.Equal(ImportStage.Package, result.Stage);
         Assert.Equal("RecipientMissing", Assert.Single(result.Issues).Code);
-        Assert.False(Directory.Exists(Path.Combine(_root, "compiled")) &&
-            Directory.EnumerateFileSystemEntries(Path.Combine(_root, "compiled")).Any());
+        AssertNoCompileOutput();
     }
 
-    private ImportPipeline Pipeline()
+    [Fact]
+    public async Task RunAsync_WithCertificatesNotCoveringManagedNodes_StopsAtPackageBeforeCompiling()
+    {
+        // 只有 node-a 的证书，而受管节点要求 node-a 与 node-b：缺一台会让那一台解不开包，必须早失败。
+        WritePackage(sourceFileName: $"{ExamName}_1.tex");
+
+        var result = await Pipeline(new TestCertificates([Recipient("node-a")])).RunAsync(Request());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ImportStage.Package, result.Stage);
+        Assert.Equal("RecipientMissing", Assert.Single(result.Issues).Code);
+        Assert.Contains("受管主备节点", Assert.Single(result.Issues).Message, StringComparison.Ordinal);
+        AssertNoCompileOutput();
+    }
+
+    [Fact]
+    public async Task RunAsync_WithRelativeOrMissingPaths_StopsAtValidateBeforeReadingMaterials()
+    {
+        // 相对路径与空目录在**读取材料之前**就被拒：不越界读，也不等到编译完才发现。
+        WritePackage(sourceFileName: $"{ExamName}_1.tex");
+
+        var relative = await Pipeline().RunAsync(Request() with { PackageRoot = "relative-package" });
+        Assert.Equal(ImportStage.Validate, relative.Stage);
+        Assert.Equal("PathInvalid", Assert.Single(relative.Issues).Code);
+        AssertNoCompileOutput();
+
+        var missingOutput = await Pipeline().RunAsync(Request() with { PackageOutputDirectory = "  " });
+        Assert.Equal(ImportStage.Validate, missingOutput.Stage);
+        Assert.Equal("PathInvalid", Assert.Single(missingOutput.Issues).Code);
+        AssertNoCompileOutput();
+    }
+
+    [Fact]
+    public async Task RunAsync_WithProductDirectoryEqualToMaterialDirectory_StopsAtValidate()
+    {
+        // 产物写回材料目录会把中间文件混进原始材料，必须在读材料之前拒绝。
+        WritePackage(sourceFileName: $"{ExamName}_1.tex");
+
+        var result = await Pipeline().RunAsync(Request() with { CompilationOutputDirectory = _root });
+
+        Assert.Equal(ImportStage.Validate, result.Stage);
+        Assert.Equal("PathInvalid", Assert.Single(result.Issues).Code);
+        AssertNoCompileOutput();
+    }
+
+    private void AssertNoCompileOutput()
+    {
+        var compiled = Path.Combine(_root, "compiled");
+        Assert.False(Directory.Exists(compiled) && Directory.EnumerateFileSystemEntries(compiled).Any());
+    }
+
+    /// <summary>受管节点为 node-a 与 node-b；用例只走到发布之前，不需要真实数据库发布。</summary>
+    private static readonly ManagedNodeEncryptionPolicy Policy =
+        new(new HashSet<string>(StringComparer.Ordinal) { "node-a", "node-b" });
+
+    /// <summary>默认给出一组覆盖受管节点的合成证书；校验阶段之前就停下的用例用得到它。</summary>
+    private ImportPipeline Pipeline(IPublicationCertificateProvider? certificates = null)
+        => Build(certificates ?? new TestCertificates(CoveringRecipients()));
+
+    private static IReadOnlyList<NodeKeyRecipient> CoveringRecipients() =>
+        [Recipient("node-a"), Recipient("node-b")];
+
+    private ImportPipeline Build(IPublicationCertificateProvider certificates)
     {
         var encryption = new PackageEncryptionService(4096);
         var resources = new PostgresVersionedResourceStore(fixture.DataSource);
         var publisher = new StudentPackagePublisher(encryption);
-        return new ImportPipeline(publisher, resources, new UnusedVersioningService());
+        var bundles = new PostgresBundlePublicationService(
+            new PostgresExamVersioningService(fixture.DataSource),
+            new PostgresVersionedResourceStore(fixture.DataSource),
+            new UnusedKeyUnwrapper(),
+            Policy);
+        return new ImportPipeline(publisher, resources, new UnusedVersioningService(), bundles, certificates, Policy);
     }
 
-    private ImportPipelineRequest Request(IReadOnlyList<PackageRecipient>? recipients = null) => new(
+    private ImportPipelineRequest Request() => new(
         _root, ExamId, 1,
         Path.Combine(_root, "compiled"), Path.Combine(_root, "package"),
-        recipients ?? [Recipient()], "synthetic-operator", "合成导入用例");
+        "synthetic-operator", "合成导入用例");
 
-    /// <summary>给流水线一个可用的加密收件人，使用例能走到收件人检查之后的阶段。</summary>
-    private static PackageRecipient Recipient()
+    /// <summary>合成节点公钥；用例只到发布之前，证书不参与真实加解密。</summary>
+    private static NodeKeyRecipient Recipient(string nodeId)
     {
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var request = new System.Security.Cryptography.X509Certificates.CertificateRequest(
             "CN=synthetic-import-node", rsa,
             System.Security.Cryptography.HashAlgorithmName.SHA256,
             System.Security.Cryptography.RSASignaturePadding.Pkcs1);
-        using var certificate = request.CreateSelfSigned(
-            DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
-        return new PackageRecipient("node-a", certificate.Export(
-            System.Security.Cryptography.X509Certificates.X509ContentType.Cert));
+        return new NodeKeyRecipient(nodeId, request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1)));
+    }
+
+    private sealed class TestCertificates(IReadOnlyList<NodeKeyRecipient> recipients) : IPublicationCertificateProvider
+    {
+        public PublicationCertificateLease Acquire() => new(recipients);
+    }
+
+    private sealed class UnconfiguredCertificates : IPublicationCertificateProvider
+    {
+        public PublicationCertificateLease Acquire() =>
+            throw new System.Security.Cryptography.CryptographicException("尚未配置发布公钥证书。");
+    }
+
+    private sealed class UnusedKeyUnwrapper : IPackageKeyUnwrapper
+    {
+        public byte[] Unwrap(EncryptedPackageEnvelope envelope) => throw new NotSupportedException();
     }
 
     private void WritePackage(string sourceFileName, bool withAnswerKey = true)
