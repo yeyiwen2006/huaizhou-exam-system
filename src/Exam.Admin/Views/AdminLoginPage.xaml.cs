@@ -15,7 +15,7 @@ public partial class AdminLoginPage : UserControl
     {
         _vm = vm;
         DataContext = vm;
-        if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
+        if (System.Windows.Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
         { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
         vm.PasswordsCleared += OnPasswordsCleared;

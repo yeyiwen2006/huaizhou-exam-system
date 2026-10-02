@@ -16,6 +16,7 @@ internal static partial class ExamCli
             .Any(index => arguments[index] == "--error-format" && arguments[index + 1] == "json");
         var exit = 6;
         var localImport = false;
+        string? importAction = null;
         Console.SetError(errors);
         try
         {
@@ -25,6 +26,13 @@ internal static partial class ExamCli
             {
                 var value = arguments[i];
                 if (value == "--help") { args.Add(value); continue; }
+                // C05 confirmation is a switch, not a key/value option. Keep it command-specific,
+                // so accepting it does not loosen unrelated command validation.
+                if (value == "--confirm" && args.Count >= 3 && args[0] == "import" && args[1] == "publish")
+                {
+                    if (!seen.Add(value)) throw new ArgumentException("确认选项重复。");
+                    args.Add(value); continue;
+                }
                 if (!value.StartsWith("--", StringComparison.Ordinal)) { args.Add(value); continue; }
                 if (!seen.Add(value) || i + 1 >= arguments.Length ||
                     arguments[i + 1].StartsWith("--", StringComparison.Ordinal))
@@ -44,7 +52,8 @@ internal static partial class ExamCli
                 else { args.Add(value); args.Add(arguments[++i]); }
             }
             // Validate shared address semantics even for commands with their own parser.
-            localImport = args.Count > 0 && args[0] == "import";
+            importAction = args.Count > 1 && args[0] == "import" ? args[1] : null;
+            localImport = importAction == "verify";
             var serverIndex = args.IndexOf("--server");
             var server = serverIndex >= 0 ? args[serverIndex + 1] : Environment.GetEnvironmentVariable(ServerEnvironment);
             if (args.Count > 0 && args[0] is not ("import" or "management" or "version" or "artifact-info" or "help" or "--help" or "-h" or "error-codes") &&
@@ -78,6 +87,10 @@ internal static partial class ExamCli
             code = exit == 3 ? "IMPORT_VALIDATION_FAILED" : "IMPORT_COMPILATION_FAILED";
             message = "导入核对未通过。 " + string.Join(" ", publicIssues);
         }
+        if (importAction == "publish" && exit is 4 or 5 or 6 or 130)
+            message = "发布结果未确认；请保留原预览目录，核对考试状态后使用同一目录重试，不要重新生成另一份发布请求。";
+        else if (importAction == "preview" && exit == 4)
+            message = "材料、编译结果或考试设置校验未通过；未发布，请核对试题包与已保存的考试设置。";
         // Only contract constants may cross the error boundary; never echo a response body.
         var contractCodes = typeof(ErrorCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string)).Select(f => (string)f.GetRawConstantValue()!);

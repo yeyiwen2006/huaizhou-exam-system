@@ -640,6 +640,54 @@
             </ScrollViewer>
         </TabItem>
 
+        <TabItem Header="试卷导入与发布" Tag="{StaticResource Icon.Layers}" IsEnabled="{Binding HasCurrentExam}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="试卷导入与发布"
+                        Content="选择当前考试的本地逐题目录或 ZIP；检查、逐题预览和明确确认后，才会正式发布。"/>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="当前考试" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="{Binding Import.ExamName}" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="试题包来源" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding Import.SourcePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
+                            <WrapPanel>
+                                <Button Content="选择目录" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectDirectoryCommand}"/>
+                                <Button Content="选择 ZIP" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectZipCommand}"/>
+                                <Button Content="检查并生成预览" Style="{StaticResource PrimaryAction}" Command="{Binding Import.CheckCommand}"/>
+                                <Button Content="取消当前操作" Style="{StaticResource ActionButton}" Command="{Binding Import.CancelCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding Import.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="本次只读预览：逐题检查 PDF 版式与选项" Style="{StaticResource CardHeading}"/>
+                            <DataGrid ItemsSource="{Binding Import.Questions}" SelectedItem="{Binding Import.SelectedQuestion}" IsReadOnly="True"
+                                      AutoGenerateColumns="False" Height="270" Margin="0,10,0,10">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="60"/>
+                                    <DataGridTextColumn Header="科目" Binding="{Binding Subject}" Width="*"/>
+                                    <DataGridTextColumn Header="题组" Binding="{Binding Group}" Width="*"/>
+                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="95"/>
+                                    <DataGridTextColumn Header="逐题满分" Binding="{Binding Score}" Width="80"/>
+                                    <DataGridTextColumn Header="选项" Binding="{Binding Options}" Width="140"/>
+                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="90"/>
+                                    <DataGridTextColumn Header="PDF 页数" Binding="{Binding PageCount}" Width="80"/>
+                                    <DataGridTextColumn Header="选项绑定页" Binding="{Binding RegionPages}" Width="180"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <WrapPanel>
+                                <Button Content="打开选中题目 PDF" Style="{StaticResource ActionButton}" Command="{Binding Import.OpenQuestionCommand}"/>
+                                <Button Content="确认并正式发布" Style="{StaticResource PrimaryAction}" Command="{Binding Import.PublishCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="发布成功仅表示服务器整套试卷与答案规则已生效，不代表所有学生端均已更新。"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
         </TabControl>
         </Grid>
     </Grid>

@@ -24,10 +24,13 @@ public partial class MainWindow : Window
     {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         Management = management ?? throw new ArgumentNullException(nameof(management));
-        if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
+        if (System.Windows.Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
         { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
         _viewModel.Monitoring.CollectionCompleted += OnCollectionCompleted;
+        _viewModel.Import.ConfirmPublicationAsync = message =>
+            Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "确认正式发布试卷", message,
+                confirmText: "确认发布", cancelText: "取消", isDanger: true);
         DataContext = _viewModel;
 
         _viewModel.Connection.PropertyChanged += OnConnectionPropertyChanged;
