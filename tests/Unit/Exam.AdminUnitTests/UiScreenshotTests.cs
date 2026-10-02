@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -44,6 +45,7 @@ public sealed class UiScreenshotTests
             Exception? failure = null;
             App? application = null;
             MainWindow? window = null;
+            AdminUiFixture? fixture = null;
             using var output = new StringWriter();
             using var listener = new TextWriterTraceListener(output);
             var source = PresentationTraceSources.DataBindingSource;
@@ -63,20 +65,18 @@ public sealed class UiScreenshotTests
                 application.StartupUri = new Uri("pack://application:,,,/Exam.Admin;component/MainWindow.xaml", UriKind.Absolute);
                 application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 DrainDispatcher();
-                window = Assert.IsType<MainWindow>(application.MainWindow);
-                window.ShowInTaskbar = false;
-                window.WindowState = WindowState.Normal;
-                window.Left = -4000;
-                window.Top = -4000;
-                window.Width = 1440;
-                window.Height = 900;
-                var viewModel = Assert.IsType<MainViewModel>(window.DataContext);
+                fixture = new AdminUiFixture(application);
+                window = fixture.Window;
+                fixture.Login();
+                fixture.OpenExam();
+                var viewModel = fixture.ViewModel;
                 Populate(viewModel);
                 DrainDispatcher();
                 window.UpdateLayout();
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 var written = new List<string>();
+                var pageHashes = new HashSet<string>(StringComparer.Ordinal);
                 for (var index = 0; index < tabs.Items.Count; index++)
                 {
                     tabs.SelectedIndex = index;
@@ -85,12 +85,22 @@ public sealed class UiScreenshotTests
                     if (viewModel.Reports.IsPageActive && !viewModel.Reports.Session.HasTables)
                         PopulateReport(viewModel);
                     Settle(window);
-                    var header = (tabs.Items[index] as TabItem)?.Header as string;
+                    var tab = Assert.IsType<TabItem>(tabs.Items[index]);
+                    Assert.Equal(Visibility.Visible, tabs.Visibility);
+                    Assert.True(tab.IsEnabled);
+                    Assert.True(tab.IsSelected);
+                    Assert.True(Assert.IsAssignableFrom<FrameworkElement>(tab.Content).IsVisible,
+                        $"标签页 {index} 没有实际展示，不能将登录页截图当成业务页。");
+                    Assert.Null(((ContentControl)window.FindName("PageRegion")).Content);
+                    var header = tab.Header as string;
                     var slug = Slug(header);
                     var name = slug.Length == 0
                         ? $"admin-{index}"
                         : $"admin-{index}-{slug}";
-                    written.AddRange(SaveScreenshots(window, directory, name));
+                    var pagePaths = SaveScreenshots(window, directory, name).ToArray();
+                    var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pagePaths[0])));
+                    Assert.True(pageHashes.Add(hash), $"页面 {header} 与其他页面像素完全相同，可能没有真正切换页面。");
+                    written.AddRange(pagePaths);
                     // 同一页在窗口最小尺寸下再截一张，检查顶部连接条与表单不挤压。
                     window.Width = window.MinWidth;
                     window.Height = window.MinHeight;
@@ -103,12 +113,14 @@ public sealed class UiScreenshotTests
 
                 listener.Flush();
                 File.WriteAllText(Path.Combine(directory, "admin-binding-trace.txt"), output.ToString(), new UTF8Encoding(false));
-                Assert.True(written.Count == tabs.Items.Count * Scales.Length * 2);
+                Assert.Equal(tabs.Items.Count * Scales.Length * 2, written.Count);
+                Assert.Equal(tabs.Items.Count, pageHashes.Count);
+                Assert.DoesNotContain("System.Windows.Data Error:", output.ToString(), StringComparison.Ordinal);
             }
             catch (Exception exception) { failure = exception; }
             finally
             {
-                try { window?.Close(); application?.Shutdown(); }
+                try { fixture?.Dispose(); window?.Close(); application?.Shutdown(); }
                 catch (Exception error) { failure ??= error; }
                 finally
                 {
@@ -132,16 +144,9 @@ public sealed class UiScreenshotTests
         viewModel.Connection.ServerAddress = "https://synthetic-server.invalid:5001/";
         viewModel.Connection.Username = "synthetic-admin";
 
-        // 主页卡片与当前考试（合成数据）；进入考试会尝试读取服务器，离线时只在设置页显示读取失败。
-        var start = new DateTimeOffset(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
-        var summaries = new[]
-        {
-            new ExamSummary("synthetic-exam", "合成模拟考试", start, start.AddHours(2), ExamLifecycle.Scheduled, true, true, 4, 1, 3),
-            new ExamSummary("synthetic-exam-2", "2027届清华复旦交大联合模拟笔试理科综合能力测试第一场正式", start.AddDays(1), start.AddDays(1).AddHours(2), ExamLifecycle.Scheduled, false, false, 0, 0, 1),
-            new ExamSummary("synthetic-exam-0", "合成练习考试", start.AddDays(-7), start.AddDays(-7).AddHours(1), ExamLifecycle.Ended, true, false, 28, 28, 2),
-        };
-        foreach (var summary in summaries) viewModel.Home.Exams.Add(new ExamCardViewModel(summary, () => { }));
-        viewModel.OpenExam(summaries[0]);
+        // The fixture has already authenticated and loaded this exam through the real API client.
+        Assert.True(viewModel.Connection.IsConnected);
+        Assert.Equal(AdminUiFixture.ExamId, viewModel.Exam.ExamId);
         viewModel.SelectedPage = MainViewModel.HomePage;
 
         var exam = viewModel.Exam;
@@ -180,15 +185,9 @@ public sealed class UiScreenshotTests
         roster.ClassText = "03";
         roster.AdmissionNo = "2027006";
 
-        var activation = viewModel.Activation;
-        activation.Groups.Add(new RoomGroupDraft("synthetic-room-a", "合成试场A"));
-        activation.Groups.Add(new RoomGroupDraft("synthetic-room-b", "合成试场B"));
-        activation.SelectedGroup = activation.Groups[0];
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-01", "A-001", "已激活", "", "—", "—", "—"));
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-02", "A-002", "已激活", "", "—", "—", "—"));
-        activation.Devices.Add(new ActivationDeviceRow("synthetic-device-17", "A-017", "已取消", "", "—", "—", "—"));
-        activation.ActivationRequestId = "synthetic-activation-request-03";
-        activation.QueryDeviceId = "synthetic-device-02";
+        // The activation page reads authoritative synthetic groups/devices when it becomes active.
+        viewModel.Activation.QueryDeviceId = string.Empty;
+        viewModel.Activation.MoveReason = "合成示例：更换试场";
 
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";
@@ -206,6 +205,7 @@ public sealed class UiScreenshotTests
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-1", "synthetic-exam", 1, 3, completedAt));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-2", "synthetic-exam", 2, 4, completedAt.AddMinutes(6)));
 
+        viewModel.Accounts.Accounts.Clear();
         // 考务账号页（管理员可见）：合成账号，覆盖已启用、等待批准和已停用三种状态。
         var created = new DateTimeOffset(2026, 10, 1, 9, 0, 0, TimeSpan.FromHours(8));
         foreach (var account in new[]

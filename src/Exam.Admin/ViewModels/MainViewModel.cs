@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Windows.Input;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
@@ -30,7 +30,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _api = api;
         Connection = new ConnectionViewModel(_api);
         Exam = new ExamConfigurationViewModel(_api);
-        Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService());
+        Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService(), _api);
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
         Connection.PropertyChanged += OnConnectionPropertyChanged;
@@ -82,6 +82,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         SetCreating(false);
         CurrentExam = exam;
+        _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
         Reports.ExamName = exam.Name;
@@ -92,6 +93,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public void NewExam()
     {
         CurrentExam = null;
+        Roster.Reset();
         Monitoring.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
@@ -104,6 +106,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         SetCreating(false);
         CurrentExam = detail.Summary;
+        if (!StringComparer.Ordinal.Equals(Roster.ExamId, detail.Summary.ExamId))
+            _ = Roster.OpenAsync(detail.Summary.ExamId);
         Monitoring.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
         Reports.ExamName = detail.Summary.Name;
@@ -114,6 +118,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         SetCreating(false);
         CurrentExam = null;
+        Roster.Reset();
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
@@ -150,6 +155,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _api.ConfigurationChanged -= OnConfigurationChanged;
         Monitoring.Dispose();
+        Roster.Dispose();
+        Activation.Dispose();
         Reports.Dispose();
         _api.Dispose();
     }

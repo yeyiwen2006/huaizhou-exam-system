@@ -23,7 +23,9 @@ public static class FriendlyErrors
 
     public static string Describe(string code, string? serverMessage) => code switch
     {
-        ErrorCodes.VersionConflict => "数据已被其他人修改，请重新读取后再保存。",
+        ErrorCodes.VersionConflict => IsReadableChinese(serverMessage)
+            ? serverMessage + " 请重新读取当前状态后确认，不要覆盖其他操作的结果。"
+            : "数据已被其他人修改，请重新读取后再保存。",
         ErrorCodes.NotFound or "EXAM_NOT_FOUND" => "没有找到对应的考试或记录，请核对后重试。",
         ErrorCodes.Forbidden or "UNAUTHORIZED" or "OPERATOR_AUTH_FAILED" => "没有操作权限或登录已失效，请重新登录后再试。",
         ErrorCodes.NotActiveServer or ErrorCodes.StaleServerEpoch or "STALE_SERVER_IDENTITY" or "INVALID_SERVER_IDENTITY"

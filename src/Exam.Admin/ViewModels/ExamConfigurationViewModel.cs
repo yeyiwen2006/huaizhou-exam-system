@@ -36,18 +36,21 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private void ResetScheduleContext()
     {
         _contextVersion++;
+        _catalogReady = false;
+        _requestedExamId = string.IsNullOrEmpty(_examId) ? null : _examId;
         _expectedScheduleVersion = null;
+        NotifyCatalog();
         OnPropertyChanged(nameof(ScheduleVersionText));
     }
 
     public ExamConfigurationViewModel(AdminApiClient api)
     {
         _api = api;
-        _api.ConfigurationChanged += (_, _) => ResetScheduleContext();
-        AddSubjectCommand = new RelayCommand(AddSubject);
-        RemoveSubjectCommand = new RelayCommand(RemoveSubject, () => SelectedSubject is not null);
-        AddGroupCommand = new RelayCommand(AddGroup, () => SelectedSubject is not null);
-        RemoveGroupCommand = new RelayCommand(RemoveGroup, () => SelectedSubject?.SelectedGroup is not null);
+        _api.ConfigurationChanged += (_, _) => ClearLoadedExam();
+        AddSubjectCommand = new RelayCommand(AddSubject, () => IsSettingsEditable);
+        RemoveSubjectCommand = new RelayCommand(RemoveSubject, () => IsSettingsEditable && SelectedSubject is not null);
+        AddGroupCommand = new RelayCommand(AddGroup, () => IsSettingsEditable && SelectedSubject is not null);
+        RemoveGroupCommand = new RelayCommand(RemoveGroup, () => IsSettingsEditable && SelectedSubject?.SelectedGroup is not null);
         RefreshInstructionsCommand = new RelayCommand(RefreshInstructions);
         SaveScheduleCommand = new AsyncRelayCommand(SaveScheduleAsync, onError: SetError);
         LoadScheduleCommand = new AsyncRelayCommand(LoadScheduleAsync, onError: SetError);
@@ -122,7 +125,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         ScheduledEndText = snapshot.Schedule.EndsAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
         _expectedScheduleVersion = snapshot.Versions.ScheduleVersion;
         OnPropertyChanged(nameof(ScheduleVersionText));
-        Status = $"已读取服务器上的考试时间。名称、科目、题组和计分规则仍只在本机，尚未保存到服务器。";
+        Status = "已读取服务器上的考试时间；完整考试设置请使用本页重新读取功能。";
     }
 
     /// <summary>与服务器保存时相同的规则（ExamSettingsRules），另加本机时间格式检查。</summary>

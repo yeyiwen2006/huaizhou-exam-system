@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using Exam.Admin.ViewModels;
 using Exam.Admin.Views;
@@ -10,9 +10,12 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private AdminLoginPage? _loginPage;
 
-    public MainWindow()
+    public MainWindow() : this(new MainViewModel()) { }
+
+    /// <summary>Accept an owned view model so navigation can be tested with the same production controls and an isolated transport.</summary>
+    public MainWindow(MainViewModel viewModel)
     {
-        _viewModel = new MainViewModel();
+        _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         InitializeComponent();
         _viewModel.Monitoring.CollectionCompleted += OnCollectionCompleted;
         DataContext = _viewModel;

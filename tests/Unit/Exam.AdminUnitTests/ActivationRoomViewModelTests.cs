@@ -6,57 +6,37 @@ namespace Exam.AdminUnitTests;
 public sealed class ActivationRoomViewModelTests
 {
     [Fact]
-    public void LocalGroupDraft_RenamePreservesId_AndRejectsNonemptyDeletion()
+    public void DisconnectedDirectoryCannotPretendToSaveLocalGroups()
     {
         using var api = new AdminApiClient();
-        var viewModel = new ActivationRoomViewModel(api) { NewGroupName = "合成试场一" };
+        using var viewModel = new ActivationRoomViewModel(api) { NewGroupName = "合成试场" };
+        Assert.False(viewModel.AddGroupCommand.CanExecute(null));
         viewModel.AddGroupCommand.Execute(null);
-        var group = Assert.Single(viewModel.Groups);
-
-        viewModel.SelectedGroupName = "合成试场二";
-        viewModel.RenameGroupCommand.Execute(null);
-        Assert.Equal(group.RoomGroupId, Assert.Single(viewModel.Groups).RoomGroupId);
-        Assert.Equal("合成试场二", viewModel.SelectedGroup!.Name);
-
-        viewModel.Devices.Add(new ActivationDeviceRow("device-1", "20260923001", "Active",
-            group.RoomGroupId, "接口未提供", "接口未提供", "接口未提供"));
-        viewModel.RemoveGroupCommand.Execute(null);
-        Assert.Single(viewModel.Groups);
-        Assert.Contains("不能删除", viewModel.Status, StringComparison.Ordinal);
-
-        viewModel.Devices.Clear();
-        viewModel.RemoveGroupCommand.Execute(null);
         Assert.Empty(viewModel.Groups);
     }
 
     [Fact]
-    public void LocalGroupDraft_RejectsDuplicateNames()
+    public void ConnectionResetClearsEvenUnverifiedGroupDrafts()
     {
         using var api = new AdminApiClient();
-        var viewModel = new ActivationRoomViewModel(api) { NewGroupName = "合成试场" };
-        viewModel.AddGroupCommand.Execute(null);
-        viewModel.NewGroupName = "合成试场";
-
-        viewModel.AddGroupCommand.Execute(null);
-
-        Assert.Single(viewModel.Groups);
+        using var viewModel = new ActivationRoomViewModel(api);
+        viewModel.Groups.Add(new RoomGroupDraft("synthetic-draft", "合成旧试场"));
+        viewModel.NewGroupName = "旧服务器输入";
+        api.Disconnect();
+        Assert.Empty(viewModel.Groups);
+        Assert.Empty(viewModel.NewGroupName);
     }
 
     [Theory]
     [InlineData("unverified-group")]
     [InlineData("  unverified-group  ")]
-    public void Approval_RejectsUnverifiedRoomGroupBeforeAnyServerCall(string roomGroupId)
+    public async Task ApprovalRejectsUnverifiedGroupBeforeAnyRequest(string groupId)
     {
         using var api = new AdminApiClient();
-        var viewModel = new ActivationRoomViewModel(api)
-        {
-            ActivationRequestId = "synthetic-request",
-            ApprovalRoomGroupId = roomGroupId
-        };
-
-        viewModel.ApproveCommand.Execute(null);
-
-        Assert.Contains("试场分组暂不能在审批时指定", viewModel.Status, StringComparison.Ordinal);
+        using var viewModel = new ActivationRoomViewModel(api)
+        { ActivationRequestId = "synthetic-request", ApprovalRoomGroupId = groupId };
+        await viewModel.ApproveAsync();
+        Assert.Contains("尚未从服务器读取", viewModel.Status, StringComparison.Ordinal);
         Assert.Empty(viewModel.Devices);
     }
 }
