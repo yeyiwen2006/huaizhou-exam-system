@@ -51,20 +51,26 @@ public sealed class ImportPipeline(
             return pathFailure;
         }
 
-        var prepared = await PrepareAsync(request, cancellationToken);
-        if (prepared.Failure is not null)
+        var material = await ValidateMaterialAsync(request, cancellationToken);
+        if (material.Failure is not null)
         {
-            return prepared.Failure;
+            return material.Failure;
         }
 
-        var manifest = prepared.Manifest!;
+        var manifest = material.Manifest!;
+        var compilation = await CompileAsync(request, manifest, cancellationToken);
+        if (compilation.Failure is not null)
+        {
+            return compilation.Failure;
+        }
+
         var extractor = new OptionRegionExtractor();
         var preview = new List<ImportQuestionPreview>(manifest.Questions.Count);
         var issues = new List<ImportPipelineIssue>();
         foreach (var question in manifest.Questions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var pdfPath = prepared.Compiled![question.QuestionId].OutputPdfPath!;
+            var pdfPath = compilation.Compiled![question.QuestionId].OutputPdfPath!;
             var extraction = extractor.Extract(new OptionRegionRequest(manifest.ExamId, request.ExpectedPaperVersion,
                 [new OptionRegionSourceQuestion(question.QuestionId, pdfPath, question.Options!)]));
             preview.Add(new ImportQuestionPreview(
@@ -99,6 +105,27 @@ public sealed class ImportPipeline(
             return pathFailure;
         }
 
+        // 该考试是否已有已发布的试卷版本：决定本次是首次发布还是开考后修订。
+        // 读数只用于**早判定**与准备参数；真正的并发门由 A06 在发布事务里按当前版本判定，
+        // 因此这里读到旧版本只会导致发布被拒绝，不会覆盖别人的版本。
+        var current = versioning.GetExam(request.ExamId);
+        if (!current.Succeeded || current.Value is null)
+        {
+            return Failed(ImportStage.Validate, current.ErrorCode.ToString(),
+                current.Error ?? "读取考试版本状态失败，未导入。");
+        }
+
+        var declared = NormalizeDeclared(request);
+
+        // 版本必须前进。这只是**早判定**：真正的并发门由 A06 在发布事务里按当前版本判定，
+        // 这里提前拒绝是为了不白跑一次整卷编译、也不至于撞上「同名加密产物已存在」这种看不出原因的失败。
+        if (request.ExpectedPaperVersion <= current.Value.Versions.PaperVersion)
+        {
+            return Failed(ImportStage.Validate, "VersionConflict",
+                $"目标试卷版本必须大于服务器当前版本：当前 {current.Value.Versions.PaperVersion}，" +
+                $"本次目标 {request.ExpectedPaperVersion}。可用「读取当前版本」核对后重试。");
+        }
+
         // 没有可用发布公钥就不必编译：早失败，不浪费一次全量编译。
         PublicationCertificateLease lease;
         try
@@ -126,24 +153,37 @@ public sealed class ImportPipeline(
                     "发布公钥未覆盖全部受管主备节点，未组包；请先补全节点证书配置。");
             }
 
-            var prepared = await PrepareAsync(request, cancellationToken);
-            if (prepared.Failure is not null)
+            var material = await ValidateMaterialAsync(request, cancellationToken);
+            if (material.Failure is not null)
             {
-                return prepared.Failure;
+                return material.Failure;
             }
 
-            var manifest = prepared.Manifest!;
-            var compiled = prepared.Compiled!;
+            var manifest = material.Manifest!;
+
+            // 变更题号声明在**整卷编译之前**按本次清单核对：漏填或填了清单外的题号都要早失败。
+            var changed = ResolveChangedQuestionIds(declared, manifest, current.Value.Versions.PaperVersion);
+            if (changed.Error is not null)
+            {
+                return Failed(ImportStage.Validate, changed.Error.Code, changed.Error.Message);
+            }
+
+            var compilation = await CompileAsync(request, manifest, cancellationToken);
+            if (compilation.Failure is not null)
+            {
+                return compilation.Failure;
+            }
+
+            var compiled = compilation.Compiled!;
             // 请求给出的是**本次发布出的版本**；A06 的原子入口按「当前版本 = 目标版本 − 1」判定并发冲突。
             var targetVersion = request.ExpectedPaperVersion;
-            // 资源标识与包标识必须一致：整体发布按资源标识解密核对学生包内容。
-            var resourceId = $"student-package-{request.ExamId}-{targetVersion}";
-            var encryptedPath = Path.Combine(request.PackageOutputDirectory,
-                $"{request.ExamId}-{targetVersion}.epkg");
+            var layout = Layout(request, targetVersion);
+            var resourceId = layout.ResourceId;
+            var encryptedPath = layout.EncryptedPath;
             var packaged = await publisher.PublishAsync(
                 manifest,
                 new StudentPackageRequest(
-                    request.PackageRoot, request.CompilationOutputDirectory, request.PackageOutputDirectory,
+                    request.PackageRoot, request.CompilationOutputDirectory, layout.PreviewDirectory,
                     resourceId, targetVersion, encryptedPath, lease.Recipients)
                 {
                     CompiledQuestions = compiled
@@ -180,34 +220,23 @@ public sealed class ImportPipeline(
             }
 
             // 5. 整体发布：A06 在同一事务里发布**试卷版本与计分规则**，并真正解密核对本次加密包。
-            //    并发门取服务器当前版本，不由调用方申报：读数之后版本若被他人推进，整体发布会拒绝而不是覆盖。
-            var snapshot = versioning.GetExam(request.ExamId);
-            if (!snapshot.Succeeded || snapshot.Value is null)
-            {
-                return new ImportPipelineResult(false, ImportStage.Publish,
-                    [new ImportPipelineIssue(snapshot.ErrorCode.ToString(),
-                        snapshot.Error ?? "读取考试版本状态失败，未发布。")],
-                    packaged.Plan, packaged.EncryptedPackagePath, resourceId);
-            }
-
-            var changed = ResolveChangedQuestionIds(request, manifest, snapshot.Value.Versions.PaperVersion);
-            if (changed.Error is not null)
-            {
-                return new ImportPipelineResult(false, ImportStage.Publish,
-                    [changed.Error], packaged.Plan, packaged.EncryptedPackagePath, resourceId);
-            }
-
-            // 预览已确认：RunAsync 自己完成了逐题编译（PrepareAsync）与逐题选项定位（组包器），
+            //    并发门由 A06 在事务内按当前版本判定：早先的读数若已过期，发布会拒绝而不是覆盖。
+            // 预览已确认：RunAsync 自己完成了逐题编译与逐题选项定位（组包器），
             // 这里不是把调用方的声明当成事实。
+            // 幂等键：调用方没给就按**本次逻辑发布的内容**派生，网络重试会重放已记录的结果，
+            // 而不是变成另一次发布（A06 的整体发布按该键记录并重放）。
+            var requestId = string.IsNullOrWhiteSpace(request.RequestId)
+                ? StableRequestId(request.ExamId, targetVersion, material.ManifestJson!, material.AnswerKeyJson!)
+                : request.RequestId;
             var published = await bundles.PublishAsync(
                 request.ExamId,
                 new PublishExamBundleApiRequest(
-                    request.RequestId,
+                    requestId,
                     targetVersion - 1,
-                    snapshot.Value.Versions.GradingVersion,
+                    current.Value.Versions.GradingVersion,
                     resourceId,
-                    prepared.ManifestJson!,
-                    prepared.AnswerKeyJson!,
+                    material.ManifestJson!,
+                    material.AnswerKeyJson!,
                     changed.Changed!,
                     request.Reason,
                     PreviewApproved: true),
@@ -230,23 +259,29 @@ public sealed class ImportPipeline(
     }
 
     /// <summary>
+    /// 按考试、目标版本与材料内容派生稳定的幂等键：同一份材料发布同一版本只算一次发布。
+    /// </summary>
+    private static string StableRequestId(string examId, long targetVersion, string manifestJson, string answerKeyJson)
+    {
+        var material = System.Text.Encoding.UTF8.GetBytes(
+            $"{examId}|{targetVersion}|{manifestJson}|{answerKeyJson}");
+        return "import-" + Convert.ToHexString(SHA256.HashData(material))[..32].ToLowerInvariant();
+    }
+
+    /// <summary>
     /// 本次发布声明变更的题目。首次发布（服务器尚无试卷版本）整卷都是新的；
-    /// **开考后修订必须由调用方逐题声明**：默认整卷都变会让全体考生被要求复核全卷，
-    /// 而漏报变更题会让该题考生根本收不到复核提示——两种偏差都不接受，所以这里要求显式声明。
-    /// 返回 (变更题号, 拒绝原因)；两者恰有一个非空。本方法是纯函数，不保存跨请求状态。
+    /// 开考后修订按调用方的逐题声明提交：**必须声明**，而且每条都要在本次材料清单内。
+    /// 默认整卷都变会让全体考生被要求复核全卷，漏报会让该题考生收不到复核提示，两种偏差都不接受。
+    /// 纯函数，不保存跨请求状态。
     /// </summary>
     private static (IReadOnlyList<string>? Changed, ImportPipelineIssue? Error) ResolveChangedQuestionIds(
-        ImportPipelineRequest request, ExamManifest manifest, long currentPaperVersion)
+        IReadOnlyList<string> declared, ExamManifest manifest, long currentPaperVersion)
     {
         if (currentPaperVersion < 1)
         {
             return (manifest.Questions.Select(question => question.QuestionId).ToList(), null);
         }
 
-        var declared = (request.DeclaredChangedQuestionIds ?? [])
-            .Where(questionId => !string.IsNullOrWhiteSpace(questionId))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
         if (declared.Count == 0)
         {
             return (null, new ImportPipelineIssue("ChangedQuestionsNotDeclared",
@@ -261,9 +296,29 @@ public sealed class ImportPipeline(
             : (declared, null);
     }
 
+    private static IReadOnlyList<string> NormalizeDeclared(ImportPipelineRequest request) =>
+        (request.DeclaredChangedQuestionIds ?? [])
+            .Where(questionId => !string.IsNullOrWhiteSpace(questionId))
+            .Select(questionId => questionId.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     /// <summary>
-    /// 请求边界校验：路径必须齐全、绝对，产物目录不得写回材料目录。
-    /// 在读取任何材料之前做完——越界或缺失的参数不该等到编译完整卷才发现。
+    /// 本次发布的包产物布局。
+    /// **加密包与预览目录必须分开**：组包器要求明文预览目录独立、且密文不在其中
+    /// （发布路径本不写明文，但目录边界仍然会被核对，同目录会直接拒包）。
+    /// 资源标识与包标识取同一个值：整体发布按资源标识解密核对学生包内容。
+    /// </summary>
+    private static (string ResourceId, string EncryptedPath, string PreviewDirectory) Layout(
+        ImportPipelineRequest request, long targetVersion) => (
+        $"student-package-{request.ExamId}-{targetVersion}",
+        Path.Combine(request.PackageOutputDirectory, $"{request.ExamId}-{targetVersion}.epkg"),
+        Path.Combine(request.PackageOutputDirectory, "_preview"));
+
+    /// <summary>
+    /// 请求边界校验：路径必须齐全、绝对，产物目录不得写回材料目录，
+    /// 且产物布局要满足组包器的目录边界。在读取任何材料之前做完——
+    /// 越界或缺失的参数不该等到编译完整卷（再被组包器拒绝）才发现。
     /// </summary>
     private static ImportPipelineResult? ValidatePaths(ImportPipelineRequest request, bool forPublish)
     {
@@ -281,30 +336,60 @@ public sealed class ImportPipeline(
                 "编译产物与包产物必须写到材料目录之外，不写回材料目录。");
         }
 
+        if (forPublish)
+        {
+            var layout = Layout(request, request.ExpectedPaperVersion);
+            if (IsWithin(request.CompilationOutputDirectory, request.PackageRoot) ||
+                IsWithin(request.PackageOutputDirectory, request.PackageRoot) ||
+                IsWithin(layout.PreviewDirectory, request.PackageRoot) ||
+                IsWithin(layout.PreviewDirectory, request.CompilationOutputDirectory) ||
+                IsWithin(layout.EncryptedPath, layout.PreviewDirectory))
+            {
+                return Failed(ImportStage.Validate, "PathInvalid",
+                    "包产物与预览目录不能位于材料或编译目录之内，加密包也不能落在预览目录里。");
+            }
+        }
+
         return null;
     }
 
     private static bool IsUsablePath(string? path) =>
         !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path);
 
+    /// <summary>inner 是否就是 root 或位于 root 之内。</summary>
+    private static bool IsWithin(string inner, string root)
+    {
+        var normalizedInner = Path.GetFullPath(inner)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRoot = Path.GetFullPath(root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedInner.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
+               normalizedInner.StartsWith(normalizedRoot + Path.DirectorySeparatorChar,
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalizedInner.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar,
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool SamePath(string left, string right) =>
         string.Equals(left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             right.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>步骤 1–2：源材料校验与逐题编译。失败时返回带阶段的结果，不继续后续步骤。</summary>
+    /// <summary>
+    /// 步骤 1：源材料校验。清单与完整参考答案都必须过 D01，缺答案不允许发布成品包。
+    /// 只读材料、**不编译**：先判定请求与变更题号声明，再动手编译整卷。
+    /// </summary>
     private async Task<(ImportPipelineResult? Failure, ExamManifest? Manifest,
-        Dictionary<string, TeXCompileResult>? Compiled, string? ManifestJson, string? AnswerKeyJson)> PrepareAsync(
+        string? ManifestJson, string? AnswerKeyJson)> ValidateMaterialAsync(
         ImportPipelineRequest request,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // 1. 源材料校验：清单与完整参考答案都必须过 D01；缺答案不允许发布成品包。
         var manifestPath = Path.Combine(request.PackageRoot, "manifest.json");
         if (!File.Exists(manifestPath))
         {
-            return (Failed(ImportStage.Validate, "MaterialMissing", $"找不到导入清单：{manifestPath}"), null, null, null, null);
+            return (Failed(ImportStage.Validate, "MaterialMissing", $"找不到导入清单：{manifestPath}"), null, null, null);
         }
 
         var manifestText = await File.ReadAllTextAsync(manifestPath, cancellationToken);
@@ -317,27 +402,35 @@ public sealed class ImportPipeline(
         {
             return (Failed(ImportStage.Validate, "ManifestInvalid",
                 string.Join("；", validation.Issues.Take(10).Select(issue => $"{issue.Rule}@{issue.Location}"))),
-                null, null, null, null);
+                null, null, null);
         }
 
         if (answerKeyText is null || validation.RequiresAnswerKeyArithmetic)
         {
             return (Failed(ImportStage.Validate, "AnswerKeyIncomplete", "缺少完整参考答案，不能发布成品包。"),
-                null, null, null, null);
+                null, null, null);
         }
 
         var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestText, ImportJson.Create())!;
         if (!string.Equals(manifest.ExamId, request.ExamId, StringComparison.Ordinal))
         {
-            return (Failed(ImportStage.Validate, "ExamMismatch", "清单的考试标识与请求不一致。"), null, null, null, null);
+            return (Failed(ImportStage.Validate, "ExamMismatch", "清单的考试标识与请求不一致。"), null, null, null);
         }
 
-        // 2. 逐题编译：工具链缺失或任一题编译失败都不继续组包。
+        return (null, manifest, manifestText, answerKeyText);
+    }
+
+    /// <summary>步骤 2：逐题编译。工具链缺失或任一题编译失败都不继续组包。</summary>
+    private async Task<(ImportPipelineResult? Failure, Dictionary<string, TeXCompileResult>? Compiled)> CompileAsync(
+        ImportPipelineRequest request,
+        ExamManifest manifest,
+        CancellationToken cancellationToken)
+    {
         var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
         if (toolchain is null)
         {
             return (Failed(ImportStage.Compile, "ToolchainMissing", "找不到可用的 XeLaTeX，无法编译逐题源文件。"),
-                null, null, null, null);
+                null);
         }
 
         var runner = new ExternalProcessRunner();
@@ -364,13 +457,13 @@ public sealed class ImportPipeline(
             {
                 return (Failed(ImportStage.Compile, "QuestionCompileFailed",
                     string.Join("；", result.Issues.Select(issue => issue.Code.ToString())), question.QuestionId),
-                    null, null, null, null);
+                    null);
             }
 
             compiled[question.QuestionId] = result;
         }
 
-        return (null, manifest, compiled, manifestText, answerKeyText);
+        return (null, compiled);
     }
 
     private static ImportPipelineResult Failed(ImportStage stage, string code, string message, string? questionId = null) =>
