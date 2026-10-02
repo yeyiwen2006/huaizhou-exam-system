@@ -4,6 +4,7 @@ using Exam.Contracts.Operators;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
 using Exam.Domain.Common;
 
 namespace Exam.Management;
@@ -114,6 +115,14 @@ public static class ManagementApi
         app.MapPost("/management/v1/service/restores", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteOperationAsync(context, runtime, await runtime.RestoreAsync(
                 await ReadAsync<RestoreRequest>(context, json), Actor(context), context.RequestAborted)));
+        app.MapGet("/management/v1/high-availability/status", async (HttpContext context, ManagementRuntime runtime) =>
+            await WriteAsync(context, runtime, await runtime.GetHighAvailabilityAsync(context.RequestAborted)));
+        foreach (var (route, kind) in new[] { ("takeover", ManagementOperationKind.Takeover),
+                     ("emergency", ManagementOperationKind.Emergency), ("rebuild", ManagementOperationKind.Rebuild),
+                     ("reprotect", ManagementOperationKind.Reprotect) })
+            app.MapPost($"/management/v1/high-availability/{route}", async (HttpContext context, ManagementRuntime runtime) =>
+                await WriteOperationAsync(context, runtime, await runtime.ExecuteHighAvailabilityAsync(
+                    await ReadAsync<HighAvailabilityRequest>(context, json), Actor(context), kind, context.RequestAborted)));
     }
 
     private static async Task<T> ReadAsync<T>(HttpContext context, JsonSerializerOptions json) =>
@@ -147,14 +156,19 @@ public static class ManagementApi
         ErrorCodes.Forbidden => 403,
         ErrorCodes.NotFound => 404,
         ErrorCodes.VersionConflict => 409,
+        ErrorCodes.StaleServerEpoch => 409,
         _ => 503
     };
 
     private static Task WriteAsync(HttpContext context, ManagementRuntime runtime, object? result, ApiError? error = null, int status = 200)
     {
         context.Response.StatusCode = status;
-        // This response makes no authoritative database observation. Do not use configured/historical epochs.
+        var observation = result as HighAvailabilityStatus ?? (result as ManagementOperation)?.HighAvailability;
+        if (result is ManagementOperation operation) result = operation with { FailoverPlan = null };
+        var verified = observation?.VerifiedAt is { } at && observation.State is { ServerEpoch: > 0 } &&
+            DateTimeOffset.UtcNow - at <= TimeSpan.FromSeconds(10) && at <= DateTimeOffset.UtcNow.AddSeconds(5);
         return context.Response.WriteAsJsonAsync(new ManagementEnvelope<object>(runtime.ServerId, runtime.NodeId,
-            null, false, null, context.TraceIdentifier, result, error), JsonDefaults.CreateServerTransport(), context.RequestAborted);
+            verified ? observation!.State!.ServerEpoch : null, verified, verified ? observation!.VerifiedAt : null,
+            context.TraceIdentifier, result, error), JsonDefaults.CreateServerTransport(), context.RequestAborted);
     }
 }

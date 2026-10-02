@@ -1,0 +1,207 @@
+<UserControl x:Class="Exam.Admin.ServiceManagement.ServiceManagementView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls;assembly=Exam.Desktop.Shared"
+             Background="{DynamicResource Brush.Background}">
+    <UserControl.Resources>
+        <Style x:Key="Management.Action" TargetType="Button" BasedOn="{StaticResource Btn.Secondary}">
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="MinWidth" Value="100"/>
+        </Style>
+        <Style x:Key="Management.Field" TargetType="TextBox" BasedOn="{StaticResource Tbx.Base}">
+            <Setter Property="Margin" Value="0,4,12,12"/>
+        </Style>
+        <Style x:Key="Management.Section" TargetType="Border" BasedOn="{StaticResource Card}">
+            <Setter Property="Margin" Value="0,0,0,16"/>
+        </Style>
+    </UserControl.Resources>
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource TopBar}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack"/>
+                <StackPanel>
+                    <TextBlock Text="本机服务管理" Style="{StaticResource PageTitle}"/>
+                    <TextBlock Text="{Binding TargetText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
+            <StackPanel>
+                <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
+                <TextBlock Text="{Binding Message}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,12,0,12"/>
+                <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}" Margin="0,0,0,12">
+                    <TextBlock x:Name="PersistentPendingText" Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+        <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="{StaticResource Padding.Page}">
+                <Border Style="{StaticResource Management.Section}" Visibility="{Binding IsSignedOut, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="独立管理登录" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="使用部署提供的本机管理端口。业务停止或数据库不可用时，管理宿主按已启用账号的受保护缓存认证。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,16"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <StackPanel><TextBlock Text="管理 HTTPS 根地址" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="管理地址"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="预期逻辑服务器" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding ServerId, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2"><TextBlock Text="预期本机节点" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding NodeId, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel><TextBlock Text="考务账号" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="口令" Style="{StaticResource FieldLabel}"/>
+                                <PasswordBox x:Name="LoginPassword" Margin="0,4,12,12"/>
+                            </StackPanel>
+                            <Button x:Name="LoginButton" Grid.Column="2" Content="登录管理" Style="{StaticResource Btn.Primary}" Margin="0,20,0,12" Click="OnLogin"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}">
+                    <Border Style="{StaticResource Management.Section}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,12">
+                                <Button DockPanel.Dock="Right" Content="退出管理登录" Style="{StaticResource Btn.Secondary}" Command="{Binding LogoutCommand}"/>
+                                <TextBlock Text="服务与检查" Style="{StaticResource SectionTitle}"/>
+                            </DockPanel>
+                            <WrapPanel Margin="0,0,0,14">
+                                <controls:StatusPill Text="{Binding ProcessText}" Level="Info" Margin="0,0,12,8"/>
+                                <controls:StatusPill Text="{Binding ReadinessText}" Level="Warning" Margin="0,0,12,8"/>
+                                <TextBlock Text="{Binding EpochText}" Style="{StaticResource CaptionText}" Margin="0,4,0,8"/>
+                            </WrapPanel>
+                            <WrapPanel>
+                                <Button Content="刷新状态与日志" Style="{StaticResource Management.Action}" Command="{Binding RefreshCommand}"/>
+                                <Button Content="启动业务" Style="{StaticResource Management.Action}" Command="{Binding StartCommand}"/>
+                                <Button Content="停止业务" Style="{StaticResource Management.Action}" Command="{Binding StopCommand}"/>
+                                <Button Content="运行自检" Style="{StaticResource Management.Action}" Command="{Binding ChecksCommand}"/>
+                                <Button Content="取消等待" Style="{StaticResource Management.Action}" Command="{Binding CancelWaitCommand}"/>
+                            </WrapPanel>
+                            <WrapPanel>
+                                <Button Content="查询原请求" Style="{StaticResource Management.Action}" Command="{Binding QueryCommand}"/>
+                                <Button Content="按原内容重试" Style="{StaticResource Management.Action}" Command="{Binding RetryOriginalCommand}"/>
+                                <Button Content="续办原恢复" Style="{StaticResource Management.Action}" Command="{Binding ResumeRestoreCommand}"/>
+                            </WrapPanel>
+                            <ItemsControl ItemsSource="{Binding Checks}">
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Name}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Result}" Style="{StaticResource BodyText}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding WriteGate}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/>
+                                    </Grid>
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="HighAvailabilityCard" Style="{StaticResource Management.Section}">
+                        <Expander Header="主备状态与手动接管" IsExpanded="True">
+                            <StackPanel Margin="0,16,0,0">
+                                <TextBlock Text="{Binding HighAvailabilityVersionText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <DataGrid ItemsSource="{Binding Nodes}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                          Height="138" HeadersVisibility="Column" HorizontalScrollBarVisibility="Auto" Margin="0,0,0,16">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="节点" Binding="{Binding NodeId}" Width="*"/>
+                                        <DataGridTextColumn Header="角色" Binding="{Binding Role}" Width="84"/>
+                                        <DataGridTextColumn Header="连接" Binding="{Binding Reachability}" Width="100"/>
+                                        <DataGridTextColumn Header="数据库" Binding="{Binding Recovery}" Width="100"/>
+                                        <DataGridTextColumn Header="重放差值/字节" Binding="{Binding ReplayLag}" Width="125"/>
+                                        <DataGridTextColumn Header="解锁材料" Binding="{Binding Keys}" Width="100"/>
+                                        <DataGridTextColumn Header="证书" Binding="{Binding Certificate}" Width="100"/>
+                                        <DataGridTextColumn Header="观察时间" Binding="{Binding ObservedAt}" Width="110"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="本次目标节点" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding HighAvailabilityTarget, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="操作原因（写入审计）" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding HighAvailabilityReason, UpdateSourceTrigger=PropertyChanged}" MaxLength="500"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="接管仅可提升本机备用节点。须在现场确认原主机已隔离；失联和心跳超时不能替代隔离。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <WrapPanel Margin="0,0,0,12">
+                                    <CheckBox Content="确认原主机已断电" IsChecked="{Binding OldPrimaryPoweredOff}" Margin="0,0,24,8"/>
+                                    <CheckBox Content="确认原主机业务网络已隔离" IsChecked="{Binding OldPrimaryNetworkIsolated}" Margin="0,0,24,8"/>
+                                    <CheckBox Content="确认重建本机旧数据并保持隔离" IsChecked="{Binding ConfirmDestructiveRebuild}" Margin="0,0,0,8"/>
+                                </WrapPanel>
+                                <WrapPanel>
+                                    <Button Content="手动接管本机" Style="{StaticResource Management.Action}" Command="{Binding TakeoverCommand}"/>
+                                    <Button Content="进入单机应急" Style="{StaticResource Management.Action}" Command="{Binding EmergencyCommand}"/>
+                                    <Button Content="重建本机旧节点" Style="{StaticResource Management.Action}" Command="{Binding RebuildCommand}"/>
+                                    <Button Content="恢复同步保护" Style="{StaticResource Management.Action}" Command="{Binding ReprotectCommand}"/>
+                                </WrapPanel>
+                                <TextBlock Text="保护状态未知时禁止主备变更。新主机不会自动接受旧主机回写；恢复保护须核实完整材料和双侧最新持久确认。" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
+                    <Border Style="{StaticResource Management.Section}">
+                        <Expander Header="本机业务配置" IsExpanded="True">
+                            <StackPanel Margin="0,16,0,0">
+                                <TextBlock Text="{Binding ConfigurationVersionText}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="业务监听地址" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding BindAddress, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="业务 HTTPS 端口" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding HttpsPort, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock Text="业务数据目录" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding DataDirectory, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <CheckBox Content="配置声明启用主备（实际保护以权威状态为准）" IsChecked="{Binding HighAvailabilityEnabled}" Margin="0,0,0,16"/>
+                                <WrapPanel>
+                                    <Button Content="保存配置" Style="{StaticResource Management.Action}" Command="{Binding ConfigureCommand}"/>
+                                    <Button Content="重新载入配置" Style="{StaticResource Management.Action}" Click="OnReload"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
+                    <Border Style="{StaticResource Management.Section}">
+                        <Expander Header="备份与隔离恢复" IsExpanded="True">
+                            <StackPanel Margin="0,16,0,0">
+                                <TextBlock Text="须先停止业务。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <TextBlock Text="备份目标绝对目录" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding BackupDestination, UpdateSourceTrigger=PropertyChanged}"/>
+                                <Button Content="创建备份" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding BackupCommand}"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="备份标识" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding RestoreBackupId, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="备份来源绝对目录" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding RestoreSource, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Button Content="隔离恢复" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding RestoreCommand}"/>
+                                <TextBlock Text="{Binding RestoreText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
+                    <Border Style="{StaticResource Management.Section}">
+                        <Expander Header="限定操作与运行日志" IsExpanded="False">
+                            <StackPanel Margin="0,16,0,0">
+                                <TextBlock Text="只读取操作和事件元数据，每类最多50条。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                                <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="320">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="140"/>
+                                        <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="100"/>
+                                        <DataGridTextColumn Header="操作 / 类别" Binding="{Binding Kind}" Width="*"/>
+                                        <DataGridTextColumn Header="阶段 / 级别" Binding="{Binding Phase}" Width="140"/>
+                                        <DataGridTextColumn Header="结果 / 事件" Binding="{Binding Code}" Width="140"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

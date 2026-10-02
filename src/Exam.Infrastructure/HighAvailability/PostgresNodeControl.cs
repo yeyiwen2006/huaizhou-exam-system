@@ -32,14 +32,7 @@ public sealed class PostgresNodeHealthProbe(
             const string sql = """
                 SELECT pg_is_in_recovery(),
                        CASE
-                           WHEN pg_is_in_recovery() AND
-                                EXISTS
-                                (
-                                    SELECT 1
-                                      FROM pg_stat_wal_receiver
-                                     WHERE status = 'streaming'
-                                       AND last_msg_receipt_time >= clock_timestamp() - interval '10 seconds'
-                                ) AND
+                           WHEN pg_is_in_recovery() AND NOT pg_is_wal_replay_paused() AND
                                 pg_last_wal_receive_lsn() IS NOT NULL AND
                                 pg_last_wal_replay_lsn() IS NOT NULL THEN
                                pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
@@ -176,10 +169,11 @@ public sealed class StagedPostgresNodeRebuilder(
             ["PGPORT"] = connection.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["PGUSER"] = connection.Username ?? throw new InvalidOperationException("重建源数据库用户不能为空。"),
             ["PGPASSWORD"] = connection.Password ?? string.Empty,
+            ["PGAPPNAME"] = nodeId,
             ["PGSSLMODE"] = connection.SslMode.ToString().ToLowerInvariant()
         };
         var result = await processRunner.RunAsync(
-            Path.Combine(options.PostgresBinDirectory, "pg_basebackup.exe"),
+            Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),
             ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast", "--no-password"],
             environment,
             options.Timeout,

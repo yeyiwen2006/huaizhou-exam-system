@@ -126,7 +126,7 @@ internal static partial class ExamCli
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
         Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");
-        Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore）");
+        Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");

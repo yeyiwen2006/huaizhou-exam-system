@@ -1,6 +1,12 @@
-# F01 本机管理合成响应与部署模板
+# F01/F04 本机管理合成响应与部署模板
 
 这些 JSON 均人工构造，仅用于管理契约说明，不包含真实试题、账号、配置或恢复数据。
+
+F02 主备管理另见 [正式契约与部署](../../docs/f02-high-availability-management.md)。
+`appsettings.high-availability.example.json` 为管理和业务宿主共用的配置补充；所有 `REPLACE_WITH_...` 均须由部署填入受保护配置，不能直接投入使用。节点间 `Confirmation:PeerToken` 由受保护部署另行提供，样例不含凭据；两节点数据库端点必须不同，对端确认根必须提供其独立且最新的持久记录，不能复制一个旧快照冒充双方确认。实际 PostgreSQL 独立配置须保留对端所需的网络监听与认证规则。
+
+`management ha-status` 读取主备状态；`takeover`、`emergency`、`rebuild`、`reprotect` 均用 `--input FILE`。
+`ha-takeover-request.example.json` 展示完整请求结构，隔离确认默认未确认，因此不可用于直接接管。填写当前已认证账号、最新代次/版本、实际目标和原因；接管必须在本机备用节点执行。应急的目标为本机活动主节点，隔离字段为 `null`；重建的目标为本机非活动节点，须另行明确 `confirmDestructiveRebuild`；恢复保护在活动主节点执行，目标为已重建或应急后已修复追平的备用节点，隔离字段为 `null`。不同操作使用各自新请求号，丢响应只查询或重发同一个原请求。应急与接管完成后先自检，再明确启动业务。
 
 - `status-success.json`：业务停止但管理状态可读；进程状态与业务就绪分开，当前代次未核实。
 - `request-conflict.json`：同 requestId 的节点、操作者或内容不同，HTTP 409。

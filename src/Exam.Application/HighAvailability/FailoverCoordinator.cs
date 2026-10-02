@@ -12,6 +12,7 @@ public interface IFailoverPlatform
     Task BeginRebuildAsync(string nodeId, string sourceNodeId, CancellationToken cancellationToken);
 }
 
+/// <summary>Single-process protocol model. Production management uses DurableFailoverCoordinator and its persistent journal.</summary>
 public sealed class FailoverCoordinator
 {
     private readonly IFailoverPlatform _platform;

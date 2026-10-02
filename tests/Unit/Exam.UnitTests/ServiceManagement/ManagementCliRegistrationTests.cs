@@ -3,13 +3,70 @@ using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.UnitTests.ServiceManagement;
 
 public sealed class ManagementCliRegistrationTests
 {
+    [Theory]
+    [InlineData("ha-status")]
+    [InlineData("takeover")]
+    [InlineData("emergency")]
+    [InlineData("rebuild")]
+    [InlineData("reprotect")]
+    public async Task RegisteredHaCommandsUseFormalManagementRoutesAndPreserveUnverifiedResults(string command)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "synthetic-ha-cli-" + Guid.NewGuid().ToString("N"));
+        var request = new HighAvailabilityRequest("stable-ha", "server", "node", "operator", 1, 2, "node", "synthetic reason");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(request, JsonDefaults.Create()));
+        try
+        {
+            using var transport = new ResponseTransport(message =>
+            {
+                Assert.Equal("/management/v1/high-availability/" + (command == "ha-status" ? "status" : command), message.RequestUri!.AbsolutePath);
+                if (command == "ha-status") return Json(new ManagementEnvelope<HighAvailabilityStatus>("server", "node", null, false, null, "synthetic",
+                    new("server", "node", null, null, false, []), null));
+                var kind = Enum.Parse<ManagementOperationKind>(command, ignoreCase: true);
+                return Json(new ManagementEnvelope<ManagementOperation>("server", "node", null, false, null, "synthetic",
+                    new("stable-ha", "server", "node", "operator", kind, "synthetic-hash", ManagementOperationPhase.NeedsVerification,
+                        DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), null));
+            });
+            using var output = new StringWriter(); using var errors = new StringWriter();
+            var arguments = Target.Concat(command == "ha-status" ? [] : new[] { "--input", path }).ToArray();
+            Assert.Equal(6, await ManagementCli.RunAsync(command, arguments, default,
+                (uri, server, node) => new LocalManagementClient(uri, server, node, () => "synthetic-token", transport), output, errors));
+            Assert.Empty(output.ToString()); Assert.NotEmpty(errors.ToString()); Assert.Equal(1, transport.Calls);
+        }
+        finally { File.Delete(path); }
+    }
     private static readonly string[] Target = ["--management-url", "https://localhost:9443", "--server-id", "server", "--node-id", "node"];
+
+    [Theory]
+    [InlineData("missing-checks", 5)]
+    [InlineData("duplicate-primary", 5)]
+    [InlineData("certificate", 5)]
+    [InlineData("unverified", 5)]
+    [InlineData("stale-state", 6)]
+    [InlineData("stale-node", 6)]
+    public async Task SharedHaReadRejectsIncompleteOrStaleProtectionProof(string invalid, int expected)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = new ServerDeploymentState("server", "primary", 2, ProtectionMode.SynchronousDualNode,
+            new Dictionary<string, NodeState> {
+                ["primary"] = new("primary", DeploymentNodeRole.Primary, true, false, 0, true, true, now),
+                ["node"] = new("node", invalid == "duplicate-primary" ? DeploymentNodeRole.Primary : DeploymentNodeRole.Standby,
+                    true, true, 0, true, invalid != "certificate", invalid == "stale-node" ? now.AddSeconds(-15) : now) }, 3, []);
+        var availability = new HighAvailabilityStatus("server", "node", state,
+            invalid == "unverified" ? null : invalid == "stale-state" ? now.AddSeconds(-15) : now, true,
+            invalid == "missing-checks" ? [] : [new("failover-state", true, "synthetic", true), new("synchronous-protection", true, "synthetic", true)]);
+        using var transport = new ResponseTransport(_ => Json(new ManagementEnvelope<HighAvailabilityStatus>("server", "node", null, false, null, "synthetic", availability, null)));
+        using var output = new StringWriter(); using var errors = new StringWriter();
+        Assert.Equal(expected, await ManagementCli.RunAsync("ha-status", Target, default,
+            (uri, server, node) => new LocalManagementClient(uri, server, node, () => "synthetic-token", transport), output, errors));
+        Assert.Empty(output.ToString()); Assert.NotEmpty(errors.ToString());
+    }
 
     [Fact]
     public async Task RegisteredReadUsesIndependentManagementRouteAndChecksTarget()

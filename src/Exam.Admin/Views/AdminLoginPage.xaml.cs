@@ -7,11 +7,16 @@ namespace Exam.Admin.Views;
 public partial class AdminLoginPage : UserControl
 {
     private readonly ConnectionViewModel _vm;
+    public event Action? ManagementRequested;
+
+    private void OnManagementRequested(object sender, RoutedEventArgs e) => ManagementRequested?.Invoke();
 
     public AdminLoginPage(ConnectionViewModel vm)
     {
         _vm = vm;
         DataContext = vm;
+        if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
+        { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
         vm.PasswordsCleared += OnPasswordsCleared;
     }
@@ -28,5 +33,10 @@ public partial class AdminLoginPage : UserControl
         ConfirmPasswordInput.Clear();
     }
 
-    public void Detach() => _vm.PasswordsCleared -= OnPasswordsCleared;
+    public void Detach()
+    {
+        PasswordInput.Clear();
+        ConfirmPasswordInput.Clear();
+        _vm.PasswordsCleared -= OnPasswordsCleared;
+    }
 }

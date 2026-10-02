@@ -69,6 +69,11 @@
     </Window.Resources>
 
     <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
+        <controls:Banner Grid.Row="0" Level="Warning" Margin="12,8,12,4" Padding="12"
+                         DataContext="{Binding Management, RelativeSource={RelativeSource AncestorType=Window}}"
+                         IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
+        <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
 
@@ -89,6 +94,8 @@
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="退出登录" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
                                 Command="{Binding Connection.LogoutCommand}" />
+                        <Button DockPanel.Dock="Right" Content="本机服务管理" Style="{StaticResource Btn.Secondary}"
+                                Margin="0,0,8,0" Click="OnManagementRequested" />
                         <Border Style="{StaticResource IconTile}" Width="36" Height="36" CornerRadius="9" Margin="0,0,12,0">
                             <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Users}" Width="18" Height="18" />
                         </Border>
@@ -634,5 +641,6 @@
         </TabItem>
 
         </TabControl>
+        </Grid>
     </Grid>
 </Window>

@@ -39,7 +39,8 @@ public sealed class ManagementOperationRunner(
         }
 
         // Staged recovery and an interrupted mutation must never be bypassed by a different start id.
-        if (previous is null && kind is (ManagementOperationKind.Start or ManagementOperationKind.Configure or ManagementOperationKind.Restore) &&
+        if (previous is null && (kind is ManagementOperationKind.Start or ManagementOperationKind.Configure or ManagementOperationKind.Restore ||
+            HighAvailability.DurableFailoverCoordinator.IsFailover(kind)) &&
             await store.HasUnverifiedOperationsAsync(cancellationToken))
             throw new DomainRuleException(ErrorCodes.ServiceRecovering, "存在待核对的本机操作或暂存恢复，禁止自动启动、修改配置或再次恢复。");
 
@@ -48,7 +49,8 @@ public sealed class ManagementOperationRunner(
         async Task PreserveCheckpointAsync()
         {
             var checkpoint = await store.FindAsync(requestId, CancellationToken.None);
-            if (checkpoint is { Phase: ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification } && checkpoint.RequestId == accepted.RequestId &&
+            if (checkpoint is not null && (checkpoint.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification ||
+                HighAvailability.DurableFailoverCoordinator.IsFailover(kind) && checkpoint.FailoverPlan is not null) && checkpoint.RequestId == accepted.RequestId &&
                 checkpoint.ServerId == serverId && checkpoint.NodeId == nodeId && checkpoint.ActorId == actorId &&
                 checkpoint.Kind == kind && checkpoint.ContentHash == hash && checkpoint.RequestJson == accepted.RequestJson &&
                 checkpoint.AcceptedAt == accepted.AcceptedAt)
@@ -74,14 +76,15 @@ public sealed class ManagementOperationRunner(
             catch (DomainRuleException error)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification || error.Code == ErrorCodes.PersistenceFailed
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification ||
+                        accepted.FailoverPlan is not null || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(error.Code, error.Message, Retryable: error.Retryable) };
             }
             catch (ArgumentException)
             {
                 await PreserveCheckpointAsync();
-                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification
+                result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification || accepted.FailoverPlan is not null
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
             }
@@ -130,15 +133,17 @@ public sealed class ManagementOperationRunner(
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception) { return ForQuery(operation); }
         if (observed is null) return ForQuery(operation);
+        var failedWithoutIntent = HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind) &&
+            operation.FailoverPlan is null && observed.Phase == ManagementOperationPhase.Failed && observed.Error is not null;
         if (observed.RequestId != operation.RequestId || observed.ServerId != operation.ServerId ||
             observed.NodeId != operation.NodeId || observed.ActorId != operation.ActorId || observed.Kind != operation.Kind ||
             observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||
             observed.RecoveryWorkingDirectory != operation.RecoveryWorkingDirectory ||
-            observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null ||
+            observed.AcceptedAt != operation.AcceptedAt || observed.Error is not null && !failedWithoutIntent ||
             (operation.Kind != ManagementOperationKind.Restore && observed.RecoveryActivation != operation.RecoveryActivation) ||
             (operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Completed &&
              observed.Restore is not { IsolationStaged: true, RecoveryVerified: true, BusinessReady: true }) ||
-            (observed.Phase != ManagementOperationPhase.Completed &&
+            (observed.Phase != ManagementOperationPhase.Completed && !failedWithoutIntent &&
              !(operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Staged &&
                observed.Restore is { IsolationStaged: true, BusinessReady: false })))
             throw new InvalidOperationException("操作核对结果未保留原请求绑定。");

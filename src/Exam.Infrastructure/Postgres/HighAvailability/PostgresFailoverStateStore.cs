@@ -15,6 +15,10 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            // Control-plane transitions must flush locally when the isolated synchronous peer is absent.
+            // Business success retains the independent confirmation gate; this does not authorize its writes.
+            await using (var durability = new NpgsqlCommand("SET LOCAL synchronous_commit=local", connection, transaction))
+                await durability.ExecuteNonQueryAsync(cancellationToken);
             const string stateSql = """
                 INSERT INTO exam.server_state
                     (server_id, active_node_id, server_epoch, protection_mode, state_version, updated_at)
@@ -104,6 +108,7 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
         CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
         const string stateSql = """
             SELECT active_node_id, server_epoch, protection_mode, state_version
             FROM exam.server_state
@@ -113,7 +118,7 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
         long epoch;
         ProtectionMode protection;
         long version;
-        await using (var command = new NpgsqlCommand(stateSql, connection))
+        await using (var command = new NpgsqlCommand(stateSql, connection, transaction))
         {
             command.Parameters.AddWithValue(serverId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -135,7 +140,7 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
             FROM exam.server_nodes
             WHERE server_id = $1;
             """;
-        await using (var command = new NpgsqlCommand(nodesSql, connection))
+        await using (var command = new NpgsqlCommand(nodesSql, connection, transaction))
         {
             command.Parameters.AddWithValue(serverId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -161,7 +166,7 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
             WHERE server_id = $1
             ORDER BY occurred_at, audit_id;
             """;
-        await using (var command = new NpgsqlCommand(auditSql, connection))
+        await using (var command = new NpgsqlCommand(auditSql, connection, transaction))
         {
             command.Parameters.AddWithValue(serverId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -177,6 +182,7 @@ public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
             }
         }
 
+        await transaction.CommitAsync(cancellationToken);
         return new ServerDeploymentState(
             serverId,
             activeNodeId,

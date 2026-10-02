@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
@@ -16,11 +17,12 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
             return command switch
             {
                 "status" when inputJson is null && requestId is null => await WriteAsync(await client.GetStatusAsync(token), output, errors),
+                "ha-status" when inputJson is null && requestId is null => await WriteAsync(await client.GetHighAvailabilityAsync(token), output, errors),
                 "configuration" when inputJson is null && requestId is null => await WriteAsync(await client.GetConfigurationAsync(token), output, errors),
                 "logs" when inputJson is null && requestId is null => await WriteAsync(await client.GetLogsAsync(50, token), output, errors),
                 "runtime-logs" when inputJson is null && requestId is null => await WriteAsync(await client.GetRuntimeLogsAsync(50, token), output, errors),
                 "operation" when inputJson is null && requestId is not null => await WriteAsync(await client.GetOperationAsync(requestId, token), output, errors),
-                "start" or "stop" or "checks" or "configure" or "backup" or "restore" when inputJson is not null && requestId is null =>
+                "start" or "stop" or "checks" or "configure" or "backup" or "restore" or "takeover" or "emergency" or "rebuild" or "reprotect" when inputJson is not null && requestId is null =>
                     await WriteAsync(await client.ExecuteAsync(Kind(command), inputJson, token), output, errors),
                 _ => throw new ArgumentException("管理命令或输入无效。")
             };
@@ -42,6 +44,8 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
         "start" => ManagementOperationKind.Start, "stop" => ManagementOperationKind.Stop,
         "checks" => ManagementOperationKind.Checks, "configure" => ManagementOperationKind.Configure,
         "backup" => ManagementOperationKind.Backup, "restore" => ManagementOperationKind.Restore,
+        "takeover" => ManagementOperationKind.Takeover, "emergency" => ManagementOperationKind.Emergency,
+        "rebuild" => ManagementOperationKind.Rebuild, "reprotect" => ManagementOperationKind.Reprotect,
         _ => throw new ArgumentException("管理操作无效。")
     };
 
@@ -52,7 +56,7 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
         var code = error is not null ? error.Code switch
         {
             ErrorCodes.InvalidInput => 2, "UNAUTHORIZED" or ErrorCodes.Forbidden => 3,
-            ErrorCodes.NotFound or ErrorCodes.VersionConflict => 4, _ => 6
+            ErrorCodes.NotFound or ErrorCodes.VersionConflict or ErrorCodes.StaleServerEpoch => 4, _ => 6
         } : response.StatusCode switch
         {
             HttpStatusCode.BadRequest => 2, HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => 3,
@@ -65,6 +69,12 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
             else if (operation.Phase is ManagementOperationPhase.Failed or ManagementOperationPhase.NeedsVerification ||
                 operation.Checks?.Any(check => check.BlocksWrites && !check.Passed) == true) code = 6;
         }
+        if (envelope.Result is HighAvailabilityStatus availability && code == 0 &&
+            (availability.State is null || availability.VerifiedAt is not { } verified ||
+             DateTimeOffset.UtcNow - verified > TimeSpan.FromSeconds(10) || verified > DateTimeOffset.UtcNow.AddSeconds(5) ||
+             availability.SynchronousProtectionVerified && availability.State.Nodes.Values.Any(n =>
+                 DateTimeOffset.UtcNow - n.ObservedAt > TimeSpan.FromSeconds(10) || n.ObservedAt > DateTimeOffset.UtcNow.AddSeconds(5)) ||
+             availability.State.ProtectionMode == ProtectionMode.SynchronousDualNode && !availability.SynchronousProtectionVerified)) code = 6;
         await (code == 0 ? output : errors).WriteLineAsync(JsonSerializer.Serialize(envelope, JsonDefaults.Create()));
         return code;
     }

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
+using Exam.Contracts.HighAvailability;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
@@ -41,6 +42,13 @@ public sealed class LocalManagementClient : IDisposable
 
     public Task<ManagementClientResponse<ManagementStatus>> GetStatusAsync(CancellationToken token = default) =>
         SendAsync<ManagementStatus>(HttpMethod.Get, "service/status", null, token);
+
+    public async Task<ManagementClientResponse<HighAvailabilityStatus>> GetHighAvailabilityAsync(CancellationToken token = default)
+    {
+        var response = await SendAsync<HighAvailabilityStatus>(HttpMethod.Get, "high-availability/status", null, token);
+        RequireHighAvailability(response.Envelope.Result);
+        return response;
+    }
 
     public Task<ManagementClientResponse<ServiceConfiguration>> GetConfigurationAsync(CancellationToken token = default) =>
         SendAsync<ServiceConfiguration>(HttpMethod.Get, "service/configuration", null, token);
@@ -84,10 +92,13 @@ public sealed class LocalManagementClient : IDisposable
             ManagementOperationKind.Start => "start", ManagementOperationKind.Stop => "stop",
             ManagementOperationKind.Checks => "checks", ManagementOperationKind.Configure => "configuration",
             ManagementOperationKind.Backup => "backups", ManagementOperationKind.Restore => "restores",
+            ManagementOperationKind.Takeover => "takeover", ManagementOperationKind.Emergency => "emergency",
+            ManagementOperationKind.Rebuild => "rebuild", ManagementOperationKind.Reprotect => "reprotect",
             _ => throw new ArgumentException("管理操作无效。")
         };
         var response = await SendAsync<ManagementOperation>(kind == ManagementOperationKind.Configure ? HttpMethod.Put : HttpMethod.Post,
-            "service/" + route, requestJson, token);
+            (kind is ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect
+                ? "high-availability/" : "service/") + route, requestJson, token);
         RequireOperationBinding(response.Envelope.Result, requestId, kind);
         return response;
     }
@@ -147,6 +158,7 @@ public sealed class LocalManagementClient : IDisposable
             operation.NodeId != _nodeId || string.IsNullOrWhiteSpace(operation.ActorId) || kind is not null && operation.Kind != kind))
             throw new HttpRequestException("管理结果与原请求绑定不一致。");
         if (operation is null) return;
+        RequireHighAvailability(operation.HighAvailability);
         if (!Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
             operation.Phase == ManagementOperationPhase.Staged &&
                 (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
@@ -159,9 +171,36 @@ public sealed class LocalManagementClient : IDisposable
                 ManagementOperationKind.Checks => operation.Checks is { Count: > 0 },
                 ManagementOperationKind.Backup => operation.Backup is { IncludesDatabase: true, IncludesProtectedConfiguration: true, IncludesVersionedResources: true },
                 ManagementOperationKind.Restore => operation.Restore is { IsolationStaged: true, RecoveryVerified: true, BusinessReady: true },
+                ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild =>
+                    operation.HighAvailability is { State: not null, VerifiedAt: not null } ha &&
+                    ha.State.ProtectionMode == (operation.Kind == ManagementOperationKind.Rebuild ? ProtectionMode.Recovering : ProtectionMode.EmergencySingleNode),
+                ManagementOperationKind.Reprotect => operation.HighAvailability is { State.ProtectionMode: ProtectionMode.SynchronousDualNode,
+                    VerifiedAt: not null, SynchronousProtectionVerified: true },
                 _ => false
             })))
             throw new HttpRequestException("管理操作阶段与实际结果不一致。");
+    }
+
+    private void RequireHighAvailability(HighAvailabilityStatus? availability)
+    {
+        if (availability is null) return;
+        var state = availability.State;
+        if (availability.ServerId != _serverId || availability.NodeId != _nodeId || availability.Checks is null ||
+            state is null && (availability.VerifiedAt is not null || availability.SynchronousProtectionVerified) ||
+            state is not null && (state.ServerId != _serverId || state.ServerEpoch <= 0 || state.Version <= 0 ||
+                !Enum.IsDefined(state.ProtectionMode) || state.Nodes is null || state.Nodes.Count != 2 || !state.Nodes.ContainsKey(_nodeId) ||
+                !state.Nodes.TryGetValue(state.ActiveNodeId, out var active) || active.Role != DeploymentNodeRole.Primary ||
+                state.Nodes.Values.Count(n => n.Role == DeploymentNodeRole.Primary) != 1 ||
+                state.Nodes.Any(n => n.Value is null || n.Key != n.Value.NodeId || !Enum.IsDefined(n.Value.Role))) ||
+            availability.VerifiedAt is not null && !availability.Checks.Any(c => c.Name == "failover-state" && c.Passed && c.BlocksWrites))
+            throw new HttpRequestException("主备响应身份、状态或核实证据无效。");
+        if (availability.SynchronousProtectionVerified && (state is not { ProtectionMode: ProtectionMode.SynchronousDualNode } ||
+            availability.VerifiedAt is null || state.Nodes.Values.Count(n => n.Role == DeploymentNodeRole.Standby) != 1 ||
+            state.Nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady ||
+                n.Role == DeploymentNodeRole.Primary && n.DatabaseInRecovery || n.Role == DeploymentNodeRole.Standby && (!n.DatabaseInRecovery || n.ReplayLagBytes != 0)) ||
+            availability.Checks.Any(c => c.BlocksWrites && !c.Passed) ||
+            !availability.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed && c.BlocksWrites)))
+            throw new HttpRequestException("主备响应缺少完整同步保护证据。");
     }
 
     private static void RequireRequestId(string requestId)

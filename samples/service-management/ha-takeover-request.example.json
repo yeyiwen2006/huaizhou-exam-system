@@ -1,0 +1,18 @@
+{
+  "requestId": "REPLACE_WITH_NEW_STABLE_REQUEST_ID",
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-standby",
+  "actorId": "REPLACE_WITH_AUTHENTICATED_USERNAME",
+  "expectedEpoch": 1,
+  "expectedVersion": 1,
+  "targetNodeId": "synthetic-standby",
+  "reason": "合成示例：实际操作前填写本次原因并核对原主隔离",
+  "isolation": {
+    "isolatedNodeId": "synthetic-node",
+    "hostPoweredOff": false,
+    "businessNetworkIsolated": false,
+    "confirmedBy": "REPLACE_WITH_AUTHENTICATED_USERNAME",
+    "reason": "合成示例：实际操作前填写本次原因并核对原主隔离"
+  },
+  "confirmDestructiveRebuild": false
+}

@@ -2,7 +2,10 @@
 
   <ItemGroup>
     <Compile Include="..\Exam.Infrastructure\Reporting\ReportWorkbookDownload.cs" Link="Reporting\ReportWorkbookDownload.cs" />
+    <Compile Include="..\Exam.Infrastructure\ServiceManagement\LocalManagementClient.cs" Link="ServiceManagement\LocalManagementClient.cs" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <Using Include="System.Net.Http" />
+    <Using Include="System.IO" />
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Desktop.Shared\Exam.Desktop.Shared.csproj" />
     <ProjectReference Include="..\Exam.Domain\Exam.Domain.csproj" />
