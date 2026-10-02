@@ -81,7 +81,7 @@ public sealed class ImportVerifyCliTests : IDisposable
     [Fact]
     public async Task Preview_WithoutRequiredOptions_IsUsageError()
     {
-        // 服务端命令要求 --exam/--version/--compile/--reason；缺任何一项都属用法错误，不发请求。
+        // 本地预览需要 --exam 与新 --output 目录；参数缺失不发请求。
         var result = await RunCliAsync(["import", "preview", _root]);
 
         // 退出码 2 由 CLI 统一映射为 INVALID_INPUT（命令自己的文案会被该层替换）。
@@ -90,7 +90,7 @@ public sealed class ImportVerifyCliTests : IDisposable
     }
 
     [Fact]
-    public async Task Publish_WithoutNodeCertificate_IsUsageError()
+    public async Task Publish_LegacyServerPathAndCertificateOptionsAreRejected()
     {
         var result = await RunCliAsync(["import", "publish", _root,
             "--exam", "import-verify-exam", "--version", "1",

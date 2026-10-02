@@ -1,258 +1,280 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Exam.Contracts.Administration;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Versioning;
+using Exam.Contracts.Common;
+using Exam.Contracts.Exams;
 using Exam.Domain.Importing;
 using Exam.Domain.Scoring;
 using Exam.Infrastructure.Compilation;
-using Exam.Infrastructure.Postgres.Resources;
+using Exam.Domain.Exams;
 using Exam.Infrastructure.Security;
 using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.Infrastructure.Packaging;
 
-/// <summary>
-/// C05 的真实导入流水线：源材料校验 → 逐题编译 → 安全组包加密（D03 发布）→ 版本资源入库 → 试卷版本发布。
-///
-/// 每一步失败都**停在那一阶段**并如实报告：不产出部分结果、不把失败当成功、不跳过依赖检查。
-/// 发布时按 A06 的要求同时给足四道门（清单已校验、已编译、预览已确认、加密包已就绪），缺任何一道都不发布。
-/// 取消沿调用链传播：已加密但未入库的包不进入结果，入库但未发布的资源不会被当成已发布。
-///
-/// <see cref="InspectAsync"/> 只做到编译与坐标抽取为止（不组包、不入库、不发布），供导入预览使用；
-/// <see cref="RunAsync"/> 在同一个准备结果上继续完成组包与发布，两步不会取得不同的清单或编译结果。
-/// </summary>
-public sealed class ImportPipeline(
-    StudentPackagePublisher publisher,
-    PostgresVersionedResourceStore resources,
-    IExamVersioningService versioning,
-    TimeProvider? timeProvider = null)
+public sealed record ImportPreviewQuestion(string QuestionId, int QuestionNo, string Subject,
+    string Group, string Type, string Score, string Options, string PdfPath,
+    string CorrectOptions = "", int PageCount = 0, string RegionPages = "");
+
+/// <summary>The checked source and compiled PDFs belong to this one preview; a new selection disposes them.</summary>
+public sealed partial class PreparedExamImport : IDisposable
 {
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-
-    /// <summary>
-    /// 预检：校验清单与答案、逐题编译、逐题抽取选项坐标，返回逐题摘要供预览确认。
-    /// **不组包、不入库、不发布**——预览确认后才由 <see cref="RunAsync"/> 发布。
-    /// </summary>
-    public async Task<ImportPipelineResult> InspectAsync(
-        ImportPipelineRequest request,
-        CancellationToken cancellationToken = default)
+    internal PreparedExamImport(ExamImportWorkspace workspace, ExamManifest manifest, string manifestJson,
+        string answerJson, ExamVersionSnapshot expected, IReadOnlyDictionary<string, TeXCompileResult> compiled,
+        IReadOnlyList<ImportPreviewQuestion> questions, string source)
     {
-        var prepared = await PrepareAsync(request, cancellationToken);
-        if (prepared.Failure is not null)
-        {
-            return prepared.Failure;
-        }
-
-        var manifest = prepared.Manifest!;
-        var extractor = new OptionRegionExtractor();
-        var preview = new List<ImportQuestionPreview>(manifest.Questions.Count);
-        var issues = new List<ImportPipelineIssue>();
-        foreach (var question in manifest.Questions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var pdfPath = prepared.Compiled![question.QuestionId].OutputPdfPath!;
-            var extraction = extractor.Extract(new OptionRegionRequest(manifest.ExamId, request.ExpectedPaperVersion,
-                [new OptionRegionSourceQuestion(question.QuestionId, pdfPath, question.Options!)]));
-            preview.Add(new ImportQuestionPreview(
-                question.QuestionId, true, question.Options!.Count,
-                extraction.Succeeded ? question.Options.Count : 0));
-            if (!extraction.Succeeded)
-            {
-                issues.AddRange(extraction.Issues.Select(issue => new ImportPipelineIssue(
-                    issue.Code.ToString(), issue.Message, question.QuestionId, issue.OptionId)));
-            }
-        }
-
-        return new ImportPipelineResult(
-            issues.Count == 0,
-            issues.Count == 0 ? ImportStage.Completed : ImportStage.Package,
-            issues,
-            Preview: preview);
+        Workspace = workspace; Manifest = manifest; ManifestJson = manifestJson; AnswerJson = answerJson;
+        Expected = expected; Compiled = compiled; Questions = questions; Source = source;
+        ResourceId = "c05-" + Guid.NewGuid().ToString("N");
+        RequestId = Guid.NewGuid().ToString("N");
     }
 
-    public async Task<ImportPipelineResult> RunAsync(
-        ImportPipelineRequest request,
-        CancellationToken cancellationToken = default)
+    internal ExamImportWorkspace Workspace { get; }
+    internal ExamManifest Manifest { get; }
+    internal string ManifestJson { get; }
+    internal string AnswerJson { get; }
+    internal ExamVersionSnapshot Expected { get; }
+    internal IReadOnlyDictionary<string, TeXCompileResult> Compiled { get; }
+    internal string ResourceId { get; private set; }
+    internal string RequestId { get; private set; }
+    internal bool IsDisposed { get; private set; }
+    internal UploadExamBundleRequest? Upload { get; set; }
+    public string Source { get; }
+    public IReadOnlyList<ImportPreviewQuestion> Questions { get; }
+    public long TargetPaperVersion => Expected.Versions.PaperVersion + 1;
+    public void Dispose()
     {
-        // 没有可用收件人就不必编译：早失败，不浪费一次全量编译。
-        var recipients = BuildRecipients(request.Recipients);
-        if (recipients.Count == 0)
-        {
-            return Failed(ImportStage.Package, "RecipientMissing", "没有可用的加密接收节点证书。");
-        }
+        if (IsDisposed) return;
+        IsDisposed = true;
+        if (PublicationGate.CurrentCount != 0) Workspace.Dispose();
+    }
 
-        var prepared = await PrepareAsync(request, cancellationToken);
-        if (prepared.Failure is not null)
-        {
-            return prepared.Failure;
-        }
+}
 
-        var manifest = prepared.Manifest!;
-        var compiled = prepared.Compiled!;
+public interface IExamImportService
+{
+    Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct = default);
+    Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default);
+}
 
-        var encryptedPath = Path.Combine(request.PackageOutputDirectory,
-            $"{request.ExamId}-{request.ExpectedPaperVersion}.epkg");
-        var packaged = await publisher.PublishAsync(
-            manifest,
-            new StudentPackageRequest(
-                request.PackageRoot, request.CompilationOutputDirectory, request.PackageOutputDirectory,
-                $"package-{request.ExamId}-{request.ExpectedPaperVersion}", request.ExpectedPaperVersion,
-                encryptedPath, recipients)
-            {
-                CompiledQuestions = compiled
-            },
-            cancellationToken);
-        if (!packaged.Succeeded || packaged.Envelope is null || packaged.EncryptedPackagePath is null)
-        {
-            return new ImportPipelineResult(false, ImportStage.Package,
-                packaged.Issues
-                    .Select(issue => new ImportPipelineIssue(issue.Code.ToString(), issue.Message, Path: issue.Path))
-                    .ToList(),
-                packaged.Plan);
-        }
-
-        // 4. 版本资源入库：先入库再发布；入库失败不发布。
-        var now = _timeProvider.GetUtcNow();
-        var resourceId = $"student-package-{request.ExamId}-{request.ExpectedPaperVersion}";
+public class ImportPipeline(IExamPublicationClient api) : IExamImportService
+{
+    // Deterministic contract tests may substitute compilation; production constructors always use XeLaTeX.
+    internal Func<TeXCompileRequest, CancellationToken, Task<TeXCompileResult>>? CompileOverride { get; init; }
+    public async Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        var generation = api.Generation;
+        var expected = await api.GetExamAsync(examId, ct);
+        var selectedExam = await api.GetExamDetailAsync(examId, ct);
+        if (selectedExam.Summary.ExamId != expected.ExamId)
+            throw new InvalidDataException("所选考试与服务器版本信息不一致，请重新打开考试。");
+        // The current C05 increment is first publication only. In-exam revisions are a separate task.
+        RequireFirstPublication(expected);
+        EnsureConnection(generation, api.ServerId);
+        var workspace = await ExamImportWorkspace.CreateAsync(source, ct);
         try
         {
-            await resources.SaveAsync(new VersionedEncryptedResource(
-                resourceId,
-                request.ExamId,
-                "student-package",
-                request.ExpectedPaperVersion,
-                await File.ReadAllBytesAsync(packaged.EncryptedPackagePath, cancellationToken),
-                packaged.Envelope,
-                now,
-                request.Operator), cancellationToken);
-        }
-        catch (Exception exception)
-            when (exception is IOException or InvalidOperationException or Npgsql.NpgsqlException)
-        {
-            return new ImportPipelineResult(false, ImportStage.Store,
-                [new ImportPipelineIssue("ResourceStoreFailed", "加密包入库失败，未发布版本。")], packaged.Plan);
-        }
-
-        // 5. 发布试卷版本：四道门同时给足，缺一不发布。
-        var structure = ImportedGradingRules.BuildStructure(manifest);
-        var published = versioning.PublishPaper(new PublishPaperRequest(
-            request.ExamId,
-            request.ExpectedPaperVersion - 1,
-            resourceId,
-            structure,
-            structure.Questions.Select(question => question.QuestionId).ToList(),
-            new PaperPublicationValidation(
-                ManifestValidated: true,
-                Compiled: true,
-                PreviewApproved: true,
-                EncryptedPackageReady: true),
-            request.Operator,
-            request.Reason,
-            now,
-            request.RequestId));
-        if (!published.Succeeded)
-        {
-            return new ImportPipelineResult(false, ImportStage.Publish,
-                [new ImportPipelineIssue(
-                    published.ErrorCode.ToString(),
-                    published.Error ?? "试卷版本发布被拒绝。")],
-                packaged.Plan,
-                packaged.EncryptedPackagePath,
-                resourceId);
-        }
-
-        return new ImportPipelineResult(true, ImportStage.Completed, [], packaged.Plan,
-            packaged.EncryptedPackagePath, resourceId, request.ExpectedPaperVersion);
-    }
-
-    /// <summary>步骤 1–2：源材料校验与逐题编译。失败时返回带阶段的结果，不继续后续步骤。</summary>
-    private async Task<(ImportPipelineResult? Failure, ExamManifest? Manifest,
-        Dictionary<string, TeXCompileResult>? Compiled)> PrepareAsync(
-        ImportPipelineRequest request,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        // 1. 源材料校验：清单与完整参考答案都必须过 D01；缺答案不允许发布成品包。
-        var manifestPath = Path.Combine(request.PackageRoot, "manifest.json");
-        if (!File.Exists(manifestPath))
-        {
-            return (Failed(ImportStage.Validate, "MaterialMissing", $"找不到导入清单：{manifestPath}"), null, null);
-        }
-
-        var manifestText = await File.ReadAllTextAsync(manifestPath, cancellationToken);
-        var answerKeyPath = Path.Combine(request.PackageRoot, "server-only", "answer-key.json");
-        var answerKeyText = File.Exists(answerKeyPath)
-            ? await File.ReadAllTextAsync(answerKeyPath, cancellationToken)
-            : null;
-        var validation = new ExamManifestValidator().ValidateJson(manifestText, answerKeyText);
-        if (!validation.IsValid)
-        {
-            return (Failed(ImportStage.Validate, "ManifestInvalid",
-                string.Join("；", validation.Issues.Take(10).Select(issue => $"{issue.Rule}@{issue.Location}"))),
-                null, null);
-        }
-
-        if (answerKeyText is null || validation.RequiresAnswerKeyArithmetic)
-        {
-            return (Failed(ImportStage.Validate, "AnswerKeyIncomplete", "缺少完整参考答案，不能发布成品包。"),
-                null, null);
-        }
-
-        var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestText, ImportJson.Create())!;
-        if (!string.Equals(manifest.ExamId, request.ExamId, StringComparison.Ordinal))
-        {
-            return (Failed(ImportStage.Validate, "ExamMismatch", "清单的考试标识与请求不一致。"), null, null);
-        }
-
-        // 2. 逐题编译：工具链缺失或任一题编译失败都不继续组包。
-        var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive);
-        if (toolchain is null)
-        {
-            return (Failed(ImportStage.Compile, "ToolchainMissing", "找不到可用的 XeLaTeX，无法编译逐题源文件。"),
-                null, null);
-        }
-
-        var runner = new ExternalProcessRunner();
-        var version = await runner.RunAsync(toolchain.ExecutablePath, ["--version"],
-            new Dictionary<string, string>(), TimeSpan.FromSeconds(10), cancellationToken);
-        var compiler = new XeLaTeXCompiler(
-            runner,
-            toolchain with
+            var manifestPath = Path.Combine(workspace.PackageRoot, "manifest.json");
+            var answerPath = Path.Combine(workspace.PackageRoot, "server-only", "answer-key.json");
+            var manifestJson = await ExamImportWorkspace.ReadUtf8Async(manifestPath, ct);
+            var answerJson = await ExamImportWorkspace.ReadUtf8Async(answerPath, ct);
+            (manifestJson, answerJson) = await Task.Run(() => BindPackageToSelectedExam(
+                manifestJson, answerJson, examId, selectedExam.Summary.Name), ct);
+            manifestJson = ImportCatalogBinding.Bind(manifestJson, answerJson, selectedExam.Settings);
+            await File.WriteAllTextAsync(manifestPath, manifestJson, ct);
+            await File.WriteAllTextAsync(answerPath, answerJson, ct);
+            var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestJson, ImportJson.Create())
+                ?? throw new InvalidDataException("试题清单无效。");
+            var compile = CompileOverride;
+            if (compile is null)
             {
-                Platform = version.StandardOutput.Contains("MiKTeX", StringComparison.OrdinalIgnoreCase)
-                    ? XeLaTeXPlatform.MiKTeX
-                    : XeLaTeXPlatform.TeXLive
-            },
-            TimeSpan.FromMinutes(3));
-
-        var compiled = new Dictionary<string, TeXCompileResult>(StringComparer.Ordinal);
-        foreach (var question in manifest.Questions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var result = await compiler.CompileAsync(
-                new TeXCompileRequest(request.PackageRoot, question.Source, request.CompilationOutputDirectory),
-                cancellationToken);
-            if (!result.Succeeded)
-            {
-                return (Failed(ImportStage.Compile, "QuestionCompileFailed",
-                    string.Join("；", result.Issues.Select(issue => issue.Code.ToString())), question.QuestionId),
-                    null, null);
+                var toolchain = XeLaTeXToolchain.TryDetect(XeLaTeXPlatform.TeXLive)
+                    ?? throw new InvalidOperationException("未找到 XeLaTeX；需要在考务主机安装 TeX 发行版才能检查与预览。");
+                var runner = new ExternalProcessRunner();
+                var version = await runner.RunAsync(toolchain.ExecutablePath, ["--version"],
+                    new Dictionary<string, string>(), TimeSpan.FromSeconds(10), ct);
+                var platform = version.StandardOutput.Contains("MiKTeX", StringComparison.OrdinalIgnoreCase)
+                    ? XeLaTeXPlatform.MiKTeX : XeLaTeXPlatform.TeXLive;
+                var compiler = new XeLaTeXCompiler(runner, toolchain with { Platform = platform }, TimeSpan.FromMinutes(3));
+                compile = compiler.CompileAsync;
             }
-
-            compiled[question.QuestionId] = result;
+            Directory.CreateDirectory(workspace.CompilationRoot);
+            var compiled = new Dictionary<string, TeXCompileResult>(StringComparer.Ordinal);
+            foreach (var question in manifest.Questions.OrderBy(q => q.QuestionNo))
+            {
+                ct.ThrowIfCancellationRequested();
+                var result = await compile(new TeXCompileRequest(workspace.PackageRoot,
+                    question.Source, workspace.CompilationRoot), ct);
+                if (!result.Succeeded)
+                    throw new InvalidDataException($"第 {question.QuestionNo} 题编译失败：" +
+                        string.Join("；", result.Issues.Select(issue => issue.Message +
+                            (issue.File is null ? "" : "（" + issue.File + (issue.Line is null ? "" : $"，第 {issue.Line} 行") + "）"))));
+                compiled.Add(question.QuestionId, result);
+            }
+            var regions = await Task.Run(() => new OptionRegionExtractor().Extract(new OptionRegionRequest(examId,
+                expected.Versions.PaperVersion + 1, manifest.Questions.Select(q =>
+                    new OptionRegionSourceQuestion(q.QuestionId, compiled[q.QuestionId].OutputPdfPath!, q.Options!)).ToArray())), ct);
+            if (!regions.Succeeded)
+                throw new InvalidDataException("选项定位检查失败：" + string.Join("；",
+                    regions.Issues.Select(issue => "第 " + manifest.Questions.FirstOrDefault(q => q.QuestionId == issue.QuestionId)?.QuestionNo + " 题：" + issue.Message)));
+            var subjects = manifest.Subjects.ToDictionary(x => x.SubjectId, x => x.Name, StringComparer.Ordinal);
+            var groups = manifest.Groups.ToDictionary(x => x.GroupId, x => x, StringComparer.Ordinal);
+            var answers = JsonSerializer.Deserialize<AnswerKeyFile>(answerJson, ImportJson.Create())!
+                .Answers.ToDictionary(x => x.QuestionId, StringComparer.Ordinal);
+            var regionPages = regions.Artifact!.Questions.ToDictionary(x => x.QuestionId,
+                x => string.Join("、", x.Options.Select(o => o.OptionId + ":" + (o.PageIndex + 1) + "页")),
+                StringComparer.Ordinal);
+            var preview = manifest.Questions.OrderBy(q => q.QuestionNo).Select(q => new ImportPreviewQuestion(q.QuestionId, q.QuestionNo,
+                subjects[q.SubjectId], groups[q.GroupId].Name, QuestionTypeText(groups[q.GroupId].Type),
+                QuestionFullScore(groups[q.GroupId], answers[q.QuestionId].CorrectOptionIds!.Count),
+                string.Join("、", q.Options!), compiled[q.QuestionId].OutputPdfPath!,
+                string.Join("、", answers[q.QuestionId].CorrectOptionIds!),
+                compiled[q.QuestionId].Report.PageCount, regionPages[q.QuestionId])).ToArray();
+            EnsureConnection(generation, api.ServerId);
+            var latest = await api.GetExamDetailAsync(examId, ct);
+            EnsureConnection(generation, api.ServerId);
+            if (latest.Summary.SettingsVersion != selectedExam.Summary.SettingsVersion)
+                throw new InvalidOperationException("检查期间考试设置发生变化，请重新检查。");
+            var prepared = new PreparedExamImport(workspace, manifest, manifestJson, answerJson, expected, compiled, preview, source)
+            { ConnectionGeneration = generation, LogicalServerId = api.ServerId,
+              ExpectedSettingsVersion = selectedExam.Summary.SettingsVersion };
+            await prepared.SealAsync(ct);
+            return prepared;
         }
-
-        return (null, manifest, compiled);
+        catch { workspace.Dispose(); throw; }
     }
 
-    private static IReadOnlyList<NodeKeyRecipient> BuildRecipients(IReadOnlyList<PackageRecipient> recipients) =>
-        recipients
-            .Where(recipient => !string.IsNullOrWhiteSpace(recipient.NodeId) && recipient.CertificateDer.Length != 0)
-            .Select(recipient => new NodeKeyRecipient(
-                recipient.NodeId, X509CertificateLoader.LoadCertificate(recipient.CertificateDer)))
-            .ToList();
+    public static void RequireFirstPublication(ExamVersionSnapshot expected)
+    {
+        if (expected.LifecycleState != ExamLifecycle.Scheduled)
+            throw new InvalidOperationException("考试已开始或结束，首次导入必须在开考前完成。");
+        if (expected.Versions.PaperVersion != 0 || expected.Paper is not null ||
+            expected.Versions.GradingVersion != 0 || expected.Grading is not null)
+            throw new InvalidOperationException("这场考试已有正式试卷，请使用版本修改流程，不能再次首次导入。");
+    }
 
-    private static ImportPipelineResult Failed(ImportStage stage, string code, string message, string? questionId = null) =>
-        new(false, stage, [new ImportPipelineIssue(code, message, questionId)]);
+    public static (string Manifest, string Answers) BindPackageToSelectedExam(string manifestJson,
+        string answerJson, string selectedExamId, string selectedExamName)
+    {
+        // Validate the untouched source first: mismatched source answers cannot be made valid by rebinding.
+        ImportedGradingRules.Create(manifestJson, answerJson);
+        var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestJson, ImportJson.Create())!;
+        if (ExamSettingsRules.NameKey(manifest.ExamName) != ExamSettingsRules.NameKey(selectedExamName))
+            throw new InvalidDataException("试题包考试名称与所选考试不一致，拒绝导入。");
+        var sourceManifest = JsonNode.Parse(manifestJson)?.AsObject()
+            ?? throw new InvalidDataException("试题清单无效。");
+        var sourceAnswers = JsonNode.Parse(answerJson)?.AsObject()
+            ?? throw new InvalidDataException("独立参考答案无效。");
+        sourceManifest["examId"] = selectedExamId;
+        sourceAnswers["examId"] = selectedExamId;
+        var reboundManifest = sourceManifest.ToJsonString();
+        var reboundAnswers = sourceAnswers.ToJsonString();
+        if (ImportedGradingRules.Create(reboundManifest, reboundAnswers).ExamId != selectedExamId)
+            throw new InvalidDataException("试题包无法绑定到所选考试。");
+        return (reboundManifest, reboundAnswers);
+    }
+
+    public static string QuestionFullScore(ManifestGroup group, int correctCount)
+    {
+        var expression = correctCount == 1
+            ? group.Scoring?.OneCorrect?.Correct : group.Scoring?.MultipleCorrect?.AllCorrect;
+        var checkedExpression = ScoreExpressionParser.Check(expression);
+        if (checkedExpression.Root is null)
+            throw new InvalidDataException("逐题满分表达式无效。");
+        var score = ScoreExpressionParser.Evaluate(checkedExpression.Root, correctCount, correctCount);
+        if (!score.TryFormatFiniteDecimal(out var text))
+            throw new InvalidDataException("逐题满分不是有限小数。");
+        return text;
+    }
+
+    public static string QuestionTypeText(string? type) => type switch
+    {
+        "single" => "单项选择题", "multiple" => "多项选择题", "indeterminate" => "不定项选择题",
+        _ => throw new InvalidDataException("题型无效。")
+    };
+
+    private void EnsureConnection(long generation, string? serverId)
+    {
+        if (api.Generation != generation || string.IsNullOrWhiteSpace(serverId) ||
+            !StringComparer.Ordinal.Equals(serverId, api.ServerId))
+            throw new InvalidOperationException("服务器连接已改变，请在原服务器核对结果并重新检查材料。");
+    }
+
+    public async Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (prepared.IsDisposed) throw new InvalidOperationException("预览已过期，请重新检查试题包。");
+        await prepared.PublicationGate.WaitAsync(ct);
+        try
+        {
+            if (prepared.IsDisposed) throw new ObjectDisposedException(nameof(PreparedExamImport));
+            EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
+            await prepared.VerifyUnchangedAsync(ct);
+            if (prepared.Upload is null)
+            {
+                var current = await api.GetExamAsync(prepared.Expected.ExamId, ct);
+                var detail = await api.GetExamDetailAsync(prepared.Expected.ExamId, ct);
+                EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
+                RequireFirstPublication(current);
+                if (current.ExamId != prepared.Expected.ExamId || current.Versions != prepared.Expected.Versions ||
+                    detail.Summary.SettingsVersion != prepared.ExpectedSettingsVersion)
+                    throw new InvalidOperationException("考试版本或设置已变化，请重新检查试题包，不能用旧预览发布。");
+                ImportCatalogBinding.RequireMatch(prepared.ManifestJson, prepared.AnswerJson, detail.Summary.Name, detail.Settings);
+                var recipients = await api.GetPublicationRecipientsAsync(ct);
+                EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
+                if (recipients.Recipients is not { Count: > 0 and <= 32 })
+                    throw new InvalidOperationException("服务器没有提供有效的发布证书。");
+                var certificates = new List<NodeKeyRecipient>();
+                try
+                {
+                    var nodes = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var recipient in recipients.Recipients)
+                    {
+                        if (string.IsNullOrWhiteSpace(recipient.NodeId) || !nodes.Add(recipient.NodeId) ||
+                            recipient.CertificateDerBase64 is not { Length: > 0 and <= 131072 })
+                            throw new InvalidDataException("服务器返回的发布证书列表无效。");
+                        certificates.Add(new NodeKeyRecipient(recipient.NodeId,
+                            X509CertificateLoader.LoadCertificate(Convert.FromBase64String(recipient.CertificateDerBase64))));
+                    }
+                    var requestForPackage = new StudentPackageRequest(prepared.Workspace.PackageRoot,
+                        prepared.Workspace.CompilationRoot, prepared.Workspace.StudentRoot, prepared.ResourceId,
+                        prepared.TargetPaperVersion, prepared.Workspace.EncryptedPath, certificates)
+                    { CompiledQuestions = prepared.Compiled };
+                    var result = await Task.Run(() => new StudentPackagePublisher(new PackageEncryptionService())
+                        .PublishAsync(prepared.Manifest, requestForPackage, ct), ct);
+                    if (!result.Succeeded || result.Envelope is null || result.EncryptedPackagePath is null)
+                        throw new InvalidDataException("学生包生成失败：" + string.Join("；", result.Issues.Select(i => i.Message)));
+                    await prepared.VerifyUnchangedAsync(ct);
+                    var request = new PublishExamBundleApiRequest(prepared.RequestId,
+                        prepared.Expected.Versions.PaperVersion, prepared.Expected.Versions.GradingVersion,
+                        prepared.ResourceId, prepared.ManifestJson, prepared.AnswerJson,
+                        prepared.Manifest.Questions.Select(q => q.QuestionId).ToArray(), "首次导入并发布整套试卷", true);
+                    var e = result.Envelope;
+                    prepared.Upload = new UploadExamBundleRequest(request, new PublicationPackageEnvelope(e.PackageId,
+                        e.PaperVersion, e.ChunkSize, e.NoncePrefix, e.WrappedKeys, e.CertificateThumbprints));
+                    await prepared.SaveUploadAsync(ct);
+                }
+                finally { foreach (var item in certificates) item.Certificate.Dispose(); }
+            }
+            // A visible local version is NOT a durable HA acknowledgement. An uncertain retry must replay
+            // the exact upload through the existing ConfirmationBeforeResult gate, even after the exam starts.
+            EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
+            await prepared.SaveUploadAsync(ct);
+            var published = await api.UploadPublicationAsync(prepared.Expected.ExamId, prepared.Upload,
+                prepared.Workspace.EncryptedPath, ct);
+            EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
+            if (!prepared.MatchesPublication(published))
+                throw new InvalidDataException("服务器回执与本次考试、试卷和规则版本不一致，不能确认发布成功。");
+            return published;
+        }
+        finally
+        {
+            prepared.PublicationGate.Release();
+            if (prepared.IsDisposed) prepared.Workspace.Dispose();
+        }
+    }
 }

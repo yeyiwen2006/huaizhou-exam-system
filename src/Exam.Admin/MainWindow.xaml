@@ -655,6 +655,7 @@
                                 <Button Content="选择目录" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectDirectoryCommand}"/>
                                 <Button Content="选择 ZIP" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectZipCommand}"/>
                                 <Button Content="检查并生成预览" Style="{StaticResource PrimaryAction}" Command="{Binding Import.CheckCommand}"/>
+                                <Button Content="取消当前操作" Style="{StaticResource ActionButton}" Command="{Binding Import.CancelCommand}"/>
                             </WrapPanel>
                             <TextBlock Text="{Binding Import.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
                         </StackPanel>

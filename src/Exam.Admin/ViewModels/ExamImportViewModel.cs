@@ -1,3 +1,4 @@
+using Exam.Infrastructure.Packaging;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Exam.Admin.Infrastructure;
@@ -21,6 +22,9 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private bool _isChecking;
     private bool _isPublishing;
     private long _context;
+    private long _settingsVersion = -1;
+    private bool _disposed;
+    private CancellationTokenSource? _operationCancellation;
     private ImportPreviewQuestion? _selectedQuestion;
     private readonly List<PreparedExamImport> _retired = [];
 
@@ -36,7 +40,8 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         CheckCommand = new AsyncRelayCommand(CheckAsync, () => !IsBusy &&
             !string.IsNullOrWhiteSpace(ExamId) && !string.IsNullOrWhiteSpace(SourcePath), SetError);
         PublishCommand = new AsyncRelayCommand(PublishAsync, () => CanPublish, SetError);
-        OpenQuestionCommand = new RelayCommand(OpenQuestion, () => SelectedQuestion is not null && HasPreview);
+        OpenQuestionCommand = new RelayCommand(OpenQuestion, () => !IsBusy && SelectedQuestion is not null && HasPreview);
+        CancelCommand = new RelayCommand(() => _operationCancellation?.Cancel(), () => IsBusy);
     }
 
     public Func<string, Task<bool>> ConfirmPublicationAsync { get; set; } = _ => Task.FromResult(false);
@@ -55,7 +60,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public bool IsPublishing { get => _isPublishing; private set { if (SetProperty(ref _isPublishing, value)) UpdateCommands(); } }
     public bool IsBusy => IsChecking || IsPublishing;
     public bool HasPreview => _preview is not null;
-    public bool CanPublish => HasPreview && !IsBusy && _preview!.Expected.ExamId == ExamId;
+    public bool CanPublish => !_disposed && HasPreview && !IsBusy && _preview!.Expected.ExamId == ExamId;
     public ObservableCollection<ImportPreviewQuestion> Questions { get; } = [];
     public ImportPreviewQuestion? SelectedQuestion
     {
@@ -67,11 +72,14 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public RelayCommand OpenQuestionCommand { get; }
     public AsyncRelayCommand CheckCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
+    public RelayCommand CancelCommand { get; }
 
     public void SetCurrentExam(ExamSummary? exam)
     {
-        if (StringComparer.Ordinal.Equals(_examId, exam?.ExamId) && StringComparer.Ordinal.Equals(_examName, exam?.Name)) return;
+        if (StringComparer.Ordinal.Equals(_examId, exam?.ExamId) && StringComparer.Ordinal.Equals(_examName, exam?.Name) &&
+            _settingsVersion == (exam?.SettingsVersion ?? -1)) return;
         ClearPreview("考试已切换；旧检查结果已清除。");
+        _settingsVersion = exam?.SettingsVersion ?? -1;
         _examId = exam?.ExamId ?? string.Empty;
         ExamName = exam?.Name ?? string.Empty;
         SourcePath = string.Empty;
@@ -86,18 +94,19 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
 
     public async Task CheckAsync()
     {
-        if (IsBusy) return;
+        if (IsBusy || _disposed) return;
         ClearPreview("正在检查试题包…");
         var context = _context;
         var examId = ExamId;
         var source = SourcePath;
         if (string.IsNullOrWhiteSpace(examId) || string.IsNullOrWhiteSpace(source))
         { Status = "请先选择考试及试题目录或 ZIP。"; return; }
+        _operationCancellation = new CancellationTokenSource();
         IsChecking = true;
         PreparedExamImport? prepared = null;
         try
         {
-            prepared = await _service.PrepareAsync(source, examId);
+            prepared = await _service.PrepareAsync(source, examId, _operationCancellation.Token);
             if (context != _context || examId != ExamId || source != SourcePath) return;
             _preview = prepared;
             prepared = null;
@@ -107,53 +116,61 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             OnPropertyChanged(nameof(HasPreview));
             UpdateCommands();
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
-            or ArgumentException or InvalidOperationException or System.Text.Json.JsonException)
+        catch (OperationCanceledException)
+        { if (context == _context) Status = "检查已取消，未发布。"; }
+        catch (Exception error)
         {
             if (context == _context) Status = "检查失败，未发布：" +
                 (error is InvalidDataException or ArgumentException or InvalidOperationException
                     ? error.Message : FriendlyErrors.Describe(error));
         }
-        finally { prepared?.Dispose(); IsChecking = false; }
+        finally
+        {
+            prepared?.Dispose();
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
+            IsChecking = false;
+        }
     }
 
     public async Task PublishAsync()
     {
         var prepared = _preview;
-        if (prepared is null || IsBusy || prepared.Expected.ExamId != ExamId) return;
+        if (_disposed || prepared is null || IsBusy || prepared.Expected.ExamId != ExamId) return;
         var context = _context;
-        var confirmed = await ConfirmPublicationAsync($"考试：{ExamName}\n来源：{prepared.Source}\n题目：{prepared.Questions.Count} 道\n确认已逐题查看预览并正式发布？此操作会让学生端取得新试卷。");
-        if (!confirmed) { if (context == _context) Status = "已取消发布；服务器未收到发布请求。"; return; }
-        if (context != _context || !ReferenceEquals(prepared, _preview)) return;
+        _operationCancellation = new CancellationTokenSource();
+        // Confirmation is part of the critical section: a second click must not create another dialog/request.
         IsPublishing = true;
-        Status = "正在加密并向服务器正式发布；请勿重复选择考试。";
         try
         {
-            var published = await _service.PublishAsync(prepared);
-            if (context != _context) { Status = "界面已切换；请到原服务器核对发布结果。"; return; }
-            CompleteIfMatched(prepared, published);
+            var confirmed = await ConfirmPublicationAsync($"考试：{ExamName}\n来源：{prepared.Source}\n题目：{prepared.Questions.Count} 道\n确认已逐题查看版式、答案及选项绑定并正式发布？");
+            if (context != _context || !ReferenceEquals(prepared, _preview)) return;
+            if (!confirmed)
+            {
+                Status = prepared.PublicationAttempted ? "已取消本次重试；此前的发布结果仍须在原服务器核对。" : "已取消发布；服务器未收到发布请求。";
+                return;
+            }
+            _operationCancellation.Token.ThrowIfCancellationRequested();
+            Status = "正在加密并等待服务器确认整套发布结果，请勿重复操作。";
+            var published = await _service.PublishAsync(prepared, _operationCancellation.Token);
+            if (context == _context) CompleteIfMatched(prepared, published);
         }
         catch (Exception error)
         {
             if (context != _context) return;
-            if (error is HttpRequestException or TaskCanceledException ||
+            // Reading a locally committed version cannot prove the primary/standby confirmation completed.
+            // Only the original upload's official response (including an idempotent replay) is success.
+            if (error is HttpRequestException or OperationCanceledException ||
                 error is AdminApiException apiError && ((int)apiError.StatusCode >= 500 ||
                     apiError.Code is "EMPTY_RESPONSE" or "INVALID_RESPONSE"))
-            {
-                try
-                {
-                    var current = await _api.GetExamAsync(ExamId);
-                    if (current.Paper?.ArtifactId == prepared.ResourceId &&
-                        current.Versions.PaperVersion == prepared.TargetPaperVersion)
-                    { CompleteIfMatched(prepared, current); return; }
-                }
-                catch { /* A failed status query cannot prove failure or success. */ }
-                Status = "发布结果尚不能确认；没有显示成功。请先核对服务器版本，再决定是否用同一预览重试。";
-            }
-            else Status = "发布失败，未确认生效：" + FriendlyErrors.Describe(error);
+                Status = "发布结果尚不能确认；没有显示成功。请保留此预览，连接原服务器后用同一预览重试。";
+            else Status = "发布未确认生效：" + (error is InvalidDataException or ArgumentException or InvalidOperationException
+                ? error.Message : FriendlyErrors.Describe(error));
         }
         finally
         {
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
             IsPublishing = false;
             foreach (var retired in _retired) retired.Dispose();
             _retired.Clear();
@@ -162,9 +179,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
 
     private void CompleteIfMatched(PreparedExamImport prepared, ExamVersionSnapshot actual)
     {
-        if (actual.Paper?.ArtifactId != prepared.ResourceId ||
-            actual.Versions.PaperVersion != prepared.TargetPaperVersion ||
-            actual.Versions.GradingVersion <= prepared.Expected.Versions.GradingVersion)
+        if (!prepared.MatchesPublication(actual))
         { Status = "服务器返回的试卷或规则版本与本次导入不符；请人工核对，不能认定发布成功。"; return; }
         ClearPreview("已发布");
         Status = $"正式发布成功：考试 {ExamName}，试卷版本 {actual.Versions.PaperVersion}，规则版本 {actual.Versions.GradingVersion}。学生端更新状态需另行核对。";
@@ -197,6 +212,8 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private void SetError(Exception error) => Status = "操作失败：" + FriendlyErrors.Describe(error);
     private void UpdateCommands()
     {
+        CancelCommand.RaiseCanExecuteChanged();
+        OpenQuestionCommand.RaiseCanExecuteChanged();
         CheckCommand.RaiseCanExecuteChanged();
         PublishCommand.RaiseCanExecuteChanged();
         SelectDirectoryCommand.RaiseCanExecuteChanged();
@@ -207,8 +224,21 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private void OnConfigurationChanged(object? sender, EventArgs e) => SetCurrentExam(null);
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _api.ConfigurationChanged -= OnConfigurationChanged;
-        _preview?.Dispose();
-        foreach (var retired in _retired) retired.Dispose();
+        ++_context;
+        _operationCancellation?.Cancel();
+        if (_preview is not null)
+        {
+            if (IsPublishing) _retired.Add(_preview);
+            else _preview.Dispose();
+            _preview = null;
+        }
+        if (!IsPublishing)
+        {
+            foreach (var retired in _retired) retired.Dispose();
+            _retired.Clear();
+        }
     }
 }

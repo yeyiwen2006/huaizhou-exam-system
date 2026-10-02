@@ -16,6 +16,7 @@ from isolation import OwnedRun, private_environment
 def now(): return datetime.now(timezone.utc).isoformat()
 
 def dependency(profile):
+    if profile == 'postgres-latex': return dependency('postgres') or dependency('latex')
     if profile == 'windows': return None if os.name == 'nt' else 'Windows desktop host required'
     if profile == 'postgres': return None if os.environ.get('EXAM_TEST_POSTGRES') else 'Isolated PostgreSQL connection is unavailable'
     if profile == 'postgres-physical':
@@ -60,7 +61,7 @@ def run(profiles: list[str], output: Path, timeout: int = 900) -> int:
                 private=str(private_run.root)
                 command = [dotnet,'test',project,'--no-build','--no-restore','--configuration','Release','-m:1',
                     '--filter',filters,'--logger','trx;LogFileName=result.trx','--results-directory',private,
-                    '--blame-hang-timeout',f'{min(timeout,300 if profile in ("latex","postgres-physical") else 90)}s','--blame-hang-dump-type','none']
+                    '--blame-hang-timeout',f'{min(timeout,300 if profile in ("latex","postgres-physical","import-e2e") else 90)}s','--blame-hang-dump-type','none']
                 try:
                     environment=private_environment()
                     environment.update({k:v for k,v in os.environ.items() if k.startswith('EXAM_TEST_')})

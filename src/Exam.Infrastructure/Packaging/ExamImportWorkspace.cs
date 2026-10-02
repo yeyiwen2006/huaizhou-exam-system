@@ -1,14 +1,18 @@
 using System.IO.Compression;
 using System.Text;
+using Exam.Domain.Importing;
 
-namespace Exam.Admin.Services;
+namespace Exam.Infrastructure.Packaging;
 
 /// <summary>Copies an untrusted local source into one private, bounded snapshot before validation.</summary>
-public sealed class ExamImportWorkspace : IDisposable
+public sealed partial class ExamImportWorkspace : IDisposable
 {
     private const long MaxTotalBytes = 256L * 1024 * 1024;
     private const int MaxFiles = 2048;
     private readonly string _ownedRoot;
+    internal string Root => _ownedRoot;
+    internal bool Persistent { get; private set; }
+    private FileStream? _persistentLock;
     private bool _disposed;
 
     private ExamImportWorkspace(string ownedRoot)
@@ -33,6 +37,7 @@ public sealed class ExamImportWorkspace : IDisposable
         Directory.CreateDirectory(workspace.PackageRoot);
         try
         {
+            RestrictAccess(root);
             if (Directory.Exists(source))
                 await workspace.CopyDirectoryAsync(Path.GetFullPath(source), ct);
             else if (File.Exists(source) && Path.GetExtension(source).Equals(".zip", StringComparison.OrdinalIgnoreCase))
@@ -54,6 +59,7 @@ public sealed class ExamImportWorkspace : IDisposable
 
     private async Task CopyDirectoryAsync(string source, CancellationToken ct)
     {
+        RejectLinks(source);
         var pending = new Stack<string>();
         pending.Push(source);
         var count = 0;
@@ -69,9 +75,12 @@ public sealed class ExamImportWorkspace : IDisposable
                 var attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidDataException("试题目录包含链接，已拒绝读取。");
+                var relative = Path.GetRelativePath(source, entry);
+                _ = ResolveTarget(relative);
+                if (++count > MaxFiles) throw new InvalidDataException("试题包文件和目录数量超过安全上限。");
                 if ((attributes & FileAttributes.Directory) != 0) { pending.Push(entry); continue; }
                 var info = new FileInfo(entry);
-                if (++count > MaxFiles || info.Length < 0 || info.Length > MaxTotalBytes - total)
+                if (info.Length < 0 || info.Length > MaxTotalBytes - total)
                     throw new InvalidDataException("试题包文件数量或总大小超过安全上限。");
                 total += info.Length;
                 var target = ResolveTarget(Path.GetRelativePath(source, entry));
@@ -86,7 +95,9 @@ public sealed class ExamImportWorkspace : IDisposable
 
     private async Task ExtractZipAsync(string source, CancellationToken ct)
     {
+        RejectLinks(source);
         using var zip = ZipFile.OpenRead(source);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (zip.Entries.Count > MaxFiles) throw new InvalidDataException("ZIP 文件数量超过安全上限。");
         long total = 0;
         foreach (var entry in zip.Entries)
@@ -95,6 +106,8 @@ public sealed class ExamImportWorkspace : IDisposable
             if (entry.FullName.Contains('\\') || Path.IsPathRooted(entry.FullName) ||
                 ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000)
                 throw new InvalidDataException("ZIP 含非法路径或链接。");
+            if (!names.Add(entry.FullName.TrimEnd('/')))
+                throw new InvalidDataException("ZIP 含重复或仅大小写不同的路径。");
             var target = ResolveTarget(entry.FullName);
             if (entry.FullName.EndsWith('/')) { Directory.CreateDirectory(target); continue; }
             if (entry.Length < 0 || entry.Length > MaxTotalBytes - total)
@@ -124,6 +137,10 @@ public sealed class ExamImportWorkspace : IDisposable
 
     private string ResolveTarget(string relative)
     {
+        var parts = relative.Replace('\\', '/').TrimEnd('/').Split('/');
+        if (relative.Length > 512 || parts.Length > 32 || parts.Any(p =>
+                p is "." or ".." || !WindowsFileNameRules.IsValidFileName(p)))
+            throw new InvalidDataException("试题包含非法文件名、路径或过深的目录。");
         var target = Path.GetFullPath(Path.Combine(PackageRoot, relative));
         if (!target.StartsWith(PackageRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("试题包路径越界。");
@@ -132,10 +149,13 @@ public sealed class ExamImportWorkspace : IDisposable
 
     public static async Task<string> ReadUtf8Async(string path, CancellationToken ct = default)
     {
-        var info = new FileInfo(path);
-        if (info.Length is < 1 or > 10 * 1024 * 1024)
+        RejectLinks(path);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length is < 1 or > 10 * 1024 * 1024)
             throw new InvalidDataException("试题清单或答案为空，或超过 10 MB 上限。");
-        var bytes = await File.ReadAllBytesAsync(path, ct);
+        var bytes = new byte[checked((int)stream.Length)];
+        await stream.ReadExactlyAsync(bytes, ct);
+        if (stream.ReadByte() != -1) throw new InvalidDataException("读取期间文件发生变化。");
         return new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
     }
 
@@ -143,6 +163,7 @@ public sealed class ExamImportWorkspace : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (Persistent) { _persistentLock?.Dispose(); return; }
         var temp = Path.GetFullPath(Path.GetTempPath());
         var full = Path.GetFullPath(_ownedRoot);
         if (Path.GetDirectoryName(full) == temp.TrimEnd(Path.DirectorySeparatorChar) &&

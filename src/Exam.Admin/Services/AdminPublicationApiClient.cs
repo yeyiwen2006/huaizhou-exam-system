@@ -1,4 +1,5 @@
 using System.Net;
+using Exam.Infrastructure.Packaging;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -9,7 +10,7 @@ using Exam.Contracts.Versioning;
 
 namespace Exam.Admin.Services;
 
-public sealed partial class AdminApiClient
+public sealed partial class AdminApiClient : IExamPublicationClient
 {
     public Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default) =>
         SendAsync<PublicationRecipients>(HttpMethod.Get, "api/v1/publications/recipients", null, ct);

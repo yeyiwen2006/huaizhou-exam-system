@@ -2,6 +2,9 @@ using System.Data;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Scoring;
+using Exam.Domain.Importing;
+using Exam.Contracts.Exams;
+using Exam.Contracts.Common;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Security;
 using Npgsql;
@@ -47,6 +50,15 @@ public sealed partial class PostgresExamVersioningService
         { transaction.Commit(); return replayed; }
         var revision=LockStream(connection,transaction,request.ExamId);
         if(revision is null)return NotFound<ExamVersionSnapshot>(request.ExamId);
+        // Catalog editors lock the catalog before entry access. Keep that lock order to avoid
+        // deadlocks, and prevent a saved preview from racing a change to the authoritative settings.
+        (string Name, ExamSettings Settings)? catalog = null;
+        using (var command = new NpgsqlCommand("SELECT exam_name, settings::text FROM exam.exam_catalog WHERE exam_id=$1 FOR SHARE;", connection, transaction))
+        {
+            command.Parameters.AddWithValue(request.ExamId);
+            using var reader = command.ExecuteReader();
+            if (reader.Read()) catalog = (reader.GetString(0), JsonSerializer.Deserialize<ExamSettings>(reader.GetString(1), JsonDefaults.Create())!);
+        }
         LockEntryAccess(connection,transaction,request.ExamId);
         var service=Replay(connection,transaction,request.ExamId,revision.Value);
         if(SynchronizeAndValidateCanonicalParticipants(connection,transaction,service,request.ExamId,request) is { } canonicalError)
@@ -54,6 +66,21 @@ public sealed partial class PostgresExamVersioningService
         var before=service.GetExam(request.ExamId).Value ?? throw new InvalidDataException("考试版本流无法重建。");
         // 时间由服务器产生，不进入外层请求指纹；相同请求网络重试不会因时间变化失去幂等性。
         var now=DateTimeOffset.UtcNow;
+        if (before.Paper is null)
+        {
+            if (before.LifecycleState != ExamLifecycle.Scheduled || now >= before.Schedule.StartsAt)
+                return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.PublicationNotReady,
+                    "首次导入必须在开考前完成，未保存或激活任何部分试卷。");
+            if (catalog is { } configured)
+            {
+                try { ImportCatalogBinding.RequireMatch(request.ManifestJson, request.AnswerKeyJson, configured.Name, configured.Settings); }
+                catch (ArgumentException)
+                {
+                    return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.VersionConflict,
+                        "试题包与当前考试名称、科目、题组或计分设置不一致，请重新检查后发布。");
+                }
+            }
+        }
         var paper=new PublishPaperRequest(request.ExamId,request.ExpectedPaperVersion,request.ArtifactId,
             rules.Structure,request.ChangedQuestionIds,new(true,true,true,true),request.Operator,request.Reason,now,request.RequestId+":paper");
         var grading=new PublishGradingRulesRequest(request.ExamId,request.ExpectedGradingVersion,

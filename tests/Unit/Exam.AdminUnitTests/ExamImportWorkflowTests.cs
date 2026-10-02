@@ -1,3 +1,4 @@
+using Exam.Infrastructure.Packaging;
 using System.IO.Compression;
 using System.IO;
 using System.Net.Http;
@@ -175,6 +176,103 @@ public sealed class ExamImportWorkflowTests
         Assert.Contains("synthetic-request", transmitted!, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RepeatedClickDuringConfirmationDoesNotOpenASecondConfirmation()
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory);
+        using var vm = new ExamImportViewModel(api, service: service);
+        vm.SetCurrentExam(Summary("synthetic-exam-1")); vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        var confirmation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        vm.ConfirmPublicationAsync = _ => { calls++; return confirmation.Task; };
+        var first = vm.PublishAsync();
+        Assert.True(vm.IsPublishing);
+        await vm.PublishAsync();
+        Assert.Equal(1, calls);
+        confirmation.SetResult(false);
+        await first;
+        Assert.Equal(0, service.PublishCalls);
+        Assert.False(vm.IsPublishing);
+    }
+
+    [Fact]
+    public async Task SameExamNewSettingsInvalidateTheOldPreview()
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory);
+        using var vm = new ExamImportViewModel(api, service: service);
+        var exam = Summary("synthetic-exam-1");
+        vm.SetCurrentExam(exam); vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        Assert.True(vm.CanPublish);
+        vm.SetCurrentExam(exam with { SettingsVersion = 2 });
+        Assert.False(vm.CanPublish);
+        Assert.Empty(vm.Questions);
+    }
+
+    [Fact]
+    public async Task LostUploadReplyDoesNotQueryLocalVersionAndDeclareDurableSuccess()
+    {
+        using var fixture = new SourceFixture();
+        var service = new FakeImportService(fixture.Directory) { LoseReceipt = true };
+        var reads = 0;
+        using var handler = new PublicationHandler(_ =>
+        {
+            reads++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = JsonContent.Create(new ApiEnvelope<ExamVersionSnapshot>("synthetic-server", "node-a", 1,
+                "synthetic", service.LastResult, null), options: JsonDefaults.Create()) };
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001", "synthetic-token", "synthetic-operator");
+        using var vm = new ExamImportViewModel(api, service: service) { ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        vm.SetCurrentExam(Summary("synthetic-exam-1")); vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        await vm.PublishAsync();
+        Assert.Equal(0, reads);
+        Assert.DoesNotContain("正式发布成功", vm.Status);
+        Assert.Contains("尚不能确认", vm.Status);
+        Assert.True(vm.CanPublish);
+    }
+
+    [Fact]
+    public async Task SameArtifactFromAnotherExamIsNotAcceptedAsSuccess()
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory) { ResultExamId = "other-exam" };
+        using var vm = new ExamImportViewModel(api, service: service) { ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        vm.SetCurrentExam(Summary("synthetic-exam-1")); vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync(); await vm.PublishAsync();
+        Assert.DoesNotContain("正式发布成功", vm.Status);
+        Assert.True(vm.CanPublish);
+    }
+
+    [Fact]
+    public async Task SwitchingExamDuringPublicationDoesNotOverwriteTheNewContext()
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeImportService(fixture.Directory) { PublishRelease = gate };
+        using var vm = new ExamImportViewModel(api, service: service) { ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        vm.SetCurrentExam(Summary("synthetic-exam-1")); vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        var publication = vm.PublishAsync();
+        var oldRoot = service.LastPrepared!.Workspace.PackageRoot;
+        vm.SetCurrentExam(Summary("synthetic-exam-2"));
+        var newStatus = vm.Status;
+        Assert.True(System.IO.Directory.Exists(oldRoot));
+        gate.SetResult(); await publication;
+        Assert.Equal(newStatus, vm.Status);
+        Assert.Equal("synthetic-exam-2", vm.ExamId);
+        Assert.False(System.IO.Directory.Exists(oldRoot));
+    }
+
     private static ExamSummary Summary(string examId) => new(examId, "合成考试", DateTimeOffset.UtcNow,
         DateTimeOffset.UtcNow.AddHours(1), ExamLifecycle.Scheduled, false, false, 0, 0, 1);
 
@@ -192,6 +290,11 @@ public sealed class ExamImportWorkflowTests
     {
         public bool FailNextCheck { get; set; }
         public bool FailPublish { get; set; }
+        public bool LoseReceipt { get; set; }
+        public string? ResultExamId { get; set; }
+        public TaskCompletionSource? PublishRelease { get; set; }
+        public ExamVersionSnapshot? LastResult { get; private set; }
+        public PreparedExamImport? LastPrepared { get; private set; }
         public int PublishCalls { get; private set; }
         public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default)
         {
@@ -202,20 +305,23 @@ public sealed class ExamImportWorkflowTests
                 new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)),
                 ExamLifecycle.Scheduled, null, null, null, null,
                 new Dictionary<string, ParticipantVersionStatus>());
-            return new PreparedExamImport(workspace, manifest, "{}", "{}", version,
+            return LastPrepared = new PreparedExamImport(workspace, manifest, "{}", "{}", version,
                 new Dictionary<string, TeXCompileResult>(),
                 [new ImportPreviewQuestion("q-1", 1, "合成科目", "合成题组", "single", "1", "A、B", "synthetic.pdf")], selected);
         }
-        public Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default)
+        public async Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default)
         {
             PublishCalls++;
             if (FailPublish) throw new InvalidDataException("合成发布失败");
             var paper = new PaperPublicationInfo(1, prepared.ResourceId, new PaperStructure([]), [],
                 DateTimeOffset.UtcNow, "synthetic-operator", "first import");
-            var grading = new GradingPublicationInfo(1, "synthetic-rules", DateTimeOffset.UtcNow,
+            var grading = new GradingPublicationInfo(1, "bundle-rules-" + prepared.ResourceId, DateTimeOffset.UtcNow,
                 "synthetic-operator", "first import");
-            return Task.FromResult(prepared.Expected with
-            { Versions = new VersionVector(1, 1, 1), Paper = paper, Grading = grading });
+            LastResult = prepared.Expected with
+            { ExamId = ResultExamId ?? prepared.Expected.ExamId, Versions = new VersionVector(1, 1, 1), Paper = paper, Grading = grading };
+            if (LoseReceipt) throw new HttpRequestException("synthetic lost receipt");
+            if (PublishRelease is not null) await PublishRelease.Task;
+            return LastResult;
         }
     }
 
