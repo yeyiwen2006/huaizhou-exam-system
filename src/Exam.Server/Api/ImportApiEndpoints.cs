@@ -47,6 +47,19 @@ public static class ImportApiEndpoints
                 await pipeline.RunAsync(request, cancellationToken));
         });
 
+        // E01-C49：只改答案与计分规则（不换试卷版本、不重新组包），发布规则版本并按新版本触发重算。
+        // 操作者同样取自已认证身份，请求体不带 operator。
+        group.MapPost("/{examId}/rule-revisions", async (string examId,
+            [FromBody] GradingRuleRevisionRequest body,
+            [FromServices] GradingRuleRevisionService revisions,
+            HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
+            ApiEndpointResults.Success(context, configuration, context.TraceIdentifier,
+                await revisions.ReviseAsync(
+                    examId,
+                    body,
+                    ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context),
+                    cancellationToken)));
+
         return group;
     }
 }

@@ -343,11 +343,18 @@
                         <Button Content="刷新客户端更新" Style="{StaticResource ActionButton}" Margin="8,0,0,0"
                                 Command="{Binding PaperImport.RefreshClientUpdatesCommand}"
                                 IsEnabled="{Binding PaperImport.CanRefreshClientUpdates}" />
+                        <Button Content="只修订答案与规则" Style="{StaticResource ActionButton}" Margin="8,0,0,0"
+                                Command="{Binding PaperImport.ReviseGradingRulesCommand}"
+                                IsEnabled="{Binding PaperImport.CanReviseGradingRules}" />
                     </StackPanel>
+
+                    <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap" Margin="0,8,0,0"
+                               Text="「只修订答案与规则」不换试卷版本、不重新组包，只按所选材料包里的清单与完整参考答案发布新的计分规则版本，并按新版本触发重算；试卷内容有改动请用「发布」。" />
 
                     <TextBlock Text="{Binding PaperImport.Status}" Margin="0,12,0,0" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding PaperImport.Stage, StringFormat=当前阶段：{0}}" Style="{StaticResource CardNote}" Margin="0,4,0,0" />
                     <TextBlock Text="{Binding PaperImport.ClientUpdateSummary}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding PaperImport.GradingRevisionSummary}" Margin="0,4,0,0" TextWrapping="Wrap" />
 
                     <TextBlock Text="逐题预检结果" Style="{StaticResource CardHeading}" Margin="0,16,0,0" />
                     <ListView ItemsSource="{Binding PaperImport.Questions}" MaxHeight="220">

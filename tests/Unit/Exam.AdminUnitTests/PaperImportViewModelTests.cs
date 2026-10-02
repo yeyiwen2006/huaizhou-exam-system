@@ -165,6 +165,67 @@ public sealed partial class PaperImportViewModelTests
     }
 
     [Fact]
+    public async Task ReviseGradingRules_PublishesRulesAndReportsTheRecalculationSeparately()
+    {
+        JsonNode? revised = null;
+        using var handler = new Handler(async (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == $"/api/v1/imports/{ExamId}/rule-revisions")
+            {
+                revised = Body(request);
+                return Success(new Exam.Contracts.Importing.GradingRuleRevisionResult(
+                    true, 3, [], SubmissionCount: 12, Enqueued: 4,
+                    Readiness: new Exam.Contracts.Grading.GradingReadiness(3, false,
+                        [new Exam.Contracts.Grading.RegradeItem("synthetic-submission", Exam.Contracts.Grading.RegradeReason.StaleVersion)],
+                        ["还有 8 份答卷未按该版本计分"])));
+            }
+
+            return Success(PreviewPassed);
+        });
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+        await vm.SelectPackageAsync();
+        vm.Reason = "合成规则修订";
+
+        await vm.ReviseGradingRulesAsync();
+
+        Assert.NotNull(revised);
+        Assert.Equal(PackageRoot, revised["packageRoot"]!.GetValue<string>());
+        // 不要求操作者记规则版本号：0 表示由服务器取当前版本的下一版。
+        Assert.Equal(0, revised["gradingVersion"]!.GetValue<long>());
+        Assert.Equal("合成规则修订", revised["reason"]!.GetValue<string>());
+        // 规则已发布（试卷版本不变）与重算就绪分开说。
+        Assert.Contains("已发布到版本 3", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("试卷版本不变", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("重算范围 12 份答卷", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.Contains("本次入队 4 份", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.Contains("未就绪", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.Contains("还有 8 份答卷未按该版本计分", vm.GradingRevisionSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReviseGradingRules_WithoutAPackageOrReasonDoesNotCallTheServer()
+    {
+        var requests = 0;
+        using var handler = new Handler((request, _) =>
+        {
+            requests++;
+            return Task.FromResult(Success(PreviewPassed));
+        });
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+
+        await vm.ReviseGradingRulesAsync();
+        Assert.Equal(0, requests);
+        Assert.Contains("请先选择当前考试与材料包目录", vm.Status, StringComparison.Ordinal);
+
+        await vm.SelectPackageAsync();
+        await vm.ReviseGradingRulesAsync();
+        Assert.Equal(0, requests);
+        Assert.Contains("请先填写本次发布原因", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task LoadTargetVersion_ReadsTheServerVersionAndOffersTheNextOne()
     {
         using var handler = new Handler((request, _) => Task.FromResult(Success(Snapshot(4))));

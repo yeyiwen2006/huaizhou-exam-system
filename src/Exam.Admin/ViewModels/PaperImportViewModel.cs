@@ -38,6 +38,7 @@ public sealed class PaperImportViewModel : BindableBase
     private string _status = IdleStatus;
     private string _stage = string.Empty;
     private string _clientUpdateSummary = "尚未核对客户端更新。";
+    private string _gradingRevisionSummary = "尚未修订答案与规则。";
     private bool _busy;
     private bool _previewPassed;
 
@@ -50,6 +51,7 @@ public sealed class PaperImportViewModel : BindableBase
         PreviewCommand = new AsyncRelayCommand(PreviewAsync, onError: SetError);
         PublishCommand = new AsyncRelayCommand(PublishAsync, onError: SetError);
         RefreshClientUpdatesCommand = new AsyncRelayCommand(RefreshClientUpdatesAsync, onError: SetError);
+        ReviseGradingRulesCommand = new AsyncRelayCommand(ReviseGradingRulesAsync, onError: SetError);
     }
 
     /// <summary>由外壳在切换当前考试时设置；预检、发布与客户端核对都以它为准。</summary>
@@ -190,10 +192,21 @@ public sealed class PaperImportViewModel : BindableBase
         private set => SetProperty(ref _clientUpdateSummary, value);
     }
 
+    /// <summary>
+    /// 只改答案与计分规则的结果：**规则已发布**与**成绩已重算完**分开说，
+    /// 不把「规则已换」说成「成绩已重算完」。
+    /// </summary>
+    public string GradingRevisionSummary
+    {
+        get => _gradingRevisionSummary;
+        private set => SetProperty(ref _gradingRevisionSummary, value);
+    }
+
     public bool CanPreview => !IsBusy;
     public bool CanPublish => PreviewPassed && !IsBusy;
     public bool CanReadCurrentVersion => !IsBusy && !string.IsNullOrWhiteSpace(ExamId);
     public bool CanRefreshClientUpdates => !IsBusy && !string.IsNullOrWhiteSpace(ExamId);
+    public bool CanReviseGradingRules => !IsBusy && !string.IsNullOrWhiteSpace(ExamId) && !string.IsNullOrWhiteSpace(PackageRoot);
 
     /// <summary>预检的逐题摘要：是否编译成功、清单选项数与实际定位到的区域数。</summary>
     public ObservableCollection<ImportQuestionPreview> Questions { get; } = [];
@@ -206,6 +219,7 @@ public sealed class PaperImportViewModel : BindableBase
     public AsyncRelayCommand PreviewCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
     public AsyncRelayCommand RefreshClientUpdatesCommand { get; }
+    public AsyncRelayCommand ReviseGradingRulesCommand { get; }
 
     public Task SelectPackageAsync()
     {
@@ -324,6 +338,56 @@ public sealed class PaperImportViewModel : BindableBase
         {
             var snapshot = await _api.GetExamAsync(ExamId);
             ClientUpdateSummary = DescribeClientUpdates(snapshot);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 只改**答案与计分规则**：材料包里的清单与完整参考答案决定新规则，试卷版本不变，也不需要重新组包。
+    /// 规则版本取服务器当前版本的下一版（不要求操作者记版本号）。
+    /// </summary>
+    public async Task ReviseGradingRulesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ExamId) || string.IsNullOrWhiteSpace(PackageRoot))
+        {
+            Status = NoExamOrPackageStatus;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Reason))
+        {
+            Status = "请先填写本次发布原因。";
+            return;
+        }
+
+        IsBusy = true;
+        Status = "正在发布新的答案与计分规则，并按新版本规划重算…";
+        try
+        {
+            var result = await _api.ReviseGradingRulesAsync(ExamId, PackageRoot, 0, Reason);
+            if (!result.Succeeded)
+            {
+                Status = "规则修订未完成；请按问题逐条处理后重试。";
+                foreach (var issue in result.Issues)
+                {
+                    Issues.Add(issue);
+                }
+
+                GradingRevisionSummary = $"规则修订未完成：{string.Join("；", result.Issues.Select(issue => $"{issue.Code} {issue.Message}"))}";
+                return;
+            }
+
+            Status = $"答案与计分规则已发布到版本 {result.PublishedGradingVersion}（试卷版本不变）。";
+            var readiness = result.Readiness?.RecalculationReady == true
+                ? "就绪"
+                : $"未就绪（{string.Join("；", result.Readiness?.Blockers ?? [])}）";
+            GradingRevisionSummary =
+                $"规则版本 {result.PublishedGradingVersion} 已发布：重算范围 {result.SubmissionCount} 份答卷，" +
+                $"本次入队 {result.Enqueued} 份，重算{readiness}。" +
+                (result.RecalculationError is null ? string.Empty : $" 重算未触发：{result.RecalculationError}");
         }
         finally
         {
@@ -468,6 +532,7 @@ public sealed class PaperImportViewModel : BindableBase
         OnPropertyChanged(nameof(CanPublish));
         OnPropertyChanged(nameof(CanReadCurrentVersion));
         OnPropertyChanged(nameof(CanRefreshClientUpdates));
+        OnPropertyChanged(nameof(CanReviseGradingRules));
     }
 
     private void SetError(Exception exception) => Status = $"操作失败：{exception.Message}";

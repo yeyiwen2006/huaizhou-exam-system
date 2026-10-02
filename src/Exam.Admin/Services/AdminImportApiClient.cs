@@ -53,4 +53,23 @@ public sealed partial class AdminApiClient
             declaredChangedQuestionIds = declaredChangedQuestionIds is { Count: > 0 } ? declaredChangedQuestionIds : null,
             reason
         }, cancellationToken);
+
+    /// <summary>
+    /// 只改**答案与计分规则**（不换试卷版本、不重新组包）：发布新的规则版本并按新版本触发重算。
+    /// <paramref name="gradingVersion"/> 传 0 表示由服务器取当前规则版本的下一版。
+    /// 返回结果把「规则已发布」与「重算是否就绪」分开报告。
+    /// </summary>
+    public Task<GradingRuleRevisionResult> ReviseGradingRulesAsync(
+        string examId,
+        string packageRoot,
+        long gradingVersion,
+        string reason,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<GradingRuleRevisionResult>(HttpMethod.Post,
+            $"api/v1/imports/{Uri.EscapeDataString(examId)}/rule-revisions", new
+            {
+                packageRoot,
+                gradingVersion,
+                reason
+            }, cancellationToken);
 }

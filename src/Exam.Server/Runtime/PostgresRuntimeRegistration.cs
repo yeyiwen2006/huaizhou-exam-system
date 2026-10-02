@@ -188,6 +188,8 @@ public static class PostgresRuntimeRegistration
             provider.GetRequiredService<Exam.Infrastructure.Security.IPublicationCertificateProvider>(),
             provider.GetRequiredService<Exam.Infrastructure.Security.ManagedNodeEncryptionPolicy>(),
             provider.GetRequiredService<TimeProvider>()));
+        // E01-C49：只改答案与计分规则的修订入口（A06 规则发布 + D05 重算）。
+        services.AddSingleton<Exam.Infrastructure.Packaging.GradingRuleRevisionService>();
         services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
         services.AddSingleton<IPackageKeyUnwrapper>(new CertificateStorePackageKeyUnwrapper(
             identity.NodeId,

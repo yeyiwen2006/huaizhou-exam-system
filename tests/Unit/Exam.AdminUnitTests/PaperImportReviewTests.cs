@@ -253,6 +253,50 @@ public sealed partial class PaperImportViewModelTests
     }
 
     [Fact]
+    public async Task Review_RulesRevisionThatPublishedButCouldNotRecalculateDoesNotClaimCompletion()
+    {
+        using var handler = new Handler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath.EndsWith("/rule-revisions", StringComparison.Ordinal)
+                ? Success(new Exam.Contracts.Importing.GradingRuleRevisionResult(true, 3, [], 0, 0, null,
+                    "规则版本 3 已发布，但重算未触发：合成故障"))
+                : Success(PreviewPassed)));
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+        await vm.SelectPackageAsync();
+        vm.Reason = "合成规则修订";
+
+        await vm.ReviseGradingRulesAsync();
+
+        // 规则确实发布了：不能反过来说成失败；但重算没跑起来必须如实说，不能宣称已重算。
+        Assert.Contains("已发布到版本 3", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("重算未触发：合成故障", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("重算就绪", vm.GradingRevisionSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Review_FailedRulesRevisionReportsTheIssueAndKeepsNoSuccessState()
+    {
+        using var handler = new Handler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath.EndsWith("/rule-revisions", StringComparison.Ordinal)
+                ? Success(new Exam.Contracts.Importing.GradingRuleRevisionResult(false, null,
+                    [new Exam.Contracts.Importing.ImportPipelineIssue("PaperNotPublished",
+                        "该考试尚未发布试卷版本。")]))
+                : Success(PreviewPassed)));
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+        await vm.SelectPackageAsync();
+        vm.Reason = "合成规则修订";
+
+        await vm.ReviseGradingRulesAsync();
+
+        Assert.Contains("未完成", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("PaperNotPublished", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("已发布", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        // 失败的问题逐条进列表，不只在状态行里说一句。
+        Assert.Equal("PaperNotPublished", Assert.Single(vm.Issues).Code);
+    }
+
+    [Fact]
     public async Task Review_PreviewWithoutAPackageOrWithNoReasonNeverReachesTheServer()
     {
         var attempted = 0;
