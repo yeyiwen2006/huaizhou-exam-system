@@ -17,6 +17,9 @@ namespace Exam.Infrastructure.Packaging;
 /// 两条边界写在这里：
 /// - **「规则已发布」不等于「成绩已重算完」**。发布结果与重算范围/入队/就绪分开报告；
 ///   发布成功但重算没能跑起来时如实报出 <see cref="GradingRuleRevisionResult.RecalculationError"/>。
+/// - **内容没变就不发布新版本**：本次材料与当前已发布规则的内容标识一致时直接返回「已是该规则」。
+///   A06 的通用规则发布没有请求级幂等，重复点击或网络重试会无谓地推进规则版本，
+///   那会让旧报表无谓地失效并暂停查看与导出；成绩重算仍由重算调度按当前版本持续对账，不受此影响。
 /// - **原答案与旧成绩不被覆盖**：版本必须前进，A06 按「当前版本 = 目标版本 − 1」在事务内判定，
 ///   重算规划只按新版本补齐过期或缺失的成绩，遇到更高版本成绩会阻断本批而不是降版覆盖。
 /// </summary>
@@ -101,10 +104,16 @@ public sealed class GradingRuleRevisionService(
                 "该考试尚未发布试卷版本：答案与计分规则必须对应一份已发布的试卷，请先完成导入发布。");
         }
 
+        // 内容与当前已发布规则一致就不推进版本：重复点击或网络重试不该让报表无谓失效。
+        var ruleSetId = "rules-" + ContentId(manifestText + answerKeyText);
+        if (string.Equals(snapshot.Value.Grading?.RuleSetId, ruleSetId, StringComparison.Ordinal))
+        {
+            return new GradingRuleRevisionResult(true, current, [], AlreadyInEffect: true);
+        }
+
         // 3. 发布新的计分规则版本。RecalculationReady 表示「重算路径可用、调用方为此负责」，
         //    不等于成绩已经重算完——真正的就绪结论由紧接着的重算快照给出。
         var manifestJson = manifestText;
-        var ruleSetId = "rules-" + ContentId(manifestText + answerKeyText);
         var published = versioning.PublishGradingRules(new PublishGradingRulesRequest(
             examId,
             target - 1,

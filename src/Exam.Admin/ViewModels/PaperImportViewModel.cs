@@ -380,6 +380,14 @@ public sealed class PaperImportViewModel : BindableBase
                 return;
             }
 
+            if (result.AlreadyInEffect)
+            {
+                // 内容没变就不推新版本：不把「已是该规则」说成「又发布了一次」。
+                Status = $"材料与当前已发布规则内容一致，未发布新版本（当前规则版本 {result.PublishedGradingVersion}）。";
+                GradingRevisionSummary = $"规则内容未变化，未推进规则版本；当前规则版本 {result.PublishedGradingVersion}。";
+                return;
+            }
+
             Status = $"答案与计分规则已发布到版本 {result.PublishedGradingVersion}（试卷版本不变）。";
             var readiness = result.Readiness?.RecalculationReady == true
                 ? "就绪"

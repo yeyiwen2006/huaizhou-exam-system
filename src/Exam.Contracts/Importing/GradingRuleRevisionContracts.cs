@@ -22,6 +22,9 @@ public sealed record GradingRuleRevisionRequest(
 /// <paramref name="Enqueued"/> 与 <paramref name="Readiness"/> 如实给出，
 /// 发布成功但重算没能跑起来时填 <paramref name="RecalculationError"/>，
 /// 不把「规则已换」说成「成绩已重算完」。
+///
+/// <paramref name="AlreadyInEffect"/> 为 true 表示本次材料与**当前已发布规则**内容一致，
+/// 未产生新版本（重复点击或网络重试不该无谓地推进规则版本——那会让旧报表无谓地失效并暂停查看与导出）。
 /// </summary>
 public sealed record GradingRuleRevisionResult(
     bool Succeeded,
@@ -30,4 +33,5 @@ public sealed record GradingRuleRevisionResult(
     int SubmissionCount = 0,
     int Enqueued = 0,
     GradingReadiness? Readiness = null,
-    string? RecalculationError = null);
+    string? RecalculationError = null,
+    bool AlreadyInEffect = false);

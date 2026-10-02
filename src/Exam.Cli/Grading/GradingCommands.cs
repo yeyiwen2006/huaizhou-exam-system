@@ -131,6 +131,13 @@ internal static partial class ExamCli
             return 4;
         }
 
+        if (result.AlreadyInEffect)
+        {
+            // 内容没变就不推新版本：说清楚是「已是该规则」，不是「又发布了一次」。
+            Console.Error.WriteLine($"材料与当前已发布规则内容一致，未发布新版本（当前规则版本 {result.PublishedGradingVersion}）。");
+            return 0;
+        }
+
         // 规则已经发布；重算范围与就绪单独说明，不把两者混成一句话。
         Console.Error.WriteLine($"规则版本 {result.PublishedGradingVersion} 已发布。");
         Console.Error.WriteLine($"重算范围 {result.SubmissionCount} 份答卷，本次入队 {result.Enqueued} 份；" +

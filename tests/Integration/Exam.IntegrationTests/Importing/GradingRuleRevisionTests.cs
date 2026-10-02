@@ -98,6 +98,25 @@ public sealed class GradingRuleRevisionTests(PostgresDatabaseFixture fixture) : 
     }
 
     [Fact]
+    public async Task ReviseAsync_RepeatingTheSameRevision_DoesNotAdvanceTheVersionAgain()
+    {
+        // 网络重试或重复点击：材料内容与当前已发布规则一致，直接返回「已是该规则」，
+        // 不再推一个新版本（否则旧报表会无谓失效并暂停查看与导出）。
+        var exam = await CreateExamAsync();
+        WritePackage();
+        await PublishPaper(exam);
+        var first = await Service(exam).ReviseAsync(_examId, Request(), "synthetic-operator");
+        Assert.True(first.Succeeded, Describe(first));
+
+        var second = await Service(exam).ReviseAsync(_examId, Request(), "synthetic-operator");
+
+        Assert.True(second.Succeeded, Describe(second));
+        Assert.True(second.AlreadyInEffect);
+        Assert.Equal(first.PublishedGradingVersion, second.PublishedGradingVersion);
+        Assert.Equal(1, exam.GetExam(_examId).Value!.Versions.GradingVersion);
+    }
+
+    [Fact]
     public async Task ReviseAsync_WithoutACompleteAnswerKey_IsRejectedAndPublishesNothing()
     {
         var exam = await CreateExamAsync();

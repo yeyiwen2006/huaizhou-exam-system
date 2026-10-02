@@ -274,6 +274,27 @@ public sealed partial class PaperImportViewModelTests
     }
 
     [Fact]
+    public async Task Review_UnchangedRulesDoNotClaimANewVersionWasPublished()
+    {
+        // 材料与当前已发布规则一致：界面必须说「未发布新版本」，不能显示成又发布了一次。
+        using var handler = new Handler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath.EndsWith("/rule-revisions", StringComparison.Ordinal)
+                ? Success(new Exam.Contracts.Importing.GradingRuleRevisionResult(
+                    true, 4, [], AlreadyInEffect: true))
+                : Success(PreviewPassed)));
+        using var api = Configured(handler);
+        var vm = new PaperImportViewModel(api, new FakeDialogs()) { ExamId = ExamId };
+        await vm.SelectPackageAsync();
+        vm.Reason = "合成规则修订";
+
+        await vm.ReviseGradingRulesAsync();
+
+        Assert.Contains("未发布新版本", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("未推进规则版本", vm.GradingRevisionSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("已发布到版本", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Review_FailedRulesRevisionReportsTheIssueAndKeepsNoSuccessState()
     {
         using var handler = new Handler((request, _) => Task.FromResult(
