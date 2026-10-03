@@ -238,6 +238,53 @@ public static class PaperMaterialsArchive
             new InMemoryMaterialFileSource(files), manifest);
     }
 
+    /// <summary>
+    /// 把已校验的归档解出成**可编辑的材料包目录**：目录里就是清单、题目 `.tex`、共享样式、图片与独立答案，
+    /// 可直接用于再次检查与修订。归档自身的 `materials.json` 不写出（它不是材料包的一部分）。
+    /// 目标目录必须不存在；解出后按既有限制只向当前账户与 SYSTEM 开放。
+    /// </summary>
+    public static async Task ExtractAsync(PaperMaterialsArchiveResult archive, string targetDirectory,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        if (!archive.Succeeded || archive.Materials is null)
+            throw new InvalidDataException("材料归档不可用：" + (archive.Failure?.Value ?? "未知原因"));
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetDirectory);
+        var target = Path.GetFullPath(targetDirectory);
+        if (Directory.Exists(target) || File.Exists(target))
+            throw new IOException("材料输出目录已存在，请选择新的目录。");
+        var parent = Path.GetDirectoryName(target) ?? throw new ArgumentException("材料输出目录无效。");
+        if (!Directory.Exists(parent)) throw new DirectoryNotFoundException("材料输出目录的父目录不存在。");
+        ExamImportWorkspace.RejectLinks(parent);
+        var staging = Path.Combine(parent, ".c05-materials-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        ExamImportWorkspace.RestrictAccess(staging);
+        try
+        {
+            foreach (var path in archive.Materials.Paths)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.Equals(path, ManifestFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var output = Path.GetFullPath(Path.Combine(staging, path.Replace('/', Path.DirectorySeparatorChar)));
+                if (!output.StartsWith(staging + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"材料路径越界：{path}");
+                Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+                await File.WriteAllBytesAsync(output, archive.Materials.Read(path), ct);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            Directory.Move(staging, target);
+        }
+        finally
+        {
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+        }
+    }
+
     private static void WriteEntry(ZipArchive zip, string path, byte[] content)
     {
         var entry = zip.CreateEntry(path, CompressionLevel.Optimal);

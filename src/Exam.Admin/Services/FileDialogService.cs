@@ -19,6 +19,9 @@ public interface IExamImportSourceDialog
 {
     string? OpenDirectory();
     string? OpenZip();
+
+    /// <summary>选择放置**取回的源材料**的父目录（取回目录会在其下新建，含题目与独立答案）。</summary>
+    string? OpenNewMaterialDirectory();
 }
 
 public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService, IExamImportSourceDialog
@@ -35,6 +38,12 @@ public sealed class FileDialogService : IFileDialogService, IManifestFileDialogS
     {
         var dialog = new OpenFileDialog { Filter = "试题 ZIP 包 (*.zip)|*.zip", CheckFileExists = true };
         return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? OpenNewMaterialDirectory()
+    {
+        var dialog = new OpenFolderDialog { Title = "选择放置取回源材料的父目录" };
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
     }
 
     public string? OpenExcelFile()

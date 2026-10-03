@@ -91,6 +91,8 @@ internal static partial class ExamCli
             message = "发布结果未确认；请保留原预览目录，核对考试状态后使用同一目录重试，不要重新生成另一份发布请求。";
         else if (importAction == "preview" && exit == 4)
             message = "材料、编译结果或考试设置校验未通过；未发布，请核对试题包与已保存的考试设置。";
+        else if (importAction == "materials" && exit == 4)
+            message = "取回源材料未完成；请核对考试名称与当前已发布版本，未写出任何目录。";
         // Only contract constants may cross the error boundary; never echo a response body.
         var contractCodes = typeof(ErrorCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string)).Select(f => (string)f.GetRawConstantValue()!);

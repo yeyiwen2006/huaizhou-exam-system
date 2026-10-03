@@ -157,6 +157,34 @@ public sealed class PaperMaterialsArchiveTests
     }
 
     [Fact]
+    public async Task Extract_WritesAnEditableMaterialPackageAndRefusesAnExistingTarget()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "c05-extract-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var archive = PaperMaterialsArchive.Read(PaperMaterialsArchive.Build(ExamId, 1, Materials()));
+            Assert.True(archive.Succeeded, archive.Failure?.Value);
+            var target = Path.Combine(directory, "materials");
+
+            await PaperMaterialsArchive.ExtractAsync(archive, target);
+
+            // 解出来的就是可直接再检查/修订的材料包：清单、题目源文件、图片、独立答案。
+            Assert.True(File.Exists(Path.Combine(target, "manifest.json")));
+            Assert.True(File.Exists(Path.Combine(target, "questions", "q1.tex")));
+            Assert.True(File.Exists(Path.Combine(target, "figures", "a.png")));
+            // 归档自身的清单不写出：它不是材料包的一部分。
+            Assert.False(File.Exists(Path.Combine(target, PaperMaterialsArchive.ManifestFileName)));
+            // 目标目录已存在就报错，不覆盖操作者已有的目录。
+            await Assert.ThrowsAsync<IOException>(() => PaperMaterialsArchive.ExtractAsync(archive, target));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Read_RejectsNotAZip()
     {
         var result = PaperMaterialsArchive.Read([1, 2, 3, 4]);
