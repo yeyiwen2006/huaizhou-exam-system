@@ -37,6 +37,25 @@ public sealed class ExamImportRevisionViewModelTests
     }
 
     [Fact]
+    public void RetrieveMaterialsCommand_IsEnabledOnlyWithACurrentExam()
+    {
+        var vm = new ExamImportViewModel(new AdminApiClient(), new FakeDialog(string.Empty));
+
+        // 没有当前考试时不可用（避免对着空考试发请求）。
+        Assert.False(vm.RetrieveMaterialsCommand.CanExecute(null));
+
+        vm.SetCurrentExam(Summary());
+        Assert.True(vm.RetrieveMaterialsCommand.CanExecute(null));
+
+        // 切换考试同样刷新可用状态：命令的 CanExecuteChanged 必须被抬起，否则按钮状态会失真。
+        var changed = false;
+        vm.RetrieveMaterialsCommand.CanExecuteChanged += (_, _) => changed = true;
+        vm.SetCurrentExam(Summary() with { ExamId = "synthetic-other-exam" });
+        Assert.True(changed);
+        Assert.True(vm.RetrieveMaterialsCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task RetrieveMaterials_ExtractsTheCurrentVersionArchiveUnderTheChosenParent()
     {
         var parent = Path.Combine(Path.GetTempPath(), "c05-retrieve-" + Guid.NewGuid().ToString("N"));

@@ -323,6 +323,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         OpenQuestionCommand.RaiseCanExecuteChanged();
         CheckCommand.RaiseCanExecuteChanged();
         PublishCommand.RaiseCanExecuteChanged();
+        RetrieveMaterialsCommand.RaiseCanExecuteChanged();
         SelectDirectoryCommand.RaiseCanExecuteChanged();
         SelectZipCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(CanPublish));
