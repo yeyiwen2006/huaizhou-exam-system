@@ -77,8 +77,8 @@ internal static partial class ExamCli
     private static async Task<int> ReadGradingStatusAsync(HttpClient client, string examReference,
         CancellationToken cancellationToken)
     {
-        var examId = await ResolveExamIdAsync(client, examReference, cancellationToken);
-        var report = await GetGradingStatusAsync(client, examId, cancellationToken);
+        // status 沿用既有语义：位置参数就是考试标识（历史行为，不改既有使用方式）。
+        var report = await GetGradingStatusAsync(client, examReference, cancellationToken);
         Console.WriteLine(JsonSerializer.Serialize(report, JsonDefaults.Create()));
         Console.Error.WriteLine(DescribeGradingState(report));
         return 0;
