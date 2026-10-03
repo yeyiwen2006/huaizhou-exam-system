@@ -21,7 +21,8 @@ namespace Exam.Infrastructure.ServiceManagement;
 public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPackageKeyUnwrapper unwrapper) : IStartupReadinessProbe
 {
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
-    private static readonly string[] Names = ["activation-sequences", "version-projections", "published-resources", "submission-receipts", "reliable-events"];
+    private static readonly string[] Names = ["activation-sequences", "version-projections", "published-resources",
+        "submission-receipts", "reliable-events", "paper-materials"];
 
     public async Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration, CancellationToken token)
     {
@@ -44,6 +45,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
             await AddAsync(Names[1], () => CheckVersionsAsync(connection, transaction, token));
             await AddAsync(Names[2], () => CheckResourcesAsync(connection, transaction, token));
             await AddAsync(Names[3], () => CheckReceiptsAsync(connection, transaction, token));
+            await AddAsync(Names[5], () => CheckPaperMaterialsAsync(connection, transaction, token));
             await AddAsync(Names[4], async () => await NoRowsAsync("""
                 SELECT 1 FROM exam.command_events e
                 LEFT JOIN exam.participations p ON p.participation_id = e.participation_id
@@ -132,6 +134,26 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     }
 
     private static long PostgreSqlTimestampTicks(DateTimeOffset value) => value.UtcTicks / 10 * 10;
+
+    private async Task<bool> CheckPaperMaterialsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        CancellationToken token)
+    {
+        // 源材料归档与试卷版本同一事务写入，因此「已发布版本必须有归档」是可核对的恢复不变量：
+        // 接管后要能取回材料继续修题，缺归档必须在放行业务写入之前拦下。
+        // 兼容性：本功能上线前发布的考试完全没有归档行，这类考试按「尚未归档」豁免，
+        // 不做自动删除也就不会出现「有归档又缺某个版本」的中间状态。
+        return await NoRowsAsync("""
+            SELECT 1 FROM exam.version_state v
+             WHERE v.paper_version > 0
+               AND EXISTS (SELECT 1 FROM exam.paper_materials m WHERE m.exam_id = v.exam_id)
+               AND NOT EXISTS (SELECT 1 FROM exam.paper_materials m
+                                WHERE m.exam_id = v.exam_id AND m.paper_version = v.paper_version AND m.archive_bytes > 0)
+            UNION ALL SELECT 1 FROM exam.paper_materials m
+             WHERE m.archive_bytes <= 0 OR length(m.archive_sha256) <> 64 OR length(m.package_content_sha256) <> 64
+                OR m.format_version < 1 OR m.file_count < 1 OR jsonb_typeof(m.question_digests) <> 'object'
+                OR m.question_digests = '{}'::jsonb
+            """, connection, transaction, token);
+    }
 
     private async Task<bool> CheckResourcesAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
     {

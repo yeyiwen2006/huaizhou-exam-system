@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Net;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Importing;
@@ -17,6 +18,14 @@ using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
 using Exam.IntegrationTests.Postgres;
+using Exam.Server.Api;
+using Exam.Server.Runtime;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 
 namespace Exam.IntegrationTests.Importing;
@@ -128,6 +137,46 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
         Assert.False(rejected.Succeeded);
         Assert.Equal(VersioningErrorCode.MaterialsBaselineMissing, rejected.ErrorCode);
         Assert.Equal(1, f.Versions.GetExam(f.ExamId).Value!.Versions.PaperVersion);
+    }
+
+    [Fact]
+    public async Task Retrieval_ReturnsTheArchivedBytesWithTheirHashAndRejectsUnknownVersions()
+    {
+        // 权限部分由中间件用例覆盖（该路由要求考务会话、设备凭据无效）；这里核对功能面：
+        // 返回的字节与归档哈希一致、可取回、版本缺失/越界都给出明确拒绝。
+        using var f = await Fixture.CreateAsync(database.DataSource);
+        Assert.True((await f.PublishAsync(1, MaterialFiles(f.ExamName), [])).Succeeded);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"{ServerIdentityOptions.SectionName}:ServerId"] = "synthetic-server",
+            [$"{ServerIdentityOptions.SectionName}:NodeId"] = "node-a",
+            [$"{ServerIdentityOptions.SectionName}:ServerEpoch"] = "1"
+        });
+        builder.Services.AddSingleton(f.Materials);
+        await using var app = builder.Build();
+        app.MapGroup("/api/v1").MapPublicationUploadApi();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+
+        var ok = await client.GetAsync($"/api/v1/exams/{f.ExamId}/paper-materials?version=1");
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        var bytes = await ok.Content.ReadAsByteArrayAsync();
+        var declared = ok.Headers.GetValues("X-Exam-Materials-Sha256").Single();
+        Assert.Equal(declared, Convert.ToHexString(SHA256.HashData(bytes)));
+        Assert.Contains("no-store", ok.Headers.CacheControl!.ToString(), StringComparison.OrdinalIgnoreCase);
+        // 取回的正是归档本身：能解出材料清单与逐题所需文件。
+        var archive = PaperMaterialsArchive.Read(bytes);
+        Assert.True(archive.Succeeded, archive.Failure?.Value);
+        Assert.NotNull(archive.Materials!.Resolve($"questions/{f.ExamName}_1.tex"));
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await client.GetAsync($"/api/v1/exams/{f.ExamId}/paper-materials?version=0")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.GetAsync($"/api/v1/exams/{f.ExamId}/paper-materials?version=9")).StatusCode);
     }
 
     [Fact]

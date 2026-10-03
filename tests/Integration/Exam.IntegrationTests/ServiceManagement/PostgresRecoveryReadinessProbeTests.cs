@@ -62,7 +62,7 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     {
         CreateExam();
         var checks = await InspectAsync();
-        Assert.Equal(5, checks.Count);
+        Assert.Equal(6, checks.Count);
         Assert.All(checks, c => Assert.True(c.Passed, c.Name));
         var guard = new BusinessRecoveryGuard();
         Assert.False(guard.Snapshot.Ready);
@@ -79,6 +79,8 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{examId}', '\"wrong\"'::jsonb)", "version-projections")]
     [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{schedule,startsAt}', to_jsonb((payload->'schedule'->>'startsAt')::timestamptz + interval '1 minute'))", "version-projections")]
     [InlineData("UPDATE exam.version_events SET payload = jsonb_set(payload, '{schedule}', 'null'::jsonb)", "version-projections")]
+    // 归档行结构损坏（长度为 0、摘要不是 64 位、逐题摘要为空）：恢复核对必须拦住业务写入。
+    [InlineData("INSERT INTO exam.paper_materials (exam_id, paper_version, archive, archive_sha256, package_content_sha256, format_version, file_count, archive_bytes, question_digests, created_at, created_by) VALUES ('synthetic-exam', 1, '\x01'::bytea, repeat('a', 64), repeat('b', 64), 1, 1, 0, '{}'::jsonb, now(), 'synthetic-operator')", "paper-materials")]
     public async Task DamagedVersionEvidenceClosesGuard(string damage, string expected)
     {
         CreateExam();
