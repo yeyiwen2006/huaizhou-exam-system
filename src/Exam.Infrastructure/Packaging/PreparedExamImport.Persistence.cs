@@ -145,8 +145,9 @@ public sealed partial class PreparedExamImport
             var questions = Questions.Select(x => x with
             { PdfPath = Path.GetRelativePath(Workspace.Root, x.PdfPath).Replace('\\', '/') }).ToArray();
             await WriteAtomicAsync(Path.Combine(staging, "preview.json"),
-                new SavedPreview(1, Source, Expected, ExpectedSettingsVersion, LogicalServerId!, ResourceId,
-                    RequestId, compiled, questions, _fingerprints), ct);
+                new SavedPreview(2, Source, Expected, ExpectedSettingsVersion, LogicalServerId!, ResourceId,
+                    RequestId, compiled, questions, _fingerprints,
+                    Reason, DeclaredChangedQuestions, ChangedQuestionsHint), ct);
             // Prove the exported bytes, not only the original preview, match the confirmed snapshot.
             foreach (var (relative, hash) in _fingerprints)
                 if (hash != await HashAsync(ResolveSnapshotPath(staging, relative), ct))
@@ -167,7 +168,8 @@ public sealed partial class PreparedExamImport
             var json = JsonDefaults.Create();
             var state = JsonSerializer.Deserialize<SavedPreview>(await ExamImportWorkspace.ReadUtf8Async(
                 Path.Combine(workspace.Root, "preview.json"), ct), json) ?? throw new InvalidDataException("预览记录无效。");
-            if (state.FormatVersion != 1 || state.Expected is null || string.IsNullOrWhiteSpace(state.ServerId) ||
+            if (state.FormatVersion != 2 || state.Expected is null || string.IsNullOrWhiteSpace(state.ServerId) ||
+                string.IsNullOrWhiteSpace(state.Reason) || state.DeclaredChangedQuestions is not { Count: > 0 } ||
                 state.Compiled is null || state.Questions is null || state.Hashes is not { Count: > 0 and <= 4096 } ||
                 state.ResourceId is null || !state.ResourceId.StartsWith("c05-", StringComparison.Ordinal) ||
                 !Guid.TryParseExact(state.ResourceId[4..], "N", out _) || !Guid.TryParseExact(state.RequestId, "N", out _))
@@ -189,7 +191,8 @@ public sealed partial class PreparedExamImport
             { OutputPdfPath = ResolveSnapshotPath(workspace.Root, x.Value.OutputPdfPath!) }, StringComparer.Ordinal);
             var questions = state.Questions.Select(q => q with { PdfPath = ResolveSnapshotPath(workspace.Root, q.PdfPath) }).ToArray();
             prepared = new PreparedExamImport(workspace, manifest, manifestJson, answerJson, state.Expected,
-                compiled, questions, state.Source)
+                compiled, questions, state.Source, state.Reason, state.DeclaredChangedQuestions,
+                state.ChangedQuestionsHint ?? [])
             {
                 ResourceId = state.ResourceId, RequestId = state.RequestId, ExpectedSettingsVersion = state.SettingsVersion,
                 LogicalServerId = state.ServerId, ConnectionGeneration = api.Generation, _fingerprints = state.Hashes
@@ -279,9 +282,15 @@ public sealed partial class PreparedExamImport
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    /// <summary>
+    /// 预览记录。**格式版本 2** 起带上发布原因、声明的变更题号与差异提示：
+    /// 声明是发布请求的一部分，必须在预览阶段定稿（发布只重放同一份已保存的请求），
+    /// 因此旧版预览（v1）不再可用，载入时要求重新检查材料。
+    /// </summary>
     private sealed record SavedPreview(int FormatVersion, string Source, ExamVersionSnapshot Expected,
         long SettingsVersion, string ServerId, string ResourceId, string RequestId,
         Dictionary<string, TeXCompileResult> Compiled, IReadOnlyList<ImportPreviewQuestion> Questions,
-        Dictionary<string, string> Hashes);
+        Dictionary<string, string> Hashes, string Reason,
+        IReadOnlyList<string> DeclaredChangedQuestions, IReadOnlyList<string>? ChangedQuestionsHint);
     private sealed record SavedUpload(UploadExamBundleRequest Upload, string CiphertextHash);
 }

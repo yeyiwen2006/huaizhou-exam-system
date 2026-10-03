@@ -41,6 +41,42 @@ public sealed class HttpExamPublicationClient(HttpClient http, Action<HttpReques
             $"api/v1/exams/{Uri.EscapeDataString(examId)}/publications/upload", form, ct);
     }
 
+    public async Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion,
+        CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"api/v1/exams/{Uri.EscapeDataString(examId)}/paper-materials?version=" +
+            paperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        credentials?.Invoke(request);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ExamPublicationApiException($"HTTP_{(int)response.StatusCode}",
+                $"取回源材料归档被拒绝：HTTP {(int)response.StatusCode}。", response.StatusCode);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(chunk, ct);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            if (buffer.Length + read > PaperMaterialsArchive.MaxArchiveBytes)
+            {
+                throw new InvalidDataException("服务器返回的源材料归档超过大小上限。");
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
+    }
+
     private async Task<T> SendAsync<T>(HttpMethod method, string path, HttpContent? content, CancellationToken ct) where T : class
     {
         using var request = new HttpRequestMessage(method, path) { Content = content };

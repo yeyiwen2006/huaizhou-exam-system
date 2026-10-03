@@ -16,6 +16,61 @@ public sealed partial class AdminApiClient : IExamPublicationClient
         SendAsync<PublicationRecipients>(HttpMethod.Get, "api/v1/publications/recipients", null, ct);
 
     /// <summary>
+    /// 取回某个已发布试卷版本的源材料归档（明文 ZIP，含独立答案）：开考后修订从上一版本材料出发。
+    /// 失败响应仍是业务封套，优先用服务器给出的问题码；成功响应按流读取并受归档上限保护。
+    /// </summary>
+    public async Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        EnsureConfigured();
+        var generation = Generation;
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"api/v1/exams/{Uri.EscapeDataString(examId)}/paper-materials?version=" +
+            paperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        EnsureCurrentConnection(generation);
+        if (!response.IsSuccessStatusCode)
+        {
+            ApiEnvelope<object>? failure = null;
+            try
+            {
+                failure = await response.Content.ReadFromJsonAsync<ApiEnvelope<object>>(_json, ct);
+            }
+            catch (JsonException)
+            {
+                // 非封套响应按 HTTP 状态报告。
+            }
+
+            throw new AdminApiException(failure?.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
+                failure?.Error?.Message ?? $"取回源材料归档失败：HTTP {(int)response.StatusCode}。",
+                response.StatusCode);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(chunk, ct);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            if (buffer.Length + read > Exam.Infrastructure.Packaging.PaperMaterialsArchive.MaxArchiveBytes)
+            {
+                throw new AdminApiException("MATERIALS_ARCHIVE_INVALID", "服务器返回的源材料归档超过大小上限。",
+                    HttpStatusCode.BadGateway);
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
+    }
+
+    /// <summary>
     /// 只上传密文（学生包与源材料归档），调用方在结果不确定时沿用同一请求与同一份密文重试。
     /// 归档里含独立答案，因此和包一样必须先加密：明文不得进入表单临时缓冲。
     /// </summary>

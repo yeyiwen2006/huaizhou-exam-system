@@ -18,4 +18,10 @@ public interface IExamPublicationClient
     /// </summary>
     Task<ExamVersionSnapshot> UploadPublicationAsync(string examId, UploadExamBundleRequest upload,
         string encryptedPath, string materialsPath, CancellationToken ct = default);
+
+    /// <summary>
+    /// 取回某个**已发布**试卷版本的源材料归档（明文 ZIP，含独立答案，属敏感出口）。
+    /// 开考后修订要从上一版本的原始材料出发；按流读取并受归档上限保护。
+    /// </summary>
+    Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion, CancellationToken ct = default);
 }

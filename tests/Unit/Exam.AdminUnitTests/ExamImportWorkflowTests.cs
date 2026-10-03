@@ -300,7 +300,8 @@ public sealed class ExamImportWorkflowTests
         public ExamVersionSnapshot? LastResult { get; private set; }
         public PreparedExamImport? LastPrepared { get; private set; }
         public int PublishCalls { get; private set; }
-        public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default)
+        public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default,
+            string? reason = null, IReadOnlyList<string>? changedQuestions = null)
         {
             if (FailNextCheck) throw new InvalidDataException("合成错误包");
             var workspace = await ExamImportWorkspace.CreateAsync(source, ct);
@@ -311,7 +312,8 @@ public sealed class ExamImportWorkflowTests
                 new Dictionary<string, ParticipantVersionStatus>());
             return LastPrepared = new PreparedExamImport(workspace, manifest, "{}", "{}", version,
                 new Dictionary<string, TeXCompileResult>(),
-                [new ImportPreviewQuestion("q-1", 1, "合成科目", "合成题组", "single", "1", "A、B", "synthetic.pdf")], selected);
+                [new ImportPreviewQuestion("q-1", 1, "合成科目", "合成题组", "single", "1", "A、B", "synthetic.pdf")],
+                selected, ImportPipeline.FirstImportReason, ["q-1"], []);
         }
         public async Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default)
         {
