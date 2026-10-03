@@ -142,10 +142,26 @@ public static class PaperMaterialsArchive
                     return Failed("MaterialsArchiveInvalid", $"材料归档条目过大：{path}");
                 }
 
+                // 逐条按上限读取：压缩后 64 MiB 的归档解压后可以膨胀很多倍，不能无界读进内存。
                 using var content = new MemoryStream();
                 using (var source = entry.Open())
                 {
-                    source.CopyTo(content);
+                    var buffer = new byte[64 * 1024];
+                    while (true)
+                    {
+                        var read = source.Read(buffer, 0, buffer.Length);
+                        if (read <= 0)
+                        {
+                            break;
+                        }
+
+                        if (content.Length + read > MaxArchiveBytes)
+                        {
+                            return Failed("MaterialsArchiveInvalid", $"材料归档条目解压后超出上限：{path}");
+                        }
+
+                        content.Write(buffer, 0, read);
+                    }
                 }
 
                 if (content.Length != entry.Length)

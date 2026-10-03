@@ -130,7 +130,8 @@ public sealed class PaperMaterialsVerifier(
                 $"无法按本次清单计算逐题摘要：{error.Message}");
         }
 
-        var declared = request.ChangedQuestionIds
+        // 请求体可能是显式 null（JSON 里写 null 就是空声明），按空集处理而不是抛异常。
+        var declared = (request.ChangedQuestionIds ?? [])
             .Where(questionId => !string.IsNullOrWhiteSpace(questionId))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(questionId => questionId, StringComparer.Ordinal)

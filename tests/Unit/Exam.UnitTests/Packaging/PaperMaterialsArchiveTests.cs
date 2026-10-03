@@ -130,6 +130,33 @@ public sealed class PaperMaterialsArchiveTests
     }
 
     [Fact]
+    public void Read_RejectsAnEntryThatDecompressesBeyondTheLimit()
+    {
+        // 压缩后很小、解压后超上限的条目（zip bomb 方向）必须拒绝：不能无界读进内存。
+        using var buffer = new MemoryStream();
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using (var entry = zip.CreateEntry("questions/q1.tex", CompressionLevel.Optimal).Open())
+            {
+                var chunk = new byte[1024 * 1024];
+                var blocks = PaperMaterialsArchive.MaxArchiveBytes / chunk.Length + 1;
+                for (var index = 0; index < blocks; index++)
+                {
+                    entry.Write(chunk);
+                }
+            }
+
+            using var manifest = zip.CreateEntry(PaperMaterialsArchive.ManifestFileName).Open();
+            manifest.Write(Encoding.UTF8.GetBytes(Manifest(string.Empty)));
+        }
+
+        var result = PaperMaterialsArchive.Read(buffer.ToArray());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
     public void Read_RejectsNotAZip()
     {
         var result = PaperMaterialsArchive.Read([1, 2, 3, 4]);
