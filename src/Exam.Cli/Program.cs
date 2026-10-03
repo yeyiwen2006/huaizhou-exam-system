@@ -125,7 +125,9 @@ internal static partial class ExamCli
         Console.WriteLine("  publications publish 名称 --input FILE  原子激活已验证的试卷及计分规则");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
-        Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");
+        Console.WriteLine("  grading status 考试 [--server URL]     读取当前规则版本、答卷范围及计分就绪状态");
+        Console.WriteLine("  grading revise 考试 --package 材料包目录 --reason 说明 [--server URL]");
+        Console.WriteLine("                                        只改答案与计分规则：读本地清单与完整答案提交发布，并显示重算状态");
         Console.WriteLine("  import verify 包目录                  本地校验并逐题编译、抽取选项坐标（不连服务器）");
         Console.WriteLine("  import preview 本地目录或ZIP --exam 考试名称 --output 新预览目录 [--server URL]");
         Console.WriteLine("                                        在本机检查、编译并保存私有逐题预览；尚未发布");

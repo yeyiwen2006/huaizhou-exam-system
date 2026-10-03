@@ -23,6 +23,7 @@ public static class PublicationUploadEndpoints
                 "PUBLICATION_NOT_READY","发布公钥证书不可用；请核对受管节点及公开证书配置。",StatusCodes.Status503ServiceUnavailable);}
         });
         api.MapPost("/exams/{examId}/publications/upload",async (string examId,[FromServices] PostgresBundlePublicationService service,
+            [FromServices] GradingRecalculationTrigger recalculation,
             [FromServices] PublicationUploadGate admission,HttpContext context,IConfiguration configuration,CancellationToken ct)=>
         {
             const long maximum=(long)StudentPaperPackage.MaxPackageBytes+4L*StudentPackageLayout.MaxMetadataBytes+2*1024*1024;
@@ -50,6 +51,12 @@ public static class PublicationUploadEndpoints
                 await form.Files[0].CopyToAsync(buffer,ct);
                 var result=await service.PublishUploadedAsync(examId,upload,buffer.ToArray(),
                     ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context),ct);
+                // 整体发布也发布了规则版本：提交之后同样及时安排一轮重算（失败由后台循环补偿）。
+                if(result.Succeeded)
+                {
+                    await recalculation.TryTriggerAsync(examId,ct);
+                }
+
                 return ApiEndpointResults.FromVersioning(context,configuration,upload.Publication.RequestId,result);
             }
             catch(Exception error)when(error is JsonException or InvalidDataException or ArgumentException)

@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using Exam.Application.Scoring;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
@@ -209,6 +210,10 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             if (network) builder.WebHost.UseUrls("http://127.0.0.1:0"); else builder.WebHost.UseTestServer();
             builder.Services.AddSingleton(publication);
             builder.Services.AddSingleton<PublicationUploadGate>();
+            // 发布端点提交后会及时安排一轮重算：夹具按生产装配方式提供同一实现。
+            builder.Services.AddSingleton(new GradingRecalculationTrigger(new PostgresGradingInputs(source),
+                new RecalculationScheduler(new PostgresGradingScope(source), new PostgresRecalculationQueue(source)),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<GradingRecalculationTrigger>.Instance));
             var app = builder.Build();
             ServerFixture? fixture = null;
             app.Use(async (context, next) =>

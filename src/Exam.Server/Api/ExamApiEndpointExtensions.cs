@@ -660,13 +660,15 @@ public static class ExamApiEndpointExtensions
                     request.RequestId)));
         });
 
-        group.MapPost("/exams/{examId}/grading-publications", (
+        group.MapPost("/exams/{examId}/grading-publications", async (
             string examId,
             PublishGradingRulesApiRequest request,
             IExamVersioningService service,
             TimeProvider timeProvider,
+            [FromServices] GradingRecalculationTrigger recalculation,
             HttpContext context,
-            IConfiguration configuration) =>
+            IConfiguration configuration,
+            CancellationToken cancellationToken) =>
         {
             if (string.IsNullOrWhiteSpace(request.RequestId))
             {
@@ -677,11 +679,7 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.Error(context, configuration, request.RequestId, "PUBLICATION_NOT_READY",
                     "发布计分规则必须提供清单和完整参考答案，服务器将重新校验。", StatusCodes.Status400BadRequest);
 
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.PublishGradingRules(new PublishGradingRulesRequest(
+            var published = service.PublishGradingRules(new PublishGradingRulesRequest(
                     examId,
                     request.ExpectedVersion,
                     request.RuleSetId,
@@ -691,7 +689,15 @@ public static class ExamApiEndpointExtensions
                     timeProvider.GetUtcNow(),
                     request.RequestId,
                     request.ManifestJson,
-                    request.AnswerKeyJson)));
+                    request.AnswerKeyJson));
+            // 发布已提交：随后及时安排一轮重算，让入口能回报「重算中 / 结果就绪」。
+            // 调度失败不回滚发布，由后台重算循环补偿。
+            if (published.Succeeded)
+            {
+                await recalculation.TryTriggerAsync(examId, cancellationToken);
+            }
+
+            return ApiEndpointResults.FromVersioning(context, configuration, request.RequestId, published);
         });
 
         group.MapPost("/exams/{examId}/participants", (

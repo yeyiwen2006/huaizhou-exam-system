@@ -685,6 +685,25 @@
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="只改答案与计分规则" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="不重新编译、不组包：从所选材料包读取清单与完整答案提交发布，服务器随后按新版本安排重算。重算期间旧报表不可查询或导出。"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBlock Text="材料包目录（含 manifest.json 与 server-only/answer-key.json）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding GradingRevision.PackagePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
+                            <TextBlock Text="本次修改原因（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding GradingRevision.Reason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                            <WrapPanel>
+                                <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.SelectPackageCommand}"/>
+                                <Button Content="发布规则修订" Style="{StaticResource PrimaryAction}" Command="{Binding GradingRevision.PublishCommand}"/>
+                                <Button Content="刷新重算状态" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.RefreshStatusCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding GradingRevision.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding GradingRevision.PublishedText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding GradingRevision.RecalculationText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
