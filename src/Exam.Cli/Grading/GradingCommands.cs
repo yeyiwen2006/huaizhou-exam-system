@@ -77,9 +77,9 @@ internal static partial class ExamCli
     private static async Task<int> ReadGradingStatusAsync(HttpClient client, string examReference,
         CancellationToken cancellationToken)
     {
-        // status 沿用既有语义：位置参数就是考试标识（历史行为，不改既有使用方式）。
-        var report = await GetGradingStatusAsync(client, examReference, cancellationToken);
-        Console.WriteLine(JsonSerializer.Serialize(report, JsonDefaults.Create()));
+        // status 沿用既有语义：位置参数就是考试标识，stdout 仍是业务封套（既有输出契约）。
+        var (report, envelope) = await GetGradingStatusAsync(client, examReference, cancellationToken);
+        Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.Create()));
         Console.Error.WriteLine(DescribeGradingState(report));
         return 0;
     }
@@ -158,7 +158,7 @@ internal static partial class ExamCli
         Console.Error.WriteLine($"规则发布成功：版本 {published.Versions.GradingVersion}" +
             $"（试卷版本 {published.Versions.PaperVersion}，规则集 {published.Grading?.RuleSetId ?? "未记录"}）。");
         var status = await GetGradingStatusAsync(client, examId, cancellationToken);
-        Console.Error.WriteLine(DescribeGradingState(status));
+        Console.Error.WriteLine(DescribeGradingState(status.Report));
         Console.Error.WriteLine("可用 `grading status` 复查重算进度；重算期间旧报表不可查询或导出。");
         return 0;
     }
@@ -186,8 +186,9 @@ internal static partial class ExamCli
         return $"重算中：规则版本 {version}，{scope} 未完成 {readiness.Outstanding.Count} 份。{blockers}".TrimEnd();
     }
 
-    private static async Task<GradingStatusReport> GetGradingStatusAsync(HttpClient client, string examId,
-        CancellationToken cancellationToken)
+    /// <summary>读计分状态：返回报告与**原样封套**（命令把封套写到 stdout，与既有输出约定一致）。</summary>
+    private static async Task<(GradingStatusReport Report, ApiEnvelope<GradingStatusReport> Envelope)>
+        GetGradingStatusAsync(HttpClient client, string examId, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get, "/api/v1/grading/" + Uri.EscapeDataString(examId) + "/status");
@@ -200,7 +201,7 @@ internal static partial class ExamCli
                 envelope?.Error?.Message ?? "计分状态响应缺少有效结果。");
         }
 
-        return envelope.Result;
+        return (envelope.Result, envelope);
     }
 
     private static async Task<ExamVersionSnapshot> GetSnapshotAsync(HttpClient client, string examId,
