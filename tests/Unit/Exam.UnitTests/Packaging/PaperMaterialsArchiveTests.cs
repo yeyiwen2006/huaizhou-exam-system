@@ -1,0 +1,189 @@
+using System.IO.Compression;
+using System.Text;
+
+using Exam.Domain.Importing;
+using Exam.Infrastructure.Packaging;
+
+namespace Exam.UnitTests.Packaging;
+
+/// <summary>
+/// 源材料归档格式的用例：确定性、可读写往返，以及**坏归档一律拒绝**。
+/// 归档随发布一起交给服务器，坏归档被当成材料集合就会让「实际变更题号」核对失去意义，
+/// 因此每个失败分支都要有稳定错误码。
+/// </summary>
+public sealed class PaperMaterialsArchiveTests
+{
+    private const string ExamId = "synthetic-materials-exam";
+
+    [Fact]
+    public void Build_IsDeterministic_ForTheSameMaterials()
+    {
+        var first = PaperMaterialsArchive.Build(ExamId, 1, Materials());
+        var second = PaperMaterialsArchive.Build(ExamId, 1, Materials());
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Build_ThenRead_RoundTripsEveryFileAndTheManifest()
+    {
+        var result = PaperMaterialsArchive.Read(PaperMaterialsArchive.Build(ExamId, 2, Materials()));
+
+        Assert.True(result.Succeeded, result.Failure?.Value);
+        Assert.Equal(ExamId, result.Manifest!.ExamId);
+        Assert.Equal(2, result.Manifest.PaperVersion);
+        Assert.Equal(PaperMaterialsArchive.CurrentFormatVersion, result.Manifest.FormatVersion);
+        Assert.Equal(3, result.Manifest.Files.Count);
+        Assert.Equal("题干", Encoding.UTF8.GetString(result.Materials!.Read("questions/q1.tex")));
+        Assert.Equal(["figures/a.png", "manifest.json", "questions/q1.tex"], result.Materials.Paths);
+    }
+
+    [Fact]
+    public void Read_RejectsContentThatDoesNotMatchTheDeclaredHash()
+    {
+        // 归档带一个声明了错哈希的清单：即使 ZIP 本身可读，也必须拒绝。
+        var archive = Zip(
+            ("questions/q1.tex", "题干"),
+            (PaperMaterialsArchive.ManifestFileName, Manifest("""{"path":"questions/q1.tex","length":6,"sha256":"0000"}""")));
+
+        var result = PaperMaterialsArchive.Read(archive);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsAnUnsupportedFormatVersion()
+    {
+        var archive = Zip(
+            ("questions/q1.tex", "题干"),
+            (PaperMaterialsArchive.ManifestFileName,
+                """{"formatVersion":99,"examId":"synthetic-materials-exam","paperVersion":1,"files":[]}"""));
+
+        var result = PaperMaterialsArchive.Read(archive);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsFormatUnsupported", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsAMissingManifest()
+    {
+        var result = PaperMaterialsArchive.Read(Zip(("questions/q1.tex", "题干")));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsPathsThatEscapeThePackageRoot()
+    {
+        var archive = Zip(
+            ("../evil.tex", "越界"),
+            (PaperMaterialsArchive.ManifestFileName, Manifest(string.Empty)));
+
+        var result = PaperMaterialsArchive.Read(archive);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsCaseAliasedDuplicatePaths()
+    {
+        var archive = Zip(
+            ("questions/Q1.tex", "甲"),
+            ("questions/q1.tex", "乙"),
+            (PaperMaterialsArchive.ManifestFileName, Manifest(string.Empty)));
+
+        var result = PaperMaterialsArchive.Read(archive);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsEntriesTheManifestDoesNotDeclare()
+    {
+        var archive = Zip(
+            ("questions/q1.tex", "题干"),
+            ("figures/undeclared.png", "没登记"),
+            (PaperMaterialsArchive.ManifestFileName,
+                Manifest("""{"path":"questions/q1.tex","length":6,"sha256":"0000"}""")));
+
+        var result = PaperMaterialsArchive.Read(archive);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Build_RejectsCaseAliasedDuplicates()
+    {
+        var files = new List<KeyValuePair<string, byte[]>>
+        {
+            new("questions/Q1.tex", [1]),
+            new("questions/q1.tex", [2])
+        };
+
+        Assert.Throws<ArgumentException>(() => PaperMaterialsArchive.Build(ExamId, 1, files));
+    }
+
+    [Fact]
+    public void Read_RejectsNotAZip()
+    {
+        var result = PaperMaterialsArchive.Read([1, 2, 3, 4]);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Compute_WorksDirectlyOnArchivedMaterials()
+    {
+        // 归档读出的材料集合可直接喂给逐题摘要：两条链的坐标系必须一致。
+        var manifest = new Exam.Contracts.Importing.ExamManifest(1, ExamId, "合成题",
+            [new Exam.Contracts.Importing.ManifestSubject("s", "科目", "1")],
+            [new Exam.Contracts.Importing.ManifestGroup("g", "s", "单选", "single", 1, 1, false, "1",
+                new Exam.Contracts.Importing.ManifestGroupScoring(
+                    new Exam.Contracts.Importing.ManifestOneCorrect("1", "0", "0"), null))],
+            [new Exam.Contracts.Importing.ManifestQuestion("q1", 1, "s", "g", "questions/q1.tex", ["A", "B"], null)],
+            []);
+
+        var result = PaperMaterialsArchive.Read(PaperMaterialsArchive.Build(ExamId, 1, Materials()));
+        Assert.True(result.Succeeded, result.Failure?.Value);
+
+        var digests = QuestionContentDigest.Compute(manifest, result.Materials!);
+
+        Assert.Equal("q1", Assert.Single(digests).Key);
+        Assert.Equal(64, Assert.Single(digests).Value.Length);
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, byte[]>> Materials() =>
+    [
+        new("questions/q1.tex", Encoding.UTF8.GetBytes("题干")),
+        new("figures/a.png", [1, 2, 3]),
+        new("manifest.json", Encoding.UTF8.GetBytes("{}"))
+    ];
+
+    private static string Manifest(string files) => string.Join(string.Empty,
+        """{"formatVersion":""", PaperMaterialsArchive.CurrentFormatVersion,
+        ""","examId":"synthetic-materials-exam","paperVersion":1,"files":[""",
+        files, "]}");
+
+    private static byte[] Zip(params (string Path, string Content)[] entries)
+    {
+        using var buffer = new MemoryStream();
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var (path, content) in entries)
+            {
+                var entry = zip.CreateEntry(path, CompressionLevel.Optimal);
+                using var stream = entry.Open();
+                stream.Write(Encoding.UTF8.GetBytes(content));
+            }
+        }
+
+        return buffer.ToArray();
+    }
+}
