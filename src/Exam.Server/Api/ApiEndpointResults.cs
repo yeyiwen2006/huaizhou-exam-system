@@ -266,6 +266,12 @@ internal static class ApiEndpointResults
         VersioningErrorCode.ScheduleTaskNotDue => "SCHEDULE_TASK_NOT_DUE",
         VersioningErrorCode.ResourceRollbackRejected => "RESOURCE_ROLLBACK_REJECTED",
         VersioningErrorCode.IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
+        VersioningErrorCode.MaterialsArchiveInvalid => "MATERIALS_ARCHIVE_INVALID",
+        VersioningErrorCode.MaterialsFormatUnsupported => "MATERIALS_FORMAT_UNSUPPORTED",
+        VersioningErrorCode.MaterialsBaselineMissing => "MATERIALS_BASELINE_MISSING",
+        VersioningErrorCode.ChangedQuestionIdsMissing => "CHANGED_QUESTION_IDS_MISSING",
+        VersioningErrorCode.ChangedQuestionIdsUnexpected => "CHANGED_QUESTION_IDS_UNEXPECTED",
+        VersioningErrorCode.NoContentChange => "NO_CONTENT_CHANGE",
         _ => "VERSIONING_ERROR"
     };
 }

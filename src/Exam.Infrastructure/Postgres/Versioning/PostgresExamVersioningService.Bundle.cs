@@ -23,7 +23,8 @@ public sealed partial class PostgresExamVersioningService
     /// resourceToPersist 只能来自已完成真实包校验和加密的服务器应用层。
     /// </summary>
     public VersioningResult<ExamVersionSnapshot> PublishBundle(PublishExamBundleRequest request,
-        VersionedEncryptedResource? resourceToPersist = null)
+        VersionedEncryptedResource? resourceToPersist = null,
+        PaperMaterialsRow? materialsToPersist = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.RequestId) || request.RequestId.Length>128 ||
@@ -42,6 +43,9 @@ public sealed partial class PostgresExamVersioningService
             resourceToPersist.ExamId!=request.ExamId || resourceToPersist.ResourceKind!="paper-package" ||
             resourceToPersist.Version!=request.ExpectedPaperVersion+1))
             return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InvalidRequest,"待保存学生包与当前考试和目标版本不一致。");
+        if(materialsToPersist is not null && (materialsToPersist.ExamId!=request.ExamId ||
+            materialsToPersist.PaperVersion!=request.ExpectedPaperVersion+1))
+            return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InvalidRequest,"待保存的源材料归档与当前考试或目标版本不一致。");
         using var connection=_dataSource.OpenConnection();
         using var transaction=connection.BeginTransaction(IsolationLevel.ReadCommitted);
         AcquireRequestLock(connection,transaction,request.RequestId);
@@ -94,6 +98,9 @@ public sealed partial class PostgresExamVersioningService
         {
             if(resourceToPersist is not null)
                 PostgresVersionedResourceStore.SaveInTransaction(connection,transaction,resourceToPersist);
+            // 源材料归档与版本发布同一事务：不存在「版本发布了但没有归档」的半套状态。
+            if(materialsToPersist is not null)
+                PostgresPaperMaterialStore.SaveInTransaction(connection,transaction,materialsToPersist);
             if(ApplyRuntimeEffects(connection,transaction,PublishPaperOperation,paper.RequestId,paper,
                 before,paperResult.Value!,now) is { } paperError)
                 return VersioningResult<ExamVersionSnapshot>.Failure(paperError.Code,paperError.Message);

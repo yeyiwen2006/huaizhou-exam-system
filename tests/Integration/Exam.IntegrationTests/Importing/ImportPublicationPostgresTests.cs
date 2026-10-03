@@ -197,6 +197,7 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
                 .CreateSelfSigned(now.AddMinutes(-1), now.AddDays(1));
             var policy = new ManagedNodeEncryptionPolicy(new HashSet<string>(["node-a"], StringComparer.Ordinal));
             var publication = new PostgresBundlePublicationService(versions, new(source, policy), new Unwrapper(certificate), policy,
+                new PaperMaterialsVerifier(new Unwrapper(certificate), policy, new PostgresPaperMaterialStore(source)),
                 new Certificates(certificate));
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();

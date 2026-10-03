@@ -15,9 +15,12 @@ public sealed partial class AdminApiClient : IExamPublicationClient
     public Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default) =>
         SendAsync<PublicationRecipients>(HttpMethod.Get, "api/v1/publications/recipients", null, ct);
 
-    /// <summary>Uploads only encrypted bytes; callers retain the same request and ciphertext for uncertain retries.</summary>
+    /// <summary>
+    /// 只上传密文（学生包与源材料归档），调用方在结果不确定时沿用同一请求与同一份密文重试。
+    /// 归档里含独立答案，因此和包一样必须先加密：明文不得进入表单临时缓冲。
+    /// </summary>
     public async Task<ExamVersionSnapshot> UploadPublicationAsync(string examId,
-        UploadExamBundleRequest upload, string encryptedPath, CancellationToken ct = default)
+        UploadExamBundleRequest upload, string encryptedPath, string materialsPath, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         ArgumentNullException.ThrowIfNull(upload);
@@ -27,6 +30,8 @@ public sealed partial class AdminApiClient : IExamPublicationClient
         form.Add(new StringContent(JsonSerializer.Serialize(upload, _json), Encoding.UTF8, "application/json"), "metadata");
         await using var stream = new FileStream(encryptedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         form.Add(new StreamContent(stream), "package", "package.enc");
+        await using var materials = new FileStream(materialsPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        form.Add(new StreamContent(materials), "materials", "materials.enc");
         using var request = new HttpRequestMessage(HttpMethod.Post,
             $"api/v1/exams/{Uri.EscapeDataString(examId)}/publications/upload") { Content = form };
         using var response = await _httpClient.SendAsync(request, ct);

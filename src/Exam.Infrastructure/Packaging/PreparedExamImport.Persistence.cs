@@ -30,7 +30,53 @@ public sealed partial class PreparedExamImport
             var relative = Path.GetRelativePath(Workspace.Root, path).Replace('\\', '/');
             _fingerprints.Add(relative, await HashAsync(path, ct));
         }
+
+        await SealMaterialsArchiveAsync(ct);
     }
+
+    /// <summary>预览里的源材料归档文件名（含解密后上传前那份密文）。</summary>
+    internal const string MaterialsArchiveFileName = "materials.zip";
+
+    internal const string MaterialsCiphertextFileName = "materials.enc";
+
+    /// <summary>
+    /// 封存时生成源材料归档：**只**包含材料目录下的文件（清单、题目 `.tex`、共享样式、图片、独立答案），
+    /// 路径相对材料包根。归档随预览一起保存并纳入指纹，因此「丢回执后用同一预览重试」
+    /// 与跨进程重放上传的都是**同一份字节**——否则重建 ZIP 的字节差异会被判成幂等冲突。
+    /// </summary>
+    private async Task SealMaterialsArchiveAsync(CancellationToken ct)
+    {
+        var files = new List<KeyValuePair<string, byte[]>>();
+        foreach (var path in SourceFiles(Workspace.PackageRoot))
+        {
+            ct.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(Workspace.PackageRoot, path).Replace('\\', '/');
+            files.Add(new KeyValuePair<string, byte[]>(relative, await File.ReadAllBytesAsync(path, ct)));
+        }
+
+        var archive = PaperMaterialsArchive.Build(Expected.ExamId, TargetPaperVersion, files);
+        await File.WriteAllBytesAsync(MaterialsArchivePath, archive, ct);
+        // 与 HashAsync 同一写法（大写十六进制）：指纹表里不能混两种大小写。
+        _fingerprints.Add(MaterialsArchiveFileName, Convert.ToHexString(SHA256.HashData(archive)));
+    }
+
+    /// <summary>发布前核对归档未变：与密文一样，改了就不能当作同一请求重试。</summary>
+    internal async Task VerifyMaterialsAsync(CancellationToken ct)
+    {
+        if (MaterialsSha256 is not { Length: > 0 } expected ||
+            !StringComparer.Ordinal.Equals(expected, await HashAsync(MaterialsArchivePath, ct)))
+            throw new InvalidDataException("本次预览的源材料归档已变化或缺失，请重新检查试题包。");
+    }
+
+    internal string MaterialsArchivePath => Path.Combine(Workspace.Root, MaterialsArchiveFileName);
+
+    internal string MaterialsCiphertextPath => Path.Combine(Workspace.Root, MaterialsCiphertextFileName);
+
+    /// <summary>
+    /// 明文归档的 SHA-256（十六进制），随发布请求提交并由服务器按收到的字节重算比对。
+    /// 直接读指纹表——它是随预览导出/载入持久化的，因此跨进程重放也拿得到同一个值。
+    /// </summary>
+    internal string? MaterialsSha256 => _fingerprints.GetValueOrDefault(MaterialsArchiveFileName);
 
     internal async Task VerifyUnchangedAsync(CancellationToken ct)
     {
@@ -196,7 +242,9 @@ public sealed partial class PreparedExamImport
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains('\\') ||
             relative.Length > 1024 || relative.Split('/').Any(p => p is "." or ".." || !WindowsFileNameRules.IsValidFileName(p)) ||
-            !(relative.StartsWith("source/", StringComparison.Ordinal) || relative.StartsWith("compiled/", StringComparison.Ordinal)))
+            !(relative.StartsWith("source/", StringComparison.Ordinal) ||
+                relative.StartsWith("compiled/", StringComparison.Ordinal) ||
+                relative == MaterialsArchiveFileName))
             throw new InvalidDataException("预览记录含有非法或越界路径。");
         var full = Path.GetFullPath(Path.Combine(root, relative));
         if (!full.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))

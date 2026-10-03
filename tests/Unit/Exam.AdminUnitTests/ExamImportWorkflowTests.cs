@@ -150,6 +150,8 @@ public sealed class ExamImportWorkflowTests
         using var fixture = new SourceFixture();
         var encrypted = Path.Combine(fixture.Root, "synthetic.enc");
         await File.WriteAllBytesAsync(encrypted, [1, 2, 3, 4]);
+        var materials = Path.Combine(fixture.Root, "synthetic-materials.enc");
+        await File.WriteAllBytesAsync(materials, [5, 6, 7, 8]);
         string? transmitted = null;
         using var handler = new PublicationHandler(request =>
         {
@@ -170,9 +172,11 @@ public sealed class ExamImportWorkflowTests
             new PublicationPackageEnvelope("synthetic-resource", 1, 4096, "synthetic-nonce",
                 new Dictionary<string, string>(), new Dictionary<string, string>()));
         await Assert.ThrowsAsync<AdminApiException>(() =>
-            api.UploadPublicationAsync("synthetic-exam-1", upload, encrypted));
+            api.UploadPublicationAsync("synthetic-exam-1", upload, encrypted, materials));
         Assert.Contains("name=metadata", transmitted!, StringComparison.Ordinal);
         Assert.Contains("name=package", transmitted!, StringComparison.Ordinal);
+        // 源材料归档是第二份密文：表单里只允许出现密文，明文题目与答案不得进入临时缓冲。
+        Assert.Contains("name=materials", transmitted!, StringComparison.Ordinal);
         Assert.Contains("synthetic-request", transmitted!, StringComparison.Ordinal);
     }
 

@@ -197,6 +197,21 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
         _ => throw new InvalidDataException("题型无效。")
     };
 
+    /// <summary>
+    /// 用**同一组受管公钥**加密源材料归档。归档里含独立答案，明文不得进入表单临时缓冲；
+    /// 服务器解出后按既有惯例以明文入库（与版本事件里已明文保存的答案 JSON 一致）。
+    /// </summary>
+    private static async Task<PublicationPackageEnvelope> EncryptMaterialsAsync(PackageEncryptionService encryption,
+        PreparedExamImport prepared, IReadOnlyList<NodeKeyRecipient> recipients, CancellationToken ct)
+    {
+        await using var plaintext = new FileStream(prepared.MaterialsArchivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        await using var ciphertext = new FileStream(prepared.MaterialsCiphertextPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        var envelope = await encryption.EncryptAsync(plaintext, ciphertext, prepared.ResourceId + "-materials",
+            prepared.TargetPaperVersion, recipients, ct);
+        return new PublicationPackageEnvelope(envelope.PackageId, envelope.PaperVersion, envelope.ChunkSize,
+            envelope.NoncePrefix, envelope.WrappedKeys, envelope.CertificateThumbprints);
+    }
+
     private void EnsureConnection(long generation, string? serverId)
     {
         if (api.Generation != generation || string.IsNullOrWhiteSpace(serverId) ||
@@ -244,18 +259,24 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                         prepared.Workspace.CompilationRoot, prepared.Workspace.StudentRoot, prepared.ResourceId,
                         prepared.TargetPaperVersion, prepared.Workspace.EncryptedPath, certificates)
                     { CompiledQuestions = prepared.Compiled };
-                    var result = await Task.Run(() => new StudentPackagePublisher(new PackageEncryptionService())
+                    var encryption = new PackageEncryptionService();
+                    var result = await Task.Run(() => new StudentPackagePublisher(encryption)
                         .PublishAsync(prepared.Manifest, requestForPackage, ct), ct);
                     if (!result.Succeeded || result.Envelope is null || result.EncryptedPackagePath is null)
                         throw new InvalidDataException("学生包生成失败：" + string.Join("；", result.Issues.Select(i => i.Message)));
                     await prepared.VerifyUnchangedAsync(ct);
+                    // 源材料归档同样用受管公钥加密后再上传：临时缓冲里不能出现题目明文或独立答案。
+                    await prepared.VerifyMaterialsAsync(ct);
+                    var materialsEnvelope = await EncryptMaterialsAsync(encryption, prepared, certificates, ct);
                     var request = new PublishExamBundleApiRequest(prepared.RequestId,
                         prepared.Expected.Versions.PaperVersion, prepared.Expected.Versions.GradingVersion,
                         prepared.ResourceId, prepared.ManifestJson, prepared.AnswerJson,
-                        prepared.Manifest.Questions.Select(q => q.QuestionId).ToArray(), "首次导入并发布整套试卷", true);
+                        prepared.Manifest.Questions.Select(q => q.QuestionId).ToArray(), "首次导入并发布整套试卷",
+                        true, prepared.MaterialsSha256 ?? string.Empty);
                     var e = result.Envelope;
                     prepared.Upload = new UploadExamBundleRequest(request, new PublicationPackageEnvelope(e.PackageId,
-                        e.PaperVersion, e.ChunkSize, e.NoncePrefix, e.WrappedKeys, e.CertificateThumbprints));
+                        e.PaperVersion, e.ChunkSize, e.NoncePrefix, e.WrappedKeys, e.CertificateThumbprints),
+                        materialsEnvelope);
                     await prepared.SaveUploadAsync(ct);
                 }
                 finally { foreach (var item in certificates) item.Certificate.Dispose(); }
@@ -265,7 +286,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
             EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
             await prepared.SaveUploadAsync(ct);
             var published = await api.UploadPublicationAsync(prepared.Expected.ExamId, prepared.Upload,
-                prepared.Workspace.EncryptedPath, ct);
+                prepared.Workspace.EncryptedPath, prepared.MaterialsCiphertextPath, ct);
             EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
             if (!prepared.MatchesPublication(published))
                 throw new InvalidDataException("服务器回执与本次考试、试卷和规则版本不一致，不能确认发布成功。");

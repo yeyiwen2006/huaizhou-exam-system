@@ -98,6 +98,9 @@ internal sealed class SyntheticPublicationClient : IExamPublicationClient, IDisp
     public bool NoRecipients { get; set; }
     public List<UploadExamBundleRequest> Requests { get; } = [];
     public List<byte[]> Ciphertexts { get; } = [];
+
+    /// <summary>源材料归档的密文（逐次上传）；明文归档不在表单里，这一点也要能被断言。</summary>
+    public List<byte[]> MaterialsCiphertexts { get; } = [];
     public Func<ExamVersionSnapshot, Task<ExamVersionSnapshot>>? OnUpload { get; set; }
     public Action? OnDetail { get; set; }
     public SyntheticPublicationClient(SyntheticImportFixture fixture)
@@ -118,12 +121,13 @@ internal sealed class SyntheticPublicationClient : IExamPublicationClient, IDisp
     public Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default) =>
         Task.FromResult(new PublicationRecipients(NoRecipients ? [] : [new("node-a", Convert.ToBase64String(_certificate.RawData))]));
     public async Task<ExamVersionSnapshot> UploadPublicationAsync(string examId, UploadExamBundleRequest upload,
-        string encryptedPath, CancellationToken ct = default)
+        string encryptedPath, string materialsPath, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         Uploads++;
         Requests.Add(upload);
         Ciphertexts.Add(await File.ReadAllBytesAsync(encryptedPath, ct));
+        MaterialsCiphertexts.Add(await File.ReadAllBytesAsync(materialsPath, ct));
         var publication = upload.Publication;
         var structure = Exam.Domain.Scoring.ImportedGradingRules.Create(publication.ManifestJson, publication.AnswerKeyJson).Structure;
         Current = Current with

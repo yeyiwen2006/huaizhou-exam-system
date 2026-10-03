@@ -28,12 +28,15 @@ public sealed class HttpExamPublicationClient(HttpClient http, Action<HttpReques
         SendAsync<PublicationRecipients>(HttpMethod.Get, "api/v1/publications/recipients", null, ct);
 
     public async Task<ExamVersionSnapshot> UploadPublicationAsync(string examId, UploadExamBundleRequest upload,
-        string encryptedPath, CancellationToken ct = default)
+        string encryptedPath, string materialsPath, CancellationToken ct = default)
     {
         using var form = new MultipartFormDataContent();
         form.Add(new StringContent(JsonSerializer.Serialize(upload, _json), Encoding.UTF8, "application/json"), "metadata");
-        await using var stream = new FileStream(encryptedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        form.Add(new StreamContent(stream), "package", "package.enc");
+        await using var package = new FileStream(encryptedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        form.Add(new StreamContent(package), "package", "package.enc");
+        // 源材料归档同样是密文：明文不进表单临时缓冲。
+        await using var materials = new FileStream(materialsPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        form.Add(new StreamContent(materials), "materials", "materials.enc");
         return await SendAsync<ExamVersionSnapshot>(HttpMethod.Post,
             $"api/v1/exams/{Uri.EscapeDataString(examId)}/publications/upload", form, ct);
     }
