@@ -10,6 +10,9 @@ using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Submissions;
+using Exam.Domain.Importing;
+using Exam.Contracts.Importing;
+using Exam.Infrastructure.Packaging;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
@@ -138,21 +141,61 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     private async Task<bool> CheckPaperMaterialsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         CancellationToken token)
     {
-        // 源材料归档与试卷版本同一事务写入，因此「已发布版本必须有归档」是可核对的恢复不变量：
-        // 接管后要能取回材料继续修题，缺归档必须在放行业务写入之前拦下。
-        // 兼容性：本功能上线前发布的考试完全没有归档行，这类考试按「尚未归档」豁免，
-        // 不做自动删除也就不会出现「有归档又缺某个版本」的中间状态。
-        return await NoRowsAsync("""
-            SELECT 1 FROM exam.version_state v
-             WHERE v.paper_version > 0
-               AND EXISTS (SELECT 1 FROM exam.paper_materials m WHERE m.exam_id = v.exam_id)
-               AND NOT EXISTS (SELECT 1 FROM exam.paper_materials m
-                                WHERE m.exam_id = v.exam_id AND m.paper_version = v.paper_version AND m.archive_bytes > 0)
+        // Legacy events have no archive marker. New events carry a durable expectation so deleting
+        // all archives cannot turn a damaged exam back into an exempt legacy exam.
+        if (!await NoRowsAsync("""
+            SELECT 1 FROM exam.version_events e LEFT JOIN exam.paper_materials m
+              ON m.exam_id=e.exam_id AND m.paper_version=(e.payload->>'expectedVersion')::bigint+1
+             WHERE e.operation_type='paper.publish' AND e.payload->>'materialsSha256' IS NOT NULL
+               AND (m.exam_id IS NULL OR lower(m.archive_sha256) IS DISTINCT FROM lower(e.payload->>'materialsSha256'))
             UNION ALL SELECT 1 FROM exam.paper_materials m
-             WHERE m.archive_bytes <= 0 OR length(m.archive_sha256) <> 64 OR length(m.package_content_sha256) <> 64
-                OR m.format_version < 1 OR m.file_count < 1 OR jsonb_typeof(m.question_digests) <> 'object'
-                OR m.question_digests = '{}'::jsonb
-            """, connection, transaction, token);
+             WHERE NOT EXISTS (SELECT 1 FROM exam.version_events e WHERE e.exam_id=m.exam_id
+                AND e.operation_type='paper.publish' AND (e.payload->>'expectedVersion')::bigint+1=m.paper_version
+                AND lower(e.payload->>'materialsSha256')=lower(m.archive_sha256))
+               OR NOT EXISTS (SELECT 1 FROM exam.versioned_resources r WHERE r.exam_id=m.exam_id
+                    AND r.resource_version=m.paper_version AND r.resource_kind='paper-package')
+               OR m.archive_bytes<=0 OR m.archive_bytes<>octet_length(m.archive)
+               OR m.archive_bytes>67108864 OR m.archive_sha256 !~ '^[0-9a-fA-F]{64}$'
+               OR m.package_content_sha256 !~ '^[0-9a-fA-F]{64}$'
+               OR m.format_version<>1 OR m.file_count<1 OR jsonb_typeof(m.question_digests)<>'object'
+               OR m.question_digests='{}'::jsonb
+            """, connection, transaction, token)) return false;
+        await using var command = new NpgsqlCommand("""
+            SELECT exam_id,paper_version,archive_sha256,format_version,file_count,question_digests::text,archive
+              FROM exam.paper_materials ORDER BY exam_id,paper_version
+            """, connection, transaction);
+        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
+        while (await reader.ReadAsync(token))
+        {
+            var examId=reader.GetString(0);
+            var version=reader.GetInt64(1);
+            var expectedHash=reader.GetString(2);
+            var format=reader.GetInt32(3);
+            var fileCount=reader.GetInt32(4);
+            var digests=JsonSerializer.Deserialize<Dictionary<string,string>>(reader.GetString(5),Json);
+            await using var stream=await reader.GetStreamAsync(6,token);
+            using var buffer=new BoundedMaterialBuffer(PaperMaterialsArchive.MaxArchiveBytes);
+            await stream.CopyToAsync(buffer,token);
+            var bytes=buffer.ToArray();
+            try
+            {
+                if (!StringComparer.OrdinalIgnoreCase.Equals(expectedHash,Convert.ToHexString(SHA256.HashData(bytes)))) return false;
+                var archive=PaperMaterialsArchive.Read(bytes);
+                if (!archive.Succeeded || archive.Materials is null || archive.Manifest is null ||
+                    archive.Manifest.ExamId!=examId || archive.Manifest.PaperVersion!=version ||
+                    archive.Manifest.FormatVersion!=format || archive.Manifest.Files.Count!=fileCount) return false;
+                var manifestPath=archive.Materials.Resolve("manifest.json");
+                var answerPath=archive.Materials.Resolve("server-only/answer-key.json");
+                if (manifestPath is null || answerPath is null) return false;
+                var manifest=JsonSerializer.Deserialize<ExamManifest>(archive.Materials.Read(manifestPath),ImportJson.Create());
+                if (manifest is null || manifest.ExamId!=examId) return false;
+                var actual=QuestionContentDigest.Compute(manifest,archive.Materials);
+                if (digests is null || digests.Count!=actual.Count ||
+                    actual.Any(pair=>!digests.TryGetValue(pair.Key,out var digest) || digest!=pair.Value)) return false;
+            }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
+        }
+        return true;
     }
 
     private async Task<bool> CheckResourcesAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
@@ -176,6 +219,10 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                 if (snapshot?.Paper?.Structure is null) return false;
                 published.Add((snapshot.ExamId, snapshot.Paper.Version), snapshot.Paper.Structure);
             }
+        var materialHashes = new Dictionary<(string ExamId,long Version),string>();
+        await using (var hashes = new NpgsqlCommand("SELECT exam_id,paper_version,package_content_sha256 FROM exam.paper_materials",connection,transaction))
+        await using (var rows = await hashes.ExecuteReaderAsync(token))
+            while (await rows.ReadAsync(token)) materialHashes.Add((rows.GetString(0),rows.GetInt64(1)),rows.GetString(2));
         await using var command = new NpgsqlCommand("""
             SELECT resource_id, exam_id, resource_version, encryption_envelope::text, encrypted_content
               FROM exam.versioned_resources WHERE resource_kind = 'paper-package'
@@ -197,6 +244,8 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
             try
             {
                 var manifest = StudentPaperPackage.ReadManifest(bytes, examId, version, token);
+                if (materialHashes.TryGetValue((examId,version),out var expectedHash) &&
+                    !StringComparer.OrdinalIgnoreCase.Equals(expectedHash,Convert.ToHexString(SHA256.HashData(bytes)))) return false;
                 if (published.TryGetValue((examId, version), out var expected) &&
                     !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(manifest.Structure, Json), JsonSerializer.SerializeToNode(expected, Json)))
                     return false;

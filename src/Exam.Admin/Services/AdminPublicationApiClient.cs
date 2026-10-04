@@ -20,54 +20,28 @@ public sealed partial class AdminApiClient : IExamPublicationClient
     /// 失败响应仍是业务封套，优先用服务器给出的问题码；成功响应按流读取并受归档上限保护。
     /// </summary>
     public async Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion,
-        CancellationToken ct = default)
+        CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         EnsureConfigured();
         var generation = Generation;
         using var request = new HttpRequestMessage(HttpMethod.Get,
             $"api/v1/exams/{Uri.EscapeDataString(examId)}/paper-materials?version=" +
             paperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         EnsureCurrentConnection(generation);
         if (!response.IsSuccessStatusCode)
         {
-            ApiEnvelope<object>? failure = null;
-            try
-            {
-                failure = await response.Content.ReadFromJsonAsync<ApiEnvelope<object>>(_json, ct);
-            }
-            catch (JsonException)
-            {
-                // 非封套响应按 HTTP 状态报告。
-            }
-
+            var failure = await Exam.Infrastructure.Packaging.PaperMaterialsDownload.ReadFailureAsync(response, cancellationToken);
+            EnsureCurrentConnection(generation);
+            if (failure is not null) ValidateEnvelope(failure);
             throw new AdminApiException(failure?.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
-                failure?.Error?.Message ?? $"取回源材料归档失败：HTTP {(int)response.StatusCode}。",
-                response.StatusCode);
+                failure?.Error?.Message ?? "服务器拒绝取回源材料归档。", response.StatusCode);
         }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
-        while (true)
-        {
-            var read = await stream.ReadAsync(chunk, ct);
-            if (read <= 0)
-            {
-                break;
-            }
-
-            if (buffer.Length + read > Exam.Infrastructure.Packaging.PaperMaterialsArchive.MaxArchiveBytes)
-            {
-                throw new AdminApiException("MATERIALS_ARCHIVE_INVALID", "服务器返回的源材料归档超过大小上限。",
-                    HttpStatusCode.BadGateway);
-            }
-
-            buffer.Write(chunk, 0, read);
-        }
-
-        return buffer.ToArray();
+        var envelope = await Exam.Infrastructure.Packaging.PaperMaterialsDownload.ReadAsync(response,
+            examId, paperVersion, cancellationToken);
+        EnsureCurrentConnection(generation);
+        ValidateEnvelope(envelope);
+        return envelope.Result!;
     }
 
     /// <summary>

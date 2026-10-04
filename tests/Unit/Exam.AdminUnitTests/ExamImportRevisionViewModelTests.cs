@@ -166,10 +166,13 @@ public sealed class ExamImportRevisionViewModelTests
 
             if (path.EndsWith("/paper-materials", StringComparison.Ordinal))
             {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new ByteArrayContent(archive)
-                });
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) };
+                response.Headers.Add("X-Exam-Server-Id", "synthetic-server");
+                response.Headers.Add("X-Exam-Node-Id", "synthetic-node");
+                response.Headers.Add("X-Exam-Server-Epoch", "1");
+                response.Headers.Add("X-Exam-Paper-Version", paperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                response.Headers.Add("X-Exam-Materials-Sha256", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(archive)));
+                return Task.FromResult(response);
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)

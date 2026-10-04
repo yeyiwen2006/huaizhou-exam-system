@@ -277,6 +277,26 @@ public sealed class ExamImportWorkflowTests
         Assert.False(System.IO.Directory.Exists(oldRoot));
     }
 
+    [Theory]
+    [InlineData("reason")]
+    [InlineData("changed-questions")]
+    public async Task ChangingRevisionDetailsInvalidatesTheCheckedPreview(string field)
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory);
+        using var vm = new ExamImportViewModel(api, service: service);
+        vm.SetCurrentExam(Summary("synthetic-exam-1"));
+        vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        Assert.True(vm.CanPublish);
+        if (field == "reason") vm.PublishReason = "new reason";
+        else vm.ChangedQuestionsText = "q2";
+        Assert.False(vm.CanPublish);
+        Assert.Empty(vm.Questions);
+        Assert.Equal(0, service.PublishCalls);
+    }
+
     private static ExamSummary Summary(string examId) => new(examId, "合成考试", DateTimeOffset.UtcNow,
         DateTimeOffset.UtcNow.AddHours(1), ExamLifecycle.Scheduled, false, false, 0, 0, 1);
 

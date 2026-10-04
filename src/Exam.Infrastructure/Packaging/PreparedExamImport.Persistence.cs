@@ -13,6 +13,7 @@ public sealed partial class PreparedExamImport
 {
     private Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
     private string? _ciphertextHash;
+    private string? _materialsCiphertextHash;
     internal SemaphoreSlim PublicationGate { get; } = new(1, 1);
     internal long ConnectionGeneration { get; set; }
     internal string? LogicalServerId { get; set; }
@@ -97,14 +98,16 @@ public sealed partial class PreparedExamImport
     {
         if (Upload is null) throw new InvalidOperationException("尚未生成正式发布请求。");
         _ciphertextHash ??= await HashAsync(Workspace.EncryptedPath, ct);
+        _materialsCiphertextHash ??= await HashAsync(MaterialsCiphertextPath, ct);
         await VerifyCiphertextAsync(ct);
         if (Workspace.Persistent)
-            await WriteAtomicAsync(Path.Combine(Workspace.Root, "upload.json"), new SavedUpload(Upload, _ciphertextHash), ct);
+            await WriteAtomicAsync(Path.Combine(Workspace.Root, "upload.json"), new SavedUpload(Upload, _ciphertextHash, _materialsCiphertextHash), ct);
     }
 
     internal async Task VerifyCiphertextAsync(CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(_ciphertextHash) || _ciphertextHash != await HashAsync(Workspace.EncryptedPath, ct))
+        if (string.IsNullOrEmpty(_ciphertextHash) || _ciphertextHash != await HashAsync(Workspace.EncryptedPath, ct) ||
+            string.IsNullOrEmpty(_materialsCiphertextHash) || _materialsCiphertextHash != await HashAsync(MaterialsCiphertextPath, ct))
             throw new InvalidDataException("已准备的加密包发生变化，请保留现场并核对原发布结果，不能作为同一请求重试。");
     }
 
@@ -210,10 +213,15 @@ public sealed partial class PreparedExamImport
                 if (publication is null || publication.RequestId != prepared.RequestId || publication.ResourceId != prepared.ResourceId ||
                     publication.ExpectedPaperVersion != prepared.Expected.Versions.PaperVersion ||
                     publication.ExpectedGradingVersion != prepared.Expected.Versions.GradingVersion ||
-                    publication.ManifestJson != manifestJson || publication.AnswerKeyJson != answerJson)
+                    publication.ManifestJson != manifestJson || publication.AnswerKeyJson != answerJson ||
+                    publication.Reason != prepared.Reason || !publication.PreviewApproved ||
+                    publication.MaterialsSha256 != prepared.MaterialsSha256 ||
+                    publication.ChangedQuestionIds is null ||
+                    !publication.ChangedQuestionIds.SequenceEqual(prepared.DeclaredChangedQuestions, StringComparer.Ordinal))
                     throw new InvalidDataException("原发布请求与预览不一致，拒绝用改变的请求重试。");
                 prepared.Upload = saved.Upload;
                 prepared._ciphertextHash = saved.CiphertextHash;
+                prepared._materialsCiphertextHash = saved.MaterialsCiphertextHash;
                 await prepared.VerifyCiphertextAsync(ct);
             }
             return prepared;
@@ -292,5 +300,5 @@ public sealed partial class PreparedExamImport
         Dictionary<string, TeXCompileResult> Compiled, IReadOnlyList<ImportPreviewQuestion> Questions,
         Dictionary<string, string> Hashes, string Reason,
         IReadOnlyList<string> DeclaredChangedQuestions, IReadOnlyList<string>? ChangedQuestionsHint);
-    private sealed record SavedUpload(UploadExamBundleRequest Upload, string CiphertextHash);
+    private sealed record SavedUpload(UploadExamBundleRequest Upload, string CiphertextHash, string? MaterialsCiphertextHash = null);
 }

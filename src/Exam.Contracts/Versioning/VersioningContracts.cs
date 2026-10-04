@@ -159,7 +159,8 @@ public sealed record PublishPaperRequest(
     string Operator,
     string Reason,
     DateTimeOffset Now,
-    string RequestId = "");
+    string RequestId = "",
+    string? MaterialsSha256 = null);
 
 public sealed record PublishGradingRulesRequest(
     string ExamId,

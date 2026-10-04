@@ -86,7 +86,7 @@ public sealed partial class PostgresExamVersioningService
             }
         }
         var paper=new PublishPaperRequest(request.ExamId,request.ExpectedPaperVersion,request.ArtifactId,
-            rules.Structure,request.ChangedQuestionIds,new(true,true,true,true),request.Operator,request.Reason,now,request.RequestId+":paper");
+            rules.Structure,request.ChangedQuestionIds,new(true,true,true,true),request.Operator,request.Reason,now,request.RequestId+":paper",materialsToPersist?.ArchiveSha256);
         var grading=new PublishGradingRulesRequest(request.ExamId,request.ExpectedGradingVersion,
             "bundle-rules-"+request.ArtifactId,new(true,true,true),request.Operator,request.Reason,now,request.RequestId+":grading",
             request.ManifestJson,request.AnswerKeyJson);

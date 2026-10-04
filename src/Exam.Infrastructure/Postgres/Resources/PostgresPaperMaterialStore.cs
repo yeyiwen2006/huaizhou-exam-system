@@ -182,15 +182,19 @@ public sealed class PostgresPaperMaterialStore(NpgsqlDataSource dataSource)
 
     private static async Task<PaperMaterialsRow> ReadAsync(NpgsqlDataReader reader, CancellationToken ct)
     {
-        using var buffer = new MemoryStream();
+        // SequentialAccess cannot read columns 0/1 after streaming column 2.
+        var examId = reader.GetString(0);
+        var paperVersion = reader.GetInt64(1);
+        using var buffer = new Exam.Infrastructure.Packaging.BoundedMaterialBuffer(
+            Exam.Infrastructure.Packaging.PaperMaterialsArchive.MaxArchiveBytes);
         await using (var stream = await reader.GetStreamAsync(2, ct))
         {
             await stream.CopyToAsync(buffer, ct);
         }
 
         return new PaperMaterialsRow(
-            reader.GetString(0),
-            reader.GetInt64(1),
+            examId,
+            paperVersion,
             buffer.ToArray(),
             reader.GetString(3),
             reader.GetString(4),

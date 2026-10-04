@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 using Exam.Contracts.Administration;
 using Exam.Contracts.Importing;
@@ -27,13 +29,15 @@ public sealed class PaperMaterialsVerifier(
     PostgresPaperMaterialStore store)
 {
     /// <summary>解密上限：归档上限再留一点头，避免把异常大的密文解进内存。</summary>
-    private const int MaxPlaintextBytes = PaperMaterialsArchive.MaxArchiveBytes + 1024 * 1024;
+    private const int MaxPlaintextBytes = PaperMaterialsArchive.MaxArchiveBytes;
 
     public async Task<PaperMaterialsVerdict> VerifyAsync(string examId, PublishExamBundleApiRequest request,
         PublicationPackageEnvelope? envelope, byte[] ciphertext, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (envelope is null || ciphertext.Length == 0)
+        if (envelope is null || ciphertext is not { Length: > 0 } ||
+            ciphertext.Length > MaxPlaintextBytes + 1024 * 1024 ||
+            request.ExpectedPaperVersion is < 0 or long.MaxValue)
         {
             return PaperMaterialsVerdict.Failed(VersioningErrorCode.MaterialsArchiveInvalid,
                 "发布必须同时提交源材料归档：没有归档就无法核对实际变更题号。");
@@ -47,7 +51,10 @@ public sealed class PaperMaterialsVerifier(
         }
 
         var expectedVersion = checked(request.ExpectedPaperVersion + 1);
-        if (envelope.PackageId.Length is 0 or > 128 || envelope.PaperVersion != expectedVersion ||
+        if (envelope.PackageId is not { Length: > 0 and <= 128 } ||
+            envelope.WrappedKeys is not { Count: > 0 and <= 32 } ||
+            envelope.CertificateThumbprints is not { Count: > 0 and <= 32 } ||
+            envelope.PaperVersion != expectedVersion ||
             !policy.RequiredNodeIds.IsSubsetOf(envelope.WrappedKeys.Keys.ToHashSet(StringComparer.Ordinal)) ||
             !policy.RequiredNodeIds.IsSubsetOf(envelope.CertificateThumbprints.Keys.ToHashSet(StringComparer.Ordinal)))
         {
@@ -66,7 +73,7 @@ public sealed class PaperMaterialsVerifier(
             using var material = new PackageUnlockMaterial(transport.PackageId, transport.PaperVersion,
                 transport.ChunkSize, transport.NoncePrefix, key);
             using var input = new MemoryStream(ciphertext, writable: false);
-            using var output = new MemoryStream();
+            using var output = new BoundedMaterialBuffer(MaxPlaintextBytes);
             await PackageCiphertext.DecryptAsync(input, output, material, ct);
             if (output.Length is 0 or > MaxPlaintextBytes)
             {
@@ -76,7 +83,7 @@ public sealed class PaperMaterialsVerifier(
 
             plaintext = output.ToArray();
         }
-        catch (Exception error) when (error is CryptographicException or InvalidDataException or ArgumentException)
+        catch (Exception error) when (error is CryptographicException or InvalidDataException or ArgumentException or FormatException)
         {
             return PaperMaterialsVerdict.Failed(VersioningErrorCode.MaterialsArchiveInvalid,
                 "源材料归档密文或节点解锁材料校验失败，未发布。");
@@ -119,15 +126,27 @@ public sealed class PaperMaterialsVerifier(
         IReadOnlyDictionary<string, string> digests;
         try
         {
+            // The downloadable source must describe exactly what the transaction publishes.
+            // Otherwise a valid archive hash can hide missing/obsolete answers or a different manifest.
+            foreach (var (path, json) in new[]
+            {
+                ("manifest.json", request.ManifestJson),
+                ("server-only/answer-key.json", request.AnswerKeyJson)
+            })
+            {
+                var source = archive.Materials.Resolve(path);
+                if (source is null || !JsonNode.DeepEquals(JsonNode.Parse(archive.Materials.Read(source)), JsonNode.Parse(json)))
+                    throw new InvalidDataException("归档清单或独立答案与本次发布请求不一致。");
+            }
             var manifest = System.Text.Json.JsonSerializer.Deserialize<ExamManifest>(
                 request.ManifestJson, ImportJson.Create())
                 ?? throw new InvalidDataException("清单无效。");
             digests = QuestionContentDigest.Compute(manifest, archive.Materials);
         }
-        catch (Exception error) when (error is InvalidDataException or ArgumentException)
+        catch (Exception error) when (error is InvalidDataException or ArgumentException or JsonException)
         {
             return PaperMaterialsVerdict.Failed(VersioningErrorCode.MaterialsArchiveInvalid,
-                $"无法按本次清单计算逐题摘要：{error.Message}");
+                "无法按本次清单核对源材料、独立答案及逐题摘要，未发布。");
         }
 
         // 请求体可能是显式 null（JSON 里写 null 就是空声明），按空集处理而不是抛异常。
@@ -156,7 +175,7 @@ public sealed class PaperMaterialsVerifier(
         {
             return PaperMaterialsVerdict.Failed(VersioningErrorCode.MaterialsBaselineMissing,
                 $"上一已发布版本（{request.ExpectedPaperVersion}）没有源材料归档，无法核对变更题号；" +
-                "请先按带归档的上传入口发布一次材料，再修订。");
+                "请恢复这一版本的原始归档并通过恢复检查；不能将修订当作首次发布绕过核对。");
         }
 
         if (baseline.FormatVersion != QuestionContentDigest.CurrentFormatVersion)

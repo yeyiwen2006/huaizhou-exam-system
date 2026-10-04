@@ -147,6 +147,40 @@ public sealed class QuestionContentDigestTests
         Assert.Equal(["q-1"], QuestionContentDigest.Changed(before, after));
     }
 
+    [Fact]
+    public void SharedStyleGraphicsPathCoversDirectImagesAlreadyVisitedInTheQuestion()
+    {
+        var beforeFiles = BaseMaterials().Select(pair => pair.Key == Source
+            ? new KeyValuePair<string, byte[]>(Source, Bytes(QuestionBody(1, "题干", graphicsPath: string.Empty)
+                .Replace("figures/q1.png", "q1.png", StringComparison.Ordinal)))
+            : pair.Key == SharedStyle
+                ? new KeyValuePair<string, byte[]>(SharedStyle, Bytes(@"\graphicspath{{figures/}}" + Environment.NewLine + SharedStyleBody()))
+                : pair).ToList();
+        var afterFiles = beforeFiles.Select(pair => pair.Key == "figures/q1.png"
+            ? new KeyValuePair<string, byte[]>(pair.Key, Bytes("changed image")) : pair).ToList();
+        var before = QuestionContentDigest.Compute(Manifest(), new InMemoryMaterialFileSource(beforeFiles));
+        var after = QuestionContentDigest.Compute(Manifest(), new InMemoryMaterialFileSource(afterFiles));
+        Assert.Equal(["q-1"], QuestionContentDigest.Changed(before, after));
+    }
+
+    [Fact]
+    public void DependencyDepthLimitFailsClosedInsteadOfSilentlyIgnoringALeaf()
+    {
+        var files = BaseMaterials().Select(pair => pair.Key == Source
+            ? new KeyValuePair<string, byte[]>(Source, Bytes(@"\input{parts/depth0.tex}")) : pair).ToList();
+        for (var depth = 0; depth < 40; depth++)
+            files.Add(new($"parts/depth{depth}.tex", Bytes(depth == 39 ? "leaf" : $@"\input{{parts/depth{depth + 1}.tex}}")));
+        Assert.Throws<InvalidDataException>(() => QuestionContentDigest.Compute(Manifest(), new InMemoryMaterialFileSource(files)));
+    }
+
+    [Fact]
+    public void InvalidUtf8InADependencyCannotHideFurtherReferences()
+    {
+        var files = BaseMaterials().Select(pair => pair.Key == SharedStyle
+            ? new KeyValuePair<string, byte[]>(pair.Key, [0xff]) : pair).ToList();
+        Assert.Throws<InvalidDataException>(() => QuestionContentDigest.Compute(Manifest(), new InMemoryMaterialFileSource(files)));
+    }
+
     private static IReadOnlyList<string> Changed(IReadOnlyList<KeyValuePair<string, byte[]>> after)
     {
         var previous = QuestionContentDigest.Compute(Manifest(), new InMemoryMaterialFileSource(BaseMaterials()));

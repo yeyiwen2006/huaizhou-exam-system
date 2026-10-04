@@ -214,6 +214,59 @@ public sealed class PaperMaterialsArchiveTests
         Assert.Equal(64, Assert.Single(digests).Value.Length);
     }
 
+    [Fact]
+    public void Read_RejectsDuplicateArchiveManifests()
+    {
+        var result = PaperMaterialsArchive.Read(Zip(
+            (PaperMaterialsArchive.ManifestFileName, Manifest(string.Empty)),
+            (PaperMaterialsArchive.ManifestFileName, Manifest(string.Empty))));
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Fact]
+    public void Read_RejectsDuplicateDeclarationsEvenWhenFileCountsMatch()
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("a"))).ToLowerInvariant();
+        var declaration = $"{{\"path\":\"a.bin\",\"length\":1,\"sha256\":\"{hash}\"}}";
+        var result = PaperMaterialsArchive.Read(Zip(("a.bin", "a"), ("b.bin", "b"),
+            (PaperMaterialsArchive.ManifestFileName, Manifest(declaration + "," + declaration))));
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{\"path\":null,\"length\":1,\"sha256\":\"invalid\"}")]
+    [InlineData("{\"path\":\" \",\"length\":1,\"sha256\":\"invalid\"}")]
+    public void Read_InvalidManifestEntriesReturnAStableFailureInsteadOfThrowing(string entry)
+    {
+        var result = PaperMaterialsArchive.Read(Zip(("a.bin", "a"),
+            (PaperMaterialsArchive.ManifestFileName, Manifest(entry))));
+        Assert.False(result.Succeeded);
+        Assert.Equal("MaterialsArchiveInvalid", result.Failure!.Value.Key);
+    }
+
+    [Theory]
+    [InlineData("../outside.tex")]
+    [InlineData("materials.json")]
+    [InlineData("MATERIALS.JSON")]
+    [InlineData("folder/../source.tex")]
+    public void Build_RejectsUnsafeOrReservedPaths(string path)
+    {
+        Assert.Throws<ArgumentException>(() => PaperMaterialsArchive.Build(ExamId, 1,
+            [new KeyValuePair<string, byte[]>(path, [1])]));
+    }
+
+    [Fact]
+    public void Build_RejectsAggregateUncompressedSizeBeyondTheWorkspaceLimit()
+    {
+        // Reuse a single synthetic allocation; do not construct a decompression bomb in memory.
+        var content = new byte[PaperMaterialsArchive.MaxArchiveBytes];
+        var files = Enumerable.Range(0, 5).Select(i => new KeyValuePair<string, byte[]>($"{i}.bin", content));
+        Assert.Throws<InvalidDataException>(() => PaperMaterialsArchive.Build(ExamId, 1, files));
+    }
+
     private static IReadOnlyList<KeyValuePair<string, byte[]>> Materials() =>
     [
         new("questions/q1.tex", Encoding.UTF8.GetBytes("题干")),

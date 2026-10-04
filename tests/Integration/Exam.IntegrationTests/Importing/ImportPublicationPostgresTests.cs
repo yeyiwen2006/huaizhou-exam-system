@@ -133,6 +133,56 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         await server.AssertPublishedAndPrivate(server.Versions.GetExam(server.ExamId).Value!);
     }
 
+    [Fact]
+    [Trait("Category", "Postgres")]
+    [Trait("Category", "Latex")]
+    public async Task RealCli_RetrieveEditCompilePublishRunningRevision_AndReplayWithoutAnotherVersion()
+    {
+        using var source = new SyntheticImportFixture();
+        await using var server = await ServerFixture.Create(database.DataSource, source, network: true);
+        var initial = Path.Combine(source.Root, "initial-preview");
+        var preview = await RunCli(server.Address, ["import", "preview", source.Source, "--exam", source.Name, "--output", initial]);
+        Assert.True(preview.Exit == 0, preview.Output + preview.Error);
+        var first = await RunCli(server.Address, ["import", "publish", initial, "--confirm"]);
+        Assert.True(first.Exit == 0, first.Output + first.Error);
+        var original = await new PostgresPaperMaterialStore(database.DataSource).FindAsync(server.ExamId, 1);
+        Assert.NotNull(original);
+
+        await server.Scalar("UPDATE exam.exam_entry_access SET instructions_ready=true WHERE exam_id=$1", server.ExamId);
+        var now = DateTimeOffset.UtcNow;
+        var starts = now.AddSeconds(1);
+        Assert.True(server.Versions.UpdateSchedule(new(server.ExamId, 1, new(starts, now.AddHours(2)),
+            now, Guid.NewGuid().ToString("N"))).Succeeded);
+        await Task.Delay(TimeSpan.FromSeconds(1.1));
+        var started = server.Versions.ExecuteScheduleTrigger(new(server.ExamId, 2, ScheduleTriggerKind.Start,
+            DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N")));
+        Assert.True(started.Succeeded, started.Error);
+        Assert.Equal(ExamLifecycle.Running, server.Versions.GetExam(server.ExamId).Value!.LifecycleState);
+
+        var material = Path.Combine(source.Root, "retrieved-materials");
+        var retrieved = await RunCli(server.Address, ["import", "materials", source.Name, "--output", material]);
+        Assert.True(retrieved.Exit == 0, retrieved.Output + retrieved.Error);
+        var question = Directory.EnumerateFiles(Path.Combine(material, "questions"), "*.tex").Single();
+        await File.AppendAllTextAsync(question, "\n% synthetic revised source, same question and option identities\n");
+        var revised = Path.Combine(source.Root, "revision-preview");
+        var checkedRevision = await RunCli(server.Address, ["import", "preview", material, "--exam", source.Name,
+            "--output", revised, "--reason", "合成开考后纠错"]);
+        Assert.True(checkedRevision.Exit == 0, checkedRevision.Output + checkedRevision.Error);
+        foreach (var attempt in Enumerable.Range(0, 2))
+        {
+            var published = await RunCli(server.Address, ["import", "publish", revised, "--confirm"]);
+            Assert.True(published.Exit == 0, published.Output + published.Error);
+        }
+        var current = server.Versions.GetExam(server.ExamId).Value!;
+        Assert.Equal(2, current.Versions.PaperVersion);
+        Assert.Equal(2, current.Versions.GradingVersion);
+        Assert.Equal(["q1"], current.Paper!.ChangedQuestionIds);
+        Assert.Equal(2L, await server.ResourceCount());
+        Assert.Equal(2L, await server.Scalar("SELECT count(*) FROM exam.paper_materials WHERE exam_id=$1", server.ExamId));
+        var old = await new PostgresPaperMaterialStore(database.DataSource).FindAsync(server.ExamId, 1);
+        Assert.Equal(original.Archive, old!.Archive);
+    }
+
     private static async Task<(int Exit, string Output, string Error)> RunCli(string address, string[] arguments)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
@@ -209,6 +259,7 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             });
             if (network) builder.WebHost.UseUrls("http://127.0.0.1:0"); else builder.WebHost.UseTestServer();
             builder.Services.AddSingleton(publication);
+            builder.Services.AddSingleton(new PostgresPaperMaterialStore(source));
             builder.Services.AddSingleton<PublicationUploadGate>();
             var app = builder.Build();
             ServerFixture? fixture = null;

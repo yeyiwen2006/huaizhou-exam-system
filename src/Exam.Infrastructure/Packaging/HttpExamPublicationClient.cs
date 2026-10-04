@@ -51,30 +51,26 @@ public sealed class HttpExamPublicationClient(HttpClient http, Action<HttpReques
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
-            throw new ExamPublicationApiException($"HTTP_{(int)response.StatusCode}",
-                $"取回源材料归档被拒绝：HTTP {(int)response.StatusCode}。", response.StatusCode);
+            var failure = await PaperMaterialsDownload.ReadFailureAsync(response, ct);
+            if (failure is not null) ValidateIdentity(failure);
+            throw new ExamPublicationApiException(failure?.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
+                failure?.Error?.Message ?? "服务器拒绝取回源材料归档。", response.StatusCode);
         }
+        var envelope = await PaperMaterialsDownload.ReadAsync(response, examId, paperVersion, ct);
+        ValidateIdentity(envelope);
+        return envelope.Result!;
+    }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
-        while (true)
-        {
-            var read = await stream.ReadAsync(chunk, ct);
-            if (read <= 0)
-            {
-                break;
-            }
-
-            if (buffer.Length + read > PaperMaterialsArchive.MaxArchiveBytes)
-            {
-                throw new InvalidDataException("服务器返回的源材料归档超过大小上限。");
-            }
-
-            buffer.Write(chunk, 0, read);
-        }
-
-        return buffer.ToArray();
+    private void ValidateIdentity<T>([System.Diagnostics.CodeAnalysis.NotNull] ApiEnvelope<T>? envelope)
+    {
+        if (envelope is null || string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) ||
+            envelope.ServerEpoch < 1 || ServerId is not null &&
+            (envelope.ServerId != ServerId || envelope.ServerEpoch < _epoch ||
+             envelope.ServerEpoch == _epoch && envelope.NodeId != _nodeId))
+            throw new ExamPublicationApiException("INVALID_SERVER_IDENTITY", "服务器身份或代次不一致，已停止操作。", HttpStatusCode.BadGateway);
+        ServerId = envelope.ServerId;
+        _nodeId = envelope.NodeId;
+        _epoch = envelope.ServerEpoch;
     }
 
     private async Task<T> SendAsync<T>(HttpMethod method, string path, HttpContent? content, CancellationToken ct) where T : class
@@ -105,15 +101,8 @@ public sealed class HttpExamPublicationClient(HttpClient http, Action<HttpReques
             throw new ExamPublicationApiException("INVALID_RESPONSE", "服务器未返回有效业务回执，不能确认操作成功。",
                 response.IsSuccessStatusCode ? HttpStatusCode.BadGateway : response.StatusCode);
         }
-        if (envelope is null || string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) ||
-            envelope.ServerEpoch < 1 || ServerId is not null &&
-            (envelope.ServerId != ServerId || envelope.ServerEpoch < _epoch ||
-             envelope.ServerEpoch == _epoch && envelope.NodeId != _nodeId))
-            throw new ExamPublicationApiException("INVALID_SERVER_IDENTITY", "服务器身份或代次不一致，已停止操作。", HttpStatusCode.BadGateway);
-        ServerId = envelope.ServerId;
-        _nodeId = envelope.NodeId;
-        _epoch = envelope.ServerEpoch;
-        if (!response.IsSuccessStatusCode || envelope.Error is not null)
+        ValidateIdentity(envelope);
+        if (!response.IsSuccessStatusCode || envelope!.Error is not null)
             throw new ExamPublicationApiException(envelope.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
                 envelope.Error?.Message ?? "服务器没有确认本次操作完成。", response.StatusCode);
         return envelope.Result ?? throw new ExamPublicationApiException("EMPTY_RESPONSE",

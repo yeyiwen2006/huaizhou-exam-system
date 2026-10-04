@@ -38,9 +38,9 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         _service = service ?? new ExamImportService(api);
         _dialog = dialog ?? new FileDialogService();
         _api.ConfigurationChanged += OnConfigurationChanged;
-        SelectDirectoryCommand = new RelayCommand(() => Select(_dialog.OpenDirectory()), () => !IsBusy);
-        SelectZipCommand = new RelayCommand(() => Select(_dialog.OpenZip()), () => !IsBusy);
-        CheckCommand = new AsyncRelayCommand(CheckAsync, () => !IsBusy &&
+        SelectDirectoryCommand = new RelayCommand(() => Select(_dialog.OpenDirectory()), () => CanEditRevisionDetails);
+        SelectZipCommand = new RelayCommand(() => Select(_dialog.OpenZip()), () => CanEditRevisionDetails);
+        CheckCommand = new AsyncRelayCommand(CheckAsync, () => CanEditRevisionDetails &&
             !string.IsNullOrWhiteSpace(ExamId) && !string.IsNullOrWhiteSpace(SourcePath), SetError);
         PublishCommand = new AsyncRelayCommand(PublishAsync, () => CanPublish, SetError);
         RetrieveMaterialsCommand = new AsyncRelayCommand(RetrieveMaterialsAsync,
@@ -65,13 +65,18 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public bool IsPublishing { get => _isPublishing; private set { if (SetProperty(ref _isPublishing, value)) UpdateCommands(); } }
     public bool IsBusy => IsChecking || IsPublishing;
     public bool HasPreview => _preview is not null;
+    public bool CanEditRevisionDetails => !IsBusy && _preview?.PublicationAttempted != true;
     public bool CanPublish => !_disposed && HasPreview && !IsBusy && _preview!.Expected.ExamId == ExamId;
 
     /// <summary>本次修改原因：开考后修订必须填写，随发布一起记录。</summary>
     public string PublishReason
     {
         get => _publishReason;
-        set { if (SetProperty(ref _publishReason, value)) OnPropertyChanged(nameof(CanPublish)); }
+        set
+        {
+            if (_preview?.PublicationAttempted == true) return;
+            if (SetProperty(ref _publishReason, value)) ClearPreview("修改原因已改变，请重新检查后发布。");
+        }
     }
 
     /// <summary>
@@ -81,7 +86,11 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public string ChangedQuestionsText
     {
         get => _changedQuestionsText;
-        set => SetProperty(ref _changedQuestionsText, value);
+        set
+        {
+            if (_preview?.PublicationAttempted == true) return;
+            if (SetProperty(ref _changedQuestionsText, value)) ClearPreview("声明变更题号已改变，请重新检查后发布。");
+        }
     }
 
     /// <summary>检查时按内容算出的差异提示（只读）：帮操作者确认，不代替服务器的核对。</summary>
@@ -125,6 +134,8 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public async Task CheckAsync()
     {
         if (IsBusy || _disposed) return;
+        if (_preview?.PublicationAttempted == true)
+        { Status = "此前发布结果尚待核对，请保留同一预览重试，不能重新检查生成另一请求。"; return; }
         ClearPreview("正在检查试题包…");
         var context = _context;
         var examId = ExamId;
@@ -150,7 +161,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
                       "；将声明：" + string.Join("、", _preview.DeclaredChangedQuestions))
                 : string.Empty;
             Status = _preview.IsRevision
-                ? $"检查通过：{ExamName}，{Questions.Count} 道题；这是**开考后修订**（试卷版本 {_preview.Expected.Versions.PaperVersion} → {_preview.TargetPaperVersion}）。请逐题打开 PDF 确认版式与答案，再确认发布。"
+                ? $"检查通过：{ExamName}，{Questions.Count} 道题；这是开考后修订（试卷版本 {_preview.Expected.Versions.PaperVersion} → {_preview.TargetPaperVersion}）。请逐题打开 PDF 确认版式与答案，再确认发布。"
                 : $"检查通过：{ExamName}，{Questions.Count} 道题；已核对答案、编译和选项定位。请逐题打开 PDF 查看版式，确认后才能发布。";
             OnPropertyChanged(nameof(HasPreview));
             UpdateCommands();
@@ -204,6 +215,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         try
         {
             var snapshot = await _api.GetExamAsync(examId, _operationCancellation.Token);
+            if (context != _context) return;
             if (snapshot.Versions.PaperVersion < 1)
             {
                 Status = "这场考试还没有已发布的试卷版本，没有可取回的源材料。";
@@ -215,6 +227,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             var read = Exam.Infrastructure.Packaging.PaperMaterialsArchive.Read(archive);
             if (!read.Succeeded)
                 throw new InvalidDataException(read.Failure?.Value ?? "服务器返回的归档不可用。");
+            if (context != _context) return;
             var target = Path.Combine(parent, $"{examName}-源材料-v{snapshot.Versions.PaperVersion}");
             await Exam.Infrastructure.Packaging.PaperMaterialsArchive.ExtractAsync(read, target,
                 _operationCancellation.Token);
@@ -303,6 +316,8 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private void ClearPreview(string status)
     {
         ++_context;
+        _operationCancellation?.Cancel();
+        ChangedQuestionsHint = string.Empty;
         if (_preview is not null)
         {
             if (IsPublishing) _retired.Add(_preview);
@@ -328,6 +343,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         SelectZipCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(CanPublish));
         OnPropertyChanged(nameof(IsBusy));
+        OnPropertyChanged(nameof(CanEditRevisionDetails));
     }
     private void OnConfigurationChanged(object? sender, EventArgs e) => SetCurrentExam(null);
     public void Dispose()

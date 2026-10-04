@@ -32,6 +32,9 @@ public static class PaperMaterialsArchive
     /// <summary>归档字节上限。</summary>
     public const int MaxArchiveBytes = 64 * 1024 * 1024;
 
+    /// <summary>所有条目解压后的合计上限（含归档清单），不能用压缩大小替代。</summary>
+    public const long MaxTotalUncompressedBytes = 256L * 1024 * 1024;
+
     /// <summary>归档条目数上限（含材料清单）。</summary>
     public const int MaxEntries = 2048;
 
@@ -58,14 +61,24 @@ public static class PaperMaterialsArchive
 
         // 忽略大小写：归档里不能同时存在只差大小写的两个路径（读侧同样拒绝）。
         var ordered = new SortedDictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        long total = 0;
         foreach (var (path, content) in files)
         {
             var normalized = NormalizeEntryPath(path);
+            if (!IsValidEntryPath(normalized) ||
+                normalized.Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("材料包含非法路径或占用归档清单名称。", nameof(files));
             if (content is null)
             {
                 throw new ArgumentException($"材料内容不能为 null：{path}", nameof(files));
             }
 
+            if (content.LongLength > EntryLimit(normalized) ||
+                content.LongLength > MaxTotalUncompressedBytes - total)
+                throw new InvalidDataException("材料单文件或解压后总大小超过上限。");
+            total += content.LongLength;
+            if (ordered.Count >= MaxEntries - 1)
+                throw new InvalidDataException("材料文件数量超过上限。");
             if (!ordered.TryAdd(normalized, content))
             {
                 throw new ArgumentException($"归档里存在重复路径（忽略大小写）：{path}", nameof(files));
@@ -77,6 +90,9 @@ public static class PaperMaterialsArchive
             throw new InvalidDataException($"材料文件过多（最多 {MaxEntries - 1} 个），无法生成归档。");
         }
 
+        if (HasFileParent(ordered.Keys))
+            throw new ArgumentException("材料路径同时被用作文件与目录。", nameof(files));
+
         var manifest = new PaperMaterialsManifest(
             CurrentFormatVersion,
             examId,
@@ -86,6 +102,9 @@ public static class PaperMaterialsArchive
                 pair.Value.Length,
                 Convert.ToHexString(SHA256.HashData(pair.Value)).ToLowerInvariant())).ToList());
 
+        var metadata = JsonSerializer.SerializeToUtf8Bytes(manifest, ManifestJson);
+        if (metadata.Length > MaxTextFileBytes || metadata.Length > MaxTotalUncompressedBytes - total)
+            throw new InvalidDataException("材料清单或解压后总大小超过上限。");
         using var buffer = new MemoryStream();
         using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
         {
@@ -94,8 +113,7 @@ public static class PaperMaterialsArchive
                 WriteEntry(zip, path, content);
             }
 
-            WriteEntry(zip, ManifestFileName, Encoding.UTF8.GetBytes(
-                JsonSerializer.Serialize(manifest, ManifestJson)));
+            WriteEntry(zip, ManifestFileName, metadata);
         }
 
         if (buffer.Length > MaxArchiveBytes)
@@ -129,6 +147,26 @@ public static class PaperMaterialsArchive
                 return Failed("MaterialsArchiveInvalid", "材料归档条目数超出允许范围。");
             }
 
+            // Preflight every entry before inflating anything. A per-file bound alone permits
+            // thousands of individually valid entries to exhaust the server's memory.
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            long total = 0;
+            foreach (var entry in zip.Entries)
+            {
+                var name = NormalizeEntryPath(entry.FullName);
+                if (!IsValidEntryPath(name) || !names.Add(name) ||
+                    ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000 ||
+                    ((entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0) ||
+                    (name.Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase) && name != ManifestFileName))
+                    return Failed("MaterialsArchiveInvalid", "材料归档包含非法、重复或链接路径。");
+                if (entry.Length < 0 || entry.Length > EntryLimit(name) ||
+                    entry.Length > MaxTotalUncompressedBytes - total)
+                    return Failed("MaterialsArchiveInvalid", "材料归档单文件或解压后总大小超过上限。");
+                total += entry.Length;
+            }
+            if (HasFileParent(names))
+                return Failed("MaterialsArchiveInvalid", "材料路径同时被用作文件与目录。");
+
             foreach (var entry in zip.Entries)
             {
                 var path = NormalizeEntryPath(entry.FullName);
@@ -155,7 +193,7 @@ public static class PaperMaterialsArchive
                             break;
                         }
 
-                        if (content.Length + read > MaxArchiveBytes)
+                        if (read > entry.Length - content.Length)
                         {
                             return Failed("MaterialsArchiveInvalid", $"材料归档条目解压后超出上限：{path}");
                         }
@@ -186,7 +224,7 @@ public static class PaperMaterialsArchive
                 }
             }
         }
-        catch (Exception error) when (error is InvalidDataException or IOException or NotSupportedException)
+        catch (Exception error) when (error is InvalidDataException or IOException or NotSupportedException or ArgumentException)
         {
             return Failed("MaterialsArchiveInvalid", "材料归档不是可读的 ZIP。");
         }
@@ -206,7 +244,7 @@ public static class PaperMaterialsArchive
             return Failed("MaterialsArchiveInvalid", "材料归档的清单不是有效 JSON。");
         }
 
-        if (manifest is null || manifest.Files is null)
+        if (manifest is null || manifest.Files is null || string.IsNullOrWhiteSpace(manifest.ExamId) || manifest.PaperVersion < 1)
         {
             return Failed("MaterialsArchiveInvalid", "材料归档的清单不完整。");
         }
@@ -222,10 +260,13 @@ public static class PaperMaterialsArchive
             return Failed("MaterialsArchiveInvalid", "材料归档的清单与条目数量不一致。");
         }
 
+        var declaredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var declared in manifest.Files)
         {
+            if (declared is null || string.IsNullOrWhiteSpace(declared.Path))
+                return Failed("MaterialsArchiveInvalid", "材料归档清单含空文件或空路径。");
             var path = NormalizeEntryPath(declared.Path);
-            if (!IsValidEntryPath(path) || path == ManifestFileName ||
+            if (!declaredNames.Add(path) || !IsValidEntryPath(path) || path == ManifestFileName ||
                 !files.TryGetValue(path, out var content) || content.LongLength != declared.Length ||
                 !StringComparer.Ordinal.Equals(
                     Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(), declared.Sha256))
@@ -300,13 +341,25 @@ public static class PaperMaterialsArchive
     private static string NormalizeEntryPath(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return path.Replace('\\', '/').Trim();
+        return path.Replace('\\', '/');
     }
 
     private static bool IsValidEntryPath(string path) =>
-        path.Length is > 0 and <= MaxPathLength &&
+        path.Length is > 0 and <= MaxPathLength && path.Split('/').Length <= 32 &&
         PackagePathRules.IsRelativeAndInside(path) &&
         PackagePathRules.HasValidWindowsSegments(path);
+
+    private static long EntryLimit(string path) =>
+        path == ManifestFileName || IsTextLike(path) ? MaxTextFileBytes : MaxArchiveBytes;
+
+    private static bool HasFileParent(IEnumerable<string> paths)
+    {
+        var names = paths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in names)
+            for (var slash = path.IndexOf('/'); slash >= 0; slash = path.IndexOf('/', slash + 1))
+                if (names.Contains(path[..slash])) return true;
+        return false;
+    }
 
     private static bool IsTextLike(string path) =>
         TextExtensions.Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase));

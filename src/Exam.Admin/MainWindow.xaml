@@ -652,10 +652,10 @@
                             <TextBlock Text="试题包来源" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding Import.SourcePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
                             <TextBlock Text="本次修改原因（开考后修订必填，随版本一起记录）" Style="{StaticResource FormLabel}"/>
-                            <TextBox Text="{Binding Import.PublishReason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                            <TextBox Text="{Binding Import.PublishReason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
                             <TextBlock Text="变更题号（空格、逗号或顿号分隔；留空＝按内容自动算出。开考后修订会以这里声明的为准，服务器按内容核对，不一致会拒绝发布）"
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                            <TextBox Text="{Binding Import.ChangedQuestionsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                            <TextBox Text="{Binding Import.ChangedQuestionsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
                             <WrapPanel>
                                 <Button Content="选择目录" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectDirectoryCommand}"/>
                                 <Button Content="选择 ZIP" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectZipCommand}"/>

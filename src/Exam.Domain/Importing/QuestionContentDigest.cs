@@ -151,11 +151,14 @@ public static class QuestionContentDigest
 
         void Visit(string? candidate, int depth)
         {
-            if (candidate is null || depth > MaxDependencyDepth || !visited.Add(candidate))
+            if (candidate is null || visited.Contains(candidate))
             {
                 return;
             }
 
+            if (depth > MaxDependencyDepth)
+                throw new InvalidDataException("题目依赖层级超过上限，不能忽略深层材料后继续发布。");
+            visited.Add(candidate);
             if (visited.Count > MaxDependencyFiles)
             {
                 throw new InvalidDataException("题目的依赖闭包引用了过多文件，无法计算内容摘要。");
@@ -179,9 +182,7 @@ public static class QuestionContentDigest
 
                 var text = TryDecode(materials.Read(path));
                 if (text is null)
-                {
-                    continue;
-                }
+                    throw new InvalidDataException("题目依赖的文本材料不是有效 UTF-8，无法完整计算内容摘要。");
 
                 texts[path] = text;
                 var declaration = TeXSourceInspector.Inspect(text);
@@ -227,7 +228,10 @@ public static class QuestionContentDigest
             var before = visited.Count;
             foreach (var (path, text) in texts)
             {
-                foreach (var reference in TeXSourceInspector.ReadImageMacroInvocations(text, imageMacros.ToList()))
+                // A shared style may declare graphicspath after the question was visited.
+                // Revisit direct image references as well as cross-file image macros.
+                foreach (var reference in TeXSourceInspector.Inspect(text).ImageReferences
+                    .Concat(TeXSourceInspector.ReadImageMacroInvocations(text, imageMacros.ToList())))
                 {
                     Visit(ResolveImage(reference, materials, graphicsRoots), depths[path] + 1);
                 }
@@ -238,6 +242,8 @@ public static class QuestionContentDigest
             {
                 break;
             }
+            if (round == MaxImageMacroRounds - 1)
+                throw new InvalidDataException("图片依赖解析未收敛，无法完整计算内容摘要。");
         }
 
         return collected.Select(pair => (pair.Key, pair.Value)).ToList();

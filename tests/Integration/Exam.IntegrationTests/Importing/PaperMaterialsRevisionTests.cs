@@ -193,6 +193,79 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
         await f.AssertUnchangedAfterRejection();
     }
 
+    [Fact]
+    public async Task ExistingArchiveCanBeReadWithSequentialAccessAfterPublication()
+    {
+        using var f = await Fixture.CreateAsync(database.DataSource);
+        Assert.True((await f.PublishAsync(1, MaterialFiles(f.ExamName), [])).Succeeded);
+        var row = await f.Materials.FindAsync(f.ExamId, 1);
+        Assert.NotNull(row);
+        Assert.Equal(f.ExamId, row.ExamId);
+        Assert.Equal(1, row.PaperVersion);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(row.Archive)), row.ArchiveSha256);
+        Assert.True(PaperMaterialsArchive.Read(row.Archive).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("manifest.json")]
+    [InlineData("server-only/answer-key.json")]
+    [InlineData("missing-answer")]
+    public async Task SelfConsistentArchiveMustAlsoMatchThePublishedManifestAndAnswers(string fault)
+    {
+        using var f = await Fixture.CreateAsync(database.DataSource);
+        Assert.True((await f.PublishAsync(1, MaterialFiles(f.ExamName), [])).Succeeded);
+        var rejected = await f.PublishAsync(2, MaterialFiles(f.ExamName, "改题"), ["q1"], archiveFault: fault);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(VersioningErrorCode.MaterialsArchiveInvalid, rejected.ErrorCode);
+        await f.AssertUnchangedAfterRejection();
+    }
+
+    [Fact]
+    public async Task ArchivedExamCannotBypassMaterialComparisonThroughLegacyPaperPublication()
+    {
+        using var f = await Fixture.CreateAsync(database.DataSource);
+        var first = await f.PublishAsync(1, MaterialFiles(f.ExamName), []);
+        Assert.True(first.Succeeded, first.Error);
+        var rejected = f.Versions.PublishPaper(new(f.ExamId, 1, first.Value!.Paper!.ArtifactId,
+            first.Value.Paper.Structure, ["q1"], new(true, true, true, true), "synthetic-operator",
+            "attempt legacy route", DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N")));
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(VersioningErrorCode.MaterialsArchiveInvalid, rejected.ErrorCode);
+        await f.AssertUnchangedAfterRejection();
+    }
+
+    [Theory]
+    [InlineData("delete-all")]
+    [InlineData("delete-old")]
+    [InlineData("bytes")]
+    [InlineData("digests")]
+    [InlineData("package-hash")]
+    public async Task RecoveryChecksDurableArchiveExpectationsAndActualBytes(string fault)
+    {
+        // Corruption is limited to an independently owned synthetic database, never the shared fixture.
+        var isolated = new PostgresDatabaseFixture();
+        await isolated.InitializeAsync();
+        try
+        {
+            using var f = await Fixture.CreateAsync(isolated.DataSource);
+            Assert.True((await f.PublishAsync(1, MaterialFiles(f.ExamName), [])).Succeeded);
+            Assert.True((await f.PublishAsync(2, MaterialFiles(f.ExamName, "改题"), ["q1"])).Succeeded);
+            Assert.All(await f.RecoveryAsync(), check => Assert.True(check.Passed, check.Name));
+            var sql = fault switch
+            {
+                "delete-all" => "DELETE FROM exam.paper_materials WHERE exam_id=$1",
+                "delete-old" => "DELETE FROM exam.paper_materials WHERE exam_id=$1 AND paper_version=1",
+                "bytes" => "UPDATE exam.paper_materials SET archive=set_byte(archive,10,get_byte(archive,10)#1) WHERE exam_id=$1",
+                "digests" => "UPDATE exam.paper_materials SET question_digests=jsonb_set(question_digests,'{q1}',to_jsonb(repeat('a',64))) WHERE exam_id=$1",
+                _ => "UPDATE exam.paper_materials SET package_content_sha256=repeat('a',64) WHERE exam_id=$1"
+            };
+            await f.Sql(sql, f.ExamId);
+            Assert.Contains(await f.RecoveryAsync(), check => !check.Passed && check.BlocksWrites &&
+                check.Name == (fault == "package-hash" ? "published-resources" : "paper-materials"));
+        }
+        finally { await isolated.DisposeAsync(); }
+    }
+
     private static IReadOnlyList<KeyValuePair<string, string>> MaterialFiles(string examName,
         string questionOneStem = "题干一", string sharedStyle = "% 共享样式")
     {
@@ -278,7 +351,7 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
         /// <summary>按目标版本造齐三样东西并上传：学生包密文、源材料归档密文与发布请求。</summary>
         public async Task<VersioningResult<ExamVersionSnapshot>> PublishAsync(long targetVersion,
             IReadOnlyList<KeyValuePair<string, string>> materials, IReadOnlyList<string> declared,
-            bool tamperArchive = false)
+            bool tamperArchive = false, string? archiveFault = null)
         {
             // 归档内容 = 清单 + 独立答案 + 题目与共享资源；路径相对材料包根。
             var files = new List<KeyValuePair<string, byte[]>>
@@ -288,6 +361,10 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
             };
             files.AddRange(materials.Select(pair =>
                 new KeyValuePair<string, byte[]>(pair.Key, Encoding.UTF8.GetBytes(pair.Value))));
+            if (archiveFault == "missing-answer") files.RemoveAll(pair => pair.Key == "server-only/answer-key.json");
+            else if (archiveFault is not null)
+                files = files.Select(pair => pair.Key == archiveFault
+                    ? new KeyValuePair<string, byte[]>(pair.Key, Encoding.UTF8.GetBytes("{}")) : pair).ToList();
             var archive = PaperMaterialsArchive.Build(ExamId, targetVersion, files);
             var archiveSha256 = Convert.ToHexString(SHA256.HashData(archive));
             if (tamperArchive)
@@ -329,6 +406,10 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
 
             await command.ExecuteNonQueryAsync();
         }
+
+        public Task<IReadOnlyList<Exam.Contracts.ServiceManagement.StartupCheckResult>> RecoveryAsync() =>
+            new Exam.Infrastructure.ServiceManagement.PostgresRecoveryReadinessProbe(_source, new Unwrapper(_certificate))
+                .RunAsync(new("synthetic-server", "node-a", "127.0.0.1", 8443, "synthetic", false, 1), default);
 
         private PostgresBundlePublicationService Service()
         {
