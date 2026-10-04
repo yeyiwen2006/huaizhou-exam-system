@@ -98,6 +98,9 @@ internal sealed class SyntheticPublicationClient : IExamPublicationClient, IDisp
     public bool NoRecipients { get; set; }
     public List<UploadExamBundleRequest> Requests { get; } = [];
     public List<byte[]> Ciphertexts { get; } = [];
+
+    /// <summary>源材料归档的密文（逐次上传）；明文归档不在表单里，这一点也要能被断言。</summary>
+    public List<byte[]> MaterialsCiphertexts { get; } = [];
     public Func<ExamVersionSnapshot, Task<ExamVersionSnapshot>>? OnUpload { get; set; }
     public Action? OnDetail { get; set; }
     public SyntheticPublicationClient(SyntheticImportFixture fixture)
@@ -117,13 +120,29 @@ internal sealed class SyntheticPublicationClient : IExamPublicationClient, IDisp
     { ct.ThrowIfCancellationRequested(); OnDetail?.Invoke(); return Task.FromResult(Detail); }
     public Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default) =>
         Task.FromResult(new PublicationRecipients(NoRecipients ? [] : [new("node-a", Convert.ToBase64String(_certificate.RawData))]));
+    /// <summary>上一已发布版本的源材料归档（修订用例按需提供）；为空表示服务器没有归档。</summary>
+    public byte[]? PreviousMaterialsArchive { get; set; }
+
+    public Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (PreviousMaterialsArchive is null)
+        {
+            throw new Exam.Infrastructure.Packaging.ExamPublicationApiException("MATERIALS_NOT_FOUND",
+                $"服务器没有版本 {paperVersion} 的源材料归档。", System.Net.HttpStatusCode.NotFound);
+        }
+
+        return Task.FromResult(PreviousMaterialsArchive);
+    }
+
     public async Task<ExamVersionSnapshot> UploadPublicationAsync(string examId, UploadExamBundleRequest upload,
-        string encryptedPath, CancellationToken ct = default)
+        string encryptedPath, string materialsPath, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         Uploads++;
         Requests.Add(upload);
         Ciphertexts.Add(await File.ReadAllBytesAsync(encryptedPath, ct));
+        MaterialsCiphertexts.Add(await File.ReadAllBytesAsync(materialsPath, ct));
         var publication = upload.Publication;
         var structure = Exam.Domain.Scoring.ImportedGradingRules.Create(publication.ManifestJson, publication.AnswerKeyJson).Structure;
         Current = Current with

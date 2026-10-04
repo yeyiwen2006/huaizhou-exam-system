@@ -16,7 +16,7 @@ internal static partial class ExamCli
     private static async Task<int> RunImportAsync(string action, string packageRoot, string[] arguments,
         CancellationToken cancellationToken)
     {
-        if (action is "preview" or "publish")
+        if (action is "preview" or "publish" or "materials")
         {
             return await RunImportRemoteAsync(action, packageRoot, arguments, cancellationToken);
         }

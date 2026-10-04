@@ -150,6 +150,8 @@ public sealed class ExamImportWorkflowTests
         using var fixture = new SourceFixture();
         var encrypted = Path.Combine(fixture.Root, "synthetic.enc");
         await File.WriteAllBytesAsync(encrypted, [1, 2, 3, 4]);
+        var materials = Path.Combine(fixture.Root, "synthetic-materials.enc");
+        await File.WriteAllBytesAsync(materials, [5, 6, 7, 8]);
         string? transmitted = null;
         using var handler = new PublicationHandler(request =>
         {
@@ -170,9 +172,11 @@ public sealed class ExamImportWorkflowTests
             new PublicationPackageEnvelope("synthetic-resource", 1, 4096, "synthetic-nonce",
                 new Dictionary<string, string>(), new Dictionary<string, string>()));
         await Assert.ThrowsAsync<AdminApiException>(() =>
-            api.UploadPublicationAsync("synthetic-exam-1", upload, encrypted));
+            api.UploadPublicationAsync("synthetic-exam-1", upload, encrypted, materials));
         Assert.Contains("name=metadata", transmitted!, StringComparison.Ordinal);
         Assert.Contains("name=package", transmitted!, StringComparison.Ordinal);
+        // 源材料归档是第二份密文：表单里只允许出现密文，明文题目与答案不得进入临时缓冲。
+        Assert.Contains("name=materials", transmitted!, StringComparison.Ordinal);
         Assert.Contains("synthetic-request", transmitted!, StringComparison.Ordinal);
     }
 
@@ -273,6 +277,26 @@ public sealed class ExamImportWorkflowTests
         Assert.False(System.IO.Directory.Exists(oldRoot));
     }
 
+    [Theory]
+    [InlineData("reason")]
+    [InlineData("changed-questions")]
+    public async Task ChangingRevisionDetailsInvalidatesTheCheckedPreview(string field)
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory);
+        using var vm = new ExamImportViewModel(api, service: service);
+        vm.SetCurrentExam(Summary("synthetic-exam-1"));
+        vm.SourcePath = fixture.Directory;
+        await vm.CheckAsync();
+        Assert.True(vm.CanPublish);
+        if (field == "reason") vm.PublishReason = "new reason";
+        else vm.ChangedQuestionsText = "q2";
+        Assert.False(vm.CanPublish);
+        Assert.Empty(vm.Questions);
+        Assert.Equal(0, service.PublishCalls);
+    }
+
     private static ExamSummary Summary(string examId) => new(examId, "合成考试", DateTimeOffset.UtcNow,
         DateTimeOffset.UtcNow.AddHours(1), ExamLifecycle.Scheduled, false, false, 0, 0, 1);
 
@@ -296,7 +320,8 @@ public sealed class ExamImportWorkflowTests
         public ExamVersionSnapshot? LastResult { get; private set; }
         public PreparedExamImport? LastPrepared { get; private set; }
         public int PublishCalls { get; private set; }
-        public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default)
+        public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default,
+            string? reason = null, IReadOnlyList<string>? changedQuestions = null)
         {
             if (FailNextCheck) throw new InvalidDataException("合成错误包");
             var workspace = await ExamImportWorkspace.CreateAsync(source, ct);
@@ -307,7 +332,8 @@ public sealed class ExamImportWorkflowTests
                 new Dictionary<string, ParticipantVersionStatus>());
             return LastPrepared = new PreparedExamImport(workspace, manifest, "{}", "{}", version,
                 new Dictionary<string, TeXCompileResult>(),
-                [new ImportPreviewQuestion("q-1", 1, "合成科目", "合成题组", "single", "1", "A、B", "synthetic.pdf")], selected);
+                [new ImportPreviewQuestion("q-1", 1, "合成科目", "合成题组", "single", "1", "A、B", "synthetic.pdf")],
+                selected, ImportPipeline.FirstImportReason, ["q-1"], []);
         }
         public async Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default)
         {

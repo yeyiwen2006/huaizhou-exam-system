@@ -157,6 +157,9 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<PostgresExamVersioningService>();
         services.AddSingleton<IExamVersioningService>(provider=>provider.GetRequiredService<PostgresExamVersioningService>());
         services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresBundlePublicationService>();
+        // C05 源材料归档：按 (考试, 试卷版本) 保存与取回；校验器在进入发布事务之前完成核对。
+        services.AddSingleton<Exam.Infrastructure.Postgres.Resources.PostgresPaperMaterialStore>();
+        services.AddSingleton<Exam.Infrastructure.Packaging.PaperMaterialsVerifier>();
         services.AddSingleton<PostgresScheduleProcessor>();
         services.AddSingleton<PostgresScheduleWorker>();
         services.AddHostedService<RecoveryGatedWorker<PostgresScheduleWorker>>();

@@ -4,6 +4,7 @@ using Exam.Contracts.Administration;
 using Exam.Contracts.Resources;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Packaging;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
@@ -13,7 +14,7 @@ namespace Exam.Infrastructure.Postgres.Administration;
 /// <summary>不能把调用方声明的“已编译/已加密”当作事实；解密验证当前节点真实可用的学生包后才整体发布。</summary>
 public sealed partial class PostgresBundlePublicationService(PostgresExamVersioningService versions,
     PostgresVersionedResourceStore resources,IPackageKeyUnwrapper unwrapper,ManagedNodeEncryptionPolicy policy,
-    IPublicationCertificateProvider? certificates=null)
+    PaperMaterialsVerifier materials,IPublicationCertificateProvider? certificates=null)
 {
     public async Task<VersioningResult<ExamVersionSnapshot>> PublishAsync(string examId,
         PublishExamBundleApiRequest request,string actor,CancellationToken ct=default)

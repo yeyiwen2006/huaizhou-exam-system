@@ -18,6 +18,7 @@ using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Scoring;
+using Exam.Infrastructure.Packaging;
 using Exam.Infrastructure.Postgres.Administration;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Postgres.Scoring;
@@ -128,7 +129,8 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
         using var f=await Fixture.Create(database.DataSource);
         Assert.False((await f.Service.PublishAsync("other-exam",f.Api,"synthetic-operator")).Succeeded);
         var policy=new ManagedNodeEncryptionPolicy(new HashSet<string>(["node-a","missing-node"],StringComparer.Ordinal));
-        var service=new PostgresBundlePublicationService(f.Versions,new(database.DataSource,policy),new TestUnwrapper(f.Certificate),policy);
+        var service=new PostgresBundlePublicationService(f.Versions,new(database.DataSource,policy),new TestUnwrapper(f.Certificate),policy,
+            new PaperMaterialsVerifier(new TestUnwrapper(f.Certificate),policy,new PostgresPaperMaterialStore(database.DataSource)));
         Assert.Equal(VersioningErrorCode.PublicationNotReady,(await service.PublishAsync(f.ExamId,f.Api,"synthetic-operator")).ErrorCode);
         await f.AssertUnpublished();
     }
@@ -139,11 +141,11 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
         var recipients=f.Service.GetRecipients();var recipient=Assert.Single(recipients.Recipients);
         using(var publicOnly=X509CertificateLoader.LoadCertificate(Convert.FromBase64String(recipient.CertificateDerBase64)))
         {Assert.False(publicOnly.HasPrivateKey);Assert.Equal(f.Certificate.Thumbprint,publicOnly.Thumbprint);}
-        var result=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload,f.Resource.EncryptedContent,"synthetic-operator");
+        var result=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload,f.Resource.EncryptedContent,f.MaterialsCipher,"synthetic-operator");
         Assert.True(result.Succeeded,result.Error);Assert.Equal(1,result.Value!.Versions.GradingVersion);
         var stored=await new PostgresVersionedResourceStore(database.DataSource).FindByIdAsync(f.Resource.ResourceId);
         Assert.NotNull(stored);Assert.NotEqual(f.Resource.Envelope.WrappedKeys["node-a"],stored.Envelope.WrappedKeys["node-a"]);
-        var replay=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload,f.Resource.EncryptedContent,"synthetic-operator");
+        var replay=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload,f.Resource.EncryptedContent,f.MaterialsCipher,"synthetic-operator");
         Assert.True(replay.Succeeded,replay.Error);Assert.Equal(3L,await f.Scalar("SELECT count(*) FROM exam.version_events WHERE exam_id=$1",f.ExamId));
         using var input=new MemoryStream(stored.EncryptedContent);using var plaintext=new MemoryStream();
         await new PackageEncryptionService().DecryptAsync(input,plaintext,stored.Envelope,"node-a",f.Certificate);
@@ -168,6 +170,7 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
         {
             body.Add(new StringContent(JsonSerializer.Serialize(f.Upload,JsonDefaults.Create()),Encoding.UTF8,"application/json"),"metadata");
             body.Add(new ByteArrayContent(f.Resource.EncryptedContent),"package","synthetic.hxp");
+            body.Add(new ByteArrayContent(f.MaterialsCipher),"materials","synthetic-materials.hxp");
             var response=await client.PostAsync($"/api/v1/exams/{f.ExamId}/publications/upload",body);
             var text=await response.Content.ReadAsStringAsync();Assert.True(response.StatusCode==HttpStatusCode.OK,text);
             var envelope=JsonSerializer.Deserialize<ApiEnvelope<ExamVersionSnapshot>>(text,JsonDefaults.Create());
@@ -176,7 +179,8 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
         using(var invalid=new MultipartFormDataContent())
         {
             invalid.Add(new StringContent(JsonSerializer.Serialize(f.Upload,JsonDefaults.Create()),Encoding.UTF8,"application/json"),"metadata");
-            invalid.Add(new ByteArrayContent([1,2,3]),"package","one.hxp");invalid.Add(new ByteArrayContent([1]),"unexpected","two.hxp");
+            invalid.Add(new ByteArrayContent([1,2,3]),"package","one.hxp");invalid.Add(new ByteArrayContent([1]),"materials","two.hxp");
+            invalid.Add(new ByteArrayContent([1]),"unexpected","three.hxp");
             Assert.Equal(HttpStatusCode.BadRequest,(await client.PostAsync($"/api/v1/exams/{f.ExamId}/publications/upload",invalid)).StatusCode);
         }
     }
@@ -184,9 +188,11 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
     public async Task UploadedBundle_WithSecondVersionConflictLeavesNoStoredResource()
     {
         using var f=await Fixture.Create(database.DataSource,persistResource:false);
-        var result=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload with{Publication=f.Api with{ExpectedGradingVersion=99}},f.Resource.EncryptedContent,"synthetic-operator");
+        var result=await f.Service.PublishUploadedAsync(f.ExamId,f.Upload with{Publication=f.Api with{ExpectedGradingVersion=99}},f.Resource.EncryptedContent,f.MaterialsCipher,"synthetic-operator");
         Assert.Equal(VersioningErrorCode.VersionConflict,result.ErrorCode);await f.AssertUnpublished();
         Assert.Null(await new PostgresVersionedResourceStore(database.DataSource).FindByIdAsync(f.Resource.ResourceId));
+        // 源材料归档与版本同一事务：冲突时归档行同样不得留下。
+        Assert.Null(await new PostgresPaperMaterialStore(database.DataSource).FindAsync(f.ExamId,1));
     }
     private sealed class PublicCertificateProvider(X509Certificate2 certificate):IPublicationCertificateProvider
     {
@@ -194,17 +200,23 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
     }
 
     private sealed class Fixture(NpgsqlDataSource source,X509Certificate2 certificate,string examId,
-        VersionedEncryptedResource resource,PublishExamBundleApiRequest api,PublishExamBundleRequest trusted):IDisposable
+        VersionedEncryptedResource resource,PublishExamBundleApiRequest api,PublishExamBundleRequest trusted,
+        byte[] materialsCipher,EncryptedPackageEnvelope materialsEnvelope):IDisposable
     {
+        public byte[] MaterialsCipher=>materialsCipher;
+        public EncryptedPackageEnvelope MaterialsEnvelope=>materialsEnvelope;
         public string ExamId=>examId;
         public X509Certificate2 Certificate=>certificate;
         public VersionedEncryptedResource Resource=>resource;
         public PublishExamBundleApiRequest Api=>api;
         public PublishExamBundleRequest Trusted=>trusted;
         public PostgresExamVersioningService Versions{get;}=new(source);
-        public PostgresBundlePublicationService Service=>new(Versions,new(source,Policy),new TestUnwrapper(certificate),Policy,new PublicCertificateProvider(certificate));
+        public PaperMaterialsVerifier Verifier=>new(new TestUnwrapper(certificate),Policy,new PostgresPaperMaterialStore(source));
+        public PostgresBundlePublicationService Service=>new(Versions,new(source,Policy),new TestUnwrapper(certificate),Policy,Verifier,new PublicCertificateProvider(certificate));
         public UploadExamBundleRequest Upload=>new(Api,new(Resource.Envelope.PackageId,Resource.Envelope.PaperVersion,
-            Resource.Envelope.ChunkSize,Resource.Envelope.NoncePrefix,Resource.Envelope.WrappedKeys,Resource.Envelope.CertificateThumbprints));
+            Resource.Envelope.ChunkSize,Resource.Envelope.NoncePrefix,Resource.Envelope.WrappedKeys,Resource.Envelope.CertificateThumbprints),
+            new(MaterialsEnvelope.PackageId,MaterialsEnvelope.PaperVersion,MaterialsEnvelope.ChunkSize,
+                MaterialsEnvelope.NoncePrefix,MaterialsEnvelope.WrappedKeys,MaterialsEnvelope.CertificateThumbprints));
         private static readonly ManagedNodeEncryptionPolicy Policy=new(new HashSet<string>(["node-a"],StringComparer.Ordinal));
         public void Dispose()=>certificate.Dispose();
         public async Task AssertUnpublished()
@@ -253,9 +265,22 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
             var cipher=encrypted.ToArray();if(tamper)cipher[^1]^=1;
             var resource=new VersionedEncryptedResource(artifact,exam,"paper-package",1,cipher,envelope,now,"synthetic-operator");
             if(persistResource)await new PostgresVersionedResourceStore(source,Policy).SaveAsync(resource);
-            var id=Guid.NewGuid().ToString("N");var api=new PublishExamBundleApiRequest(id,0,0,artifact,manifestJson,keyJson,[],"合成整体发布测试",true);
+            // 源材料归档：清单、独立答案与题目源文件，按同一受管公钥加密后随发布一起提交。
+            var materialsArchive=PaperMaterialsArchive.Build(exam,1,
+            [
+                new("manifest.json",Encoding.UTF8.GetBytes(manifestJson)),
+                new("server-only/answer-key.json",Encoding.UTF8.GetBytes(keyJson)),
+                new("questions/合成整体发布测试_1.tex",Encoding.UTF8.GetBytes("\\documentclass{ctexart}\\begin{document}合成题 A B\\end{document}"))
+            ]);
+            using var materialsInput=new MemoryStream(materialsArchive,writable:false);using var materialsEncrypted=new MemoryStream();
+            var materialsEnvelope=await new PackageEncryptionService(4096,Policy).EncryptAsync(
+                materialsInput,materialsEncrypted,artifact+"-materials",1,[new("node-a",cert)]);
+            var materialsCipher=materialsEncrypted.ToArray();
+            var materialsSha256=Convert.ToHexString(SHA256.HashData(materialsArchive)).ToLowerInvariant();
+            var id=Guid.NewGuid().ToString("N");var api=new PublishExamBundleApiRequest(id,0,0,artifact,manifestJson,keyJson,[],"合成整体发布测试",true,materialsSha256);
             var trusted=new PublishExamBundleRequest(exam,id,0,0,artifact,Convert.ToHexString(SHA256.HashData(payload)),manifestJson,keyJson,[],"synthetic-operator","合成整体发布测试");
-            CryptographicOperations.ZeroMemory(payload);return new(source,cert,exam,resource,api,trusted);
+            CryptographicOperations.ZeroMemory(payload);
+            return new(source,cert,exam,resource,api,trusted,materialsCipher,materialsEnvelope);
         }
         // This is a deterministic one-page synthetic PDF for package integrity tests, not an asserted XeLaTeX compilation.
         private static byte[] MinimalPdf()

@@ -70,15 +70,32 @@ GET `/exams/{examId}/monitoring` 返回 `MonitoringSnapshot`，可按试场和�
 |---|---|
 | GET `/publications/recipients` | 取得受管节点公开证书 DER，不含私钥 |
 | POST `/exams/{examId}/publications/upload` | multipart 加密学生包与 `UploadExamBundleRequest` |
-| POST `/exams/{examId}/publications` | 发布已经登记的加密资源，`PublishExamBundleApiRequest` |
+| POST `/exams/{examId}/publications` | 发布已经登记的加密资源，`PublishExamBundleApiRequest`（不带源材料归档，见下） |
+| GET `/exams/{examId}/paper-materials?version=N` | 按试卷版本取回源材料归档（考务会话），返回 ZIP 与归档哈希 |
 
-上传表单恰有一个 `metadata` 字段和一个名为 `package` 的加密文件。不上传未加密学生 ZIP；临时文件缓冲只涉及密文。`metadata.Publication` 包含清单、独立答案、期望试卷及规则版本、变更题目、原因和实际预览确认；`metadata.Envelope` 是密钥信封。操作者仍从考务登录取得。使用现有服务配置中的受管节点证书，客户端不生成、替换或上传服务器私钥。
+上传表单有一个 `metadata` 字段和**两份密文**：`package`（加密学生包）与 `materials`（加密源材料归档，
+见 [逐题导入包规范](import-package-spec.md) 第 9 节）。源材料归档里含独立答案，因此和包一样必须先加密再上传——
+不上传任何明文学生 ZIP、题目源文件或答案文件，临时文件缓冲只涉及密文。`metadata.Publication` 包含清单、独立答案、期望试卷及规则版本、变更题目、原因和实际预览确认；`metadata.Envelope` 是密钥信封。操作者仍从考务登录取得。使用现有服务配置中的受管节点证书，客户端不生成、替换或上传服务器私钥。
 
 服务器不信任调用方声称“已编译、已加密、可供所有节点解锁”。它会实际解密验证学生包、显示清单及选项定位，核对试题结构、独立答案及满分规则，并使用已配置公开证书重新包装各受管节点的数据密钥。无实际预览确认、错误版本、遗漏坐标、被篡改密文或证书不可用时均不发布。
 
 上传资源、试卷与规则两个有效版本、原有 `paper.publish` / `grading.publish` 事件、运行投影和幂等回执在同一数据库事务提交。第二阶段失败不会留下第一阶段生效或资源半保存。沿用既有重算与报表读取链路，不能分别调用两个旧发布入口并把一半成功当作整体成功。
 
 请求取消发生在提交前不会激活新版本；网络在提交附近断开时，客户端不能假定失败，应保留同一请求号重试或查询当前版本。重复提交不重复发布或重算。受管节点私钥、原始题目、独立答案、解锁材料不进入回执、日志或仓库样例。
+
+`metadata.Publication.MaterialsSha256` 是**明文归档**的 SHA-256，服务器按收到的字节重算并比对；
+它同时进入发布请求指纹，因此同一请求号重试但材料内容不同会被判为幂等冲突而不是被接受。
+归档与版本在**同一事务**提交：不存在「版本发布了但没有归档」或反之的半套状态。
+
+开考后修订时 `metadata.Publication.ChangedQuestionIds` 由服务器按上一已发布版本的逐题摘要核对：
+漏报实际变更的题（`CHANGED_QUESTION_IDS_MISSING`）与把未变的题报成变更（`CHANGED_QUESTION_IDS_UNEXPECTED`）
+都拒绝；材料没有任何内容变化时拒绝走试卷修订（`NO_CONTENT_CHANGE`，只改答案请用规则修订入口）；
+上一版本没有归档时失败关闭（`MATERIALS_BASELINE_MISSING`）。归档不可读、超限或与自身清单不符报
+`MATERIALS_ARCHIVE_INVALID`，格式版本不被支持报 `MATERIALS_FORMAT_UNSUPPORTED`。
+
+取回端点只接受**考务登录会话**（不是设备凭据路由），响应带 `X-Exam-Materials-Sha256`、
+`X-Exam-Materials-File-Count` 与服务器身份头，`Cache-Control: no-store`，内容按流返回。
+归档含独立答案，属敏感出口：调用方应只在需要继续修题时取回，并遵守既有的材料本地保存约定。
 
 ## CLI
 

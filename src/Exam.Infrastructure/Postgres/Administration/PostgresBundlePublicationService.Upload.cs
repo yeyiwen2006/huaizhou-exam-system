@@ -21,9 +21,10 @@ public sealed partial class PostgresBundlePublicationService
     }
 
     public async Task<VersioningResult<ExamVersionSnapshot>> PublishUploadedAsync(string examId,UploadExamBundleRequest upload,
-        byte[] encryptedContent,string actor,CancellationToken ct=default)
+        byte[] encryptedContent,byte[] materialsContent,string actor,CancellationToken ct=default)
     {
         ArgumentNullException.ThrowIfNull(upload);ArgumentNullException.ThrowIfNull(encryptedContent);
+        ArgumentNullException.ThrowIfNull(materialsContent);
         var request=upload.Publication;var envelope=upload.Envelope;
         if(request is null||envelope is null||!request.PreviewApproved||request.ExpectedPaperVersion is <0 or long.MaxValue||
            request.ExpectedGradingVersion<0||string.IsNullOrWhiteSpace(request.ResourceId)||
@@ -42,6 +43,11 @@ public sealed partial class PostgresBundlePublicationService
             DateTimeOffset.UtcNow,actor);
         var verified=await VerifyResourceAsync(resource,rules,ct);
         if(verified.Error is not null)return Fail(VersioningErrorCode.PublicationNotReady,verified.Error);
+        // 源材料归档与声明变更题号的核对：解密、比对声明哈希、逐题摘要、与上一版本基线比对。
+        // 全部在进入发布事务之前完成——不在持有考试流锁时做 IO 与哈希。
+        var materialsVerdict=await materials.VerifyAsync(examId,request,upload.MaterialsEnvelope,materialsContent,ct);
+        if(!materialsVerdict.Accepted)
+            return Fail(materialsVerdict.ErrorCode,materialsVerdict.Message??"源材料归档或变更题号声明未通过核对。");
         byte[]? dataKey=null;
         try
         {
@@ -63,7 +69,10 @@ public sealed partial class PostgresBundlePublicationService
         catch(CryptographicException){return Fail(VersioningErrorCode.PublicationNotReady,"受管节点公开证书不可用，未发布或保存半份试卷；请核对发布证书配置。");}
         finally{if(dataKey is not null)CryptographicOperations.ZeroMemory(dataKey);}
         ct.ThrowIfCancellationRequested();
+        // 归档行与学生包明文哈希一起入库：两者来自同一次发布，可相互印证。
+        var materialsRow=materialsVerdict.ToRow(verified.ContentHash!,actor,DateTimeOffset.UtcNow);
         return versions.PublishBundle(new(examId,request.RequestId,request.ExpectedPaperVersion,request.ExpectedGradingVersion,
-            request.ResourceId,verified.ContentHash!,request.ManifestJson,request.AnswerKeyJson,request.ChangedQuestionIds,actor,request.Reason),resource);
+            request.ResourceId,verified.ContentHash!,request.ManifestJson,request.AnswerKeyJson,request.ChangedQuestionIds,actor,request.Reason,
+            request.MaterialsSha256),resource,materialsRow);
     }
 }
