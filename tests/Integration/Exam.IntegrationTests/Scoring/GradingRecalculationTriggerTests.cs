@@ -53,14 +53,33 @@ public sealed class GradingRecalculationTriggerTests
     }
 
     [Fact]
-    public async Task Trigger_PropagatesCancellation()
+    public async Task Trigger_CancellationCannotChangeAnAlreadyCommittedPublicationIntoFailure()
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var trigger = Trigger(Rules(version: 1), new RecordingQueue());
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            trigger.TryTriggerAsync("synthetic-exam", cancellation.Token));
+        Assert.Null(await trigger.TryTriggerAsync("synthetic-exam", cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Trigger_HasABoundedSchedulingAttemptEvenWhenTheScopeIsSlow()
+    {
+        var scope = new SlowScope();
+        var trigger = new GradingRecalculationTrigger(new FakeInputs(Rules(1)),
+            new RecalculationScheduler(scope, new RecordingQueue()), NullLogger<GradingRecalculationTrigger>.Instance);
+        Assert.Null(await trigger.TryTriggerAsync("synthetic-exam").WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.True(scope.Cancelled);
+    }
+
+    private sealed class SlowScope : IGradingScope
+    {
+        public bool Cancelled { get; private set; }
+        public async ValueTask<IReadOnlyList<SubmissionGradingState>> ListStatesAsync(string examId, CancellationToken ct = default)
+        {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); return []; }
+            finally { Cancelled = ct.IsCancellationRequested; }
+        }
     }
 
     private static GradingRecalculationTrigger Trigger(PublishedGradingRules? rules, RecordingQueue queue) =>

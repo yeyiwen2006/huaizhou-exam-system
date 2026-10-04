@@ -21,6 +21,9 @@ public sealed partial class HttpExamPublicationClient : IGradingRevisionClient
             $"api/v1/versioning/exams/{Uri.EscapeDataString(request.ExamId)}/grading-publications",
             JsonContent.Create(request, options: _json), ct);
 
+    public Task<GradingMaterialSnapshot> GetGradingMaterialsAsync(string examId, CancellationToken ct = default) =>
+        SendAsync<GradingMaterialSnapshot>(HttpMethod.Get, $"api/v1/exams/{Uri.EscapeDataString(examId)}/grading-materials", null, ct);
+
     public Task<GradingStatusReport> GetGradingStatusAsync(string examId, CancellationToken ct = default) =>
         SendAsync<GradingStatusReport>(HttpMethod.Get, $"api/v1/grading/{Uri.EscapeDataString(examId)}/status", null, ct);
 }

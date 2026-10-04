@@ -1,3 +1,4 @@
+using Exam.Infrastructure.Packaging;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -62,7 +63,7 @@ public sealed class GradingRevisionViewModelTests
             if (path.EndsWith("/grading-publications", StringComparison.Ordinal))
             {
                 sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync());
-                return Reply(Published(gradingVersion: 2));
+                return Reply(Published(2, sent!["ruleSetId"]!.GetValue<string>()));
             }
 
             if (path.EndsWith("/status", StringComparison.Ordinal)) return Reply(Status(ready: false));
@@ -71,8 +72,9 @@ public sealed class GradingRevisionViewModelTests
         });
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
-        var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root)) { ExamId = ExamId, Reason = "合成规则修订" };
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root)) { ConfirmPublicationAsync = _ => Task.FromResult(true), ExamId = ExamId, Reason = "合成规则修订" };
         await vm.SelectPackageAsync();
+        await vm.CheckAsync();
 
         await vm.PublishAsync();
 
@@ -101,7 +103,7 @@ public sealed class GradingRevisionViewModelTests
         api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
         using var package = new MaterialPackage();
         var dialog = new FakeDialog(null);
-        var vm = new GradingRevisionViewModel(api, dialog) { ExamId = ExamId };
+        using var vm = new GradingRevisionViewModel(api, dialog) { ExamId = ExamId };
 
         await vm.PublishAsync();
         Assert.Equal(0, calls);
@@ -132,7 +134,7 @@ public sealed class GradingRevisionViewModelTests
         try
         {
             File.WriteAllText(Path.Combine(incomplete, "manifest.json"), "{}", new UTF8Encoding(false));
-            var vm = new GradingRevisionViewModel(api, new FakeDialog(incomplete)) { ExamId = ExamId, Reason = "合成" };
+            using var vm = new GradingRevisionViewModel(api, new FakeDialog(incomplete)) { ConfirmPublicationAsync = _ => Task.FromResult(true), ExamId = ExamId, Reason = "合成" };
             await vm.SelectPackageAsync();
 
             await vm.PublishAsync();
@@ -153,7 +155,7 @@ public sealed class GradingRevisionViewModelTests
         using var handler = new Handler((request, _) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (path.EndsWith("/grading-publications", StringComparison.Ordinal)) return Task.FromResult(Reply(Published(2)));
+            if (path.EndsWith("/grading-publications", StringComparison.Ordinal)) return PublishedReplyAsync(request);
             if (path.EndsWith("/status", StringComparison.Ordinal))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                 {
@@ -164,8 +166,9 @@ public sealed class GradingRevisionViewModelTests
         });
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
-        var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root)) { ExamId = ExamId, Reason = "合成规则修订" };
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root)) { ConfirmPublicationAsync = _ => Task.FromResult(true), ExamId = ExamId, Reason = "合成规则修订" };
         await vm.SelectPackageAsync();
+        await vm.CheckAsync();
 
         await vm.PublishAsync();
 
@@ -180,7 +183,7 @@ public sealed class GradingRevisionViewModelTests
         using var handler = new Handler((_, _) => Task.FromResult(Reply(Status(ready: true))));
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
-        var vm = new GradingRevisionViewModel(api, new FakeDialog(null)) { ExamId = ExamId };
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(null)) { ExamId = ExamId };
         vm.Reason = "合成";
         _ = vm.SelectPackageAsync();
 
@@ -191,17 +194,147 @@ public sealed class GradingRevisionViewModelTests
         Assert.Equal("尚未核对重算状态。", vm.RecalculationText);
     }
 
+    [Fact]
+    public async Task LostReceiptReplaysExactlyTheCheckedRequestDespiteNewProjectionAndChangedLocalFiles()
+    {
+        using var package = new MaterialPackage();
+        var bodies = new List<string>();
+        var committed = false;
+        var ruleSet = "initial-rules";
+        using var handler = new Handler(async (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/grading-publications", StringComparison.Ordinal))
+            {
+                var body = await request.Content!.ReadAsStringAsync(); bodies.Add(body);
+                ruleSet = JsonNode.Parse(body)!["ruleSetId"]!.GetValue<string>(); committed = true;
+                if (bodies.Count == 1) throw new HttpRequestException("synthetic lost durable receipt");
+                return Reply(Published(2, ruleSet));
+            }
+            return request.RequestUri.AbsolutePath.EndsWith("/status", StringComparison.Ordinal)
+                ? Reply(Status(true)) : Reply(committed ? Published(2, ruleSet) : Snapshot());
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root))
+        { ExamId = ExamId, Reason = "synthetic correction", ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        await vm.SelectPackageAsync(); await vm.CheckAsync();
+        Assert.Single(vm.Questions);
+        await vm.PublishAsync();
+        Assert.DoesNotContain("规则发布成功", vm.PublishedText);
+        Assert.False(vm.CanSelectPackage);
+        vm.Reason = "must not replace the frozen reason";
+        await File.WriteAllTextAsync(Path.Combine(package.Root, "server-only", "answer-key.json"), "invalid external edit");
+        await vm.CheckAsync();
+        await vm.PublishAsync();
+        Assert.Equal(2, bodies.Count);
+        Assert.Equal(bodies[0], bodies[1]);
+        Assert.Equal("synthetic correction", JsonNode.Parse(bodies[1])!["reason"]!.GetValue<string>());
+        Assert.Equal(1, JsonNode.Parse(bodies[1])!["expectedVersion"]!.GetValue<long>());
+        Assert.Contains("规则发布成功：规则版本 2", vm.PublishedText);
+        await vm.PublishAsync();
+        Assert.Equal(2, bodies.Count);
+    }
+
+    [Fact]
+    public async Task SavedGradingPreviewReplaysAcrossProcessesAndRejectsChangedAnswerFile()
+    {
+        using var package = new MaterialPackage();
+        var bodies = new List<string>();
+        using var handler = new Handler(async (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/grading-publications", StringComparison.Ordinal))
+            {
+                bodies.Add(await request.Content!.ReadAsStringAsync());
+                return Reply(Published(2, JsonNode.Parse(bodies[^1])!["ruleSetId"]!.GetValue<string>()));
+            }
+            return Reply(Snapshot());
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        var output = Path.Combine(package.Root, "checked");
+        using (var prepared = await PreparedGradingRevision.PrepareAsync(api, ExamId, package.Root, "synthetic"))
+            await prepared.ExportAsync(output);
+        using (var prepared = await PreparedGradingRevision.LoadAsync(output)) await prepared.PublishAsync(api);
+        using (var prepared = await PreparedGradingRevision.LoadAsync(output)) await prepared.PublishAsync(api);
+        Assert.Equal(2, bodies.Count); Assert.Equal(bodies[0], bodies[1]);
+        await File.AppendAllTextAsync(Path.Combine(output, "answer-key.json"), " ");
+        await Assert.ThrowsAsync<InvalidDataException>(() => PreparedGradingRevision.LoadAsync(output));
+        Assert.Equal(2, bodies.Count);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SwitchingExamDuringCheckOrConfirmationCannotPublishIntoTheNewExam(bool duringCheck)
+    {
+        using var package = new MaterialPackage();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var posts = 0;
+        using var handler = new Handler(async (request, _) =>
+        {
+            if (request.Method == HttpMethod.Post) { posts++; return await PublishedReplyAsync(request); }
+            if (duringCheck) { entered.TrySetResult(); await release.Task; }
+            return Reply(Snapshot());
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root))
+        { ExamId = ExamId, Reason = "synthetic", ConfirmPublicationAsync = async _ => { entered.TrySetResult(); await release.Task; return true; } };
+        await vm.SelectPackageAsync();
+        Task operation;
+        if (duringCheck) operation = vm.CheckAsync();
+        else { await vm.CheckAsync(); operation = vm.PublishAsync(); }
+        await entered.Task;
+        vm.ExamId = "other-exam";
+        release.SetResult(); await operation;
+        Assert.Equal(0, posts); Assert.Empty(vm.Questions);
+        Assert.Equal("尚未发布规则修订。", vm.PublishedText);
+    }
+
+    [Fact]
+    public async Task ConfirmationCancellationDoesNotPublishAndChangedReasonInvalidatesPreview()
+    {
+        using var package = new MaterialPackage(); var posts = 0;
+        using var handler = new Handler((request, _) => { if (request.Method == HttpMethod.Post) posts++; return Task.FromResult(Reply(Snapshot())); });
+        using var api = new AdminApiClient(handler); api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root))
+        { ExamId = ExamId, Reason = "synthetic", ConfirmPublicationAsync = _ => Task.FromResult(false) };
+        await vm.SelectPackageAsync(); await vm.CheckAsync(); await vm.PublishAsync();
+        Assert.Equal(0, posts); Assert.True(vm.CanPublish);
+        vm.Reason = "a different reason";
+        Assert.False(vm.CanPublish); Assert.Empty(vm.Questions);
+    }
+
+    [Fact]
+    public async Task WrongReceiptIsNotDisplayedAsSuccess()
+    {
+        using var package = new MaterialPackage();
+        using var handler = new Handler((request, _) => Task.FromResult(Reply(request.Method == HttpMethod.Post ? Published(2, "wrong-rules") : Snapshot())));
+        using var api = new AdminApiClient(handler); api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root))
+        { ExamId = ExamId, Reason = "synthetic", ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        await vm.SelectPackageAsync(); await vm.CheckAsync(); await vm.PublishAsync();
+        Assert.DoesNotContain("规则发布成功", vm.PublishedText); Assert.False(vm.CanSelectPackage);
+    }
+
+    private static async Task<HttpResponseMessage> PublishedReplyAsync(HttpRequestMessage request)
+    {
+        var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!;
+        return Reply(Published(2, body["ruleSetId"]!.GetValue<string>()));
+    }
+
     private static ExamVersionSnapshot Snapshot() => new(ExamId, new VersionVector(1, 1, 1),
         new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2)), ExamLifecycle.Running,
         null, null,
-        new PaperPublicationInfo(1, "synthetic-artifact", new PaperStructure([]), [], DateTimeOffset.UtcNow,
-            "synthetic-operator", "首次导入并发布整套试卷"), null,
+        new PaperPublicationInfo(1, "synthetic-artifact", new PaperStructure([new("q-001", 1, "s", "g", "single", ["A", "B"])]), [], DateTimeOffset.UtcNow,
+            "synthetic-operator", "首次导入并发布整套试卷"), new(1, "initial-rules", DateTimeOffset.UtcNow, "synthetic-operator", "initial"),
         new Dictionary<string, ParticipantVersionStatus>());
 
-    private static ExamVersionSnapshot Published(long gradingVersion) => Snapshot() with
+    private static ExamVersionSnapshot Published(long gradingVersion, string ruleSetId = "rules-synthetic") => Snapshot() with
     {
         Versions = new VersionVector(1, 1, gradingVersion),
-        Grading = new GradingPublicationInfo(gradingVersion, "rules-synthetic", DateTimeOffset.UtcNow,
+        Grading = new GradingPublicationInfo(gradingVersion, ruleSetId, DateTimeOffset.UtcNow,
             "synthetic-operator", "合成规则修订")
     };
 

@@ -135,8 +135,17 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
         {
             if (Current(context))
             {
-                SetError(error);
-                if (prepared.PublicationAttempted) Status += " 发布结果尚未确认，保留同一预览重试，不重新读取版本。";
+                if (error is AdminApiException rejection && rejection.Code is "VERSION_CONFLICT" or "INVALID_INPUT" or "PUBLICATION_NOT_READY")
+                {
+                    if (ReferenceEquals(_pending, prepared)) { _pending = null; prepared.Dispose(); }
+                    Questions.Clear(); _completed = false;
+                    Status = $"服务器已明确拒绝本次修订（{rejection.Code}），未发布；请重新检查材料和版本。";
+                }
+                else
+                {
+                    SetError(error);
+                    if (prepared.PublicationAttempted) Status += " 发布结果尚未确认，保留同一预览重试，不重新读取版本。";
+                }
             }
         }
         finally { EndOperation(cancellation); IsBusy = false; }
@@ -156,7 +165,8 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
     {
         var report = await _api.GetGradingStatusAsync(exam, ct);
         if (!Current(context)) return;
-        if (report.ExamId != exam || _publishedVersion > 0 && (report.CurrentGradingVersion ?? 0) < _publishedVersion)
+        if (report.ExamId != exam || report.Readiness is { } readiness && readiness.TargetVersion != report.CurrentGradingVersion ||
+            _publishedVersion > 0 && (report.CurrentGradingVersion ?? 0) < _publishedVersion)
             throw new InvalidDataException("重算状态不属于本次考试或版本。");
         RecalculationText = Describe(report);
     }

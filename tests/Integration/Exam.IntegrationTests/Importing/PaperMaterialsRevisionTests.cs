@@ -266,6 +266,46 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
         finally { await isolated.DisposeAsync(); }
     }
 
+    [Fact]
+    public async Task LaterPaperRevisionCannotAtomicallyOverwriteAnIndependentlyCorrectedAnswer()
+    {
+        using var f = await Fixture.CreateAsync(database.DataSource);
+        Assert.True((await f.PublishAsync(1, MaterialFiles(f.ExamName), [])).Succeeded);
+        var corrected = new AnswerKeyFile(1, f.ExamId, [new("q1", 1, ["B"]), new("q2", 2, ["B"])]);
+        var answerJson = JsonSerializer.Serialize(corrected, ImportJson.Create());
+        var rules = f.Versions.PublishGradingRules(new(f.ExamId, 1, "corrected-rules", new(true,true,true),
+            "synthetic-operator", "correct independent answer", DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"),
+            f.ManifestJson, answerJson));
+        Assert.True(rules.Succeeded, rules.Error);
+        var rejected = await f.PublishAsync(2, MaterialFiles(f.ExamName, "edited question with stale answers"),
+            ["q1"], expectedGradingVersion: 2);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(VersioningErrorCode.VersionConflict, rejected.ErrorCode);
+        Assert.Contains("保留当前完整答案", rejected.Error);
+        var current = f.Versions.GetExam(f.ExamId).Value!;
+        Assert.Equal(1, current.Versions.PaperVersion);
+        Assert.Equal(2, current.Versions.GradingVersion);
+        Assert.Equal("corrected-rules", current.Grading!.RuleSetId);
+        Assert.Null(await f.Materials.FindAsync(f.ExamId, 2));
+        await using var count = database.DataSource.CreateCommand("SELECT count(*) FROM exam.versioned_resources WHERE exam_id=$1");
+        count.Parameters.AddWithValue(f.ExamId);
+        Assert.Equal(1L, (long)(await count.ExecuteScalarAsync())!);
+        var original = await f.Materials.FindAsync(f.ExamId, 1);
+        Assert.NotNull(original);
+        var working = PaperRevisionMaterials.WithCurrentRules(original.Archive,
+            new(f.ExamId, 1, 2, "corrected-rules", f.ManifestJson, answerJson), f.ExamId, 1, 2);
+        var extracted = PaperMaterialsArchive.Read(working).Materials!;
+        var before = PaperMaterialsArchive.Read(original.Archive).Materials!;
+        foreach (var path in before.Paths.Where(path => path != "manifest.json" && path != "server-only/answer-key.json"))
+            Assert.Equal(before.Read(path), extracted.Read(path));
+        Assert.True(PaperRevisionMaterials.EquivalentGrading(Encoding.UTF8.GetString(extracted.Read("manifest.json")),
+            Encoding.UTF8.GetString(extracted.Read("server-only/answer-key.json")), f.ManifestJson, answerJson));
+        Assert.Throws<InvalidDataException>(() => PaperRevisionMaterials.WithCurrentRules(original.Archive,
+            new(f.ExamId, 1, 3, "corrected-rules", f.ManifestJson, answerJson), f.ExamId, 1, 2));
+        Assert.Throws<InvalidDataException>(() => PaperRevisionMaterials.WithCurrentRules(original.Archive,
+            new("other-exam", 1, 2, "corrected-rules", f.ManifestJson, answerJson), f.ExamId, 1, 2));
+    }
+
     private static IReadOnlyList<KeyValuePair<string, string>> MaterialFiles(string examName,
         string questionOneStem = "题干一", string sharedStyle = "% 共享样式")
     {
@@ -351,7 +391,7 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
         /// <summary>按目标版本造齐三样东西并上传：学生包密文、源材料归档密文与发布请求。</summary>
         public async Task<VersioningResult<ExamVersionSnapshot>> PublishAsync(long targetVersion,
             IReadOnlyList<KeyValuePair<string, string>> materials, IReadOnlyList<string> declared,
-            bool tamperArchive = false, string? archiveFault = null)
+            bool tamperArchive = false, string? archiveFault = null, long? expectedGradingVersion = null)
         {
             // 归档内容 = 清单 + 独立答案 + 题目与共享资源；路径相对材料包根。
             var files = new List<KeyValuePair<string, byte[]>>
@@ -379,7 +419,7 @@ public sealed class PaperMaterialsRevisionTests(PostgresDatabaseFixture database
             var (packageCipher, packageEnvelope) = await EncryptAsync(StudentPackage(targetVersion), targetVersion, resourceId);
             var (materialsCipher, materialsEnvelope) = await EncryptAsync(archive, targetVersion, resourceId + "-materials");
             var request = new PublishExamBundleApiRequest(Guid.NewGuid().ToString("N"), targetVersion - 1,
-                targetVersion - 1, resourceId, ManifestJson, AnswerJson, declared,
+                expectedGradingVersion ?? targetVersion - 1, resourceId, ManifestJson, AnswerJson, declared,
                 "合成修订用例", true, archiveSha256);
             var upload = new UploadExamBundleRequest(request,
                 new(packageEnvelope.PackageId, packageEnvelope.PaperVersion, packageEnvelope.ChunkSize,

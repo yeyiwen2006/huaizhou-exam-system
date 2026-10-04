@@ -81,9 +81,11 @@ public static class AdministrationEndpoints
             .WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
 
         api.MapPost("/exams/{examId}/publications",async (string examId,PublishExamBundleApiRequest request,
-                [FromServices] PostgresBundlePublicationService service,HttpContext context,IConfiguration configuration,CancellationToken ct) =>
+                [FromServices] PostgresBundlePublicationService service,[FromServices] Exam.Server.Runtime.GradingRecalculationTrigger recalculation,
+                HttpContext context,IConfiguration configuration,CancellationToken ct) =>
         {
             var result=await service.PublishAsync(examId,request,Actor(context),ct);
+            if(result.Succeeded) await recalculation.TryTriggerAsync(examId,ct);
             return ApiEndpointResults.FromVersioning(context,configuration,request.RequestId,result);
         }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
         api.MapPublicationUploadApi();

@@ -127,7 +127,9 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
             var answerJson = await ExamImportWorkspace.ReadUtf8Async(answerPath, ct);
             (manifestJson, answerJson) = await Task.Run(() => BindPackageToSelectedExam(
                 manifestJson, answerJson, examId, selectedExam.Summary.Name), ct);
-            manifestJson = ImportCatalogBinding.Bind(manifestJson, answerJson, selectedExam.Settings);
+            if (!revision) manifestJson = ImportCatalogBinding.Bind(manifestJson, answerJson, selectedExam.Settings);
+            else if (!ImportedGradingRules.Create(manifestJson, answerJson).Matches(expected.Paper!.Structure))
+                throw new InvalidDataException("修订材料必须保持已发布试卷的题目与选项结构。");
             await File.WriteAllTextAsync(manifestPath, manifestJson, ct);
             await File.WriteAllTextAsync(answerPath, answerJson, ct);
             var manifest = JsonSerializer.Deserialize<ExamManifest>(manifestJson, ImportJson.Create())
@@ -369,6 +371,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                     current.Versions.PaperVersion != prepared.Expected.Versions.PaperVersion ||
                     detail.Summary.SettingsVersion != prepared.ExpectedSettingsVersion)
                     throw new InvalidOperationException("考试版本或设置已变化，请重新检查试题包，不能用旧预览发布。");
+                if (!prepared.IsRevision)
                 ImportCatalogBinding.RequireMatch(prepared.ManifestJson, prepared.AnswerJson, detail.Summary.Name, detail.Settings);
                 var recipients = await api.GetPublicationRecipientsAsync(ct);
                 EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);

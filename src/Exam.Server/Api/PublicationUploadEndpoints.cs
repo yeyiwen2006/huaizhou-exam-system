@@ -108,6 +108,31 @@ public static class PublicationUploadEndpoints
                 fileDownloadName:$"{examId}-materials-v{version}.zip",enableRangeProcessing:false);
         }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
 
+        // Complete answer material is operator-only and never part of grading status or student resources.
+        api.MapGet("/exams/{examId}/grading-materials", async (string examId,
+            [FromServices] Exam.Domain.Scoring.IGradingInputs inputs, HttpContext context,
+            IConfiguration configuration, CancellationToken ct) =>
+        {
+            _ = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
+            context.Response.Headers.CacheControl = "no-store";
+            if (inputs is not Exam.Infrastructure.Postgres.Scoring.PostgresGradingInputs stored)
+                return ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                    "PUBLICATION_NOT_READY", "当前计分源材料读取不可用。", StatusCodes.Status503ServiceUnavailable);
+            try
+            {
+                var source = await stored.LoadSourceAsync(examId, ct);
+                return source is null
+                    ? ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                        "MATERIALS_NOT_FOUND", "当前考试没有完整已发布的计分源材料。", StatusCodes.Status404NotFound)
+                    : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, source);
+            }
+            catch (Exception error) when (error is InvalidDataException or ArgumentException or JsonException)
+            {
+                return ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                    "PUBLICATION_NOT_READY", "当前规则源材料不可用，禁止返回旧版替代。", StatusCodes.Status503ServiceUnavailable);
+            }
+        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+
         return api;
     }
 

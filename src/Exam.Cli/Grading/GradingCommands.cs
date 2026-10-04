@@ -92,6 +92,7 @@ internal static partial class ExamCli
     {
         if (report.CurrentGradingVersion is not { } version) return "尚未发布任何计分规则：没有可核对的结果版本。";
         if (report.Readiness is not { } readiness) return $"已发布规则版本 {version}，但没有就绪结论。";
+        if (readiness.TargetVersion != version) throw new InvalidDataException("重算结论与当前规则版本不一致。");
         var scope = $"范围 {report.FinalSubmissionCount} 份最终答卷，已按版本 {version} 计分 {report.GradedAtCurrentVersion} 份。";
         return readiness.RecalculationReady ? $"结果就绪：规则版本 {version}，{scope}" :
             $"重算中：规则版本 {version}，{scope} 未完成 {readiness.Outstanding.Count} 份。重算期间旧报表不可查询或导出。";
