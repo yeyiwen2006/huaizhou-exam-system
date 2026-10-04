@@ -22,15 +22,17 @@ public sealed class GradingRecalculationTrigger(
     public async Task<RecalculationRun?> TryTriggerAsync(string examId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(3));
         try
         {
-            var published = await inputs.LoadRulesAsync(examId, cancellationToken);
+            var published = await inputs.LoadRulesAsync(examId, deadline.Token);
             if (published is null)
             {
                 return null;
             }
 
-            var run = await scheduler.RunOnceAsync(examId, published.GradingVersion, cancellationToken);
+            var run = await scheduler.RunOnceAsync(examId, published.GradingVersion, deadline.Token);
             if (run.Enqueued > 0)
             {
                 logger.LogInformation(
@@ -40,13 +42,16 @@ public sealed class GradingRecalculationTrigger(
 
             return run;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
-            throw;
+            // Publication is already committed. Its receipt must not turn into a failed mutation
+            // merely because this optional scheduling attempt is cancelled or times out.
+            logger.LogWarning("规则发布后的即时重算调度已中止，交给后台循环补偿；发布结果不受影响。");
+            return null;
         }
         catch (Exception error)
         {
-            logger.LogError(error, "规则发布后的重算调度失败；发布结果不受影响，交给后台重算循环补偿。");
+            logger.LogError("规则发布后的重算调度失败（{ErrorType}）；发布结果不受影响，交给后台重算循环补偿。", error.GetType().Name);
             return null;
         }
     }

@@ -87,7 +87,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
         Import.SetCurrentExam(exam);
-        GradingRevision.ExamId = exam?.ExamId ?? string.Empty;
+        GradingRevision.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
         Reports.ExamName = exam.Name;
         SelectedPage = SettingsPage;
@@ -170,6 +170,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         _api.ConfigurationChanged -= OnConfigurationChanged;
         Monitoring.Dispose();
         Import.Dispose();
+        GradingRevision.Dispose();
         Roster.Dispose();
         Activation.Dispose();
         Reports.Dispose();

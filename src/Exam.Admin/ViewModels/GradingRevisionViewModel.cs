@@ -1,266 +1,205 @@
+using System.Collections.ObjectModel;
 using System.IO;
-
+using System.Windows;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Grading;
-using Exam.Domain.Importing;
+using Exam.Infrastructure.Packaging;
 
 namespace Exam.Admin.ViewModels;
 
-/// <summary>
-/// 「只改答案与计分规则」入口：从**本地材料包**读清单与完整答案，复用既有规则发布端点提交
-/// （不重新编译、不组包）。发布提交后由服务器内部及时安排重算，后台循环补偿。
-///
-/// 「发布成功」与「成绩重算完」是两件事，分两行显示：发布成功只说明规则版本已切换；
-/// 重算中 / 结果就绪由计分状态读取给出。重算期间旧报表不可查询或导出（既有报表门）。
-/// </summary>
-public sealed class GradingRevisionViewModel : BindableBase
+/// <summary>Check an immutable rule snapshot, confirm it, and keep its request after an uncertain response.</summary>
+public sealed class GradingRevisionViewModel : BindableBase, IDisposable
 {
     private const string NoExamStatus = "请先在「全部考试」中打开一场考试，再改答案与计分规则。";
-
     private readonly AdminApiClient _api;
     private readonly IExamImportSourceDialog _dialog;
-    private string _examId = string.Empty;
-    private string _packagePath = string.Empty;
-    private string _reason = string.Empty;
-    private string _status = NoExamStatus;
-    private string _publishedText = "尚未发布规则修订。";
-    private string _recalculationText = "尚未核对重算状态。";
-    private bool _busy;
+    private string _examId = string.Empty, _packagePath = string.Empty, _reason = string.Empty;
+    private string _status = NoExamStatus, _publishedText = "尚未发布规则修订。", _recalculationText = "尚未核对重算状态。";
+    private bool _busy, _completed, _disposed;
+    private long _context, _publishedVersion;
+    private CancellationTokenSource? _cancellation;
+    private PreparedGradingRevision? _pending;
 
     public GradingRevisionViewModel(AdminApiClient api, IExamImportSourceDialog? dialog = null)
     {
-        _api = api;
-        _dialog = dialog ?? new FileDialogService();
-        SelectPackageCommand = new AsyncRelayCommand(SelectPackageAsync, onError: SetError);
-        PublishCommand = new AsyncRelayCommand(PublishAsync, onError: SetError);
-        RefreshStatusCommand = new AsyncRelayCommand(RefreshStatusAsync, onError: SetError);
+        _api = api; _dialog = dialog ?? new FileDialogService();
+        SelectPackageCommand = new AsyncRelayCommand(SelectPackageAsync, () => CanSelectPackage, SetError);
+        CheckCommand = new AsyncRelayCommand(CheckAsync, () => CanCheck, SetError);
+        PublishCommand = new AsyncRelayCommand(PublishAsync, () => CanPublish, SetError);
+        RefreshStatusCommand = new AsyncRelayCommand(RefreshStatusAsync, () => CanRefreshStatus, SetError);
+        _api.ConfigurationChanged += ConnectionChanged;
     }
 
-    /// <summary>由外壳在切换当前考试时设置；发布与状态读取都以它为准。</summary>
+    public Func<string, Task<bool>> ConfirmPublicationAsync { get; set; } = message => Task.FromResult(
+        MessageBox.Show(message, "确认答案与计分规则修订", MessageBoxButton.YesNo, MessageBoxImage.Warning,
+            MessageBoxResult.No) == MessageBoxResult.Yes);
+    public ObservableCollection<GradingRevisionQuestion> Questions { get; } = [];
     public string ExamId
     {
         get => _examId;
-        set
-        {
-            if (!SetProperty(ref _examId, value))
-            {
-                return;
-            }
-
-            // 换考试就是换发布对象：上一次的规则版本与状态结论都不能沿用。
-            PackagePath = string.Empty;
-            Status = string.IsNullOrWhiteSpace(value) ? NoExamStatus : "已选择考试；请选择材料包目录后发布规则修订。";
-            PublishedText = "尚未发布规则修订。";
-            RecalculationText = "尚未核对重算状态。";
-            RaiseCommandStates();
-        }
+        set { if (SetProperty(ref _examId, value)) ResetContext(); }
     }
-
-    public string PackagePath
-    {
-        get => _packagePath;
-        private set => SetProperty(ref _packagePath, value);
-    }
-
-    /// <summary>本次修改原因，随规则版本一起记录。</summary>
+    public string PackagePath { get => _packagePath; private set => SetProperty(ref _packagePath, value); }
     public string Reason
     {
         get => _reason;
-        set => SetProperty(ref _reason, value);
-    }
-
-    public string Status
-    {
-        get => _status;
-        private set => SetProperty(ref _status, value);
-    }
-
-    /// <summary>发布结果：规则版本与试卷版本。与重算状态分开显示。</summary>
-    public string PublishedText
-    {
-        get => _publishedText;
-        private set => SetProperty(ref _publishedText, value);
-    }
-
-    /// <summary>重算状态：重算中 / 结果就绪（来自计分状态读取，每次都重读）。</summary>
-    public string RecalculationText
-    {
-        get => _recalculationText;
-        private set => SetProperty(ref _recalculationText, value);
-    }
-
-    public bool IsBusy
-    {
-        get => _busy;
-        private set
+        set
         {
-            if (SetProperty(ref _busy, value))
-            {
-                RaiseCommandStates();
-            }
+            if (!CanEditRevision) return;
+            if (SetProperty(ref _reason, value)) InvalidatePreview();
         }
     }
-
-    public bool CanPublish => !IsBusy && !string.IsNullOrWhiteSpace(ExamId);
-    public bool CanRefreshStatus => !IsBusy && !string.IsNullOrWhiteSpace(ExamId);
-    public bool CanSelectPackage => !IsBusy && !string.IsNullOrWhiteSpace(ExamId);
-
+    public string Status { get => _status; private set => SetProperty(ref _status, value); }
+    public string PublishedText { get => _publishedText; private set => SetProperty(ref _publishedText, value); }
+    public string RecalculationText { get => _recalculationText; private set => SetProperty(ref _recalculationText, value); }
+    public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) RaiseCommandStates(); } }
+    public bool CanEditRevision => !IsBusy && !_disposed && _pending?.PublicationAttempted != true;
+    public bool CanSelectPackage => CanEditRevision && !string.IsNullOrWhiteSpace(ExamId);
+    public bool CanCheck => CanSelectPackage && !string.IsNullOrWhiteSpace(PackagePath) && !string.IsNullOrWhiteSpace(Reason);
+    public bool CanPublish => !IsBusy && !_disposed && !_completed && _pending?.Request.ExamId == ExamId;
+    public bool CanRefreshStatus => !IsBusy && !_disposed && !string.IsNullOrWhiteSpace(ExamId);
     public AsyncRelayCommand SelectPackageCommand { get; }
+    public AsyncRelayCommand CheckCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
     public AsyncRelayCommand RefreshStatusCommand { get; }
 
     public Task SelectPackageAsync()
     {
-        if (string.IsNullOrWhiteSpace(ExamId))
+        if (!CanSelectPackage) { if (string.IsNullOrWhiteSpace(ExamId)) Status = NoExamStatus; return Task.CompletedTask; }
+        var path = _dialog.OpenDirectory();
+        if (!string.IsNullOrWhiteSpace(path))
         {
-            Status = NoExamStatus;
-            return Task.CompletedTask;
+            InvalidatePreview(); PackagePath = Path.GetFullPath(path);
+            Status = "已选择材料包目录；请检查并核对逐题答案、满分后确认发布。";
         }
-
-        var directory = _dialog.OpenDirectory();
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return Task.CompletedTask;
-        }
-
-        PackagePath = Path.GetFullPath(directory);
-        Status = "已选择材料包目录；发布前会重新校验清单与完整答案。";
         return Task.CompletedTask;
+    }
+
+    private bool CheckInputs()
+    {
+        if (string.IsNullOrWhiteSpace(ExamId)) { Status = NoExamStatus; return false; }
+        if (string.IsNullOrWhiteSpace(PackagePath)) { Status = "请先选择材料包目录（含 manifest.json 与 server-only/answer-key.json）。"; return false; }
+        if (string.IsNullOrWhiteSpace(Reason)) { Status = "请填写本次修改原因。"; return false; }
+        if (!File.Exists(Path.Combine(PackagePath, "manifest.json")) || !File.Exists(Path.Combine(PackagePath, "server-only", "answer-key.json")))
+        { Status = "材料包里找不到 manifest.json 或 server-only/answer-key.json；换规则必须带完整参考答案。"; return false; }
+        return true;
+    }
+
+    public async Task CheckAsync()
+    {
+        if (!CanEditRevision || !CheckInputs()) return;
+        InvalidatePreview();
+        var context = _context; var exam = ExamId; var path = PackagePath; var reason = Reason;
+        using var cancellation = StartOperation();
+        IsBusy = true; Status = "正在核对本场试卷结构、完整答案与全部计分分支…";
+        try
+        {
+            var prepared = await PreparedGradingRevision.PrepareAsync(_api, exam, path, reason, cancellation.Token);
+            if (!Current(context)) { prepared.Dispose(); return; }
+            _pending = prepared;
+            foreach (var question in prepared.Preview) Questions.Add(question);
+            Status = $"检查通过：{prepared.Preview.Count} 题，规则版本 {prepared.Request.ExpectedVersion} → {prepared.Request.ExpectedVersion + 1}。尚未发布；请核对下方答案与满分。";
+        }
+        catch (OperationCanceledException) { if (Current(context)) Status = "核对已取消，未发布。"; }
+        catch (Exception error) { if (Current(context)) SetError(error); }
+        finally { EndOperation(cancellation); IsBusy = false; }
     }
 
     public async Task PublishAsync()
     {
-        if (string.IsNullOrWhiteSpace(ExamId))
-        {
-            Status = NoExamStatus;
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(PackagePath))
-        {
-            Status = "请先选择材料包目录（含 manifest.json 与 server-only/answer-key.json）。";
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(Reason))
-        {
-            Status = "请填写本次修改原因。";
-            return;
-        }
-
-        var manifestPath = Path.Combine(PackagePath, "manifest.json");
-        var answerPath = Path.Combine(PackagePath, "server-only", "answer-key.json");
-        if (!File.Exists(manifestPath) || !File.Exists(answerPath))
-        {
-            Status = "材料包里找不到 manifest.json 或 server-only/answer-key.json；换规则必须带完整参考答案。";
-            return;
-        }
-
+        if (IsBusy || _disposed || _completed) return;
+        if (_pending is null) { if (CheckInputs()) Status = "请先检查并核对规则预览，再确认发布。"; return; }
+        if (_pending.Request.ExamId != ExamId)
+        { Status = "另一场考试的发布结果尚未确认，请返回原考试重试同一份规则预览。"; return; }
+        var prepared = _pending; var context = _context; var exam = ExamId;
+        using var cancellation = StartOperation();
         IsBusy = true;
-        Status = "正在提交规则修订（不重新编译、不组包）…";
         try
         {
-            var manifestJson = await File.ReadAllTextAsync(manifestPath);
-            var answerJson = await File.ReadAllTextAsync(answerPath);
-            var validation = new ExamManifestValidator().ValidateJson(manifestJson, answerJson);
-            if (!validation.IsValid)
-            {
-                Status = "清单或参考答案未通过校验：" +
-                    string.Join("；", validation.Issues.Take(5).Select(issue => $"{issue.Rule}@{issue.Location}"));
-                return;
-            }
-
-            if (validation.RequiresAnswerKeyArithmetic)
-            {
-                Status = "参考答案不完整：缺少计分算术所需的条目，不能改计分规则。";
-                return;
-            }
-
-            var snapshot = await _api.GetExamAsync(ExamId);
-            if (snapshot.Versions.PaperVersion < 1 || snapshot.Paper is null)
-            {
-                Status = "该考试尚未发布试卷版本；答案与计分规则必须对应一份已发布的试卷。";
-                return;
-            }
-
-            var published = await _api.ReviseGradingRulesAsync(ExamId, manifestJson, answerJson,
-                snapshot.Versions.GradingVersion, Reason);
-            PublishedText = $"规则发布成功：规则版本 {published.Versions.GradingVersion}，" +
-                $"试卷版本 {published.Versions.PaperVersion}（规则集 {published.Grading?.RuleSetId ?? "未记录"}）。" +
+            if (!prepared.PublicationAttempted && !await ConfirmPublicationAsync(
+                    $"已核对 {prepared.Preview.Count} 道题的答案与满分？\n本次只发布规则版本 {prepared.Request.ExpectedVersion + 1}，不更换试卷。\n修改原因：{prepared.Request.Reason}\n发布后旧报表失效，全部已收答卷按新规则重算。")) return;
+            if (!Current(context)) return;
+            var published = await prepared.PublishAsync(_api, cancellation.Token);
+            if (ReferenceEquals(_pending, prepared)) { _pending = null; prepared.Dispose(); }
+            if (!Current(context)) return;
+            _completed = true; _publishedVersion = published.Versions.GradingVersion;
+            PublishedText = $"规则发布成功：规则版本 {published.Versions.GradingVersion}，试卷版本 {published.Versions.PaperVersion}。" +
                 "发布成功只说明服务器已切换规则版本，成绩是否重算完见下一行。";
-            Status = "规则修订已提交；正在核对重算状态…";
+            Status = "规则修订已提交；重算期间旧报表不可查询或导出。";
+            try { await ReadStatusAsync(exam, context, cancellation.Token); }
+            catch (Exception) { if (Current(context)) RecalculationText = "重算状态核对失败（发布结果不受影响），请刷新重算状态。"; }
         }
-        finally
+        catch (OperationCanceledException) { if (Current(context)) Status = "操作已中止，发布结果尚未确认；请重试同一份规则预览。"; }
+        catch (Exception error)
         {
-            IsBusy = false;
+            if (Current(context))
+            {
+                SetError(error);
+                if (prepared.PublicationAttempted) Status += " 发布结果尚未确认，保留同一预览重试，不重新读取版本。";
+            }
         }
-
-        // 发布已经成功：状态核对失败也不得改写上面的发布结果。
-        await TryRefreshStatusAsync();
+        finally { EndOperation(cancellation); IsBusy = false; }
     }
 
     public async Task RefreshStatusAsync()
     {
-        if (string.IsNullOrWhiteSpace(ExamId))
-        {
-            RecalculationText = "尚未核对重算状态。";
-            return;
-        }
-
-        IsBusy = true;
-        try
-        {
-            RecalculationText = Describe(await _api.GetGradingStatusAsync(ExamId));
-        }
-        finally
-        {
-            IsBusy = false;
-        }
+        if (!CanRefreshStatus) return;
+        var context = _context; var exam = ExamId;
+        using var cancellation = StartOperation(); IsBusy = true;
+        try { await ReadStatusAsync(exam, context, cancellation.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception) { if (Current(context)) RecalculationText = "重算状态核对失败（发布结果不受影响），请稍后刷新。"; }
+        finally { EndOperation(cancellation); IsBusy = false; }
     }
-
-    private async Task TryRefreshStatusAsync()
+    private async Task ReadStatusAsync(string exam, long context, CancellationToken ct)
     {
-        try
-        {
-            await RefreshStatusAsync();
-            Status = "规则修订已提交；重算状态见下方。重算期间旧报表不可查询或导出。";
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            RecalculationText = $"重算状态核对失败（发布结果不受影响）：{exception.Message}";
-        }
+        var report = await _api.GetGradingStatusAsync(exam, ct);
+        if (!Current(context)) return;
+        if (report.ExamId != exam || _publishedVersion > 0 && (report.CurrentGradingVersion ?? 0) < _publishedVersion)
+            throw new InvalidDataException("重算状态不属于本次考试或版本。");
+        RecalculationText = Describe(report);
     }
 
-    /// <summary>把计分状态翻成「重算中 / 结果就绪」，带上范围与阻断原因。</summary>
     internal static string Describe(GradingStatusReport report)
     {
-        if (report.CurrentGradingVersion is not { } version)
-        {
-            return "尚未发布任何计分规则：没有可核对的结果版本。";
-        }
-
-        if (report.Readiness is not { } readiness)
-        {
-            return $"已发布规则版本 {version}，但本次读取没有就绪结论。";
-        }
-
+        if (report.CurrentGradingVersion is not { } version) return "尚未发布任何计分规则：没有可核对的结果版本。";
+        if (report.Readiness is not { } readiness) return $"已发布规则版本 {version}，但本次读取没有就绪结论。";
         var scope = $"范围 {report.FinalSubmissionCount} 份最终答卷，已按版本 {version} 计分 {report.GradedAtCurrentVersion} 份。";
-        if (readiness.RecalculationReady)
-        {
-            return $"结果就绪：规则版本 {version}，{scope}";
-        }
-
+        if (readiness.RecalculationReady) return $"结果就绪：规则版本 {version}，{scope}";
         var blockers = readiness.Blockers.Count == 0 ? string.Empty : " 阻断：" + string.Join("；", readiness.Blockers);
         return $"重算中：规则版本 {version}，{scope} 未完成 {readiness.Outstanding.Count} 份。{blockers}".TrimEnd();
     }
-
+    private void InvalidatePreview()
+    {
+        if (_pending?.PublicationAttempted == true) return;
+        _pending?.Dispose(); _pending = null; _completed = false; Questions.Clear(); RaiseCommandStates();
+    }
+    private void ResetContext()
+    {
+        ++_context; _cancellation?.Cancel();
+        InvalidatePreview(); Questions.Clear(); PackagePath = string.Empty; _publishedVersion = 0; _completed = false;
+        if (_pending?.Request.ExamId == ExamId) foreach (var q in _pending.Preview) Questions.Add(q);
+        PublishedText = "尚未发布规则修订。"; RecalculationText = "尚未核对重算状态。";
+        Status = _pending?.PublicationAttempted == true ? "保留了尚未确认的原请求；回到原考试后可重试，不能重新检查生成另一请求。" :
+            string.IsNullOrWhiteSpace(ExamId) ? NoExamStatus : "已选择考试；请选择材料包目录并检查。";
+        RaiseCommandStates();
+    }
+    private void ConnectionChanged(object? sender, EventArgs e) => ResetContext();
+    private bool Current(long context) => !_disposed && context == _context;
+    private CancellationTokenSource StartOperation() { var c = new CancellationTokenSource(); _cancellation = c; return c; }
+    private void EndOperation(CancellationTokenSource c) { if (ReferenceEquals(_cancellation, c)) _cancellation = null; }
     private void RaiseCommandStates()
     {
-        OnPropertyChanged(nameof(CanPublish));
-        OnPropertyChanged(nameof(CanRefreshStatus));
-        OnPropertyChanged(nameof(CanSelectPackage));
+        foreach (var property in new[] { nameof(CanEditRevision), nameof(CanSelectPackage), nameof(CanCheck), nameof(CanPublish), nameof(CanRefreshStatus) }) OnPropertyChanged(property);
+        SelectPackageCommand.RaiseCanExecuteChanged(); CheckCommand.RaiseCanExecuteChanged();
+        PublishCommand.RaiseCanExecuteChanged(); RefreshStatusCommand.RaiseCanExecuteChanged();
     }
-
-    private void SetError(Exception exception) => Status = $"操作失败：{exception.Message}";
+    private void SetError(Exception error) => Status = error is AdminApiException api ? $"操作未完成（{api.Code}）：{api.Message}" :
+        error is InvalidDataException or ArgumentException ? "规则材料或版本核对未通过，请检查清单、答案与本场试卷结构。" : "操作未完成，请核对连接与本机材料后重试。";
+    public void Dispose()
+    {
+        if (_disposed) return; _disposed = true; ++_context; _cancellation?.Cancel();
+        _api.ConfigurationChanged -= ConnectionChanged; _pending?.Dispose();
+    }
 }

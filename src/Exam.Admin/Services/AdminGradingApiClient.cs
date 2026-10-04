@@ -4,11 +4,20 @@ using System.Text;
 
 using Exam.Contracts.Grading;
 using Exam.Contracts.Versioning;
+using Exam.Infrastructure.Packaging;
 
 namespace Exam.Admin.Services;
 
-public sealed partial class AdminApiClient
+public sealed partial class AdminApiClient : IGradingRevisionClient
 {
+    public Task<string> GetGradingOperatorAsync(CancellationToken ct = default)
+    { EnsureConfigured(); ct.ThrowIfCancellationRequested(); return Task.FromResult(OperatorId); }
+
+    public Task<ExamVersionSnapshot> SendGradingRevisionAsync(PublishGradingRulesRequest request,
+        CancellationToken ct = default) => SendAsync<ExamVersionSnapshot>(HttpMethod.Post,
+            $"api/v1/versioning/exams/{Uri.EscapeDataString(request.ExamId)}/grading-publications", request, ct,
+            preserveRequestId: true);
+
     /// <summary>
     /// 只改**答案与计分规则**：把本地材料包里的清单与完整答案提交给既有规则发布端点
     /// （不重新编译、不组包）。服务器会重新校验清单、答案与已发布试卷结构一致。
