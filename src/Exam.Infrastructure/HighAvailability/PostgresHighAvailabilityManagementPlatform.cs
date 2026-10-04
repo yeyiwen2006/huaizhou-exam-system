@@ -271,10 +271,17 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var active = _options.Nodes[plan.After.ActiveNodeId]; var actual = await ReadAsync(active, token);
         if (actual is null || actual.Value.Recovery || actual.Value.System != plan.SystemIdentifier || actual.Value.Database != plan.DatabaseName)
             return false;
-        if (plan.Kind == ManagementOperationKind.Takeover && SameState(actual.Value.State, plan.Before) && actual.Value.Timeline > plan.Timeline)
+        if (!SameState(actual.Value.State, plan.Before) && !SameState(actual.Value.State, plan.After)) return false;
+        if (plan.Kind == ManagementOperationKind.Takeover)
+        {
+            if (plan.After.ActiveNodeId != Local.NodeId || actual.Value.Timeline <= plan.Timeline) return false;
+            // A larger timeline is not proof that promotion retained the latest confirmed data.
+            // Recheck the original, independent heads and actual lineage before publishing or selecting.
+            await VerifyPromotedStandbyAsync(plan, actual.Value.Timeline, token);
+        }
+        if (plan.Kind == ManagementOperationKind.Takeover && SameState(actual.Value.State, plan.Before))
             await PublishAsync(plan, token); // Complete only the publication of this already-proven promotion.
         else if (!SameState(actual.Value.State, plan.After)) return false;
-        if (plan.Kind == ManagementOperationKind.Takeover && actual.Value.Timeline <= plan.Timeline) return false;
         if (plan.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Emergency)
         { await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token); return true; }
         if (plan.Kind == ManagementOperationKind.Reprotect)
@@ -290,6 +297,39 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             return _business.Status == BusinessServiceStatus.Running;
         }
         return false;
+    }
+
+    private async Task VerifyPromotedStandbyAsync(FailoverExecutionPlan plan, int timeline, CancellationToken token)
+    {
+        var primary = Confirmation(_options.Nodes[plan.Before.ActiveNodeId], plan.Before.ServerEpoch);
+        var standby = Confirmation(Local, plan.Before.ServerEpoch);
+        // Same lock order as the normal primary-to-standby confirmation handshake.
+        using var primaryGuard = primary.Lock();
+        using var standbyGuard = standby.Lock();
+        var head = RequireMatchingHeads(plan.Before, plan.Before.ActiveNodeId, Local.NodeId);
+        if (head.Record.SystemIdentifier != plan.SystemIdentifier || head.Record.DatabaseName != plan.DatabaseName ||
+            head.Record.ResourcesDigest != plan.ResourcesDigest ||
+            FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) != head.Record.ResourcesDigest)
+            throw new IOException("接管恢复的最新确认身份或本机资源与持久意图不一致。");
+
+        await using var source = ManagementProbeConnection.Create(Local.ConnectionString, 10);
+        await using (var command = source.CreateCommand("""
+            SELECT pg_is_in_recovery(),s.system_identifier::text,current_database(),p.timeline_id,
+                   pg_current_wal_flush_lsn()::text
+            FROM pg_control_system() s CROSS JOIN pg_control_checkpoint() p
+            """))
+        await using (var row = await command.ExecuteReaderAsync(token))
+        {
+            if (!await row.ReadAsync(token) || row.GetBoolean(0) || row.GetString(1) != plan.SystemIdentifier ||
+                row.GetString(2) != plan.DatabaseName || row.GetInt32(3) != timeline ||
+                FileConfirmationStore.Lsn(row.GetString(4)) < FileConfirmationStore.Lsn(head.Record.FlushLsn))
+                throw new IOException("提升后的实际数据库未覆盖最新持久确认边界。");
+        }
+        _ = await VerifiedTimelineContinuation.ReadAsync(source, head.Record, timeline,
+            Local.ConnectionString, _options.PostgresBinDirectory, token);
+        if (head.Record.Timeline != plan.Timeline)
+            _ = await VerifiedTimelineContinuation.ReadAsync(source, head.Record with { Timeline = plan.Timeline }, timeline,
+                Local.ConnectionString, _options.PostgresBinDirectory, token);
     }
 
     private async Task PublishAsync(FailoverExecutionPlan plan, CancellationToken token)

@@ -28,7 +28,15 @@ namespace Exam.IntegrationTests.HighAvailability;
 public sealed class NativeManagementFailoverTests
 {
     [NativeConfirmationFact]
-    public async Task ActualStreamingPromotionRebuildAndReprotectionUseDurableManagementApi()
+    public Task ActualStreamingPromotionRebuildAndReprotectionUseDurableManagementApi() => RunAsync(false);
+
+    [NativeConfirmationFact]
+    public Task InterruptedPromotionRequiresOriginalHeadsResourcesAndTimelineBeforePublication() => RunAsync(true);
+
+    [NativeConfirmationFact]
+    public Task InterruptedPublishedPromotionStillRequiresOriginalEvidenceBeforeSelection() => RunAsync(true, true);
+
+    private static async Task RunAsync(bool interruptPromotion, bool publishBeforeInterruption = false)
     {
         await NativePhysicalPostgresTools.ValidateConfiguredSourceAsync();
         await using var seedLease = new DatabaseLease(); var seed = seedLease.Value; await seed.InitializeAsync();
@@ -106,10 +114,44 @@ public sealed class NativeManagementFailoverTests
             var unavailableOldResources = nodeA.ResourcesDirectory + ".offline";
             Directory.Move(nodeA.ResourcesDirectory, unavailableOldResources);
             await Wait(async () => (await platformB.ObserveAsync(default)).State?.Nodes["node-b"].ReplayLagBytes == 0);
-            await using var apiB = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "b-management"), platformB);
+            var interrupted = new InterruptedPromotionPlatform(platformB, sourceB, businessB, publishBeforeInterruption);
+            await using var apiB = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "b-management"),
+                interruptPromotion ? interrupted : platformB);
             using var clientB = apiB.Client();
-            var takeover = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 3, "node-b", "synthetic old primary stopped",
-                new("node-a", true, false, "operator", "synthetic old primary stopped")));
+            var takeoverRequest = new HighAvailabilityRequest("takeover", "server", "node-b", "operator", 1, 3, "node-b", "synthetic old primary stopped",
+                new("node-a", true, false, "operator", "synthetic old primary stopped"));
+            if (interruptPromotion)
+            {
+                using var response = await clientB.PostAsJsonAsync("/management/v1/high-availability/takeover", takeoverRequest, JsonDefaults.Create());
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                var pending = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(JsonDefaults.Create()))!.Result!;
+                Assert.Equal(ManagementOperationPhase.NeedsVerification, pending.Phase);
+                Assert.False(await Recovery(sourceB));
+                Assert.Equal(publishBeforeInterruption ? 4 : 3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
+
+                // A greater timeline number alone is not evidence of the confirmed branch.
+                var history = Directory.GetFiles(Path.Combine(dataB, "pg_wal"), "*.history").Order().Last();
+                var historyBytes = await File.ReadAllBytesAsync(history);
+                try
+                {
+                    await File.WriteAllTextAsync(history, "1\t0/1\tsynthetic fork before confirmed data\n");
+                    await AssertPendingAsync();
+                }
+                finally { await File.WriteAllBytesAsync(history, historyBytes); }
+
+                var headDirectory = new FileFailoverDeploymentSelection(optionsA.SelectionPath).Read()!.ConfirmationDirectory;
+                var hidden = headDirectory + ".synthetic-unavailable";
+                Directory.Move(headDirectory, hidden);
+                try { await AssertPendingAsync(); }
+                finally { Directory.Move(hidden, headDirectory); }
+
+                var extraResource = Path.Combine(nodeB.ResourcesDirectory, "synthetic-unconfirmed.txt");
+                await File.WriteAllTextAsync(extraResource, "synthetic unconfirmed resource");
+                try { await AssertPendingAsync(); }
+                finally { File.Delete(extraResource); }
+            }
+            var takeover = await Operation(clientB, "takeover", takeoverRequest);
+            if (interruptPromotion) Assert.Equal(1, interrupted.Promotions);
             Assert.Equal(2, takeover.HighAvailability!.State!.ServerEpoch);
             Assert.False(await Recovery(sourceB)); Assert.Equal(ProtectionMode.EmergencySingleNode, takeover.HighAvailability.State.ProtectionMode);
             var replay = await Operation(clientB, "takeover", new("takeover", "server", "node-b", "operator", 1, 3, "node-b", "synthetic old primary stopped",
@@ -132,6 +174,19 @@ public sealed class NativeManagementFailoverTests
             Assert.Equal(new FileConfirmationStore(new FileFailoverDeploymentSelection(optionsA.SelectionPath).Read()!.ConfirmationDirectory).Read(),
                 new FileConfirmationStore(new FileFailoverDeploymentSelection(optionsB.SelectionPath).Read()!.ConfirmationDirectory).Read());
             Assert.Equal(1, hostA.RebuildStarts); // Old data is quarantined; only the new standby was restarted.
+
+            async Task AssertPendingAsync()
+            {
+                var queried = await clientB.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>("/management/v1/operations/takeover", JsonDefaults.Create());
+                Assert.Equal(ManagementOperationPhase.NeedsVerification, queried!.Result!.Phase);
+                Assert.Null(queried.Result.HighAvailability);
+                Assert.Equal(publishBeforeInterruption ? 4 : 3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
+                Assert.Null(new FileFailoverDeploymentSelection(optionsB.SelectionPath).Read());
+                Assert.Equal(1, interrupted.Promotions);
+                var blocked = takeoverRequest with { RequestId = "synthetic-bypass" };
+                using var denied = await clientB.PostAsJsonAsync("/management/v1/high-availability/takeover", blocked, JsonDefaults.Create());
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, denied.StatusCode);
+            }
         }
         finally
         {
@@ -193,6 +248,33 @@ public sealed class NativeManagementFailoverTests
     { await using var command = source.CreateCommand(sql); await command.ExecuteNonQueryAsync(); }
     private sealed class NoPackages : IPackageKeyUnwrapper
     { public byte[] Unwrap(EncryptedPackageEnvelope envelope) => throw new IOException("Synthetic empty fixture must not release a package key."); }
+    // Inject either interruption boundary: physical promotion before or after application state publication.
+    // Queries and restart reconciliation still use the actual production platform, not a fake database.
+    private sealed class InterruptedPromotionPlatform(IHighAvailabilityManagementPlatform inner, NpgsqlDataSource source,
+        IManagedBusinessHost business, bool publishBeforeInterruption) : IHighAvailabilityManagementPlatform
+    {
+        public int Promotions;
+        public Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token) => inner.ObserveAsync(token);
+        public Task<FailoverExecutionPlan> PrepareAsync(ManagementOperation operation, HighAvailabilityRequest request,
+            ServerDeploymentState before, ServerDeploymentState after, CancellationToken token) => inner.PrepareAsync(operation, request, before, after, token);
+        public async Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token)
+        {
+            if (plan.Kind != ManagementOperationKind.Takeover)
+            { await inner.ExecuteAsync(plan, token); return; }
+            await business.StopAsync(token);
+            await using var promote = source.CreateCommand("SELECT pg_promote(true,60)");
+            promote.CommandTimeout = 65;
+            Assert.True((bool)(await promote.ExecuteScalarAsync(token))!);
+            Promotions++;
+            // Make pg_control_checkpoint's new timeline observable before testing recovery evidence.
+            await using var checkpoint = source.CreateCommand("CHECKPOINT");
+            await checkpoint.ExecuteNonQueryAsync(token);
+            if (publishBeforeInterruption)
+                await new PostgresFailoverStateStore(source).SaveAsync(plan.After, token);
+            throw new IOException("Synthetic interruption after actual promotion, before deployment selection.");
+        }
+        public Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token) => inner.ReconcileAsync(plan, token);
+    }
     private sealed class Listener : IManagedBusinessHost
     {
         public BusinessServiceStatus Status { get; private set; } = BusinessServiceStatus.Stopped;
