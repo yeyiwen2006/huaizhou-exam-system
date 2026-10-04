@@ -13,7 +13,7 @@ namespace Exam.Admin.ViewModels;
 
 /// <summary>
 /// 考试设置与服务器考试目录的衔接：新建考试、读取完整设置、保存名称与科目题组、学生端显示开关。
-/// 考试名称即考试类别，是区分考试的唯一凭据；内部编号由服务器生成，界面不显示。
+/// 考试名称是区分考试的唯一业务依据；内部编号由服务器生成，界面不显示。
 /// </summary>
 public sealed partial class ExamConfigurationViewModel
 {
