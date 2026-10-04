@@ -249,6 +249,8 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             WorkingDirectory = root.FullName, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false
         };
+        start.StandardOutputEncoding = new System.Text.UTF8Encoding(false, true);
+        start.StandardErrorEncoding = new System.Text.UTF8Encoding(false, true);
         start.ArgumentList.Add(assembly);
         foreach (var value in arguments) start.ArgumentList.Add(value);
         start.Environment["EXAM_SERVER_URL"] = address;

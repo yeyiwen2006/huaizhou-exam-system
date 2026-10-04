@@ -55,6 +55,8 @@ public sealed partial class PostgresSubmissionStoreTests
         var host = Path.Combine(Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..")),
             OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
         var start = new ProcessStartInfo(host) { UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true };
+        start.StandardOutputEncoding = new System.Text.UTF8Encoding(false, true);
+        start.StandardErrorEncoding = new System.Text.UTF8Encoding(false, true);
         start.ArgumentList.Add(Path.Combine(root.FullName, "src", "Exam.Cli", "bin", "Release", "net10.0", "Exam.Cli.dll"));
         foreach (var argument in args) start.ArgumentList.Add(argument);
         start.ArgumentList.Add("--server"); start.ArgumentList.Add(server);
