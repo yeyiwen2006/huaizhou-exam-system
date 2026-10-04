@@ -13,6 +13,7 @@ public sealed partial class PreparedExamImport
 {
     private Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
     private string? _ciphertextHash;
+    private string? _materialsCiphertextHash;
     internal SemaphoreSlim PublicationGate { get; } = new(1, 1);
     internal long ConnectionGeneration { get; set; }
     internal string? LogicalServerId { get; set; }
@@ -30,7 +31,53 @@ public sealed partial class PreparedExamImport
             var relative = Path.GetRelativePath(Workspace.Root, path).Replace('\\', '/');
             _fingerprints.Add(relative, await HashAsync(path, ct));
         }
+
+        await SealMaterialsArchiveAsync(ct);
     }
+
+    /// <summary>预览里的源材料归档文件名（含解密后上传前那份密文）。</summary>
+    internal const string MaterialsArchiveFileName = "materials.zip";
+
+    internal const string MaterialsCiphertextFileName = "materials.enc";
+
+    /// <summary>
+    /// 封存时生成源材料归档：**只**包含材料目录下的文件（清单、题目 `.tex`、共享样式、图片、独立答案），
+    /// 路径相对材料包根。归档随预览一起保存并纳入指纹，因此「丢回执后用同一预览重试」
+    /// 与跨进程重放上传的都是**同一份字节**——否则重建 ZIP 的字节差异会被判成幂等冲突。
+    /// </summary>
+    private async Task SealMaterialsArchiveAsync(CancellationToken ct)
+    {
+        var files = new List<KeyValuePair<string, byte[]>>();
+        foreach (var path in SourceFiles(Workspace.PackageRoot))
+        {
+            ct.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(Workspace.PackageRoot, path).Replace('\\', '/');
+            files.Add(new KeyValuePair<string, byte[]>(relative, await File.ReadAllBytesAsync(path, ct)));
+        }
+
+        var archive = PaperMaterialsArchive.Build(Expected.ExamId, TargetPaperVersion, files);
+        await File.WriteAllBytesAsync(MaterialsArchivePath, archive, ct);
+        // 与 HashAsync 同一写法（大写十六进制）：指纹表里不能混两种大小写。
+        _fingerprints.Add(MaterialsArchiveFileName, Convert.ToHexString(SHA256.HashData(archive)));
+    }
+
+    /// <summary>发布前核对归档未变：与密文一样，改了就不能当作同一请求重试。</summary>
+    internal async Task VerifyMaterialsAsync(CancellationToken ct)
+    {
+        if (MaterialsSha256 is not { Length: > 0 } expected ||
+            !StringComparer.Ordinal.Equals(expected, await HashAsync(MaterialsArchivePath, ct)))
+            throw new InvalidDataException("本次预览的源材料归档已变化或缺失，请重新检查试题包。");
+    }
+
+    internal string MaterialsArchivePath => Path.Combine(Workspace.Root, MaterialsArchiveFileName);
+
+    internal string MaterialsCiphertextPath => Path.Combine(Workspace.Root, MaterialsCiphertextFileName);
+
+    /// <summary>
+    /// 明文归档的 SHA-256（十六进制），随发布请求提交并由服务器按收到的字节重算比对。
+    /// 直接读指纹表——它是随预览导出/载入持久化的，因此跨进程重放也拿得到同一个值。
+    /// </summary>
+    internal string? MaterialsSha256 => _fingerprints.GetValueOrDefault(MaterialsArchiveFileName);
 
     internal async Task VerifyUnchangedAsync(CancellationToken ct)
     {
@@ -51,14 +98,16 @@ public sealed partial class PreparedExamImport
     {
         if (Upload is null) throw new InvalidOperationException("尚未生成正式发布请求。");
         _ciphertextHash ??= await HashAsync(Workspace.EncryptedPath, ct);
+        _materialsCiphertextHash ??= await HashAsync(MaterialsCiphertextPath, ct);
         await VerifyCiphertextAsync(ct);
         if (Workspace.Persistent)
-            await WriteAtomicAsync(Path.Combine(Workspace.Root, "upload.json"), new SavedUpload(Upload, _ciphertextHash), ct);
+            await WriteAtomicAsync(Path.Combine(Workspace.Root, "upload.json"), new SavedUpload(Upload, _ciphertextHash, _materialsCiphertextHash), ct);
     }
 
     internal async Task VerifyCiphertextAsync(CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(_ciphertextHash) || _ciphertextHash != await HashAsync(Workspace.EncryptedPath, ct))
+        if (string.IsNullOrEmpty(_ciphertextHash) || _ciphertextHash != await HashAsync(Workspace.EncryptedPath, ct) ||
+            string.IsNullOrEmpty(_materialsCiphertextHash) || _materialsCiphertextHash != await HashAsync(MaterialsCiphertextPath, ct))
             throw new InvalidDataException("已准备的加密包发生变化，请保留现场并核对原发布结果，不能作为同一请求重试。");
     }
 
@@ -99,8 +148,9 @@ public sealed partial class PreparedExamImport
             var questions = Questions.Select(x => x with
             { PdfPath = Path.GetRelativePath(Workspace.Root, x.PdfPath).Replace('\\', '/') }).ToArray();
             await WriteAtomicAsync(Path.Combine(staging, "preview.json"),
-                new SavedPreview(1, Source, Expected, ExpectedSettingsVersion, LogicalServerId!, ResourceId,
-                    RequestId, compiled, questions, _fingerprints), ct);
+                new SavedPreview(2, Source, Expected, ExpectedSettingsVersion, LogicalServerId!, ResourceId,
+                    RequestId, compiled, questions, _fingerprints,
+                    Reason, DeclaredChangedQuestions, ChangedQuestionsHint), ct);
             // Prove the exported bytes, not only the original preview, match the confirmed snapshot.
             foreach (var (relative, hash) in _fingerprints)
                 if (hash != await HashAsync(ResolveSnapshotPath(staging, relative), ct))
@@ -121,7 +171,8 @@ public sealed partial class PreparedExamImport
             var json = JsonDefaults.Create();
             var state = JsonSerializer.Deserialize<SavedPreview>(await ExamImportWorkspace.ReadUtf8Async(
                 Path.Combine(workspace.Root, "preview.json"), ct), json) ?? throw new InvalidDataException("预览记录无效。");
-            if (state.FormatVersion != 1 || state.Expected is null || string.IsNullOrWhiteSpace(state.ServerId) ||
+            if (state.FormatVersion != 2 || state.Expected is null || string.IsNullOrWhiteSpace(state.ServerId) ||
+                string.IsNullOrWhiteSpace(state.Reason) || state.DeclaredChangedQuestions is not { Count: > 0 } ||
                 state.Compiled is null || state.Questions is null || state.Hashes is not { Count: > 0 and <= 4096 } ||
                 state.ResourceId is null || !state.ResourceId.StartsWith("c05-", StringComparison.Ordinal) ||
                 !Guid.TryParseExact(state.ResourceId[4..], "N", out _) || !Guid.TryParseExact(state.RequestId, "N", out _))
@@ -143,7 +194,8 @@ public sealed partial class PreparedExamImport
             { OutputPdfPath = ResolveSnapshotPath(workspace.Root, x.Value.OutputPdfPath!) }, StringComparer.Ordinal);
             var questions = state.Questions.Select(q => q with { PdfPath = ResolveSnapshotPath(workspace.Root, q.PdfPath) }).ToArray();
             prepared = new PreparedExamImport(workspace, manifest, manifestJson, answerJson, state.Expected,
-                compiled, questions, state.Source)
+                compiled, questions, state.Source, state.Reason, state.DeclaredChangedQuestions,
+                state.ChangedQuestionsHint ?? [])
             {
                 ResourceId = state.ResourceId, RequestId = state.RequestId, ExpectedSettingsVersion = state.SettingsVersion,
                 LogicalServerId = state.ServerId, ConnectionGeneration = api.Generation, _fingerprints = state.Hashes
@@ -161,10 +213,15 @@ public sealed partial class PreparedExamImport
                 if (publication is null || publication.RequestId != prepared.RequestId || publication.ResourceId != prepared.ResourceId ||
                     publication.ExpectedPaperVersion != prepared.Expected.Versions.PaperVersion ||
                     publication.ExpectedGradingVersion != prepared.Expected.Versions.GradingVersion ||
-                    publication.ManifestJson != manifestJson || publication.AnswerKeyJson != answerJson)
+                    publication.ManifestJson != manifestJson || publication.AnswerKeyJson != answerJson ||
+                    publication.Reason != prepared.Reason || !publication.PreviewApproved ||
+                    publication.MaterialsSha256 != prepared.MaterialsSha256 ||
+                    publication.ChangedQuestionIds is null ||
+                    !publication.ChangedQuestionIds.SequenceEqual(prepared.DeclaredChangedQuestions, StringComparer.Ordinal))
                     throw new InvalidDataException("原发布请求与预览不一致，拒绝用改变的请求重试。");
                 prepared.Upload = saved.Upload;
                 prepared._ciphertextHash = saved.CiphertextHash;
+                prepared._materialsCiphertextHash = saved.MaterialsCiphertextHash;
                 await prepared.VerifyCiphertextAsync(ct);
             }
             return prepared;
@@ -196,7 +253,9 @@ public sealed partial class PreparedExamImport
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains('\\') ||
             relative.Length > 1024 || relative.Split('/').Any(p => p is "." or ".." || !WindowsFileNameRules.IsValidFileName(p)) ||
-            !(relative.StartsWith("source/", StringComparison.Ordinal) || relative.StartsWith("compiled/", StringComparison.Ordinal)))
+            !(relative.StartsWith("source/", StringComparison.Ordinal) ||
+                relative.StartsWith("compiled/", StringComparison.Ordinal) ||
+                relative == MaterialsArchiveFileName))
             throw new InvalidDataException("预览记录含有非法或越界路径。");
         var full = Path.GetFullPath(Path.Combine(root, relative));
         if (!full.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -231,9 +290,15 @@ public sealed partial class PreparedExamImport
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    /// <summary>
+    /// 预览记录。**格式版本 2** 起带上发布原因、声明的变更题号与差异提示：
+    /// 声明是发布请求的一部分，必须在预览阶段定稿（发布只重放同一份已保存的请求），
+    /// 因此旧版预览（v1）不再可用，载入时要求重新检查材料。
+    /// </summary>
     private sealed record SavedPreview(int FormatVersion, string Source, ExamVersionSnapshot Expected,
         long SettingsVersion, string ServerId, string ResourceId, string RequestId,
         Dictionary<string, TeXCompileResult> Compiled, IReadOnlyList<ImportPreviewQuestion> Questions,
-        Dictionary<string, string> Hashes);
-    private sealed record SavedUpload(UploadExamBundleRequest Upload, string CiphertextHash);
+        Dictionary<string, string> Hashes, string Reason,
+        IReadOnlyList<string> DeclaredChangedQuestions, IReadOnlyList<string>? ChangedQuestionsHint);
+    private sealed record SavedUpload(UploadExamBundleRequest Upload, string CiphertextHash, string? MaterialsCiphertextHash = null);
 }

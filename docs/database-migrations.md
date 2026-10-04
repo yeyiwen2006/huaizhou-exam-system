@@ -22,6 +22,14 @@ PostgreSQL 迁移在 `src/Exam.Infrastructure/Migrations` 中按提交顺序保�
 - `202609220700_B01_student_exam_metadata.sql`：学生可见的考试名称、类别及科目元数据。
 - `202609220800_B02_student_instructions.sql`：公开考试说明历史版本及元数据更新幂等记录。
 
+- `202610031000_C05_paper_materials.sql`：源材料归档（按考试与试卷版本保存归档字节、哈希与逐题摘要）。
+  只新增表，不改既有数据；主键 `(exam_id, paper_version)` 保证同一版本不会产生第二份不同内容的归档。
+  写入发生在发布事务内，与资源、试卷/规则版本、事件和投影一起提交或回滚；按决定不做自动删除。
+  兼容性：该表为空时既有行为不变；本功能上线前发布的考试没有归档行，恢复核对按「尚未归档」豁免
+  （见下），因此升级不需要回填，也不会因旧数据拦住业务写入。
+  恢复：数据在 PostgreSQL 中，随流复制到备机，接管后 `GET /exams/{examId}/paper-materials?version=N` 仍可取回；
+  核对应由恢复就绪检查的 `paper-materials` 项覆盖。
+
 迁移作为程序集嵌入资源，由 `PostgresMigrationRunner` 在 PostgreSQL advisory lock 下逐项执行，并在 `exam.schema_migrations` 记录名称。生产默认不自动迁移；维护窗口显式设置 `Database__ApplyMigrations=true`，完成后恢复为 `false`。B01/B02 合并前已在 PostgreSQL 18.6 随机隔离数据库中应用全部迁移并通过 36 项实库测试；这是已有验证记录，本轮进度更新未重新运行迁移。环境和边界见 [B01/B02 复核记录](b01-b02-review-verification.md)。
 
 ## 集成测试的数据库连接容量

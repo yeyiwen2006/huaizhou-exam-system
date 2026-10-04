@@ -38,7 +38,25 @@ public enum VersioningErrorCode
     StaleScheduleTask,
     ScheduleTaskNotDue,
     ResourceRollbackRejected,
-    IdempotencyConflict
+    IdempotencyConflict,
+
+    /// <summary>上传的源材料归档不可读、超限或与自身清单不符。</summary>
+    MaterialsArchiveInvalid,
+
+    /// <summary>源材料归档或已存基线摘要的格式版本不被当前算法支持。</summary>
+    MaterialsFormatUnsupported,
+
+    /// <summary>上一已发布版本没有源材料归档，无法核对本次声明的变更题号（失败关闭，不当作首次发布）。</summary>
+    MaterialsBaselineMissing,
+
+    /// <summary>声明漏了实际变更的题目。</summary>
+    ChangedQuestionIdsMissing,
+
+    /// <summary>把未变更的题目报成了变更。</summary>
+    ChangedQuestionIdsUnexpected,
+
+    /// <summary>没有任何题目内容变化：应使用规则单独修订入口，而不是发布新试卷版本。</summary>
+    NoContentChange
 }
 
 public sealed record ScheduleWindow(DateTimeOffset StartsAt, DateTimeOffset EndsAt);
@@ -141,7 +159,8 @@ public sealed record PublishPaperRequest(
     string Operator,
     string Reason,
     DateTimeOffset Now,
-    string RequestId = "");
+    string RequestId = "",
+    string? MaterialsSha256 = null);
 
 public sealed record PublishGradingRulesRequest(
     string ExamId,

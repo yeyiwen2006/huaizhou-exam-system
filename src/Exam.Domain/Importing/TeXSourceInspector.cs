@@ -124,6 +124,80 @@ public static class TeXSourceInspector
     }
 
     /// <summary>
+    /// `\input`/`\include` 的目标路径（按出现顺序，已去注释、反斜杠已归一为 `/`）。
+    /// 只做静态解析，供依赖闭包使用；路径合法性仍由 <see cref="Inspect"/> 的违规检查负责，
+    /// 因此这里**不**过滤非法路径——下游按包内相对路径解析不到就不计入。
+    /// </summary>
+    public static IReadOnlyList<string> ReadNestedInputs(string? texSource)
+    {
+        if (string.IsNullOrEmpty(texSource))
+        {
+            return [];
+        }
+
+        return NestedInput.Matches(StripComments(texSource))
+            .Select(match => match.Groups["path"].Value.Trim().Trim('"').Replace('\\', '/'))
+            .Where(path => path.Length > 0)
+            .ToList();
+    }
+
+    /// <summary>
+    /// 本文件里对**外部图片宏**（宏定义在共享样式里）的调用所引用的图片名。
+    /// 取调用参数里**最后一个**花括号组作为文件名，与文件内宏展开的规则一致（见 <see cref="CollectImageReferences"/>）。
+    /// </summary>
+    public static IReadOnlyList<string> ReadImageMacroInvocations(string? texSource,
+        IReadOnlyList<string> macroNames)
+    {
+        if (string.IsNullOrEmpty(texSource) || macroNames.Count == 0)
+        {
+            return [];
+        }
+
+        var source = StripComments(texSource);
+        var references = new List<string>();
+        foreach (var macro in macroNames)
+        {
+            if (macro.Length == 0)
+            {
+                continue;
+            }
+
+            var pattern = new Regex(
+                @"\\" + Regex.Escape(macro) + @"\s*(?<arguments>(?:\[[^\]]*\])?(?:\{[^{}]*\})*)",
+                RegexOptions.Compiled);
+            foreach (Match match in pattern.Matches(source))
+            {
+                var groups = Regex.Matches(match.Groups["arguments"].Value, @"\{([^{}]*)\}");
+                if (groups.Count > 0)
+                {
+                    references.Add(groups[^1].Groups[1].Value.Trim());
+                }
+            }
+        }
+
+        return references.Where(reference => reference.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// 本文件里定义的**图片宏**名（宏体含 `\includegraphics` 的自定义命令）。
+    /// 供依赖闭包跨文件使用：题目里的 `\qimg{图.png}`，其宏定义在共享样式文件里，
+    /// 只看题目文件是解析不出这张图的。
+    /// </summary>
+    public static IReadOnlyList<string> ReadImageMacros(string? texSource)
+    {
+        if (string.IsNullOrEmpty(texSource))
+        {
+            return [];
+        }
+
+        return MacroDefinition.Matches(StripComments(texSource))
+            .Where(match => match.Groups["body"].Value.Contains("includegraphics", StringComparison.Ordinal))
+            .Select(match => match.Groups["name"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
     /// 按 \graphicspath 的顺序给出图片的候选相对路径（先包根目录，再各搜索路径），
     /// 供依赖检查逐个核对是否存在。只生成路径，不访问文件系统。
     /// </summary>

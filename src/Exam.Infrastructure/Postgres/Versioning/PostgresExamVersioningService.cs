@@ -567,6 +567,29 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
         UpsertEntryAccess(connection, transaction, after);
         if (operation == PublishPaperOperation && request is PublishPaperRequest paper)
         {
+            // Once an exam uses archived publication, legacy JSON/direct-paper routes cannot
+            // bypass its source comparison. The durable event survives loss of every archive row.
+            using var history = new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM exam.paper_materials WHERE exam_id=$1)
+                    OR EXISTS (SELECT 1 FROM exam.version_events WHERE exam_id=$1
+                        AND operation_type='paper.publish' AND payload->>'materialsSha256' IS NOT NULL)
+                """, connection, transaction);
+            history.Parameters.AddWithValue(paper.ExamId);
+            if (paper.MaterialsSha256 is not null || (bool)history.ExecuteScalar()!)
+            {
+                if (paper.MaterialsSha256 is not { Length: 64 })
+                    return new(VersioningErrorCode.MaterialsArchiveInvalid,
+                        "本场考试必须通过带源材料归档的整体上传入口修订，不能绕过实际变更核对。");
+                using var archived = new NpgsqlCommand("""
+                    SELECT EXISTS (SELECT 1 FROM exam.paper_materials WHERE exam_id=$1 AND paper_version=$2
+                        AND lower(archive_sha256)=lower($3))
+                    """, connection, transaction);
+                archived.Parameters.AddWithValue(paper.ExamId);
+                archived.Parameters.AddWithValue(after.Versions.PaperVersion);
+                archived.Parameters.AddWithValue(paper.MaterialsSha256);
+                if (!(bool)archived.ExecuteScalar()!)
+                    return new(VersioningErrorCode.MaterialsArchiveInvalid, "待发布版本缺少经过核对的源材料归档。");
+            }
             using var resource = new NpgsqlCommand(
                 """
                 SELECT octet_length(encrypted_content)

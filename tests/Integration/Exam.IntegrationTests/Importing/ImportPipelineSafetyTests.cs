@@ -192,6 +192,7 @@ public sealed class ImportPipelineSafetyTests
         Assert.Equal(reads, api.Reads);
         Assert.Equal(2, api.Uploads);
         Assert.Same(api.Requests[0], api.Requests[1]);
+        Assert.Equal(api.MaterialsCiphertexts[0], api.MaterialsCiphertexts[1]);
         Assert.Equal(api.Ciphertexts[0], api.Ciphertexts[1]);
     }
 
@@ -219,6 +220,7 @@ public sealed class ImportPipelineSafetyTests
         Assert.Equal(2, api.Uploads);
         Assert.Equal(api.Requests[0].Publication.RequestId, api.Requests[1].Publication.RequestId);
         Assert.Equal(JsonSerializer.Serialize(api.Requests[0]), JsonSerializer.Serialize(api.Requests[1]));
+        Assert.Equal(api.MaterialsCiphertexts[0], api.MaterialsCiphertexts[1]);
         Assert.Equal(api.Ciphertexts[0], api.Ciphertexts[1]);
     }
 
@@ -274,6 +276,52 @@ public sealed class ImportPipelineSafetyTests
         empty = true;
         var failure = await Assert.ThrowsAsync<ExamPublicationApiException>(() => api.GetPublicationRecipientsAsync());
         Assert.Equal("EMPTY_RESPONSE", failure.Code);
+    }
+
+    [Fact]
+    public async Task ChangedMaterialsCiphertextCannotBeReplayedAsTheOriginalPublication()
+    {
+        using var source = new SyntheticImportFixture();
+        using var api = new SyntheticPublicationClient(source);
+        var pipeline = Pipeline(api);
+        using var prepared = await pipeline.PrepareAsync(source.Source, api.Current.ExamId);
+        api.OnUpload = _ => throw new HttpRequestException("synthetic lost receipt");
+        await Assert.ThrowsAsync<HttpRequestException>(() => pipeline.PublishAsync(prepared));
+        await File.AppendAllTextAsync(Path.Combine(prepared.PreviewDirectory, "materials.enc"), "changed");
+        api.OnUpload = null;
+        await Assert.ThrowsAsync<InvalidDataException>(() => pipeline.PublishAsync(prepared));
+        Assert.Equal(1, api.Uploads);
+    }
+
+    [Theory]
+    [InlineData("reason")]
+    [InlineData("changedQuestionIds")]
+    [InlineData("materialsSha256")]
+    [InlineData("materials.enc")]
+    public async Task SavedRetryRejectsChangedRevisionMetadataAndMaterialsCiphertext(string field)
+    {
+        using var source = new SyntheticImportFixture();
+        using var api = new SyntheticPublicationClient(source);
+        var pipeline = Pipeline(api);
+        var output = Path.Combine(source.Root, "saved-retry");
+        using (var prepared = await pipeline.PrepareAsync(source.Source, api.Current.ExamId)) await prepared.ExportAsync(output);
+        using (var prepared = await PreparedExamImport.LoadAsync(output, api))
+        {
+            api.OnUpload = _ => throw new HttpRequestException("synthetic lost receipt");
+            await Assert.ThrowsAsync<HttpRequestException>(() => pipeline.PublishAsync(prepared));
+        }
+        if (field == "materials.enc") await File.AppendAllTextAsync(Path.Combine(output, field), "changed");
+        else
+        {
+            var path = Path.Combine(output, "upload.json");
+            var saved = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+            saved["upload"]!["publication"]![field] = field == "changedQuestionIds"
+                ? new System.Text.Json.Nodes.JsonArray("different")
+                : System.Text.Json.Nodes.JsonValue.Create("changed");
+            await File.WriteAllTextAsync(path, saved.ToJsonString());
+        }
+        await Assert.ThrowsAsync<InvalidDataException>(() => PreparedExamImport.LoadAsync(output, api));
+        Assert.Equal(1, api.Uploads);
     }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> handle) : HttpMessageHandler

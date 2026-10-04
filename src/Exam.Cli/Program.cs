@@ -129,8 +129,12 @@ internal static partial class ExamCli
         Console.WriteLine("  import verify 包目录                  本地校验并逐题编译、抽取选项坐标（不连服务器）");
         Console.WriteLine("  import preview 本地目录或ZIP --exam 考试名称 --output 新预览目录 [--server URL]");
         Console.WriteLine("                                        在本机检查、编译并保存私有逐题预览；尚未发布");
+        Console.WriteLine("                                        开考后修订再加：--reason 说明（必填）");
+        Console.WriteLine("                                        --changed 题号[,题号…] 声明变更题号（省略时用按内容算出的差异）");
         Console.WriteLine("  import publish 预览目录 --confirm [--server URL]");
         Console.WriteLine("                                        确认同一预览后加密上传，原请求可安全重试");
+        Console.WriteLine("  import materials 考试名称 --output 新目录 [--server URL]");
+        Console.WriteLine("                                        取回当前已发布版本的源材料（含独立答案），用于继续修题");
         Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");

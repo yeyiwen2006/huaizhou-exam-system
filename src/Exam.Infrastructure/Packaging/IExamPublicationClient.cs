@@ -12,6 +12,16 @@ public interface IExamPublicationClient
     Task<ExamVersionSnapshot> GetExamAsync(string examId, CancellationToken ct = default);
     Task<ExamDetail> GetExamDetailAsync(string examId, CancellationToken ct = default);
     Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default);
+    /// <summary>
+    /// 提交两份密文：学生包与源材料归档。两份都用受管节点公钥加密后再上传——
+    /// 归档里含独立答案，明文不得进入表单临时缓冲。
+    /// </summary>
     Task<ExamVersionSnapshot> UploadPublicationAsync(string examId, UploadExamBundleRequest upload,
-        string encryptedPath, CancellationToken ct = default);
+        string encryptedPath, string materialsPath, CancellationToken ct = default);
+
+    /// <summary>
+    /// 取回某个**已发布**试卷版本的源材料归档（明文 ZIP，含独立答案，属敏感出口）。
+    /// 开考后修订要从上一版本的原始材料出发；按流读取并受归档上限保护。
+    /// </summary>
+    Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion, CancellationToken ct = default);
 }

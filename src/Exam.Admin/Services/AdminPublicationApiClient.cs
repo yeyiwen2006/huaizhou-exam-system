@@ -15,9 +15,41 @@ public sealed partial class AdminApiClient : IExamPublicationClient
     public Task<PublicationRecipients> GetPublicationRecipientsAsync(CancellationToken ct = default) =>
         SendAsync<PublicationRecipients>(HttpMethod.Get, "api/v1/publications/recipients", null, ct);
 
-    /// <summary>Uploads only encrypted bytes; callers retain the same request and ciphertext for uncertain retries.</summary>
+    /// <summary>
+    /// 取回某个已发布试卷版本的源材料归档（明文 ZIP，含独立答案）：开考后修订从上一版本材料出发。
+    /// 失败响应仍是业务封套，优先用服务器给出的问题码；成功响应按流读取并受归档上限保护。
+    /// </summary>
+    public async Task<byte[]> DownloadPaperMaterialsAsync(string examId, long paperVersion,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureConfigured();
+        var generation = Generation;
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"api/v1/exams/{Uri.EscapeDataString(examId)}/paper-materials?version=" +
+            paperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        EnsureCurrentConnection(generation);
+        if (!response.IsSuccessStatusCode)
+        {
+            var failure = await Exam.Infrastructure.Packaging.PaperMaterialsDownload.ReadFailureAsync(response, cancellationToken);
+            EnsureCurrentConnection(generation);
+            if (failure is not null) ValidateEnvelope(failure);
+            throw new AdminApiException(failure?.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
+                failure?.Error?.Message ?? "服务器拒绝取回源材料归档。", response.StatusCode);
+        }
+        var envelope = await Exam.Infrastructure.Packaging.PaperMaterialsDownload.ReadAsync(response,
+            examId, paperVersion, cancellationToken);
+        EnsureCurrentConnection(generation);
+        ValidateEnvelope(envelope);
+        return envelope.Result!;
+    }
+
+    /// <summary>
+    /// 只上传密文（学生包与源材料归档），调用方在结果不确定时沿用同一请求与同一份密文重试。
+    /// 归档里含独立答案，因此和包一样必须先加密：明文不得进入表单临时缓冲。
+    /// </summary>
     public async Task<ExamVersionSnapshot> UploadPublicationAsync(string examId,
-        UploadExamBundleRequest upload, string encryptedPath, CancellationToken ct = default)
+        UploadExamBundleRequest upload, string encryptedPath, string materialsPath, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         ArgumentNullException.ThrowIfNull(upload);
@@ -27,6 +59,8 @@ public sealed partial class AdminApiClient : IExamPublicationClient
         form.Add(new StringContent(JsonSerializer.Serialize(upload, _json), Encoding.UTF8, "application/json"), "metadata");
         await using var stream = new FileStream(encryptedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         form.Add(new StreamContent(stream), "package", "package.enc");
+        await using var materials = new FileStream(materialsPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        form.Add(new StreamContent(materials), "materials", "materials.enc");
         using var request = new HttpRequestMessage(HttpMethod.Post,
             $"api/v1/exams/{Uri.EscapeDataString(examId)}/publications/upload") { Content = form };
         using var response = await _httpClient.SendAsync(request, ct);
