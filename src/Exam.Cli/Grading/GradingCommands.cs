@@ -40,18 +40,18 @@ internal static partial class ExamCli
                 var result = await prepared.PublishAsync(api, cancellationToken);
                 Console.WriteLine(JsonSerializer.Serialize(new ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>(
                     api.ServerId!, api.GradingNodeId!, api.GradingServerEpoch, prepared.Request.RequestId, result, null), JsonDefaults.Create()));
-                Console.Error.WriteLine($"规则发布成功：规则版本 {result.Versions.GradingVersion}，试卷版本 {result.Versions.PaperVersion}。原预览可安全重试，不会重复建版。");
+                WriteSuccessDiagnostic($"规则发布成功：规则版本 {result.Versions.GradingVersion}，试卷版本 {result.Versions.PaperVersion}。原预览可安全重试，不会重复建版。");
                 try
                 {
                     var report = await api.GetGradingStatusAsync(prepared.Request.ExamId, cancellationToken);
                     if (report.ExamId != prepared.Request.ExamId || (report.CurrentGradingVersion ?? 0) < result.Versions.GradingVersion)
                         throw new InvalidDataException("状态版本不一致。");
-                    Console.Error.WriteLine(DescribeGradingState(report));
+                    WriteSuccessDiagnostic(DescribeGradingState(report));
                 }
                 catch (Exception)
                 {
                     // A committed, verified receipt remains successful even if the subsequent read fails.
-                    Console.Error.WriteLine("重算状态核对失败（发布结果不受影响）；请用 grading status 复查，勿创建另一份发布请求。");
+                    WriteSuccessDiagnostic("重算状态核对失败（发布结果不受影响）；请用 grading status 复查，勿创建另一份发布请求。");
                 }
                 return 0;
             }
@@ -65,7 +65,7 @@ internal static partial class ExamCli
                 if (report.ExamId != examId) throw new InvalidDataException("计分状态属于另一场考试。");
                 Console.WriteLine(JsonSerializer.Serialize(new ApiEnvelope<GradingStatusReport>(api.ServerId!, api.GradingNodeId!,
                     api.GradingServerEpoch, "grading-status", report, null), JsonDefaults.Create()));
-                Console.Error.WriteLine(DescribeGradingState(report));
+                WriteSuccessDiagnostic(DescribeGradingState(report));
                 return 0;
             }
             using var preview = await PreparedGradingRevision.PrepareAsync(api, examId, options["--package"], options["--reason"], cancellationToken);

@@ -29,7 +29,7 @@ jobs:
       - name: Check out the exact reviewed C05 source
         uses: actions/checkout@v4
         with:
-          ref: 6e0f5003f5dd6ba3f904ba4e6bb102d0dc9d1a94
+          ref: db2bf2b14b774edb07a06d72c9f976e9e37db754
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
