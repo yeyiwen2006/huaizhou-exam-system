@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -28,7 +29,8 @@ public sealed class CliBoundaryTests
     private static async Task<(int Exit, string Out, string Error)> RunAsync(params string[] args)
     {
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+                StandardOutputEncoding = new UTF8Encoding(false, true), StandardErrorEncoding = new UTF8Encoding(false, true) };
         start.ArgumentList.Add(Path.Combine(Repository(), "src/Exam.Cli/bin/Release/net10.0/Exam.Cli.dll"));
         foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("EXAM_", StringComparison.Ordinal)).ToArray()) start.Environment.Remove(key);
         start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"] = "true";
@@ -51,7 +53,12 @@ public sealed class CliBoundaryTests
     {
         var result = await RunAsync(command);
         Assert.Equal(0,result.Exit); Assert.NotEmpty(result.Out); Assert.Empty(result.Error);
-        if (command.Contains("help")) Assert.Contains("grading status",result.Out);
+        if (command.Contains("help"))
+        {
+            Assert.Contains("grading status",result.Out);
+            Assert.Contains("规则预览目录",result.Out);
+            Assert.False(result.Out.StartsWith("\uFEFF", StringComparison.Ordinal));
+        }
     }
 
     [Theory]
