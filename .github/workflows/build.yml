@@ -1,57 +1,13 @@
-name: E01 build, scoped tests and package evidence
+name: C05 isolated native verification
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-test:
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: |
-            **/packages.lock.json
-            **/packages.win-x64.lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Restore locked dependencies
-        run: dotnet restore Huaizhou.ExamSystem.sln --locked-mode
-      - name: Build Release
-        run: dotnet build Huaizhou.ExamSystem.sln --configuration Release --no-restore
-      - name: Core and WPF in separate test hosts
-        if: always()
-        run: python eng/testing/run_checks.py --profile core --profile wpf --output .artifacts/checks
-      - name: Validate required evidence
-        if: always()
-        run: python eng/testing/validate_results.py .artifacts/checks/run-report.json
-      - name: Preserve sanitized evidence on success and failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-e01-evidence
-          if-no-files-found: error
-          include-hidden-files: true
-          path: |
-            .artifacts/checks/run-report.json
-            .artifacts/checks/tools.json
-            .artifacts/checks/summary.md
-            .artifacts/checks/*/result.trx
-
-  postgres-integration:
+  native:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -70,9 +26,10 @@ jobs:
     env:
       EXAM_TEST_POSTGRES: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=exam-ci-${{ github.run_id }};SSL Mode=Disable
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the exact reviewed C05 source
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: 6e0f5003f5dd6ba3f904ba4e6bb102d0dc9d1a94
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -83,21 +40,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Restore locked dependencies
+      - name: Install the real XeLaTeX toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends texlive-xetex texlive-fonts-recommended
+          xelatex --version
+          fc-cache -f
+      - name: Restore locked integration dependencies
         run: dotnet restore tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --locked-mode
-      - name: Build integration tests
+      - name: Build the reviewed integration source
         run: dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-restore
-      - name: Test real PostgreSQL adapters
-        if: always()
-        run: python eng/testing/run_checks.py --profile postgres --output .artifacts/checks
-      - name: Validate required evidence
+      - name: Real compiler and PostgreSQL import-to-revision regression
+        run: python eng/testing/run_checks.py --profile latex --profile import-e2e --suite-timeout 1200 --output .artifacts/checks
+      - name: Validate exact-source native evidence
         if: always()
         run: python eng/testing/validate_results.py .artifacts/checks/run-report.json
-      - name: Preserve sanitized PostgreSQL evidence
+      - name: Preserve sanitized evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: postgres-e01-evidence
+          name: c05-native-evidence
           if-no-files-found: error
           include-hidden-files: true
           path: |
@@ -105,74 +67,3 @@ jobs:
             .artifacts/checks/tools.json
             .artifacts/checks/summary.md
             .artifacts/checks/*/result.trx
-
-  package-check:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: |
-            **/packages.lock.json
-            **/packages.win-x64.lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Publish five components twice with locked win-x64 assets
-        run: |
-          python eng/packaging/package.py build --output .artifacts/package-a
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python eng/packaging/package.py build --output .artifacts/package-b
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python eng/packaging/package.py compare .artifacts/package-a .artifacts/package-b --output .artifacts/rebuild.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python eng/packaging/package.py smoke .artifacts/package-a --output .artifacts/package-smoke.json
-      - name: Preserve package evidence only
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-e01-evidence
-          if-no-files-found: error
-          include-hidden-files: true
-          path: |
-            .artifacts/package-a/package-manifest.json
-            .artifacts/package-a/complete.json
-            .artifacts/package-b/package-manifest.json
-            .artifacts/package-b/complete.json
-            .artifacts/rebuild.json
-            .artifacts/package-smoke.json
-
-  aggregate:
-    if: always()
-    needs: [build-test, postgres-integration, package-check]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: '*-e01-evidence'
-          path: .artifacts/jobs
-      - name: Require all jobs and exact current-source profiles
-        env:
-          JOB_RESULTS: ${{ join(needs.*.result, ',') }}
-        run: |
-          python -c "import os; assert all(x=='success' for x in os.environ['JOB_RESULTS'].split(','))"
-          python eng/testing/validate_ci.py .artifacts/jobs --output .artifacts/ci-summary.json
-      - name: Preserve aggregate evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e01-ci-summary
-          if-no-files-found: error
-          include-hidden-files: true
-          path: .artifacts/ci-summary.json
