@@ -53,7 +53,41 @@ jobs:
       - name: Build the reviewed integration source
         run: dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-restore
       - name: Real compiler and PostgreSQL import-to-revision regression
-        run: python eng/testing/run_checks.py --profile latex --profile import-e2e --suite-timeout 1200 --output .artifacts/checks
+        run: |
+          python - <<'PY'
+          import json, os, re, sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, 'eng/testing')
+          import run_checks
+          from evidence import NS, read_trx
+          original = run_checks.public_trx
+          def diagnostic_trx(raw, target, run_id):
+              counts, root = read_trx(raw)
+              for result in root.findall(f'{{{NS}}}Results/{{{NS}}}UnitTestResult'):
+                  if result.get('outcome') != 'Failed':
+                      continue
+                  error = result.find(f'{{{NS}}}Output/{{{NS}}}ErrorInfo')
+                  if error is None:
+                      continue
+                  message = error.findtext(f'{{{NS}}}Message', default='')[:3500]
+                  stack = error.findtext(f'{{{NS}}}StackTrace', default='')[:5000]
+                  for setting in os.environ.get('EXAM_TEST_POSTGRES', '').split(';'):
+                      if setting.lower().startswith('password='):
+                          secret = setting.partition('=')[2]
+                          if secret:
+                              message = message.replace(secret, '<redacted>')
+                              stack = stack.replace(secret, '<redacted>')
+                  message = re.sub(r'(?i)(password|token|authorization)\s*[:=]\s*[^\s,;]+', r'\1=<redacted>', message)
+                  message = re.sub(r'[A-Za-z0-9+/=]{64,}', '<long-value-redacted>', message)
+                  for location in (str(Path.cwd()), tempfile.gettempdir()):
+                      message = message.replace(location, '<fixture>')
+                      stack = stack.replace(location, '<fixture>')
+                  name = result.get('testName', '').partition('(')[0]
+                  print('C05_FAILURE_DIAGNOSTIC ' + json.dumps({'test': name, 'message': message, 'stack': stack}, ensure_ascii=False), flush=True)
+              return original(raw, target, run_id)
+          run_checks.public_trx = diagnostic_trx
+          raise SystemExit(run_checks.run(['latex', 'import-e2e'], Path('.artifacts/checks'), 1200))
+          PY
       - name: Diagnose the synthetic compiler fixture on failure
         if: failure()
         run: dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-build --no-restore --filter FullyQualifiedName=Exam.IntegrationTests.Compilation.XeLaTeXRealToolchainTests.CompileAsync_SyntheticQuestionWithCustomCommandsAndImage_Succeeds --logger "console;verbosity=normal"
