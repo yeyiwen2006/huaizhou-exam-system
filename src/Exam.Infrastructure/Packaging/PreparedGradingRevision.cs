@@ -49,7 +49,10 @@ public sealed class PreparedGradingRevision : IDisposable
         var keys = JsonSerializer.Deserialize<AnswerKeyFile>(answers, ImportJson.Create())!.Answers
             .ToDictionary(a => a.QuestionId, StringComparer.Ordinal);
         Preview = Array.AsReadOnly(parsed.Questions.OrderBy(q => q.QuestionNo).Select(q =>
-            new GradingRevisionQuestion(q.QuestionNo, q.QuestionId, string.Join("、", keys[q.QuestionId].CorrectOptionIds!),
+            new GradingRevisionQuestion(q.QuestionNo, q.QuestionId, string.Join("、", q.Options!
+                .Select((id, index) => (id, index))
+                .Where(option => keys[q.QuestionId].CorrectOptionIds!.Contains(option.id, StringComparer.Ordinal))
+                .Select(option => q.DisplayMetadata?.OptionCaptions is { } captions ? captions[option.index] : option.id)),
                 ImportPipeline.QuestionFullScore(groups[q.GroupId], keys[q.QuestionId].CorrectOptionIds!.Count))).ToArray());
     }
 

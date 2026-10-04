@@ -33,7 +33,8 @@ public static class PaperRevisionMaterials
             foreach (var item in original[collection.Name]!.AsArray())
             {
                 var replacement = currentItems[item![collection.Id]!.GetValue<string>()]!;
-                item["maxScore"] = replacement["maxScore"]!.DeepClone();
+                if (replacement["maxScore"] is { } maximum) item["maxScore"] = maximum.DeepClone();
+                else item.AsObject().Remove("maxScore"); // A group total is optional; explicit null is not valid source JSON.
                 if (collection.Name == "groups") item["scoring"] = replacement["scoring"]!.DeepClone();
             }
         }
@@ -59,7 +60,7 @@ public static class PaperRevisionMaterials
             groups.Add(new JsonObject
             {
                 ["id"] = item!["groupId"]!.DeepClone(), ["subject"] = item["subjectId"]!.DeepClone(),
-                ["type"] = item["type"]!.DeepClone(), ["maxScore"] = item["maxScore"]!.DeepClone(),
+                ["type"] = item["type"]!.DeepClone(), ["maxScore"] = item["maxScore"]?.DeepClone(),
                 ["scoring"] = item["scoring"]!.DeepClone()
             });
         var subjects = new JsonArray();

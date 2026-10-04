@@ -139,7 +139,9 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
                 {
                     if (ReferenceEquals(_pending, prepared)) { _pending = null; prepared.Dispose(); }
                     Questions.Clear(); _completed = false;
-                    Status = $"服务器已明确拒绝本次修订（{rejection.Code}），未发布；请重新检查材料和版本。";
+                    Status = rejection.Code == "VERSION_CONFLICT"
+                        ? "考试或规则已被更新，服务器拒绝了本次修订；请重新取回材料并检查，不能覆盖其他修改。"
+                        : "服务器未接受本次修订；请核对完整答案、计分规则和已发布试卷后重新检查。";
                 }
                 else
                 {
@@ -205,7 +207,11 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
         SelectPackageCommand.RaiseCanExecuteChanged(); CheckCommand.RaiseCanExecuteChanged();
         PublishCommand.RaiseCanExecuteChanged(); RefreshStatusCommand.RaiseCanExecuteChanged();
     }
-    private void SetError(Exception error) => Status = error is AdminApiException api ? $"操作未完成（{api.Code}）：{api.Message}" :
+    private void SetError(Exception error) => Status = error is AdminApiException api ? api.Code switch
+    {
+        "REPLICA_UNAVAILABLE" or "PERSISTENCE_FAILED" => "服务器尚未确认保存结果，请保留原预览后重试。",
+        _ => FriendlyErrors.Describe(api.Code, null)
+    } :
         error is InvalidDataException or ArgumentException ? "规则材料或版本核对未通过，请检查清单、答案与本场试卷结构。" : "操作未完成，请核对连接与本机材料后重试。";
     public void Dispose()
     {

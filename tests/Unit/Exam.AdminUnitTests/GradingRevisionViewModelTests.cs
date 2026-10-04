@@ -318,6 +318,66 @@ public sealed class GradingRevisionViewModelTests
         Assert.DoesNotContain("规则发布成功", vm.PublishedText); Assert.False(vm.CanSelectPackage);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreviewUsesDisplayedOptionCaptionsButKeepsInternalAnswerIdentifiers(bool useCaptions)
+    {
+        using var package = new MaterialPackage();
+        var manifestPath = Path.Combine(package.Root, "manifest.json");
+        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
+        var question = manifest["questions"]![0]!;
+        question["options"] = new JsonArray("internal-left", "internal-right");
+        if (useCaptions) question["displayMetadata"] = new JsonObject { ["optionCaptions"] = new JsonArray("A.", "B.") };
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+        var answersPath = Path.Combine(package.Root, "server-only", "answer-key.json");
+        var answers = JsonNode.Parse(await File.ReadAllTextAsync(answersPath))!;
+        answers["answers"]![0]!["correctOptionIds"] = new JsonArray("internal-left");
+        await File.WriteAllTextAsync(answersPath, answers.ToJsonString());
+        var snapshot = Snapshot();
+        snapshot = snapshot with { Paper = snapshot.Paper! with
+        { Structure = new PaperStructure([new("q-001", 1, "s", "g", "single", ["internal-left", "internal-right"])]) } };
+        using var handler = new Handler((_, _) => Task.FromResult(Reply(snapshot)));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var prepared = await PreparedGradingRevision.PrepareAsync(api, ExamId, package.Root, "合成映射核对");
+        Assert.Equal(useCaptions ? "A." : "internal-left", Assert.Single(prepared.Preview).CorrectOptions);
+        Assert.Equal("internal-left", JsonNode.Parse(prepared.Request.AnswerKeyJson!)!["answers"]![0]!["correctOptionIds"]![0]!.GetValue<string>());
+        var output = Path.Combine(package.Root, "caption-preview");
+        await prepared.ExportAsync(output);
+        var displayed = await File.ReadAllTextAsync(Path.Combine(output, "preview.md"));
+        Assert.Contains(useCaptions ? "参考答案 A." : "参考答案 internal-left", displayed);
+        if (useCaptions) Assert.DoesNotContain("internal-left", displayed);
+    }
+
+    [Theory]
+    [InlineData("VERSION_CONFLICT", true)]
+    [InlineData("INVALID_INPUT", true)]
+    [InlineData("PUBLICATION_NOT_READY", true)]
+    [InlineData("REPLICA_UNAVAILABLE", false)]
+    [InlineData("FORBIDDEN", false)]
+    public async Task PublicationErrorsUseChineseWithoutExposingCodesOrUntrustedMessages(string code, bool definitive)
+    {
+        using var package = new MaterialPackage();
+        using var handler = new Handler((request, _) => Task.FromResult(request.Method == HttpMethod.Post
+            ? new HttpResponseMessage(HttpStatusCode.Conflict)
+            { Content = JsonContent.Create(new ApiEnvelope<object>("synthetic-server", "synthetic-node", 1, "test", null,
+                new ApiError(code, "不应显示的原始材料与内部信息 synthetic-private-marker")), options: Json) }
+            : Reply(Snapshot())));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "synthetic-operator");
+        using var vm = new GradingRevisionViewModel(api, new FakeDialog(package.Root))
+        { ExamId = ExamId, Reason = "合成失败核对", ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        await vm.SelectPackageAsync(); await vm.CheckAsync(); await vm.PublishAsync();
+        Assert.DoesNotContain(code, vm.Status);
+        Assert.DoesNotContain("synthetic-private-marker", vm.Status);
+        Assert.DoesNotContain("原始材料", vm.Status);
+        Assert.DoesNotContain("规则发布成功", vm.PublishedText);
+        Assert.Equal(definitive, vm.CanSelectPackage);
+        Assert.Equal(!definitive, vm.CanPublish);
+        if (!definitive) Assert.Contains("尚未确认", vm.Status);
+    }
+
     private static async Task<HttpResponseMessage> PublishedReplyAsync(HttpRequestMessage request)
     {
         var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!;
