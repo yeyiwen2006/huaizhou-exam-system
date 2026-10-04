@@ -98,7 +98,7 @@ public static class ReliableCommandPolicy
 
     public static string? Validate(CreateCommandEventRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.RequestId) ||
+        if (!Enum.IsDefined(request.EventType) || string.IsNullOrWhiteSpace(request.RequestId) ||
             string.IsNullOrWhiteSpace(request.EventId) ||
             string.IsNullOrWhiteSpace(request.ExamId) ||
             request.EntryVersion < 0 ||

@@ -246,7 +246,7 @@ public sealed partial class ReviewRegressionTests
         var pending = viewModel.LoadAsync();
         viewModel.ExamId = "exam-2";
         viewModel.ExamId = "exam-1";
-        release.SetResult(Success(new[] { Participation("exam-1") }));
+        release.SetResult(Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") })));
         await pending;
         Assert.Empty(viewModel.Rows);
         Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
@@ -258,12 +258,12 @@ public sealed partial class ReviewRegressionTests
         var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
         using var handler = new AsyncHandler(_ => ++calls == 1 ? release.Task
-            : Task.FromResult(Success(new[] { Participation("exam-1") with { CandidateId = "new-candidate" } })));
+            : Task.FromResult(Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") with { CandidateId = "new-candidate" } }))));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         var oldRequest = viewModel.LoadAsync();
         await viewModel.LoadAsync();
-        release.SetResult(Success(new[] { Participation("exam-1") }));
+        release.SetResult(Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") })));
         await oldRequest;
         Assert.Equal("new-candidate", Assert.Single(viewModel.Rows).CandidateId);
     }
@@ -271,11 +271,11 @@ public sealed partial class ReviewRegressionTests
     [Fact]
     public async Task Monitoring_RejectsMalformedAuthoritativeRowsWithoutReplacingExistingRows()
     {
-        using var handler = new Handler(_ => Success(new[]
+        using var handler = new Handler(_ => Success(MonitoringFixture.Snapshot(new[]
         {
             Participation("exam-1"),
             Participation("exam-1") with { CandidateId = "candidate-2" }
-        }));
+        })));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
@@ -289,7 +289,7 @@ public sealed partial class ReviewRegressionTests
     [Fact]
     public async Task Monitoring_RejectsNullAuthoritativeRowWithoutReplacingExistingRows()
     {
-        using var handler = new Handler(_ => Success(new ParticipationResult?[] { null }));
+        using var handler = new Handler(_ => Success(MonitoringFixture.Snapshot(Array.Empty<ParticipationResult>()) with { ActualCount = 1, Participants = new Exam.Contracts.Administration.MonitoringParticipant[] { null! } }));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
@@ -349,7 +349,7 @@ public sealed partial class ReviewRegressionTests
             ExpectedVersionText = "3", DecisionReason = "synthetic reason"
         };
         await viewModel.DecideDeviceAsync();
-        Assert.Contains("已保留设备", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("设备选择已保存", viewModel.Status, StringComparison.Ordinal);
         Assert.Contains("刷新失败", viewModel.Status, StringComparison.Ordinal);
         Assert.Contains("不要重复操作", viewModel.Status, StringComparison.Ordinal);
         Assert.Equal("4", viewModel.ExpectedVersionText);

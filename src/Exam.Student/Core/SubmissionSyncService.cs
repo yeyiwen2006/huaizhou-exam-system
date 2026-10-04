@@ -65,6 +65,7 @@ public sealed class SubmissionSyncService(
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
         var clockTask = SynchronizeClockAsync(linked.Token);
         runtime.StateChanged += OnRuntimeStateChanged;
+        runtime.SupplementRequested += OnSupplementRequested;
         try
         {
             while (!linked.IsCancellationRequested)
@@ -77,6 +78,7 @@ public sealed class SubmissionSyncService(
         finally
         {
             runtime.StateChanged -= OnRuntimeStateChanged;
+            runtime.SupplementRequested -= OnSupplementRequested;
             linked.Cancel();
             try { await clockTask.ConfigureAwait(false); }
             catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
@@ -388,6 +390,14 @@ public sealed class SubmissionSyncService(
             if (_disposed || state == _observedState) return;
             _observedState = state;
             if (_wake.CurrentCount == 0) _wake.Release();
+        }
+    }
+
+    private void OnSupplementRequested(object? sender, EventArgs e)
+    {
+        lock (_sync)
+        {
+            if (!_disposed && _wake.CurrentCount == 0) _wake.Release();
         }
     }
 

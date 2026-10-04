@@ -43,6 +43,7 @@ public sealed partial class StudentExamRuntime(
     private PaperUpdateCoordinator? _paperUpdate;
 
     public ExamPackageManager Manager { get; } = manager;
+    public event EventHandler? SupplementRequested;
     public AnswerSession? Answers { get; private set; }
     /// <summary>B06 在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
     public PaperUpdateCoordinator PaperUpdate
@@ -470,7 +471,13 @@ public sealed partial class StudentExamRuntime(
                     : Manager.ExamEnded ? FreezeEndedAnswersAsync(answers, CancellationToken.None) : Task.CompletedTask
                 : Task.CompletedTask;
             NotifyStateChanged();
-            try { await Task.WhenAll(packageCommand, answerStop); }
+            try
+            {
+                await Task.WhenAll(packageCommand, answerStop);
+                if (delivery.EventType == CommandEventType.UploadRequested && await packageCommand &&
+                    Manager.CurrentPhase != ExamPackageManager.Phase.Revoked)
+                    SupplementRequested?.Invoke(this, EventArgs.Empty);
+            }
             finally
             {
                 // 依据本机已验证的持久指令，而不是原始网络消息；Received 回执丢失也不丢掉更新任务。

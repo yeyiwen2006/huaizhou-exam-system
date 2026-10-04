@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Text.Json;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Common;
@@ -11,10 +11,10 @@ public sealed partial class ReviewRegressionTests
     [Fact]
     public async Task C04Review_DuplicateCandidateRowsAreNotAuthoritative()
     {
-        using var handler = new Handler(_ => Success(new[]
+        using var handler = new Handler(_ => Success(MonitoringFixture.Snapshot(new[]
         {
             Participation("exam-1"), Participation("exam-1") with { ParticipationId = "other-part" }
-        }));
+        })));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
@@ -24,10 +24,10 @@ public sealed partial class ReviewRegressionTests
     [Fact]
     public async Task C04Review_WithdrawnCandidateCannotAppearInActualParticipationResponse()
     {
-        using var handler = new Handler(_ => Success(new[]
+        using var handler = new Handler(_ => Success(MonitoringFixture.Snapshot(new[]
         {
             Participation("exam-1") with { BusinessState = ParticipationBusinessState.NotParticipating }
-        }));
+        })));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
@@ -40,7 +40,7 @@ public sealed partial class ReviewRegressionTests
         var requests = new List<DeviceDecisionRequest>();
         using var handler = new AsyncHandler(async message =>
         {
-            if (message.Method == HttpMethod.Get) return Success(new[] { Participation("exam-1") });
+            if (message.Method == HttpMethod.Get) return Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") }));
             var request = JsonSerializer.Deserialize<DeviceDecisionRequest>(
                 await message.Content!.ReadAsStringAsync(), JsonDefaults.Create())!;
             requests.Add(request);
@@ -67,7 +67,7 @@ public sealed partial class ReviewRegressionTests
             if (message.Method == HttpMethod.Get)
             {
                 refreshes++;
-                return Task.FromResult(Success(new[] { Participation("exam-1") }));
+                return Task.FromResult(Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") })));
             }
             return release.Task;
         });
@@ -114,7 +114,7 @@ public sealed partial class ReviewRegressionTests
                     firstRefreshStarted.SetResult();
                     return await firstRefresh.Task;
                 }
-                return Success(new[] { Participation("exam-1") });
+                return Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") }));
             }
             var request = JsonSerializer.Deserialize<DeviceDecisionRequest>(
                 await message.Content!.ReadAsStringAsync(), JsonDefaults.Create())!;
@@ -129,8 +129,8 @@ public sealed partial class ReviewRegressionTests
         viewModel.DecisionReason = "new synthetic reason";
         await viewModel.DecideDeviceAsync();
         var newerStatus = viewModel.Status;
-        Assert.Contains("device-3", newerStatus, StringComparison.Ordinal);
-        firstRefresh.SetResult(Success(new[] { Participation("exam-1") }));
+        Assert.Contains("设备选择已保存", newerStatus, StringComparison.Ordinal);
+        firstRefresh.SetResult(Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") })));
         await older;
         Assert.Equal(newerStatus, viewModel.Status);
         Assert.Equal("5", viewModel.ExpectedVersionText);
@@ -140,7 +140,7 @@ public sealed partial class ReviewRegressionTests
     public async Task C04Review_DecisionReceiptRequiresAnActualDecisionTimestamp()
     {
         using var handler = new Handler(message => message.Method == HttpMethod.Get
-            ? Success(new[] { Participation("exam-1") })
+            ? Success(MonitoringFixture.Snapshot(new[] { Participation("exam-1") }))
             : Success(new DeviceDecisionResult("part-1", "device-2", "device-1", 2, 4,
                 "operator-1", "synthetic reason", default)));
         using var api = Configured(handler);

@@ -4,6 +4,7 @@ using Exam.Application.Participation;
 using Exam.Application.Submissions;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
+using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
@@ -364,11 +365,19 @@ public static class ExamApiEndpointExtensions
             HttpContext context,
             IConfiguration configuration,
             CancellationToken cancellationToken) =>
-            ApiEndpointResults.FromCommand(
+        {
+            if (request.EventType == CommandEventType.UploadRequested)
+            {
+                var actor = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
+                request = request with { Metadata = new Dictionary<string, string>(request.SafeMetadata)
+                    { ["operator"] = actor } };
+            }
+            return ApiEndpointResults.FromCommand(
                 context,
                 configuration,
                 request.RequestId,
-                await service.CreateAsync(request, cancellationToken)));
+                await service.CreateAsync(request, cancellationToken));
+        });
 
         group.MapGet("/due", async (
             string participationId,

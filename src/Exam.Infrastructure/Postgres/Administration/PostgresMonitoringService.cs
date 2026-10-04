@@ -105,7 +105,9 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
             SELECT x.participation_id,d.device_id,d.client_number,coalesce(g.name,'未分组') AS group_name,
                    d.device_id=p.authorized_device_id AS authorized,presence.last_seen_at,presence.disconnected_at,
                    presence.recovering,presence.page,
-                   CASE WHEN progress.device_id=d.device_id THEN progress.answer_version ELSE 0 END AS answer_version
+                   CASE WHEN progress.device_id=d.device_id THEN progress.answer_version ELSE 0 END AS answer_version,
+                   CASE WHEN progress.device_id=d.device_id THEN progress.last_synced_at END AS last_synced_at,
+                   CASE WHEN progress.device_id=d.device_id THEN progress.answers::text ELSE '{}' END AS saved_answers
               FROM exam.participation_device_conflicts x
               JOIN exam.participations p ON p.participation_id=x.participation_id
               JOIN exam.activation_devices d ON d.device_id IN (x.original_device_id,x.pending_device_id)
@@ -123,7 +125,13 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                 var seen=Time(reader,"last_seen_at");
                 list.Add(new(Text(reader,"device_id")!,Text(reader,"client_number")!,Text(reader,"group_name")!,
                     ConnectionStatusPolicy.Evaluate(now,seen,Time(reader,"disconnected_at"),Bool(reader,"recovering")),
-                    seen,Bool(reader,"authorized"),Long(reader,"answer_version"),Text(reader,"page")??"未报告"));
+                    seen,Bool(reader,"authorized"),Long(reader,"answer_version"),Text(reader,"page")??"未报告")
+                {
+                    LastSyncedAt=Time(reader,"last_synced_at"),
+                    SavedAnswerCount=(JsonSerializer.Deserialize<Dictionary<string,AnswerValue>>(Text(reader,"saved_answers")!,AdministrationSql.Json)
+                        ??throw new InvalidDataException("冲突设备的已保存答案无效。"))
+                        .Count(pair=>pair.Value.Kind!=AnswerKind.Empty)
+                });
             }
         }
         rows=rows.Select(row=>row with{Commands=commands.GetValueOrDefault(row.ParticipationId)??[],ConflictDevices=conflicts.GetValueOrDefault(row.ParticipationId)??[]}).ToList();

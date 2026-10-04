@@ -113,8 +113,7 @@ internal sealed class AdminUiFixture : IDisposable
             if (path.Contains("/submissions/collection/events", StringComparison.Ordinal)) return Reply(Array.Empty<CollectionCompletedNotification>());
             if (path == "/api/v1/versioning/exams/" + ExamId) return Reply(new ExamVersionSnapshot(ExamId, new(1, 1, 1),
                 new(Start, Start.AddHours(2)), ExamLifecycle.Scheduled, null, null, null, null, new Dictionary<string, ParticipantVersionStatus>()));
-            if (path.EndsWith("/monitoring", StringComparison.Ordinal)) return Reply(new MonitoringSnapshot(ExamId, Start, new(1, 1, 1),
-                ExamLifecycle.Scheduled, 0, 0, 0, [], []));
+            if (path.EndsWith("/monitoring", StringComparison.Ordinal)) return Reply(MonitoringData());
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = JsonContent.Create(new ApiEnvelope<object>("synthetic-server", "synthetic-node", 1, "ui-fixture", null,
@@ -123,6 +122,21 @@ internal sealed class AdminUiFixture : IDisposable
         }
         private static Task<HttpResponseMessage> Reply<T>(T result) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         { Content = JsonContent.Create(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1, "ui-fixture", result, null), options: JsonDefaults.Create()) });
+    }
+
+    public static MonitoringSnapshot MonitoringData()
+    {
+        var participant = MonitoringFixture.Participant(new("synthetic-part-1", ExamId, "synthetic-person-1",
+            ParticipationBusinessState.Answering, "synthetic-device-1", 1, 1, 1, null)) with
+        {
+            Name = "合成考生甲", ClientNumber = "20261002001", AdmissionNo = "000001", RoomGroupName = "合成试场A",
+            Commands = [new("synthetic-start", CommandEventType.Start, 1, "待确认", Start, null, true)],
+            ConflictDevices = [
+                new("synthetic-device-1", "20261002001", "合成试场A", DeviceConnectionState.Online, Start, true, 3, "答题页")
+                    { LastSyncedAt = Start.AddMinutes(-1), SavedAnswerCount = 3 },
+                new("synthetic-device-2", "20261002002", "合成试场B", DeviceConnectionState.Online, Start, false, 0, "等待裁决")]
+        };
+        return new(ExamId, DateTimeOffset.UtcNow, new(1, 1, 1), ExamLifecycle.Running, 1, 1, 0, [participant], [participant]);
     }
 
     public void Dispose() { Window.Close(); _api.Dispose(); }

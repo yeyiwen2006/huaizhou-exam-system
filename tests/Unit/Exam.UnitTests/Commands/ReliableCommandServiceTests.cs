@@ -7,6 +7,31 @@ namespace Exam.UnitTests.Commands;
 public sealed class ReliableCommandServiceTests
 {
     [Fact]
+    public async Task UploadRequest_CannotFreezeAnActiveExam()
+    {
+        var fixture = new CommandFixture(ExamLifecycle.Running);
+        var result = await fixture.Service.CreateAsync(fixture.CreateRequest(CommandEventType.UploadRequested));
+        Assert.Equal(CommandErrorCode.VersionConflict, result.ErrorCode);
+        Assert.Null(await fixture.Store.FindAsync("event-1"));
+    }
+
+    [Fact]
+    public async Task UploadRequest_IsDurableAndReplayableAfterExamEnd()
+    {
+        var fixture = new CommandFixture(ExamLifecycle.Ended);
+        var request = fixture.CreateRequest(CommandEventType.UploadRequested);
+        Assert.True((await fixture.Service.CreateAsync(request)).IsSuccess);
+        Assert.True((await fixture.Service.CreateAsync(request)).IsSuccess);
+        var delivery = Assert.Single((await fixture.GetDueAsync()).Value!);
+        Assert.Equal(CommandEventType.UploadRequested, delivery.EventType);
+        Assert.Null(delivery.ProtectedUnlockReference);
+        fixture.Access.Set(fixture.AccessState with { AuthorizedDeviceId = "replacement", AuthorizationVersion = 2 });
+        fixture.Clock.Advance(TimeSpan.FromSeconds(2));
+        var stale = await fixture.GetDueAsync();
+        Assert.Equal(CommandErrorCode.AuthorizationRevoked, stale.ErrorCode);
+    }
+
+    [Fact]
     public async Task ScheduleDelivery_CarriesPersistedTimesAndKeepsThemAcrossRetry()
     {
         var fixture = new CommandFixture();

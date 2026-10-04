@@ -1,4 +1,4 @@
-<UserControl x:Class="Exam.Admin.Reporting.ReportPageView"
+﻿<UserControl x:Class="Exam.Admin.Reporting.ReportPageView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:reporting="clr-namespace:Exam.Admin.Reporting"
@@ -77,12 +77,12 @@
                     <TextBlock Text="{Binding GradedCountText}" Style="{DynamicResource Report.MetricValue}" />
                 </StackPanel>
             </Border>
-            <Border Style="{DynamicResource Report.Metric}">
+            <Expander Header="排查详情" Margin="8,0,0,0">
                 <StackPanel>
-                    <TextBlock Text="计分规则版本" Style="{DynamicResource Report.MetricLabel}" />
-                    <TextBlock Text="{Binding GradingVersionText}" Style="{DynamicResource Report.MetricValue}" />
+                    <TextBlock Text="计分规则版本" Style="{DynamicResource Report.MetricLabel}"/>
+                    <TextBlock Text="{Binding GradingVersionText}" Style="{DynamicResource Report.MetricValue}"/>
                 </StackPanel>
-            </Border>
+            </Expander>
         </UniformGrid>
 
         <Border Grid.Row="3" Style="{DynamicResource Hint}" Background="{DynamicResource Brush.Primary.Soft}" Padding="12,6" Margin="0,0,0,10">

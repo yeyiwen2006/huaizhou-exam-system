@@ -333,6 +333,11 @@ public sealed partial class ExamPackageManager : IDisposable
                 LastError = "设备授权已调整，请重新进入以核对当前授权。";
                 return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Received, ct);
             }
+            if (delivery.EventType == CommandEventType.UploadRequested)
+            {
+                // A supplement request never unlocks, thaws or manufactures a submission.
+                return await RecordAndAcknowledgeAsync(delivery, CommandProcessingResult.Applied, ct);
+            }
             if (delivery.EventType == CommandEventType.ScheduleChanged)
             {
                 // 计划版本与试卷版本分开；旧消息晚到、重连和重启均不能把新时间改回去。

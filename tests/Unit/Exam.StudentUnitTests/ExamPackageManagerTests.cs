@@ -19,6 +19,25 @@ namespace Exam.StudentUnitTests;
 public sealed class ExamPackageManagerTests
 {
     [Fact]
+    public async Task SupplementRequest_AcknowledgesWithoutUnlockingOrReopeningEndedExam()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        await manager.ConfirmParticipationAsync();
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start()));
+        var end = fixture.Api.Start() with { EventId = "end-upload-test", EventType = CommandEventType.End,
+            StateVersion = 3, ProtectedUnlockReference = null };
+        Assert.True(await manager.HandleCommandAsync(end));
+        var supplement = end with { EventId = "upload-test", EventType = CommandEventType.UploadRequested };
+        Assert.True(await manager.HandleCommandAsync(supplement));
+        Assert.True(await manager.HandleCommandAsync(supplement));
+        Assert.True(manager.ExamEnded);
+        Assert.Null(manager.UnlockedPayload);
+        Assert.Equal(CommandProcessingResult.Applied, fixture.Api.Acks[^1].ProcessingResult);
+        Assert.False(await manager.HandleCommandAsync(supplement with { EventId = "wrong-device", TargetDeviceId = "other-device" }));
+    }
+    [Fact]
     public async Task ScheduleUpdates_AreVersionedDurableAndRejectChangedReplay()
     {
         using var fixture = await Fixture.CreateAsync();

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Common;
@@ -7,7 +7,7 @@ using Exam.Contracts.Submissions;
 
 namespace Exam.Admin.ViewModels;
 
-public sealed class MonitoringViewModel : BindableBase, IDisposable
+public sealed partial class MonitoringViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
     private readonly TimeSpan _collectionPollInterval;
@@ -35,10 +35,17 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         get => _selectedRow;
         set
         {
-            if (SetProperty(ref _selectedRow, value) && value is not null)
+            if (SetProperty(ref _selectedRow, value))
             {
+                OnPropertyChanged(nameof(SelectedDetails));
+                OnPropertyChanged(nameof(ConflictDevices));
+                OnPropertyChanged(nameof(AnswerDetails));
+                OnPropertyChanged(nameof(CommandDetails));
+                if (!_applyingSnapshot) SelectedConflictDevice = null;
+                if (value is null) return;
+                var sameTarget = ParticipationId == value.ParticipationId;
                 ParticipationId = value.ParticipationId;
-                SelectedDeviceId = value.AuthorizedDeviceId;
+                if (!_applyingSnapshot || !sameTarget) SelectedDeviceId = value.AuthorizedDeviceId;
                 ExpectedVersionText = value.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 ResendParticipationId = value.ParticipationId;
                 ResendDeviceId = value.AuthorizedDeviceId;
@@ -51,7 +58,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private void ResetContext()
     {
         StopCollectionPolling();
+        StopSnapshotPolling();
         _contextVersion++;
+        _snapshotAsOf = default;
+        SnapshotStatus = "尚未读取实时状态。";
         _decisionRequestVersion++;
         _resendRequestVersion++;
         Rows.Clear();
@@ -87,7 +97,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             throw new ArgumentOutOfRangeException(nameof(collectionPollInterval));
         _api.ConfigurationChanged += OnConfigurationChanged;
         LoadCommand = new AsyncRelayCommand(LoadAsync, onError: SetError);
-        DecideDeviceCommand = new AsyncRelayCommand(DecideDeviceAsync, onError: SetError);
+        ResendStartCommand = new AsyncRelayCommand(() => ResendSelectedAsync(CommandEventType.Start), onError: SetError);
+        ResendEndCommand = new AsyncRelayCommand(() => ResendSelectedAsync(CommandEventType.End), onError: SetError);
+        DecideDeviceCommand = new AsyncRelayCommand(DecideSelectedDeviceAsync, onError: SetError);
+        RequestUploadCommand = new AsyncRelayCommand(RequestUploadAsync, onError: SetError);
         ResendCommand = new AsyncRelayCommand(ResendAsync, onError: SetError);
         RefreshCollectionEventsCommand = new AsyncRelayCommand(() => RefreshCollectionEventsAsync(), onError: SetCollectionError);
     }
@@ -99,13 +112,13 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public bool IsPageActive
     {
         get => _isPageActive;
-        set { if (SetProperty(ref _isPageActive, value)) UpdateCollectionPolling(); }
+        set { if (SetProperty(ref _isPageActive, value)) UpdateCollectionPolling(); UpdateSnapshotPolling(); }
     }
 
     public bool ConnectionReady
     {
         get => _connectionReady;
-        set { if (SetProperty(ref _connectionReady, value)) UpdateCollectionPolling(); }
+        set { if (SetProperty(ref _connectionReady, value)) UpdateCollectionPolling(); UpdateSnapshotPolling(); }
     }
 
     public string ExamId
@@ -117,6 +130,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             {
                 ResetContext();
                 UpdateCollectionPolling();
+                UpdateSnapshotPolling();
             }
         }
     }
@@ -143,6 +157,9 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public string CollectionStatus { get => _collectionStatus; private set => SetProperty(ref _collectionStatus, value); }
 
     public AsyncRelayCommand LoadCommand { get; }
+    public AsyncRelayCommand ResendStartCommand { get; }
+    public AsyncRelayCommand ResendEndCommand { get; }
+    public AsyncRelayCommand RequestUploadCommand { get; }
     public AsyncRelayCommand DecideDeviceCommand { get; }
     public AsyncRelayCommand ResendCommand { get; }
     public AsyncRelayCommand RefreshCollectionEventsCommand { get; }
@@ -300,125 +317,11 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         if (_disposed) return;
         _disposed = true;
         StopCollectionPolling();
+        StopSnapshotPolling();
         _api.ConfigurationChanged -= OnConfigurationChanged;
     }
 
-    public async Task LoadAsync()
-    {
-        if (string.IsNullOrWhiteSpace(ExamId))
-        {
-            Status = "请填写考试编号。";
-            return;
-        }
-
-        var examId = ExamId.Trim();
-        var context = _contextVersion;
-        var operation = ++_loadVersion;
-        Status = "正在读取参试考生…";
-        IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results;
-        try
-        {
-            results = await _api.ListActualParticipationsAsync(examId);
-        }
-        catch
-        {
-            if (context == _contextVersion && operation == _loadVersion)
-            {
-                Rows.Clear();
-                OnPropertyChanged(nameof(FilteredRows));
-                throw;
-            }
-            return;
-        }
-        if (context != _contextVersion || operation != _loadVersion)
-        {
-            return;
-        }
-        ValidateParticipations(results, examId);
-        Rows.Clear();
-        SelectedRow = null;
-
-        // B06 失焦与复核监测：与参试列表合并展示；查询失败不阻止主列表，显示占位并提示。
-        var (focusResult, focusError) = await LoadFocusSummariesAsync(examId, context, operation);
-        var focusByParticipation = focusResult ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        var reviewByParticipation = await LoadReviewStatesAsync(examId, context, operation) ?? [];
-        foreach (var item in results)
-        {
-            focusByParticipation.TryGetValue(item.ParticipationId, out var focusSummary);
-            reviewByParticipation.TryGetValue(item.ParticipationId, out var reviewState);
-            Rows.Add(new MonitoringRow(
-                item.ParticipationId,
-                item.CandidateId,
-                ToChinese(item.BusinessState),
-                item.AuthorizedDeviceId,
-                item.EntryVersion,
-                item.AuthorizationVersion,
-                item.Version,
-                item.BusinessState == ParticipationBusinessState.Submitted ? "已提交" : "未提交",
-                focusSummary ?? "暂无记录",
-                reviewState ?? "—"));
-        }
-        OnPropertyChanged(nameof(FilteredRows));
-        Status = focusError is null
-            ? $"共 {Rows.Count} 名实际参试考生。"
-            : $"共 {Rows.Count} 名实际参试考生；{focusError}";
-    }
-
-    /// <summary>失焦监测汇总；网络或权限异常时返回错误说明，不阻塞参试列表。</summary>
-    private async Task<(Dictionary<string, string>? Map, string? Error)> LoadFocusSummariesAsync(
-        string examId, long context, long operation)
-    {
-        try
-        {
-            var summaries = await _api.ListFocusSummariesAsync(examId);
-            if (context != _contextVersion || operation != _loadVersion) return (null, null);
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var summary in summaries)
-            {
-                if (summary is null || !StringComparer.Ordinal.Equals(summary.ExamId, examId) ||
-                    string.IsNullOrWhiteSpace(summary.ParticipationId) || summary.EventCount < 0 ||
-                    summary.TotalDurationMilliseconds < 0) continue;
-                map[summary.ParticipationId] = summary.EventCount == 0 ? "0 次" :
-                    $"{summary.EventCount} 次 / 共 {FormatDuration(summary.TotalDurationMilliseconds)}";
-            }
-            return (map, null);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return (null, $"失焦监测查询失败：{FriendlyErrors.Describe(exception)}");
-        }
-    }
-
-    /// <summary>修订复核状态；考生尚未进入修订流程时显示“—”。</summary>
-    private async Task<Dictionary<string, string>?> LoadReviewStatesAsync(string examId, long context, long operation)
-    {
-        try
-        {
-            var snapshot = await _api.GetExamAsync(examId);
-            if (context != _contextVersion || operation != _loadVersion) return null;
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (snapshot.Participants is not null)
-            {
-                foreach (var (participantId, status) in snapshot.Participants)
-                {
-                    if (status is null || string.IsNullOrWhiteSpace(participantId)) continue;
-                    map[participantId] = status.PaperUpdateState switch
-                    {
-                        Exam.Contracts.Versioning.PaperUpdateState.ReviewRequired => "未复核",
-                        Exam.Contracts.Versioning.PaperUpdateState.Updated => "已复核",
-                        Exam.Contracts.Versioning.PaperUpdateState.DownloadFailed => "修订未安装",
-                        _ => "—",
-                    };
-                }
-            }
-            return map;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // 复核状态属于增强信息，失败不阻塞监测列表。
-            return null;
-        }
-    }
+    public Task LoadAsync() => LoadSnapshotAsync();
 
     private static string FormatDuration(long milliseconds)
     {
@@ -466,7 +369,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             throw new InvalidOperationException("设备裁决回执与当前请求不匹配，已拒绝应用。");
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         inputVersion = _decisionInputVersion;
-        var success = $"已保留设备 {result.AuthorizedDeviceId} 继续答题，设备 {result.RevokedDeviceId} 已停止答题（操作人 {result.OperatorId}，原因：{result.Reason}）。";
+        var success = "设备选择已保存；另一端已撤销授权。仅恢复服务器最后保存的答案，两端未同步内容不会合并。";
         try
         {
             await LoadAsync();
@@ -516,31 +419,16 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         Status = $"已重发指令（累计发送 {result.DeliveryAttempts} 次）。";
     }
 
-    private static void ValidateParticipations(
-        IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results,
-        string examId)
-    {
-        if (results.Any(item => item is null || !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
-            string.IsNullOrWhiteSpace(item.ParticipationId) || string.IsNullOrWhiteSpace(item.CandidateId) ||
-            string.IsNullOrWhiteSpace(item.AuthorizedDeviceId) || item.EntryVersion < 1 ||
-            item.AuthorizationVersion < 1 || item.Version < 1 || !Enum.IsDefined(item.BusinessState) ||
-            item.BusinessState == ParticipationBusinessState.NotParticipating ||
-            item.Lifecycle is { } lifecycle && !Enum.IsDefined(lifecycle)) ||
-            results.Select(item => item.ParticipationId).Distinct(StringComparer.Ordinal).Count() != results.Count ||
-            results.Select(item => item.CandidateId).Distinct(StringComparer.Ordinal).Count() != results.Count)
-            throw new InvalidOperationException("参与记录的考试、标识、版本或状态无效，已拒绝显示。");
-    }
-
     private bool MatchesFilter(MonitoringRow row)
     {
-        if (OnlySubmitted && row.CollectionState != "已提交")
+        if (OnlySubmitted && row.CollectionState is not ("已提交" or "已回收"))
         {
             return false;
         }
+        if (RoomFilter != "全部试场" && row.RoomGroupName != RoomFilter) return false;
         var filter = FilterText.Trim();
-        return filter.Length == 0 || row.CandidateId.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-               row.ParticipationId.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-               row.AuthorizedDeviceId.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        return filter.Length == 0 || new[] { row.Name, row.ClassText, row.AdmissionNo, row.ClientNumber, row.RoomGroupName }
+               .Any(value => value.Contains(filter, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string ToChinese(ParticipationBusinessState state) => state switch
@@ -568,4 +456,18 @@ public sealed record MonitoringRow(
     long Version,
     string CollectionState,
     string FocusSummary,
-    string PaperReviewState);
+    string PaperReviewState)
+{
+    public string Name { get; init; } = string.Empty;
+    public string ClassText { get; init; } = string.Empty;
+    public string AdmissionNo { get; init; } = string.Empty;
+    public string ClientNumber { get; init; } = string.Empty;
+    public string RoomGroupName { get; init; } = string.Empty;
+    public string ConnectionText { get; init; } = string.Empty;
+    public string Page { get; init; } = string.Empty;
+    public string CurrentQuestion { get; init; } = string.Empty;
+    public string LastCommunicationText { get; init; } = string.Empty;
+    public string PaperStatus { get; init; } = string.Empty;
+    public string ConflictText { get; init; } = string.Empty;
+    public Exam.Contracts.Administration.MonitoringParticipant? Details { get; init; }
+}

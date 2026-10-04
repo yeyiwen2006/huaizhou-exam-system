@@ -423,6 +423,12 @@ public sealed class ReliableCommandService
                 "考试尚未进入结束状态。");
         }
 
+        if (request.EventType == CommandEventType.UploadRequested &&
+            authorization.ExamLifecycle != ExamLifecycle.Ended &&
+            authorization.BusinessState != ParticipationBusinessState.Submitted)
+            return CommandOperationResult<CommandEventView>.Failure(CommandErrorCode.VersionConflict,
+                "仅在考试结束或考生已交卷后请求补传原答卷，不能提前冻结正在作答的内容。");
+
         return null;
     }
 
@@ -463,6 +469,8 @@ public sealed class ReliableCommandService
                                       authorization.BusinessState is ParticipationBusinessState.Waiting or
                                           ParticipationBusinessState.Answering,
             CommandEventType.End => authorization.ExamLifecycle == ExamLifecycle.Ended,
+            CommandEventType.UploadRequested => authorization.ExamLifecycle == ExamLifecycle.Ended ||
+                authorization.BusinessState == ParticipationBusinessState.Submitted,
             _ => true
         };
     }
