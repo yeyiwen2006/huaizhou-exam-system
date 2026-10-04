@@ -10,7 +10,7 @@ using Exam.Contracts.Versioning;
 namespace Exam.Infrastructure.Packaging;
 
 /// <summary>无 WPF 依赖的考务发布适配器。HttpClient 必须禁用自动跳转，凭据由既有登录会话提供。</summary>
-public sealed class HttpExamPublicationClient(HttpClient http, Action<HttpRequestMessage>? credentials = null) : IExamPublicationClient
+public sealed partial class HttpExamPublicationClient(HttpClient http, Action<HttpRequestMessage>? credentials = null) : IExamPublicationClient
 {
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
     private string? _nodeId;

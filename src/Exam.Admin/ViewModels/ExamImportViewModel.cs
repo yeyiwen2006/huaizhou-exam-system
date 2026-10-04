@@ -224,6 +224,13 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
 
             var archive = await _api.DownloadPaperMaterialsAsync(examId, snapshot.Versions.PaperVersion,
                 _operationCancellation.Token);
+            if (snapshot.Versions.GradingVersion > snapshot.Versions.PaperVersion)
+            {
+                var currentRules = await _api.GetGradingMaterialsAsync(examId, _operationCancellation.Token);
+                if (context != _context) return;
+                archive = PaperRevisionMaterials.WithCurrentRules(archive, currentRules, examId,
+                    snapshot.Versions.PaperVersion, snapshot.Versions.GradingVersion);
+            }
             var read = Exam.Infrastructure.Packaging.PaperMaterialsArchive.Read(archive);
             if (!read.Succeeded)
                 throw new InvalidDataException(read.Failure?.Value ?? "服务器返回的归档不可用。");

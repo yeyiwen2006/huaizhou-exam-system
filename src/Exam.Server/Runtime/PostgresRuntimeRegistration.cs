@@ -128,6 +128,8 @@ public static class PostgresRuntimeRegistration
             gradingOptions.Lease,
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<RecalculationScheduler>();
+        // 规则发布成功后及时安排一轮重算（发布本身已提交；失败由后台循环补偿）。
+        services.AddSingleton<GradingRecalculationTrigger>();
         services.AddSingleton(provider => new GradingStatusService(
             provider.GetRequiredService<IGradingInputs>(),
             provider.GetRequiredService<IGradingScope>(),

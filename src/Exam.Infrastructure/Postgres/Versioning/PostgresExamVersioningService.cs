@@ -865,15 +865,19 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             return null;
         }
 
-        if (!string.Equals(reader.GetString(0), operation, StringComparison.Ordinal) ||
-            !string.Equals(reader.GetString(1), HashPayload(request), StringComparison.Ordinal))
+        var matchingOperation = string.Equals(reader.GetString(0), operation, StringComparison.Ordinal);
+        var storedHash = reader.GetString(1);
+        var responseJson = reader.GetString(2);
+        if (!matchingOperation ||
+            !string.Equals(storedHash, HashPayload(request), StringComparison.Ordinal) &&
+            !MatchesLegacyGradingPayload(request, storedHash, responseJson))
         {
             return VersioningResult<T>.Failure(
                 VersioningErrorCode.IdempotencyConflict,
                 "requestId has already been used for a different versioning operation or payload.");
         }
 
-        return JsonSerializer.Deserialize<VersioningResult<T>>(reader.GetString(2), _json)
+        return JsonSerializer.Deserialize<VersioningResult<T>>(responseJson, _json)
             ?? throw new InvalidDataException("The stored versioning idempotency response is unreadable.");
     }
 
@@ -903,7 +907,26 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
     }
 
     private string HashPayload<TRequest>(TRequest request) where TRequest : notnull =>
+        // The HTTP endpoint supplies Now on every arrival. It is audit time, not caller intent.
+        // Keep every caller-controlled field in the identity, including the exact answer/rule bytes.
+        request is PublishGradingRulesRequest grading
+            ? HashExactPayload(grading with { Now = DateTimeOffset.UnixEpoch })
+            : HashExactPayload(request);
+
+    private string HashExactPayload<TRequest>(TRequest request) where TRequest : notnull =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, _json))));
+
+    private bool MatchesLegacyGradingPayload<TRequest>(TRequest request, string storedHash, string responseJson)
+    {
+        if (request is not PublishGradingRulesRequest grading) return false;
+        // Old rows included Now. Reconstruct ONLY that server-owned value from the durable receipt;
+        // do not rewrite historical receipts, events or accept another payload under the same ID.
+        var receipt = JsonSerializer.Deserialize<VersioningResult<ExamVersionSnapshot>>(responseJson, _json);
+        return receipt is { Succeeded: true, Value.Grading: not null } &&
+            receipt.Value.ExamId == grading.ExamId &&
+            string.Equals(storedHash, HashExactPayload(grading with { Now = receipt.Value.Grading.PublishedAt }),
+                StringComparison.Ordinal);
+    }
 
     private static string RequestIdOf<TRequest>(TRequest request) =>
         request switch

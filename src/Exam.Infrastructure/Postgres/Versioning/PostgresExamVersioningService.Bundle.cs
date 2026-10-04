@@ -85,6 +85,26 @@ public sealed partial class PostgresExamVersioningService
                 }
             }
         }
+        if (before.Paper is not null && before.Versions.GradingVersion != before.Versions.PaperVersion &&
+            request.ExpectedGradingVersion == before.Versions.GradingVersion)
+        {
+            using var latest = new NpgsqlCommand("""
+                SELECT payload::text FROM exam.version_events WHERE exam_id=$1 AND operation_type='grading.publish'
+                  AND stream_revision<=$2 ORDER BY stream_revision DESC LIMIT 1
+                """, connection, transaction);
+            latest.Parameters.AddWithValue(request.ExamId);
+            latest.Parameters.AddWithValue(revision.Value);
+            var payload = latest.ExecuteScalar() as string;
+            var current = payload is null ? null : JsonSerializer.Deserialize<PublishGradingRulesRequest>(payload, JsonDefaults.Create());
+            if (current is null || current.ExamId != request.ExamId || current.ExpectedVersion != before.Versions.GradingVersion - 1 ||
+                current.ManifestJson is null || current.AnswerKeyJson is null)
+                return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.PublicationNotReady,
+                    "当前规则源材料不可用，不能以旧归档覆盖最新规则。");
+            if (!Exam.Infrastructure.Packaging.PaperRevisionMaterials.EquivalentGrading(request.ManifestJson, request.AnswerKeyJson,
+                    current.ManifestJson, current.AnswerKeyJson))
+                return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.VersionConflict,
+                    "试卷修订必须保留当前完整答案与计分规则；请重新取回最新材料。独立答案/计分修改请使用规则修订入口。");
+        }
         var paper=new PublishPaperRequest(request.ExamId,request.ExpectedPaperVersion,request.ArtifactId,
             rules.Structure,request.ChangedQuestionIds,new(true,true,true,true),request.Operator,request.Reason,now,request.RequestId+":paper",materialsToPersist?.ArchiveSha256);
         var grading=new PublishGradingRulesRequest(request.ExamId,request.ExpectedGradingVersion,

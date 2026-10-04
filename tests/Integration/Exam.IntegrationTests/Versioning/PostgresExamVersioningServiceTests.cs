@@ -69,9 +69,13 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
         Assert.Equal(TimeSpan.FromHours(8),delivery.NewScheduledEnd!.Value.Offset);
     }
 
-    [Fact]
-    public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots(bool legacyReceipt)
     {
+        // Keep these rule-only fixtures outside the shared schedule-worker clock window.
+        var rulesNow = InitialNow.AddYears(100);
         var examId = "imported-rules-" + Guid.NewGuid().ToString("N");
         var manifest = new ExamManifest(1, examId, "合成规则考试",
             [new("subject", "科目", "1")],
@@ -82,21 +86,58 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
         var keyJson = JsonSerializer.Serialize(key, ImportJson.Create());
         var rules = ImportedGradingRules.Create(manifestJson, keyJson);
         var service = new PostgresExamVersioningService(fixture.DataSource);
-        Assert.True(service.CreateExam(new(examId, new(InitialNow.AddHours(1), InitialNow.AddHours(2)), InitialNow, examId + "-create")).Succeeded);
+        Assert.True(service.CreateExam(new(examId, new(rulesNow.AddHours(1), rulesNow.AddHours(2)), rulesNow, examId + "-create")).Succeeded);
         var artifactId = examId + "-paper";
         await StorePaperPackageAsync(examId, artifactId, 1);
         Assert.True(service.PublishPaper(new(examId, 0, artifactId, rules.Structure, [], new(true, true, true, true),
-            "A", "合成接线测试", InitialNow, examId + "-paper")).Succeeded);
+            "A", "合成接线测试", rulesNow, examId + "-paper")).Succeeded);
         var request = new PublishGradingRulesRequest(examId, 0, "rules", new(true, true, true), "A", "合成接线测试",
-            InitialNow, examId + "-grading", manifestJson, keyJson);
+            rulesNow, examId + "-grading", manifestJson, keyJson);
         var published = service.PublishGradingRules(request);
         Assert.True(published.Succeeded, published.Error);
-        Assert.True(service.PublishGradingRules(request).Succeeded);
+        if (legacyReceipt)
+        {
+            var oldHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                JsonSerializer.Serialize(request, JsonDefaults.Create()))));
+            await using var legacy = fixture.DataSource.CreateCommand(
+                "UPDATE exam.version_idempotency SET payload_hash=$1 WHERE request_id=$2");
+            legacy.Parameters.AddWithValue(oldHash);
+            legacy.Parameters.AddWithValue(request.RequestId);
+            Assert.Equal(1, await legacy.ExecuteNonQueryAsync());
+        }
         var restarted = new PostgresExamVersioningService(fixture.DataSource);
+        // A different server receive time must replay the original receipt, even after restart.
+        var retry = request with { Now = request.Now.AddMinutes(2) };
+        var replies = await Task.WhenAll(Enumerable.Range(1, 3).Select(i => Task.Run(() =>
+            restarted.PublishGradingRules(retry with { Now = retry.Now.AddSeconds(i) }))));
+        foreach (var reply in replies)
+        {
+            Assert.True(reply.Succeeded, reply.Error);
+            Assert.Equal(JsonSerializer.Serialize(published, JsonDefaults.Create()),
+                JsonSerializer.Serialize(reply, JsonDefaults.Create()));
+        }
+        foreach (var changed in new[]
+        {
+            retry with { ExamId = examId + "-other" },
+            retry with { ExpectedVersion = 1 },
+            retry with { RuleSetId = "another-rule-set" },
+            retry with { Operator = "another-operator" },
+            retry with { Reason = "another-reason" },
+            retry with { Validation = new(false, true, true) },
+            retry with { ManifestJson = manifestJson + " " },
+            retry with { AnswerKeyJson = keyJson + " " }
+        })
+            Assert.Equal(VersioningErrorCode.IdempotencyConflict, restarted.PublishGradingRules(changed).ErrorCode);
+        Assert.True(restarted.PublishGradingRules(request with
+        {
+            RequestId = examId + "-grading-next", ExpectedVersion = 1, RuleSetId = "rules-next", Now = retry.Now
+        }).Succeeded);
+        Assert.Equal(1, restarted.PublishGradingRules(retry).Value!.Versions.GradingVersion);
+        Assert.Equal(2, restarted.GetExam(examId).Value!.Versions.GradingVersion);
         // A new write replays the durable command stream, including the imported rule validation.
-        var updated = restarted.UpdateSchedule(new(examId, 1, new(InitialNow.AddHours(2), InitialNow.AddHours(3)), InitialNow, examId + "-schedule"));
+        var updated = restarted.UpdateSchedule(new(examId, 1, new(rulesNow.AddHours(2), rulesNow.AddHours(3)), rulesNow, examId + "-schedule"));
         Assert.True(updated.Succeeded, updated.Error);
-        Assert.Equal(1, updated.Value!.Versions.GradingVersion);
+        Assert.Equal(2, updated.Value!.Versions.GradingVersion);
         Assert.True(updated.Value.Paper!.Structure.Questions[0].AllowAbstain);
         var snapshot = JsonSerializer.Serialize(updated.Value, JsonDefaults.Create());
         Assert.DoesNotContain("correctOptionIds", snapshot);

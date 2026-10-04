@@ -149,6 +149,9 @@ public sealed class ImportRevisionClientTests
         // 上一版归档里的清单是**已绑定**的那一份：客户端在检查时会把考试标识与科目/题组标识绑定到所选考试，
         // 归档记录的正是绑定后的清单，否则逐题摘要会因为结构字段不同而误判为「变了」。
         var (boundManifest, boundAnswers) = BindToExam(source, client.Current.ExamId);
+        // A revision starts from the published, catalog-bound working copy, not the original unbound import.
+        File.WriteAllText(source.ManifestPath, boundManifest);
+        File.WriteAllText(source.AnswerPath, boundAnswers);
         var rules = ImportedGradingRules.Create(boundManifest, boundAnswers);
         var now = DateTimeOffset.UtcNow;
         client.Current = client.Current with

@@ -296,8 +296,8 @@ public sealed class OptionRegionExtractionTests : IDisposable
         // 标识内允许冒号，因此 "a:b"+"c" 与 "a"+"b:c" 会生成同一目标名，必须拒绝而不是猜绑定。
         var result = new OptionRegionExtractor().Extract(new OptionRegionRequest("synthetic", 1,
         [
-            new OptionRegionSourceQuestion("a:b", @"C:\nonexistent-1.pdf", ["c"]),
-            new OptionRegionSourceQuestion("a", @"C:\nonexistent-2.pdf", ["b:c"])
+            new OptionRegionSourceQuestion("a:b", Path.Combine(_root, "nonexistent-1.pdf"), ["c"]),
+            new OptionRegionSourceQuestion("a", Path.Combine(_root, "nonexistent-2.pdf"), ["b:c"])
         ]));
 
         Assert.False(result.Succeeded);

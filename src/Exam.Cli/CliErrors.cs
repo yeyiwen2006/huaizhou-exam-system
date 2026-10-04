@@ -6,17 +6,22 @@ using Exam.Contracts.Importing;
 
 internal static partial class ExamCli
 {
+    private static readonly AsyncLocal<ControlledErrors?> ActiveErrors = new();
+
     // The boundary owns errors only. Successful business output stays byte-compatible.
     public static async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken)
     {
         var original = Console.Error;
         using var errors = new ControlledErrors(original);
+        var previousErrors = ActiveErrors.Value;
+        ActiveErrors.Value = errors;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var json = Enumerable.Range(0, Math.Max(0, arguments.Length - 1))
             .Any(index => arguments[index] == "--error-format" && arguments[index + 1] == "json");
         var exit = 6;
         var localImport = false;
         string? importAction = null;
+        var gradingPublication = false;
         Console.SetError(errors);
         try
         {
@@ -28,7 +33,7 @@ internal static partial class ExamCli
                 if (value == "--help") { args.Add(value); continue; }
                 // C05 confirmation is a switch, not a key/value option. Keep it command-specific,
                 // so accepting it does not loosen unrelated command validation.
-                if (value == "--confirm" && args.Count >= 3 && args[0] == "import" && args[1] == "publish")
+                if (value == "--confirm" && args.Count >= 3 && args[0] is ("import" or "grading") && args[1] == "publish")
                 {
                     if (!seen.Add(value)) throw new ArgumentException("确认选项重复。");
                     args.Add(value); continue;
@@ -54,6 +59,7 @@ internal static partial class ExamCli
             // Validate shared address semantics even for commands with their own parser.
             importAction = args.Count > 1 && args[0] == "import" ? args[1] : null;
             localImport = importAction == "verify";
+            gradingPublication = args.Count > 1 && args[0] == "grading" && args[1] == "publish";
             var serverIndex = args.IndexOf("--server");
             var server = serverIndex >= 0 ? args[serverIndex + 1] : Environment.GetEnvironmentVariable(ServerEnvironment);
             if (args.Count > 0 && args[0] is not ("import" or "management" or "version" or "artifact-info" or "help" or "--help" or "-h" or "error-codes") &&
@@ -64,8 +70,14 @@ internal static partial class ExamCli
         catch (OperationCanceledException) { exit = cancellationToken.IsCancellationRequested ? 130 : 5; }
         catch (ArgumentException) { exit = 2; }
         catch (Exception) { exit = 6; }
-        finally { Console.SetError(original); }
-        if (exit == 0) return 0;
+        finally { Console.SetError(original); ActiveErrors.Value = previousErrors; }
+        if (exit == 0)
+        {
+            // Only explicitly registered, locally formatted success diagnostics are forwarded.
+            // Never flush the captured raw error stream, including server response bodies.
+            original.Write(errors.SuccessLines.ToString());
+            return 0;
+        }
         var (code, message) = exit switch
         {
             2 => ("INVALID_INPUT", "命令、选项、配置或输入文件无效；运行 help 查看用法。"),
@@ -87,7 +99,7 @@ internal static partial class ExamCli
             code = exit == 3 ? "IMPORT_VALIDATION_FAILED" : "IMPORT_COMPILATION_FAILED";
             message = "导入核对未通过。 " + string.Join(" ", publicIssues);
         }
-        if (importAction == "publish" && exit is 4 or 5 or 6 or 130)
+        if ((importAction == "publish" || gradingPublication) && exit is 4 or 5 or 6 or 130)
             message = "发布结果未确认；请保留原预览目录，核对考试状态后使用同一目录重试，不要重新生成另一份发布请求。";
         else if (importAction == "preview" && exit == 4)
             message = "材料、编译结果或考试设置校验未通过；未发布，请核对试题包与已保存的考试设置。";
@@ -110,9 +122,20 @@ internal static partial class ExamCli
         return exit;
     }
 
+    private static void WriteSuccessDiagnostic(string message)
+    {
+        if (ActiveErrors.Value is { } errors) errors.RecordSuccess(message);
+        else Console.Error.WriteLine(message);
+    }
+
     private sealed class ControlledErrors(TextWriter terminal) : TextWriter
     {
         public StringBuilder Lines { get; } = new();
+        public StringBuilder SuccessLines { get; } = new();
+        public void RecordSuccess(string value)
+        {
+            if (SuccessLines.Length + value.Length < 65536) SuccessLines.AppendLine(value);
+        }
         public override Encoding Encoding => Encoding.UTF8;
         public override void WriteLine(string? value)
         {

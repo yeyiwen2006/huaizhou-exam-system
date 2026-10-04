@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -261,7 +262,7 @@ public sealed partial class AdminApiClient : IDisposable
         HttpMethod method,
         string relativeUri,
         object? payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool preserveRequestId = false)
         where T : class
     {
         EnsureConfigured();
@@ -269,7 +270,16 @@ public sealed partial class AdminApiClient : IDisposable
         var client = _httpClient;
         using var request = new HttpRequestMessage(method, relativeUri);
         string? mutationKey = null;
-        if (payload is not null)
+        if (payload is not null && preserveRequestId)
+        {
+            // Prepared grading revisions own a durable request ID. The generic mutation cache must
+            // neither replace it nor generate a fresh one after a successful cross-process replay.
+            var fixedBody = JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
+            if (fixedBody["requestId"]?.GetValue<string>() is not { Length: > 0 and <= 128 })
+                throw new InvalidDataException("规则预览缺少有效的固定请求编号。");
+            request.Content = JsonContent.Create(fixedBody, options: _json);
+        }
+        else if (payload is not null)
         {
             var body = JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
             // Keep the same requestId after a lost response/5xx. Only a definitive result

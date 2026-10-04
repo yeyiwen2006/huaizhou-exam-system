@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Exam.Server.Api;
+using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -10,6 +11,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using Exam.Application.Scoring;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Importing;
@@ -155,6 +157,11 @@ public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
         using var f=await Fixture.Create(database.DataSource,persistResource:false);
         var builder=WebApplication.CreateBuilder();builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(f.Service);builder.Services.AddSingleton<PublicationUploadGate>();
+        // 发布端点提交后会及时安排一轮重算：夹具按生产装配方式提供同一实现。
+        builder.Services.AddSingleton(new GradingRecalculationTrigger(new PostgresGradingInputs(database.DataSource),
+            new RecalculationScheduler(new PostgresGradingScope(database.DataSource),
+                new PostgresRecalculationQueue(database.DataSource)),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<GradingRecalculationTrigger>.Instance));
         await using var app=builder.Build();
         // Transport fixture identity only; separate AdministrationApiTests exercise production authentication middleware.
         app.Use(async(context,next)=>{context.Items["Exam.AuthenticatedOperatorId"]="synthetic-operator";await next();});

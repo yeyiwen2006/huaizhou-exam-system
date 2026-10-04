@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using Exam.Application.Scoring;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
@@ -162,6 +163,56 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         var material = Path.Combine(source.Root, "retrieved-materials");
         var retrieved = await RunCli(server.Address, ["import", "materials", source.Name, "--output", material]);
         Assert.True(retrieved.Exit == 0, retrieved.Output + retrieved.Error);
+        // Revise answers and all scoring branches without any TeX compilation or paper publication.
+        var manifestPath = Path.Combine(material, "manifest.json");
+        var answerPath = Path.Combine(material, "server-only", "answer-key.json");
+        var manifestJson = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
+        manifestJson["subjects"]![0]!["maxScore"] = "3";
+        manifestJson["groups"]![0]!["maxScore"] = "3";
+        manifestJson["groups"]![0]!["scoring"]!["oneCorrect"]!["correct"] = "3";
+        await File.WriteAllTextAsync(manifestPath, manifestJson.ToJsonString());
+        var answerJson = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(answerPath))!;
+        answerJson["answers"]![0]!["correctOptionIds"] = new System.Text.Json.Nodes.JsonArray("B");
+        await File.WriteAllTextAsync(answerPath, answerJson.ToJsonString());
+        var rulePreview = Path.Combine(source.Root, "rule-preview");
+        var competing = Path.Combine(source.Root, "competing-rule-preview");
+        foreach (var output in new[] { rulePreview, competing })
+        {
+            var checkedRules = await RunCli(server.Address, ["grading", "revise", source.Name, "--package", material,
+                "--reason", "合成答案及分值纠错", "--output", output]);
+            Assert.True(checkedRules.Exit == 0, checkedRules.Output + checkedRules.Error);
+            Assert.DoesNotContain("correctOptionIds", checkedRules.Output);
+            Assert.True(File.Exists(Path.Combine(output, "preview.md")));
+        }
+        Assert.Equal(1, server.Versions.GetExam(server.ExamId).Value!.Versions.GradingVersion);
+        var unconfirmedRules = await RunCli(server.Address, ["grading", "publish", rulePreview]);
+        Assert.Equal(2, unconfirmedRules.Exit);
+        foreach (var attempt in Enumerable.Range(0, 2))
+        {
+            var publishedRules = await RunCli(server.Address, ["grading", "publish", rulePreview, "--confirm"]);
+            Assert.True(publishedRules.Exit == 0, publishedRules.Output + publishedRules.Error);
+            Assert.Contains("规则发布成功：规则版本 2", publishedRules.Error);
+            Assert.Contains("结果就绪", publishedRules.Error);
+        }
+        var conflict = await RunCli(server.Address, ["grading", "publish", competing, "--confirm"]);
+        Assert.Equal(4, conflict.Exit);
+        var afterRules = server.Versions.GetExam(server.ExamId).Value!;
+        Assert.Equal(1, afterRules.Versions.PaperVersion);
+        Assert.Equal(2, afterRules.Versions.GradingVersion);
+        Assert.Equal(1L, await server.ResourceCount());
+        var status = await RunCli(server.Address, ["grading", "status", source.Name]);
+        Assert.True(status.Exit == 0, status.Output + status.Error);
+        Assert.Contains("结果就绪", status.Error);
+
+        // A later paper revision must use the current answer/score working copy, not restore the old archive's rules.
+        material = Path.Combine(source.Root, "materials-with-current-rules");
+        retrieved = await RunCli(server.Address, ["import", "materials", source.Name, "--output", material]);
+        Assert.True(retrieved.Exit == 0, retrieved.Output + retrieved.Error);
+        var latestSource = await new PostgresGradingInputs(database.DataSource).LoadSourceAsync(server.ExamId);
+        Assert.NotNull(latestSource);
+        Assert.Equal(2, latestSource.GradingVersion);
+        Assert.True(PaperRevisionMaterials.EquivalentGrading(await File.ReadAllTextAsync(Path.Combine(material, "manifest.json")),
+            await File.ReadAllTextAsync(Path.Combine(material, "server-only", "answer-key.json")), latestSource.ManifestJson, latestSource.AnswerKeyJson));
         var question = Directory.EnumerateFiles(Path.Combine(material, "questions"), "*.tex").Single();
         await File.AppendAllTextAsync(question, "\n% synthetic revised source, same question and option identities\n");
         var revised = Path.Combine(source.Root, "revision-preview");
@@ -175,7 +226,10 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         }
         var current = server.Versions.GetExam(server.ExamId).Value!;
         Assert.Equal(2, current.Versions.PaperVersion);
-        Assert.Equal(2, current.Versions.GradingVersion);
+        Assert.Equal(3, current.Versions.GradingVersion);
+        var finalRules = await new PostgresGradingInputs(database.DataSource).LoadSourceAsync(server.ExamId);
+        Assert.True(PaperRevisionMaterials.EquivalentGrading(latestSource.ManifestJson, latestSource.AnswerKeyJson,
+            finalRules!.ManifestJson, finalRules.AnswerKeyJson));
         Assert.Equal(["q1"], current.Paper!.ChangedQuestionIds);
         Assert.Equal(2L, await server.ResourceCount());
         Assert.Equal(2L, await server.Scalar("SELECT count(*) FROM exam.paper_materials WHERE exam_id=$1", server.ExamId));
@@ -195,6 +249,8 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             WorkingDirectory = root.FullName, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false
         };
+        start.StandardOutputEncoding = new System.Text.UTF8Encoding(false, true);
+        start.StandardErrorEncoding = new System.Text.UTF8Encoding(false, true);
         start.ArgumentList.Add(assembly);
         foreach (var value in arguments) start.ArgumentList.Add(value);
         start.Environment["EXAM_SERVER_URL"] = address;
@@ -259,8 +315,16 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             });
             if (network) builder.WebHost.UseUrls("http://127.0.0.1:0"); else builder.WebHost.UseTestServer();
             builder.Services.AddSingleton(publication);
+            builder.Services.AddSingleton(TimeProvider.System);
+            builder.Services.AddSingleton<IExamVersioningService>(versions);
+            builder.Services.AddSingleton<Exam.Domain.Scoring.IGradingInputs>(new PostgresGradingInputs(source));
+            builder.Services.AddSingleton(new GradingStatusService(new PostgresGradingInputs(source), new PostgresGradingScope(source)));
             builder.Services.AddSingleton(new PostgresPaperMaterialStore(source));
             builder.Services.AddSingleton<PublicationUploadGate>();
+            // 发布端点提交后会及时安排一轮重算：夹具按生产装配方式提供同一实现。
+            builder.Services.AddSingleton(new GradingRecalculationTrigger(new PostgresGradingInputs(source),
+                new RecalculationScheduler(new PostgresGradingScope(source), new PostgresRecalculationQueue(source)),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<GradingRecalculationTrigger>.Instance));
             var app = builder.Build();
             ServerFixture? fixture = null;
             app.Use(async (context, next) =>
@@ -282,7 +346,10 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
             var group = app.MapGroup("/api/v1");
             group.MapGet("/exams", async () => Envelope(await catalog.ListAsync()));
             group.MapGet("/exams/{examId}", async (string examId) => Envelope(await catalog.GetAsync(examId)));
-            group.MapGet("/versioning/exams/{examId}", (string examId) => Envelope(versions.GetExam(examId).Value!));
+            group.MapVersioningApi();
+            group.MapGradingApi();
+            group.MapGet("/operators/me", () => Envelope(new Exam.Contracts.Operators.OperatorAccount(
+                "synthetic-operator", "synthetic", Exam.Contracts.Operators.OperatorStatus.Active, false, now, null)));
             group.MapPublicationUploadApi();
             await app.StartAsync();
             var address = network ? app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single()

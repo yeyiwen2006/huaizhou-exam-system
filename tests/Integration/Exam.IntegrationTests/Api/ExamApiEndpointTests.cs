@@ -7,6 +7,7 @@ using Exam.Application.Submissions;
 using Exam.Application.Versioning;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
+using Exam.Application.Scoring;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Versioning;
@@ -14,6 +15,7 @@ using Exam.Domain.Commands;
 using Exam.Domain.Submissions;
 using Exam.Domain.Scoring;
 using Exam.Server.Api;
+using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
@@ -231,6 +233,11 @@ public sealed class ExamApiEndpointTests
         builder.Services.AddSingleton<ReliableCommandService>();
 
         builder.Services.AddSingleton<ISubmissionStore, InMemorySubmissionStore>();
+        // 规则发布端点提交后会及时安排一轮重算：本合成宿主用内存实现替身；
+        // 没有已发布规则时触发器直接返回，不会去调度。
+        builder.Services.AddSingleton<IGradingInputs, InMemoryGradingInputs>();
+        builder.Services.AddSingleton(new RecalculationScheduler(new InMemoryGradingScope(), new NoopRecalculationQueue()));
+        builder.Services.AddSingleton<GradingRecalculationTrigger>();
         builder.Services.AddSingleton<IGradingTaskQueue, InMemoryGradingTaskQueue>();
         builder.Services.AddSingleton<ICollectionCompletionStore, InMemoryCollectionCompletionStore>();
         builder.Services.AddSingleton<SubmissionService>();
@@ -249,4 +256,11 @@ public sealed class ExamApiEndpointTests
     {
         public override DateTimeOffset GetUtcNow() => value;
     }
+}
+
+/// <summary>合成宿主里的重算队列替身：本用例只关心发布端点，不关心入队。</summary>
+internal sealed class NoopRecalculationQueue : IRecalculationQueue
+{
+    public ValueTask<bool> EnsureQueuedAsync(string examId, string submissionId, long targetVersion,
+        CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
 }

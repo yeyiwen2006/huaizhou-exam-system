@@ -47,7 +47,13 @@ public sealed class PostgresGradingInputs : IGradingInputs
         return await reader.ReadAsync(cancellationToken) ? ReadSubmission(reader) : null;
     }
 
-    public async ValueTask<PublishedGradingRules?> LoadRulesAsync(
+    public async ValueTask<PublishedGradingRules?> LoadRulesAsync(string examId, CancellationToken cancellationToken = default)
+    {
+        var source = await LoadSourceAsync(examId, cancellationToken);
+        return source is null ? null : new(ImportedGradingRules.Create(source.ManifestJson, source.AnswerKeyJson), source.GradingVersion);
+    }
+
+    public async ValueTask<Exam.Contracts.Grading.GradingMaterialSnapshot?> LoadSourceAsync(
         string examId,
         CancellationToken cancellationToken = default)
     {
@@ -55,7 +61,7 @@ public sealed class PostgresGradingInputs : IGradingInputs
 
         // 一个 SQL 快照读取版本和对应的最后发布事件。不能跳过当前坏事件后把旧规则标成新版本。
         const string sql = """
-            SELECT state.grading_version, published.payload::text
+            SELECT state.grading_version, published.payload::text, state.paper_version
               FROM exam.version_state AS state
               LEFT JOIN LATERAL (
                   SELECT payload FROM exam.version_events
@@ -82,7 +88,7 @@ public sealed class PostgresGradingInputs : IGradingInputs
         var rules = ImportedGradingRules.Create(request.ManifestJson, request.AnswerKeyJson);
         if (rules.ExamId != examId)
             throw new InvalidDataException("计分规则源数据属于另一场考试。");
-        return new PublishedGradingRules(rules, gradingVersion);
+        return new(examId, reader.GetInt64(2), gradingVersion, request.RuleSetId, request.ManifestJson, request.AnswerKeyJson);
     }
 
     private static FinalSubmission ReadSubmission(NpgsqlDataReader reader)

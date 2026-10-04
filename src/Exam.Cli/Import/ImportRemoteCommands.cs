@@ -90,11 +90,18 @@ internal static partial class ExamCli
                     throw new InvalidDataException("这场考试还没有已发布的试卷版本，没有可取回的源材料。");
                 var archive = await api.DownloadPaperMaterialsAsync(matches[0].ExamId, snapshot.Versions.PaperVersion,
                     cancellationToken);
+                if (snapshot.Versions.GradingVersion > snapshot.Versions.PaperVersion)
+                {
+                    var currentRules = await api.GetGradingMaterialsAsync(matches[0].ExamId, cancellationToken);
+                    archive = PaperRevisionMaterials.WithCurrentRules(archive, currentRules, matches[0].ExamId,
+                        snapshot.Versions.PaperVersion, snapshot.Versions.GradingVersion);
+                }
                 var read = PaperMaterialsArchive.Read(archive);
                 if (!read.Succeeded) throw new InvalidDataException(read.Failure?.Value ?? "服务器返回的归档不可用。");
                 await PaperMaterialsArchive.ExtractAsync(read, output!, cancellationToken);
                 Console.WriteLine($"已取回：{matches[0].Name} 试卷版本 {snapshot.Versions.PaperVersion}，" +
                     $"共 {read.Manifest!.Files.Count} 个材料文件。");
+                Console.WriteLine($"工作副本已保留当前规则版本 {snapshot.Versions.GradingVersion} 的完整答案与计分字段；历史归档没有被改写。");
                 Console.WriteLine("材料目录：" + Path.GetFullPath(output!));
                 Console.WriteLine("该目录含题目源文件与独立答案，仅向当前账户开放；改完后用 import preview 重新检查。");
                 return 0;

@@ -39,13 +39,15 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
         await AssertErrorAsync(context, ErrorCodes.Forbidden);
     }
 
-    [Fact]
-    public async Task Paper_materials_download_requires_an_operator_session()
+    [Theory]
+    [InlineData("paper-materials?version=1")]
+    [InlineData("grading-materials")]
+    public async Task Paper_materials_download_requires_an_operator_session(string endpoint)
     {
         // 源材料归档含独立答案：取回入口必须走考务登录会话，不能落到公开路由或设备凭据路由上。
         var invoked = false;
         var middleware = CreateMiddleware(() => invoked = true);
-        var context = CreateJsonContext("/api/v1/exams/exam/paper-materials?version=1", "application/json", "{}");
+        var context = CreateJsonContext("/api/v1/exams/exam/" + endpoint, "application/json", "{}");
         context.Request.Method = HttpMethods.Get;
 
         await middleware.InvokeAsync(
@@ -60,13 +62,15 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
         await AssertErrorAsync(context, "UNAUTHORIZED");
     }
 
-    [Fact]
-    public async Task Paper_materials_download_is_not_authorized_by_device_credentials()
+    [Theory]
+    [InlineData("paper-materials?version=1")]
+    [InlineData("grading-materials")]
+    public async Task Paper_materials_download_is_not_authorized_by_device_credentials(string endpoint)
     {
         // 即使带着有效的设备凭据也不能取回归档：它不是学生/设备路由。
         var invoked = false;
         var middleware = CreateMiddleware(() => invoked = true);
-        var context = CreateJsonContext("/api/v1/exams/exam/paper-materials?version=1", "application/json", "{}");
+        var context = CreateJsonContext("/api/v1/exams/exam/" + endpoint, "application/json", "{}");
         context.Request.Method = HttpMethods.Get;
         context.Request.Headers["X-Exam-Device-Id"] = "device-a";
         context.Request.Headers["X-Exam-Device-Credential"] = "credential-a";

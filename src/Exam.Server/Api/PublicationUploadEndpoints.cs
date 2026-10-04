@@ -29,6 +29,7 @@ public static class PublicationUploadEndpoints
                 "PUBLICATION_NOT_READY","发布公钥证书不可用；请核对受管节点及公开证书配置。",StatusCodes.Status503ServiceUnavailable);}
         });
         api.MapPost("/exams/{examId}/publications/upload",async (string examId,[FromServices] PostgresBundlePublicationService service,
+            [FromServices] GradingRecalculationTrigger recalculation,
             [FromServices] PublicationUploadGate admission,HttpContext context,IConfiguration configuration,CancellationToken ct)=>
         {
             const long maximum=(long)StudentPaperPackage.MaxPackageBytes+PaperMaterialsArchive.MaxArchiveBytes
@@ -64,6 +65,12 @@ public static class PublicationUploadEndpoints
                 var result=await service.PublishUploadedAsync(examId,upload,
                     await ReadAsync(package,ct),await ReadAsync(materials,ct),
                     ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context),ct);
+                // 整体发布也发布了规则版本：提交之后同样及时安排一轮重算（失败由后台循环补偿）。
+                if(result.Succeeded)
+                {
+                    await recalculation.TryTriggerAsync(examId,ct);
+                }
+
                 return ApiEndpointResults.FromVersioning(context,configuration,upload.Publication.RequestId,result);
             }
             catch(Exception error)when(error is JsonException or InvalidDataException or ArgumentException)
@@ -99,6 +106,31 @@ public static class PublicationUploadEndpoints
                     "MATERIALS_NOT_FOUND",$"该考试没有版本 {version} 的源材料归档。",StatusCodes.Status404NotFound);
             return Results.Stream(archive,"application/zip",
                 fileDownloadName:$"{examId}-materials-v{version}.zip",enableRangeProcessing:false);
+        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+
+        // Complete answer material is operator-only and never part of grading status or student resources.
+        api.MapGet("/exams/{examId}/grading-materials", async (string examId,
+            [FromServices] Exam.Domain.Scoring.IGradingInputs inputs, HttpContext context,
+            IConfiguration configuration, CancellationToken ct) =>
+        {
+            _ = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
+            context.Response.Headers.CacheControl = "no-store";
+            if (inputs is not Exam.Infrastructure.Postgres.Scoring.PostgresGradingInputs stored)
+                return ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                    "PUBLICATION_NOT_READY", "当前计分源材料读取不可用。", StatusCodes.Status503ServiceUnavailable);
+            try
+            {
+                var source = await stored.LoadSourceAsync(examId, ct);
+                return source is null
+                    ? ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                        "MATERIALS_NOT_FOUND", "当前考试没有完整已发布的计分源材料。", StatusCodes.Status404NotFound)
+                    : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, source);
+            }
+            catch (Exception error) when (error is InvalidDataException or ArgumentException or JsonException)
+            {
+                return ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                    "PUBLICATION_NOT_READY", "当前规则源材料不可用，禁止返回旧版替代。", StatusCodes.Status503ServiceUnavailable);
+            }
         }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
 
         return api;

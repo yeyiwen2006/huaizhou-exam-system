@@ -50,7 +50,7 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.Equal(3, denied.Exit);
 
         var status = await RunGradingCliAsync(server, ["grading", "status", rules.ExamId]);
-        Assert.Equal(0, status.Exit);
+        Assert.True(status.Exit == 0, status.Output);
         var envelope = JsonSerializer.Deserialize<ApiEnvelope<GradingStatusReport>>(status.Output, JsonDefaults.Create());
         Assert.NotNull(envelope?.Result);
         Assert.Equal(3, envelope!.Result!.CurrentGradingVersion);
@@ -92,6 +92,10 @@ public sealed partial class PostgresSubmissionStoreTests
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<ExamApiAccessMiddleware>();
         app.MapGroup("/api/v1").MapGradingApi();
+        app.MapGet("/api/v1/exams", () => Microsoft.AspNetCore.Http.Results.Json(
+            new ApiEnvelope<Exam.Contracts.Exams.ExamSummary[]>("synthetic-grading-server", "node-a", 1, "synthetic-catalog",
+                [new("grading-cli-exam", "计分命令合成考试", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(1),
+                    ExamLifecycle.Running, false, false, 2, 2, 1)], null), JsonDefaults.Create()));
         await app.StartAsync();
         return app;
     }

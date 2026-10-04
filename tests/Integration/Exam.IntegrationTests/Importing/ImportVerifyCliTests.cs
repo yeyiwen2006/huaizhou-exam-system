@@ -160,6 +160,8 @@ public sealed class ImportVerifyCliTests : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        start.StandardOutputEncoding = new System.Text.UTF8Encoding(false, true);
+        start.StandardErrorEncoding = new System.Text.UTF8Encoding(false, true);
         start.ArgumentList.Add(Path.Combine(root.FullName, "src", "Exam.Cli", "bin", "Release", "net10.0", "Exam.Cli.dll"));
         foreach (var argument in args) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
