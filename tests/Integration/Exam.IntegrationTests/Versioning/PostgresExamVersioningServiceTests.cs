@@ -74,6 +74,8 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
     [InlineData(true)]
     public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots(bool legacyReceipt)
     {
+        // Keep these rule-only fixtures outside the shared schedule-worker clock window.
+        var rulesNow = InitialNow.AddYears(100);
         var examId = "imported-rules-" + Guid.NewGuid().ToString("N");
         var manifest = new ExamManifest(1, examId, "合成规则考试",
             [new("subject", "科目", "1")],
@@ -84,13 +86,13 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
         var keyJson = JsonSerializer.Serialize(key, ImportJson.Create());
         var rules = ImportedGradingRules.Create(manifestJson, keyJson);
         var service = new PostgresExamVersioningService(fixture.DataSource);
-        Assert.True(service.CreateExam(new(examId, new(InitialNow.AddHours(1), InitialNow.AddHours(2)), InitialNow, examId + "-create")).Succeeded);
+        Assert.True(service.CreateExam(new(examId, new(rulesNow.AddHours(1), rulesNow.AddHours(2)), rulesNow, examId + "-create")).Succeeded);
         var artifactId = examId + "-paper";
         await StorePaperPackageAsync(examId, artifactId, 1);
         Assert.True(service.PublishPaper(new(examId, 0, artifactId, rules.Structure, [], new(true, true, true, true),
-            "A", "合成接线测试", InitialNow, examId + "-paper")).Succeeded);
+            "A", "合成接线测试", rulesNow, examId + "-paper")).Succeeded);
         var request = new PublishGradingRulesRequest(examId, 0, "rules", new(true, true, true), "A", "合成接线测试",
-            InitialNow, examId + "-grading", manifestJson, keyJson);
+            rulesNow, examId + "-grading", manifestJson, keyJson);
         var published = service.PublishGradingRules(request);
         Assert.True(published.Succeeded, published.Error);
         if (legacyReceipt)
@@ -133,7 +135,7 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
         Assert.Equal(1, restarted.PublishGradingRules(retry).Value!.Versions.GradingVersion);
         Assert.Equal(2, restarted.GetExam(examId).Value!.Versions.GradingVersion);
         // A new write replays the durable command stream, including the imported rule validation.
-        var updated = restarted.UpdateSchedule(new(examId, 1, new(InitialNow.AddHours(2), InitialNow.AddHours(3)), InitialNow, examId + "-schedule"));
+        var updated = restarted.UpdateSchedule(new(examId, 1, new(rulesNow.AddHours(2), rulesNow.AddHours(3)), rulesNow, examId + "-schedule"));
         Assert.True(updated.Succeeded, updated.Error);
         Assert.Equal(2, updated.Value!.Versions.GradingVersion);
         Assert.True(updated.Value.Paper!.Structure.Questions[0].AllowAbstain);
