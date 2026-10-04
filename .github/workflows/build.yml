@@ -43,8 +43,10 @@ jobs:
       - name: Install the real XeLaTeX toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends texlive-xetex texlive-fonts-recommended
+          sudo apt-get install -y --no-install-recommends texlive-xetex texlive-fonts-recommended texlive-lang-chinese
           xelatex --version
+          kpsewhich ctexart.cls
+          kpsewhich FandolSong-Regular.otf
           fc-cache -f
       - name: Restore locked integration dependencies
         run: dotnet restore tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --locked-mode
@@ -52,6 +54,9 @@ jobs:
         run: dotnet build tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-restore
       - name: Real compiler and PostgreSQL import-to-revision regression
         run: python eng/testing/run_checks.py --profile latex --profile import-e2e --suite-timeout 1200 --output .artifacts/checks
+      - name: Diagnose the synthetic compiler fixture on failure
+        if: failure()
+        run: dotnet test tests/Integration/Exam.IntegrationTests/Exam.IntegrationTests.csproj --configuration Release --no-build --no-restore --filter FullyQualifiedName=Exam.IntegrationTests.Compilation.XeLaTeXRealToolchainTests.CompileAsync_SyntheticQuestionWithCustomCommandsAndImage_Succeeds --logger "console;verbosity=normal"
       - name: Validate exact-source native evidence
         if: always()
         run: python eng/testing/validate_results.py .artifacts/checks/run-report.json
