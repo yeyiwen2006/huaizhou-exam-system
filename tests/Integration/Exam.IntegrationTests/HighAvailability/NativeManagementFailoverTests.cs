@@ -33,7 +33,10 @@ public sealed class NativeManagementFailoverTests
     [NativeConfirmationFact]
     public Task InterruptedPromotionRequiresOriginalHeadsResourcesAndTimelineBeforePublication() => RunAsync(true);
 
-    private static async Task RunAsync(bool interruptPromotion)
+    [NativeConfirmationFact]
+    public Task InterruptedPublishedPromotionStillRequiresOriginalEvidenceBeforeSelection() => RunAsync(true, true);
+
+    private static async Task RunAsync(bool interruptPromotion, bool publishBeforeInterruption = false)
     {
         await NativePhysicalPostgresTools.ValidateConfiguredSourceAsync();
         await using var seedLease = new DatabaseLease(); var seed = seedLease.Value; await seed.InitializeAsync();
@@ -111,7 +114,7 @@ public sealed class NativeManagementFailoverTests
             var unavailableOldResources = nodeA.ResourcesDirectory + ".offline";
             Directory.Move(nodeA.ResourcesDirectory, unavailableOldResources);
             await Wait(async () => (await platformB.ObserveAsync(default)).State?.Nodes["node-b"].ReplayLagBytes == 0);
-            var interrupted = new InterruptedPromotionPlatform(platformB, sourceB, businessB);
+            var interrupted = new InterruptedPromotionPlatform(platformB, sourceB, businessB, publishBeforeInterruption);
             await using var apiB = await ManagementFailoverTestHost.CreateAsync(Path.Combine(root, "b-management"),
                 interruptPromotion ? interrupted : platformB);
             using var clientB = apiB.Client();
@@ -124,7 +127,7 @@ public sealed class NativeManagementFailoverTests
                 var pending = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(JsonDefaults.Create()))!.Result!;
                 Assert.Equal(ManagementOperationPhase.NeedsVerification, pending.Phase);
                 Assert.False(await Recovery(sourceB));
-                Assert.Equal(3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
+                Assert.Equal(publishBeforeInterruption ? 4 : 3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
 
                 // A greater timeline number alone is not evidence of the confirmed branch.
                 var history = Directory.GetFiles(Path.Combine(dataB, "pg_wal"), "*.history").Order().Last();
@@ -177,7 +180,7 @@ public sealed class NativeManagementFailoverTests
                 var queried = await clientB.GetFromJsonAsync<ManagementEnvelope<ManagementOperation>>("/management/v1/operations/takeover", JsonDefaults.Create());
                 Assert.Equal(ManagementOperationPhase.NeedsVerification, queried!.Result!.Phase);
                 Assert.Null(queried.Result.HighAvailability);
-                Assert.Equal(3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
+                Assert.Equal(publishBeforeInterruption ? 4 : 3, (await new PostgresFailoverStateStore(sourceB).LoadAsync("server"))!.Version);
                 Assert.Null(new FileFailoverDeploymentSelection(optionsB.SelectionPath).Read());
                 Assert.Equal(1, interrupted.Promotions);
                 var blocked = takeoverRequest with { RequestId = "synthetic-bypass" };
@@ -245,10 +248,10 @@ public sealed class NativeManagementFailoverTests
     { await using var command = source.CreateCommand(sql); await command.ExecuteNonQueryAsync(); }
     private sealed class NoPackages : IPackageKeyUnwrapper
     { public byte[] Unwrap(EncryptedPackageEnvelope envelope) => throw new IOException("Synthetic empty fixture must not release a package key."); }
-    // Inject the exact interruption boundary: PostgreSQL promoted, application state not yet published.
+    // Inject either interruption boundary: physical promotion before or after application state publication.
     // Queries and restart reconciliation still use the actual production platform, not a fake database.
     private sealed class InterruptedPromotionPlatform(IHighAvailabilityManagementPlatform inner, NpgsqlDataSource source,
-        IManagedBusinessHost business) : IHighAvailabilityManagementPlatform
+        IManagedBusinessHost business, bool publishBeforeInterruption) : IHighAvailabilityManagementPlatform
     {
         public int Promotions;
         public Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token) => inner.ObserveAsync(token);
@@ -266,7 +269,9 @@ public sealed class NativeManagementFailoverTests
             // Make pg_control_checkpoint's new timeline observable before testing recovery evidence.
             await using var checkpoint = source.CreateCommand("CHECKPOINT");
             await checkpoint.ExecuteNonQueryAsync(token);
-            throw new IOException("Synthetic interruption after actual promotion, before application publication.");
+            if (publishBeforeInterruption)
+                await new PostgresFailoverStateStore(source).SaveAsync(plan.After, token);
+            throw new IOException("Synthetic interruption after actual promotion, before deployment selection.");
         }
         public Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token) => inner.ReconcileAsync(plan, token);
     }
