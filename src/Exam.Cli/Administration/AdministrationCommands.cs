@@ -65,7 +65,8 @@ internal static partial class ExamCli
             }
             return rows.ToArray();
         }
-        // 读取一批收齐事件并按名单版本发出；返回 0 表示本轮已读完。
+        // 读取一批收齐事件并按名单版本发出，读到没有新事件为止。
+        // 可读提醒直接写 stderr：长时运行的 follow 必须实时输出，且不能因最终退出码非零而被错误层的缓冲丢弃。
         async Task DrainCollectionAsync(ExamSummary exam,CollectionWatch watch)
         {
             while(true)
@@ -77,12 +78,21 @@ internal static partial class ExamCli
                 {
                     // 事件写 stdout（一行一个，便于脚本消费）；可读提醒写 stderr。
                     Console.WriteLine(JsonSerializer.Serialize(item,json));
-                    WriteSuccessDiagnostic($"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。");
+                    Console.Error.Write($"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。{Environment.NewLine}");
                 }
                 Console.Out.Flush();
                 if(page.Length==0||watch.Cursor==before)return;
             }
         }
+        // 可重试的收齐轮询失败：整页校验拒绝（游标未前进）、网络异常与 5xx/超时/限流。
+        static bool IsRetryableWatchFailure(Exception error)=>error switch
+        {
+            InvalidOperationException=>true,
+            HttpRequestException=>true,
+            ExamCliException{Status:HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests}=>true,
+            ExamCliException{Status:var status}=>(int)status>=500,
+            _=>false,
+        };
         try
         {
             object result;var valid=true;
@@ -157,25 +167,38 @@ internal static partial class ExamCli
                 }
                 case ("monitor",["follow",var followExam,.. var followArguments]):
                 {
-                    // 持续等待并发出；可选位置参数：间隔秒数（默认 20）与轮数（默认不设上限）。
-                    var interval=TimeSpan.FromSeconds(20);int? rounds=null;
-                    if(followArguments.Length>2)return UnknownCommand(["monitor","follow",followExam,..followArguments]);
-                    if(followArguments.Length>0)
+                    // 持续等待并发出；位置参数依次为：起始名单版本（默认 0）、间隔秒数（默认 20，1..3600）、轮数（默认不设上限）。
+                    if(followArguments.Length>3)return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                    var startVersion=0L;var interval=TimeSpan.FromSeconds(20);int? rounds=null;
+                    if(followArguments.Length>0&&(!long.TryParse(followArguments[0],out startVersion)||startVersion<0))
+                        return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                    if(followArguments.Length>1)
                     {
-                        if(!int.TryParse(followArguments[0],out var seconds)||seconds<=0)
+                        if(!int.TryParse(followArguments[1],out var seconds)||seconds is <1 or >3600)
                             return UnknownCommand(["monitor","follow",followExam,..followArguments]);
                         interval=TimeSpan.FromSeconds(seconds);
                     }
-                    if(followArguments.Length>1)
+                    if(followArguments.Length>2)
                     {
-                        if(!int.TryParse(followArguments[1],out var parsed)||parsed<=0)
+                        if(!int.TryParse(followArguments[2],out var parsed)||parsed<=0)
                             return UnknownCommand(["monitor","follow",followExam,..followArguments]);
                         rounds=parsed;
                     }
-                    var followTarget=await FindExam(followExam);var watch=new CollectionWatch();var completed=0;
+                    var followTarget=await FindExam(followExam);var watch=new CollectionWatch(startVersion);var completed=0;var failures=0;
                     do
                     {
-                        await DrainCollectionAsync(followTarget,watch);
+                        try
+                        {
+                            await DrainCollectionAsync(followTarget,watch);
+                            failures=0;
+                        }
+                        catch(Exception error)when(IsRetryableWatchFailure(error))
+                        {
+                            // 与考务端弹窗同口径：整页无效不前进游标、网络与 5xx 都继续等待重试；
+                            // 鉴权或请求本身无效无法靠重试解决，交给外层按退出码约定失败。
+                            failures++;
+                            Console.Error.Write($"收齐事件读取失败（连续第 {failures} 次）：{error.Message}{Environment.NewLine}");
+                        }
                         completed++;
                         if(rounds is { } limit&&completed>=limit)return 0;
                         try{await Task.Delay(interval,ct);}

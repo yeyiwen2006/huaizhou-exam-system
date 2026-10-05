@@ -127,7 +127,7 @@ internal static partial class ExamCli
         Console.WriteLine("  devices list [试场]|show 编号|history 编号  查询设备、当前考生、连接状态或转组历史");
         Console.WriteLine("  monitor show|missing 名称            查询权威监控快照或未回收名单");
         Console.WriteLine("  monitor watch 名称 [起始名单版本]    读取并发出“本场考试全部答卷已成功回收”事件后退出");
-        Console.WriteLine("  monitor follow 名称 [间隔秒] [轮数]  按间隔等待并持续发出收齐事件（默认 20 秒，不限轮数）");
+        Console.WriteLine("  monitor follow 名称 [起始名单版本] [间隔秒] [轮数]  持续发出收齐事件（默认 20 秒，不限轮数）");
         Console.WriteLine("  publications publish 名称 --input FILE  原子激活已验证的试卷及计分规则");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
