@@ -81,13 +81,30 @@ public sealed class WpfBindingSmokeTests
                 Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
+                Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);
+                Assert.Equal("考生名单", ((TabItem)tabs.Items[MainViewModel.RosterPage]).Header);
+                Assert.Equal("激活与试场分组", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
                 foreach (var tab in tabs.Items.Cast<TabItem>())
                 {
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
                     if ((string)tab.Header == "激活与试场分组")
+                    {
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);
+                        var queryInput = Assert.Single(Descendants<TextBox>(window), input =>
+                            BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Activation.QueryDeviceId");
+                        var roomFilter = Assert.Single(Descendants<ComboBox>(window), input =>
+                            BindingOperations.GetBinding(input, Selector.SelectedValueProperty)?.Path.Path == "Activation.FilterRoomGroupId");
+                        var queryButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.QueryDeviceCommand));
+                        var reloadButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.RefreshDirectoryCommand));
+                        var top = queryInput.TranslatePoint(new Point(0, 0), window).Y;
+                        Assert.All(new FrameworkElement[] { roomFilter, queryButton, reloadButton }, control =>
+                        {
+                            Assert.InRange(Math.Abs(control.ActualHeight - queryInput.ActualHeight), 0, 0.5);
+                            Assert.InRange(Math.Abs(control.TranslatePoint(new Point(0, 0), window).Y - top), 0, 0.5);
+                        });
+                    }
                     if ((string)tab.Header == "试卷导入与发布")
                     {
                         Assert.Equal(viewModel.CurrentExam!.Name, viewModel.Import.ExamName);
@@ -123,6 +140,20 @@ public sealed class WpfBindingSmokeTests
                         }
                     }
                     else Assert.False(viewModel.Monitoring.IsPageActive);
+                    if ((string)tab.Header is "设备监控" or "成绩统计")
+                    {
+                        var selectedIndex = tabs.SelectedIndex;
+                        window.OpenManagement();
+                        DrainDispatcher();
+                        Assert.False(viewModel.Monitoring.IsPageActive);
+                        Assert.False(viewModel.Reports.IsPageActive);
+                        window.ReturnToBusiness();
+                        DrainDispatcher();
+                        Assert.Equal(selectedIndex, tabs.SelectedIndex);
+                        Assert.Same(tab, tabs.SelectedItem);
+                        Assert.Equal((string)tab.Header == "设备监控", viewModel.Monitoring.IsPageActive);
+                        Assert.Equal((string)tab.Header == "成绩统计", viewModel.Reports.IsPageActive);
+                    }
                 }
                 listener.Flush();
                 Assert.Equal(string.Empty, output.ToString());

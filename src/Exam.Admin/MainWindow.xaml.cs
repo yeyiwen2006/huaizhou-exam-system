@@ -108,8 +108,8 @@ public partial class MainWindow : Window
             ShowMainArea();
             _viewModel.SelectedPage = _businessPage;
             if (_viewModel.SelectedPage == MainViewModel.ActivationPage) _viewModel.Activation.StartPolling();
-            _viewModel.Monitoring.IsPageActive = _viewModel.SelectedPage == 3;
-            _viewModel.Reports.IsPageActive = _viewModel.SelectedPage == 4;
+            _viewModel.Monitoring.IsPageActive = _viewModel.SelectedPage == MainViewModel.MonitoringPage;
+            _viewModel.Reports.IsPageActive = _viewModel.SelectedPage == MainViewModel.ReportsPage;
         }
         else if (_viewModel.Connection.ShowRegistrationSuccess) ShowRegistrationSuccessPage();
         else ShowLoginPage();

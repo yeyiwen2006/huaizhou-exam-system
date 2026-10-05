@@ -208,9 +208,18 @@
                             </Grid>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,14" />
                             <WrapPanel>
-                                <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" Command="{Binding Exam.RefreshInstructionsCommand}"/>
-                                <Button Content="保存考试设置" Style="{StaticResource PrimaryAction}" Command="{Binding Exam.SaveCommand}"/>
-                                <Button Content="重新读取当前考试" Style="{StaticResource ActionButton}" Command="{Binding Exam.ReloadCommand}"/>
+                                <StackPanel Margin="0,0,48,8">
+                                    <Button Content="校验并生成说明" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Command="{Binding Exam.RefreshInstructionsCommand}"/>
+                                    <TextBlock Text="检查并预览考试说明，不会保存到服务器。" Style="{StaticResource CaptionText}" TextWrapping="NoWrap"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,48,8">
+                                    <Button Content="保存考试设置" Style="{StaticResource PrimaryAction}" HorizontalAlignment="Left" Command="{Binding Exam.SaveCommand}"/>
+                                    <TextBlock Text="把本页填写的考试设置保存到服务器。" Style="{StaticResource CaptionText}" TextWrapping="NoWrap"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,8">
+                                    <Button Content="重新从服务器读取当前考试" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Command="{Binding Exam.ReloadCommand}"/>
+                                    <TextBlock Text="读取已保存设置，覆盖本页未保存的修改。" Style="{StaticResource CaptionText}" TextWrapping="NoWrap"/>
+                                </StackPanel>
                             </WrapPanel>
                             <TextBlock Text="{Binding Exam.Status}" Style="{StaticResource StatusLine}"/>
                         </StackPanel>
@@ -292,6 +301,102 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
+
+        <TabItem Header="试卷导入与发布" Tag="{StaticResource Icon.Layers}" IsEnabled="{Binding HasCurrentExam}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="试卷导入与发布"
+                        Content="选择当前考试的本地逐题目录或 ZIP；检查、逐题预览和明确确认后，才会正式发布。"/>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="当前考试" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="{Binding Import.ExamName}" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="试题包来源" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding Import.SourcePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
+                            <Border Style="{StaticResource Hint}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="试题包需要哪些文件" Style="{StaticResource CardHeading}"/>
+                                    <TextBlock Text="可选择文件夹或 ZIP。manifest.json 必须放在包的最外层，ZIP 中不要再套一层文件夹。清单和答案均使用 UTF-8 JSON。"
+                                               Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,4,0,6"/>
+                                    <TextBlock Style="{StaticResource CaptionText}" TextWrapping="Wrap"><Run FontWeight="SemiBold">manifest.json</Run><Run>　清单，记录考试、科目、题组、题目和计分规则。</Run></TextBlock>
+                                    <TextBlock Style="{StaticResource CaptionText}" TextWrapping="Wrap"><Run FontWeight="SemiBold">逐题 .tex 文件</Run><Run>　每题一个，命名为“考试名称_题号.tex”，如“模拟考试_1.tex”；名称和题号须与清单一致，通常放在 questions/ 中。</Run></TextBlock>
+                                    <TextBlock Style="{StaticResource CaptionText}" TextWrapping="Wrap"><Run FontWeight="SemiBold">server-only/answer-key.json</Run><Run>　完整参考答案。</Run></TextBlock>
+                                    <TextBlock Style="{StaticResource CaptionText}" TextWrapping="Wrap"><Run FontWeight="SemiBold">styles/、figures/ 等资源目录</Run><Run>　题目用到的样式、图片及其他资源，按清单和 TeX 中的路径放齐。</Run></TextBlock>
+                                    <TextBlock Text="点击“检查并生成预览”会编译出逐题 PDF，无需提前提供 PDF。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="本次修改原因（开考后修订必填，随版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding Import.PublishReason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
+                            <TextBlock Text="变更题号（空格、逗号或顿号分隔；留空＝按内容自动算出。开考后修订会以这里声明的为准，服务器按内容核对，不一致会拒绝发布）"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding Import.ChangedQuestionsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
+                            <WrapPanel>
+                                <Button Content="选择目录" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectDirectoryCommand}"/>
+                                <Button Content="选择 ZIP" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectZipCommand}"/>
+                                <Button Content="检查并生成预览" Style="{StaticResource PrimaryAction}" Command="{Binding Import.CheckCommand}"/>
+                                <Button Content="从服务器上下载已发布版本试卷材料" Style="{StaticResource ActionButton}" Command="{Binding Import.RetrieveMaterialsCommand}"/>
+                                <Button Content="取消当前操作" Style="{StaticResource ActionButton}" Command="{Binding Import.CancelCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding Import.ChangedQuestionsHint}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding Import.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="本次只读预览：逐题检查 PDF 版式与选项" Style="{StaticResource CardHeading}"/>
+                            <DataGrid ItemsSource="{Binding Import.Questions}" SelectedItem="{Binding Import.SelectedQuestion}" IsReadOnly="True"
+                                      AutoGenerateColumns="False" Height="270" Margin="0,10,0,10">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="60"/>
+                                    <DataGridTextColumn Header="科目" Binding="{Binding Subject}" Width="*"/>
+                                    <DataGridTextColumn Header="题组" Binding="{Binding Group}" Width="*"/>
+                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="95"/>
+                                    <DataGridTextColumn Header="逐题满分" Binding="{Binding Score}" Width="80"/>
+                                    <DataGridTextColumn Header="选项" Binding="{Binding Options}" Width="140"/>
+                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="90"/>
+                                    <DataGridTextColumn Header="PDF 页数" Binding="{Binding PageCount}" Width="80"/>
+                                    <DataGridTextColumn Header="选项绑定页" Binding="{Binding RegionPages}" Width="180"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <WrapPanel>
+                                <Button Content="打开选中题目 PDF" Style="{StaticResource ActionButton}" Command="{Binding Import.OpenQuestionCommand}"/>
+                                <Button Content="确认并正式发布" Style="{StaticResource PrimaryAction}" Command="{Binding Import.PublishCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="发布成功仅表示服务器整套试卷与答案规则已生效，不代表所有学生端均已更新。"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="只改答案与计分规则" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="不重新编译、不组包：从所选材料包读取清单与完整答案提交发布，服务器随后按新版本安排重算。重算期间旧报表不可查询或导出。"
+                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBlock Text="材料包目录（含 manifest.json 与 server-only/answer-key.json）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding GradingRevision.PackagePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
+                            <TextBlock Text="本次修改原因（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Text="{Binding GradingRevision.Reason, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding GradingRevision.CanEditRevision}" Style="{StaticResource FormTextBox}"/>
+                            <WrapPanel>
+                                <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.SelectPackageCommand}"/>
+                                <Button Content="检查并预览规则" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.CheckCommand}"/>
+                                <Button Content="确认发布 / 重试原请求" Style="{StaticResource PrimaryAction}" Command="{Binding GradingRevision.PublishCommand}"/>
+                                <Button Content="刷新重算状态" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.RefreshStatusCommand}"/>
+                            </WrapPanel>
+                            <DataGrid ItemsSource="{Binding GradingRevision.Questions}" AutoGenerateColumns="False" IsReadOnly="True"
+                                      CanUserAddRows="False" MinHeight="100" MaxHeight="300" Margin="0,8,0,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="80"/>
+                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="*"/>
+                                    <DataGridTextColumn Header="满分" Binding="{Binding FullScore}" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="{Binding GradingRevision.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding GradingRevision.PublishedText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding GradingRevision.RecalculationText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
@@ -508,15 +613,15 @@
                             <WrapPanel>
                                 <StackPanel Width="270" Margin="0,0,12,0">
                                     <TextBlock Text="学生端编号或考生信息" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Style="{StaticResource FormTextBox}" Text="{Binding Activation.QueryDeviceId, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Activation.QueryDeviceId, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                                 <StackPanel Width="190" Margin="0,0,12,0">
                                     <TextBlock Text="试场" Style="{StaticResource FormLabel}"/>
                                     <ComboBox ItemsSource="{Binding Activation.FilterChoices}" SelectedValue="{Binding Activation.FilterRoomGroupId, Mode=TwoWay}"
-                                        DisplayMemberPath="Name" SelectedValuePath="RoomGroupId"/>
+                                        DisplayMemberPath="Name" SelectedValuePath="RoomGroupId" Height="{DynamicResource Control.Height}" Margin="0,0,0,12"/>
                                 </StackPanel>
-                                <Button Content="查询设备" Style="{StaticResource ActionButton}" VerticalAlignment="Bottom" Command="{Binding Activation.QueryDeviceCommand}"/>
-                                <Button Content="重新读取目录" Style="{StaticResource ActionButton}" VerticalAlignment="Bottom" Command="{Binding Activation.RefreshDirectoryCommand}"/>
+                                <Button Content="查询设备" Style="{StaticResource ActionButton}" Margin="0,0,8,12" VerticalAlignment="Bottom" Command="{Binding Activation.QueryDeviceCommand}"/>
+                                <Button Content="重新读取目录" Style="{StaticResource ActionButton}" Margin="0,0,8,12" VerticalAlignment="Bottom" Command="{Binding Activation.RefreshDirectoryCommand}"/>
                             </WrapPanel>
                             <TextBlock Text="{Binding Activation.DirectoryStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
                             <DataGrid ItemsSource="{Binding Activation.Devices}" SelectedItem="{Binding Activation.SelectedDevice}" IsReadOnly="False"
@@ -640,89 +745,7 @@
             </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="试卷导入与发布" Tag="{StaticResource Icon.Layers}" IsEnabled="{Binding HasCurrentExam}">
-            <ScrollViewer Style="{StaticResource PageScroller}">
-                <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="试卷导入与发布"
-                        Content="选择当前考试的本地逐题目录或 ZIP；检查、逐题预览和明确确认后，才会正式发布。"/>
-                    <Border Style="{StaticResource CardGap}">
-                        <StackPanel>
-                            <TextBlock Text="当前考试" Style="{StaticResource FormLabel}"/>
-                            <TextBlock Text="{Binding Import.ExamName}" Style="{StaticResource CardHeading}"/>
-                            <TextBlock Text="试题包来源" Style="{StaticResource FormLabel}"/>
-                            <TextBox Text="{Binding Import.SourcePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
-                            <TextBlock Text="本次修改原因（开考后修订必填，随版本一起记录）" Style="{StaticResource FormLabel}"/>
-                            <TextBox Text="{Binding Import.PublishReason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
-                            <TextBlock Text="变更题号（空格、逗号或顿号分隔；留空＝按内容自动算出。开考后修订会以这里声明的为准，服务器按内容核对，不一致会拒绝发布）"
-                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                            <TextBox Text="{Binding Import.ChangedQuestionsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
-                            <WrapPanel>
-                                <Button Content="选择目录" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectDirectoryCommand}"/>
-                                <Button Content="选择 ZIP" Style="{StaticResource ActionButton}" Command="{Binding Import.SelectZipCommand}"/>
-                                <Button Content="检查并生成预览" Style="{StaticResource PrimaryAction}" Command="{Binding Import.CheckCommand}"/>
-                                <Button Content="取回当前版本源材料" Style="{StaticResource ActionButton}" Command="{Binding Import.RetrieveMaterialsCommand}"/>
-                                <Button Content="取消当前操作" Style="{StaticResource ActionButton}" Command="{Binding Import.CancelCommand}"/>
-                            </WrapPanel>
-                            <TextBlock Text="{Binding Import.ChangedQuestionsHint}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                            <TextBlock Text="{Binding Import.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource CardGap}">
-                        <StackPanel>
-                            <TextBlock Text="本次只读预览：逐题检查 PDF 版式与选项" Style="{StaticResource CardHeading}"/>
-                            <DataGrid ItemsSource="{Binding Import.Questions}" SelectedItem="{Binding Import.SelectedQuestion}" IsReadOnly="True"
-                                      AutoGenerateColumns="False" Height="270" Margin="0,10,0,10">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="60"/>
-                                    <DataGridTextColumn Header="科目" Binding="{Binding Subject}" Width="*"/>
-                                    <DataGridTextColumn Header="题组" Binding="{Binding Group}" Width="*"/>
-                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="95"/>
-                                    <DataGridTextColumn Header="逐题满分" Binding="{Binding Score}" Width="80"/>
-                                    <DataGridTextColumn Header="选项" Binding="{Binding Options}" Width="140"/>
-                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="90"/>
-                                    <DataGridTextColumn Header="PDF 页数" Binding="{Binding PageCount}" Width="80"/>
-                                    <DataGridTextColumn Header="选项绑定页" Binding="{Binding RegionPages}" Width="180"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <WrapPanel>
-                                <Button Content="打开选中题目 PDF" Style="{StaticResource ActionButton}" Command="{Binding Import.OpenQuestionCommand}"/>
-                                <Button Content="确认并正式发布" Style="{StaticResource PrimaryAction}" Command="{Binding Import.PublishCommand}"/>
-                            </WrapPanel>
-                            <TextBlock Text="发布成功仅表示服务器整套试卷与答案规则已生效，不代表所有学生端均已更新。"
-                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource CardGap}">
-                        <StackPanel>
-                            <TextBlock Text="只改答案与计分规则" Style="{StaticResource CardHeading}"/>
-                            <TextBlock Text="不重新编译、不组包：从所选材料包读取清单与完整答案提交发布，服务器随后按新版本安排重算。重算期间旧报表不可查询或导出。"
-                                       Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                            <TextBlock Text="材料包目录（含 manifest.json 与 server-only/answer-key.json）" Style="{StaticResource FormLabel}"/>
-                            <TextBox Text="{Binding GradingRevision.PackagePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
-                            <TextBlock Text="本次修改原因（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
-                            <TextBox Text="{Binding GradingRevision.Reason, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding GradingRevision.CanEditRevision}" Style="{StaticResource FormTextBox}"/>
-                            <WrapPanel>
-                                <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.SelectPackageCommand}"/>
-                                <Button Content="检查并预览规则" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.CheckCommand}"/>
-                                <Button Content="确认发布 / 重试原请求" Style="{StaticResource PrimaryAction}" Command="{Binding GradingRevision.PublishCommand}"/>
-                                <Button Content="刷新重算状态" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.RefreshStatusCommand}"/>
-                            </WrapPanel>
-                            <DataGrid ItemsSource="{Binding GradingRevision.Questions}" AutoGenerateColumns="False" IsReadOnly="True"
-                                      CanUserAddRows="False" MinHeight="100" MaxHeight="300" Margin="0,8,0,8">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="80"/>
-                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="*"/>
-                                    <DataGridTextColumn Header="满分" Binding="{Binding FullScore}" Width="120"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <TextBlock Text="{Binding GradingRevision.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
-                            <TextBlock Text="{Binding GradingRevision.PublishedText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                            <TextBlock Text="{Binding GradingRevision.RecalculationText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-        </TabItem>
+
         </TabControl>
         </Grid>
     </Grid>
