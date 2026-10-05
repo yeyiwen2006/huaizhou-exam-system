@@ -129,14 +129,22 @@ public sealed class InMemoryCommandEventStore : ICommandEventStore
         string eventId,
         DateTimeOffset attemptedAt,
         DateTimeOffset nextDeliveryAt,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => RecordAttempt(eventId, nextDeliveryAt, false, cancellationToken);
+
+    public ValueTask<PersistentCommandEvent?> RecordManualDeliveryAttemptAsync(string eventId,
+        DateTimeOffset attemptedAt, DateTimeOffset nextDeliveryAt, CancellationToken cancellationToken = default) =>
+        RecordAttempt(eventId, nextDeliveryAt, true, cancellationToken);
+
+    private ValueTask<PersistentCommandEvent?> RecordAttempt(string eventId, DateTimeOffset nextDeliveryAt,
+        bool manual, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
             if (!_events.TryGetValue(eventId, out var commandEvent) ||
-                commandEvent.Acknowledgement?.ProcessingResult is
-                    CommandProcessingResult.Applied or CommandProcessingResult.RejectedAsStale)
+                commandEvent.Acknowledgement?.ProcessingResult == CommandProcessingResult.RejectedAsStale ||
+                commandEvent.Acknowledgement?.ProcessingResult == CommandProcessingResult.Applied &&
+                    !(manual && commandEvent.EventType == CommandEventType.End))
             {
                 return ValueTask.FromResult<PersistentCommandEvent?>(null);
             }

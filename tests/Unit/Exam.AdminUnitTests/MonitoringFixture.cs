@@ -43,7 +43,7 @@ internal static class MonitoringFixture
         long focusLossMilliseconds = 0,
         ParticipantVersionStatus? revisionStatus = null,
         IReadOnlyList<MonitoringCommand>? commands = null,
-        IReadOnlyList<ConflictDevice>? conflicts = null) => new(
+        IReadOnlyList<ConflictDevice>? conflicts = null, int? currentQuestionNo = 1) => new(
             participationId, candidateId, name, classText, admissionNo,
             authorizedDeviceId ?? "device-" + participationId, clientNumber, roomGroupId, roomGroupName,
             businessState, connectionState, page, currentQuestionId,
@@ -54,7 +54,7 @@ internal static class MonitoringFixture
             answers ?? new Dictionary<string, AnswerValue>(StringComparer.Ordinal) { ["1"] = AnswerValue.Selected("A") },
             collectionState ?? (receiptId is null ? "未回收" : "已回收"),
             receiptId, receiptId is null ? null : receivedAt ?? At,
-            focusLossCount, focusLossMilliseconds, revisionStatus, commands ?? [], conflicts ?? []);
+            focusLossCount, focusLossMilliseconds, revisionStatus, commands ?? [], conflicts ?? [], currentQuestionNo);
 
     public static MonitoringSnapshot Snapshot(string examId, params MonitoringParticipant[] participants) =>
         Snapshot(examId, participants, null);

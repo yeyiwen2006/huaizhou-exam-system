@@ -22,6 +22,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        PresenceStatus.DataContext = App.Services.Session;
+        Activated += (_, _) => App.Services.SetPresenceFocus(true);
+        Deactivated += (_, _) => App.Services.SetPresenceFocus(false);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -70,6 +73,7 @@ public partial class MainWindow : Window
     public async Task StartAsync()
     {
         _navigation = new Navigation(PageRegion);
+        App.Services.StartPresence();
 
         var device = await Task.Run(App.Services.DeviceStore.Load);
         if (device is not null)
@@ -140,26 +144,31 @@ public partial class MainWindow : Window
 
         public void GoToLogin()
         {
+            App.Services.SetPresencePage("登录");
             Set(new LoginPage(this));
         }
 
         public void GoToExamSelection()
         {
+            App.Services.SetPresencePage("选择考试");
             Set(new ExamSelectionPage(this));
         }
 
         public void GoToWaitingExam(ExamOverview exam)
         {
+            App.Services.SetPresencePage("等待考试", exam.ExamId);
             Set(new WaitingExamPage(this, exam));
         }
 
         public void GoToExamInProgress(ExamOverview exam, StudentExamRuntime runtime)
         {
+            App.Services.SetPresencePage("正在答题", exam.ExamId);
             Set(new ExamInProgressPage(this, exam, runtime));
         }
 
         public void GoToSubmitted(SubmissionReceipt receipt)
         {
+            App.Services.SetPresencePage("交卷反馈", receipt.ExamId);
             Set(new SubmittedPage(this, receipt));
         }
     }

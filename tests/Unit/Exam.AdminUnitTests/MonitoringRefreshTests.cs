@@ -413,6 +413,50 @@ public sealed class MonitoringRefreshTests
         }
     }
 
+    [Fact]
+    public async Task Refresh_RemovedCommandAndConflictCannotRemainArmed()
+    {
+        var snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(
+            commands: [MonitoringFixture.Command()], conflicts: [MonitoringFixture.Conflict()]));
+        var mutations = 0;
+        using var handler = new SyntheticHandler(request =>
+        {
+            if (request.Method == HttpMethod.Post) mutations++;
+            return Success(snapshot);
+        });
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var vm = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        await vm.LoadAsync();
+        vm.SelectedRow = vm.Rows[0];
+        vm.SelectedConflictDevice = vm.SelectedConflictDevices[0];
+        vm.DecisionReason = "合成裁决原因";
+        snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant());
+        await vm.LoadAsync();
+        Assert.Null(vm.SelectedCommand);
+        Assert.Null(vm.SelectedConflictDevice);
+        Assert.Empty(vm.EventId);
+        Assert.Empty(vm.SelectedDeviceId);
+        await vm.ResendAsync();
+        await vm.DecideDeviceAsync();
+        Assert.Equal(0, mutations);
+    }
+
+    [Fact]
+    public async Task Refresh_OlderSnapshotDoesNotOverwriteNewerAnswers()
+    {
+        var snapshot = MonitoringFixture.Snapshot("exam-1", [MonitoringFixture.Participant(name: "最新状态")], null,
+            asOf: MonitoringFixture.At.AddSeconds(2));
+        using var handler = new SyntheticHandler(_ => Success(snapshot));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var vm = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        await vm.LoadAsync();
+        snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(name: "迟到旧状态"));
+        await vm.LoadAsync();
+        Assert.Equal("最新状态", Assert.Single(vm.Rows).Name);
+    }
+
     private static async Task UntilAsync(Func<bool> condition)
     {
         for (var attempt = 0; attempt < 600 && !condition(); attempt++)

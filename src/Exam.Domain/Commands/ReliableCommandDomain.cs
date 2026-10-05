@@ -75,6 +75,11 @@ public interface ICommandEventStore
         DateTimeOffset dueAtOrBefore,
         CancellationToken cancellationToken = default);
 
+    ValueTask<PersistentCommandEvent?> RecordManualDeliveryAttemptAsync(
+        string eventId, DateTimeOffset attemptedAt, DateTimeOffset nextDeliveryAt,
+        CancellationToken cancellationToken = default) =>
+        RecordDeliveryAttemptAsync(eventId, attemptedAt, nextDeliveryAt, cancellationToken);
+
     ValueTask<PersistentCommandEvent?> RecordDeliveryAttemptAsync(
         string eventId,
         DateTimeOffset attemptedAt,

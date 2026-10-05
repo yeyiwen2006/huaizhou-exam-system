@@ -41,17 +41,18 @@ internal static class MonitoringDisplay
     };
 
     /// <summary>当前题号及其已保存答案；没有上报题号时不冒充有进度。</summary>
-    public static string CurrentAnswer(string? questionId, IReadOnlyDictionary<string, AnswerValue> answers)
+    public static string CurrentAnswer(string? questionId, IReadOnlyDictionary<string, AnswerValue> answers, int? questionNo)
     {
         if (string.IsNullOrWhiteSpace(questionId)) return "—";
-        if (!answers.TryGetValue(questionId, out var value)) return $"第 {questionId} 题：未保存";
+        var label = questionNo is > 0 ? $"第 {questionNo} 题" : "当前题（题号未提供）";
+        if (!answers.TryGetValue(questionId, out var value)) return $"{label}：未保存";
         var selected = value.Kind switch
         {
-            AnswerKind.Selected => value.OptionIds.Count == 0 ? "—" : string.Join("/", value.OptionIds),
+            AnswerKind.Selected => value.OptionIds.Count == 0 ? "—" : string.Concat(value.OptionIds),
             AnswerKind.Abstain => "不作答",
             _ => "未作答"
         };
-        return $"第 {questionId} 题：{selected}";
+        return $"{label}：{selected}";
     }
 
     /// <summary>试卷版本与更新结果：实际版本与目标版本不一致时同时显示，便于辨认更新失败。</summary>
@@ -69,15 +70,15 @@ internal static class MonitoringDisplay
         if (commands.Count == 0) return "暂无指令";
         return string.Join("；", commands.Select(command =>
             command.AcknowledgedAt is { } acknowledged
-                ? $"{CommandType(command.EventType)}：{command.Confirmation}（{acknowledged:HH:mm:ss}）"
+                ? $"{CommandType(command.EventType)}：{command.Confirmation}（{acknowledged.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}）"
                 : $"{CommandType(command.EventType)}：{command.Confirmation}"));
     }
 
     public static string LastCommunication(DateTimeOffset? lastCommunicationAt) =>
-        lastCommunicationAt is { } at ? at.ToString("yyyy-MM-dd HH:mm:ss") : "无通信记录";
+        lastCommunicationAt is { } at ? at.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss") : "无通信记录";
 
     public static string ReceivedAt(DateTimeOffset? receivedAt) =>
-        receivedAt is { } at ? at.ToString("yyyy-MM-dd HH:mm:ss") : "—";
+        receivedAt is { } at ? at.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss") : "—";
 
     /// <summary>
     /// 失焦汇总。用整型秒数换算而不是 <see cref="TimeSpan"/>：设备上报的时长只校验过非负，

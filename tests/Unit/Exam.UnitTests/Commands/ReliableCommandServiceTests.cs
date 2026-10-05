@@ -275,6 +275,22 @@ public sealed class ReliableCommandServiceTests
         Assert.Equal("event-1", replay.Value!.EventId);
     }
 
+    [Fact]
+    public async Task ManualEndResend_WakesUncollectedDeviceWithoutReopeningAutomaticDelivery()
+    {
+        var fixture = new CommandFixture(ExamLifecycle.Ended);
+        await fixture.Service.CreateAsync(fixture.CreateRequest(CommandEventType.End));
+        await fixture.Service.AcknowledgeAsync(fixture.Ack(CommandProcessingResult.Applied, "ack-end"));
+        var resent = await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1);
+        Assert.True(resent.IsSuccess);
+        Assert.Equal(CommandEventType.End, resent.Value!.EventType);
+        Assert.Empty((await fixture.GetDueAsync()).Value!);
+        fixture.Access.Set(fixture.AccessState with { BusinessState = ParticipationBusinessState.Submitted });
+        Assert.False((await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1)).IsSuccess);
+        fixture.Access.Set(fixture.AccessState with { AuthorizedDeviceId = "new-device", AuthorizationVersion = 2 });
+        Assert.False((await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1)).IsSuccess);
+    }
+
     private sealed class CommandFixture
     {
         public CommandFixture(ExamLifecycle lifecycle = ExamLifecycle.Running)

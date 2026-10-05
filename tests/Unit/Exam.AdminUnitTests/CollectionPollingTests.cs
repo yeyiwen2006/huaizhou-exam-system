@@ -203,7 +203,7 @@ public sealed partial class CollectionPollingTests
         api.Disconnect();
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         await vm.RefreshCollectionEventsAsync();
-        Assert.Equal(4, reminders.Count); // Identical event IDs from another server are independent.
+        Assert.Equal(5, reminders.Count); // 两个名单版本在另一服务器各自提醒一次。
         Assert.Equal(2, reminders[^1].RosterVersion);
     }
 

@@ -147,6 +147,7 @@ public sealed partial class AdminApiClient
             participant.EntryVersion < 1 || participant.AuthorizationVersion < 1 || participant.ParticipationVersion < 1 ||
             participant.AnswerVersion < 0 || participant.InstalledPaperVersion < 0 || participant.TargetPaperVersion < 0 ||
             participant.FocusLossCount < 0 || participant.FocusLossMilliseconds < 0 ||
+            participant.CurrentQuestionNo is <= 0 ||
             participant.Answers is null || participant.Commands is null || participant.ConflictDevices is null ||
             participant.RevisionStatus is { } revision && !Enum.IsDefined(revision.PaperUpdateState))
             return false;

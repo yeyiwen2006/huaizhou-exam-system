@@ -14,5 +14,5 @@ internal static class StudentExitDialog
             {
                 if (window is MainWindow main) main.PrepareForApplicationExit();
                 Application.Current.Shutdown();
-            });
+            }, App.Services.StopPresenceAsync);
 }

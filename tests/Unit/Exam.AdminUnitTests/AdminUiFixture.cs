@@ -42,7 +42,7 @@ internal sealed class AdminUiFixture : IDisposable
             name: "合成考生01", classText: "01", admissionNo: "2027001", clientNumber: "20270115001",
             roomGroupId: "synthetic-room-a", roomGroupName: "合成试场A",
             businessState: ParticipationBusinessState.Answering, connectionState: DeviceConnectionState.Online,
-            lastCommunicationAt: Start.AddMinutes(-1), currentQuestionId: "3",
+            lastCommunicationAt: Start.AddMinutes(-1), currentQuestionId: "3", currentQuestionNo: 3,
             answers: new Dictionary<string, AnswerValue> { ["3"] = AnswerValue.Selected("B", "D") },
             downloadState: "已下载", focusLossCount: 1, focusLossMilliseconds: 3200,
             commands:
@@ -62,7 +62,7 @@ internal sealed class AdminUiFixture : IDisposable
             name: "合成考生02", classText: "02", admissionNo: "2027002", clientNumber: "20270115002",
             roomGroupId: "synthetic-room-b", roomGroupName: "合成试场B",
             businessState: ParticipationBusinessState.Submitted, connectionState: DeviceConnectionState.Online,
-            lastCommunicationAt: Start.AddMinutes(-2), currentQuestionId: "10",
+            lastCommunicationAt: Start.AddMinutes(-2), currentQuestionId: "10", currentQuestionNo: 10,
             answers: new Dictionary<string, AnswerValue> { ["10"] = AnswerValue.Selected("A") },
             receiptId: "synthetic-receipt-02", receivedAt: Start.AddMinutes(-1),
             targetPaperVersion: 2, installedPaperVersion: 2,

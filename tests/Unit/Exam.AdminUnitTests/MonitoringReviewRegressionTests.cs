@@ -128,7 +128,8 @@ public sealed partial class ReviewRegressionTests
         viewModel.DecisionReason = "new synthetic reason";
         await viewModel.DecideDeviceAsync();
         var newerStatus = viewModel.Status;
-        Assert.Contains("device-3", newerStatus, StringComparison.Ordinal);
+        Assert.Contains("new synthetic reason", newerStatus, StringComparison.Ordinal);
+        Assert.DoesNotContain("device-3", newerStatus, StringComparison.Ordinal);
         firstRefresh.SetResult(Success(MonitoringFixture.Default()));
         await older;
         Assert.Equal(newerStatus, viewModel.Status);

@@ -39,6 +39,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private long _decisionInputVersion;
     private long _resendInputVersion;
     private MonitoringRow? _selectedRow;
+    private bool _applyingSnapshot;
     private int _actualCount;
     private int _collectedCount;
     private DateTimeOffset? _asOf;
@@ -49,16 +50,17 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public MonitoringRow? SelectedRow
     {
         get => _selectedRow;
-        set => SelectRow(value, fillOperatorInputs: true);
+        set { if (!_applyingSnapshot) SelectRow(value, fillOperatorInputs: true); }
     }
 
     /// <summary>
     /// 切换选中行。只有操作者主动选中（<paramref name="fillOperatorInputs"/>）才改写裁决与重发输入，
     /// 并使早先发出的请求按既有规则失效；自动刷新重建行时只换实例，不动操作者已填写的内容，
-    /// 否则每 2 秒一次的刷新会把选中和正在进行的操作抹掉。
+    /// 否则每 0.75 秒一次的刷新会把选中和正在进行的操作抹掉。
     /// </summary>
     private void SelectRow(MonitoringRow? row, bool fillOperatorInputs)
     {
+        var previous = _selectedRow;
         if (!SetProperty(ref _selectedRow, row)) return;
         var selectedEventId = _selectedCommand?.Command.EventId;
         var selectedConflictDeviceId = _selectedConflictDevice?.DeviceId;
@@ -84,6 +86,16 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             // 自动刷新只换了行对象：把操作者已选中的指令与对照设备按标识选回新实例，
             // 否则下拉框与对照表会变空，而 EventId/SelectedDeviceId 仍是“已武装”状态。
             RestoreSelection(selectedEventId, selectedConflictDeviceId);
+            if (previous is not null && (previous.Version != row.Version || previous.AuthorizationVersion != row.AuthorizationVersion ||
+                previous.EntryVersion != row.EntryVersion || previous.AuthorizedDeviceId != row.AuthorizedDeviceId))
+            {
+                // 授权或业务版本改变后须重新核对设备，不能把旧选择套到新的授权上。
+                SelectedDeviceId = ExpectedVersionText = EventId = string.Empty;
+                SetProperty(ref _selectedConflictDevice, null, nameof(SelectedConflictDevice));
+                SetProperty(ref _selectedCommand, null, nameof(SelectedCommand));
+                foreach (var item in SelectedCommands) item.IsSelected = false;
+                foreach (var item in SelectedConflictDevices) item.IsSelected = false;
+            }
             return;
         }
         _resendInputVersion++;
@@ -117,6 +129,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             SetProperty(ref _selectedConflictDevice, device, nameof(SelectedConflictDevice));
             foreach (var item in SelectedConflictDevices) item.IsSelected = ReferenceEquals(item, device);
         }
+        if (eventId is not null && command?.CanResend != true) EventId = string.Empty;
+        if (conflictDeviceId is not null && device is null) SelectedDeviceId = string.Empty;
     }
 
     private void ResetContext()
@@ -149,7 +163,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         Status = "考试或服务器已切换，请点击“刷新”。";
         _statusIsPlaceholder = true;
         RefreshNote = string.Empty;
-        CollectionStatus = "打开本页时会查询收齐记录；连接期间每 20 秒自动补取，离开本页也会继续提醒。";
+        CollectionStatus = "打开本页时会查询收齐记录；连接期间每 1 秒自动补取，离开本页也会继续提醒。";
     }
     private string _filterText = string.Empty;
     private string _roomGroupFilter = string.Empty;
@@ -177,11 +191,11 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         TimeSpan? monitoringRefreshInterval = null)
     {
         _api = api;
-        _collectionPollInterval = collectionPollInterval ?? TimeSpan.FromSeconds(20);
+        _collectionPollInterval = collectionPollInterval ?? TimeSpan.FromSeconds(1);
         if (_collectionPollInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(collectionPollInterval));
         // 权威状态自动刷新：需求要求正常联网时监测滞后不超过 2 秒；刷新周期可注入，便于回归与替换实现。
-        _monitoringRefreshInterval = monitoringRefreshInterval ?? TimeSpan.FromSeconds(2);
+        _monitoringRefreshInterval = monitoringRefreshInterval ?? TimeSpan.FromMilliseconds(750);
         if (_monitoringRefreshInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(monitoringRefreshInterval));
         _api.ConfigurationChanged += OnConfigurationChanged;
@@ -222,7 +236,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public bool IsPageActive
     {
         get => _isPageActive;
-        set { if (SetProperty(ref _isPageActive, value)) UpdatePolling(); }
+        set { if (SetProperty(ref _isPageActive, value)) UpdateMonitoringRefresh(); }
     }
 
     public bool ConnectionReady
@@ -308,6 +322,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             if (value is not null)
             {
                 EventId = value.Command.EventId;
+                ResendParticipationId = _selectedRow?.ParticipationId ?? string.Empty;
+                ResendDeviceId = _selectedRow?.AuthorizedDeviceId ?? string.Empty;
                 EntryVersionText = _selectedRow?.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? EntryVersionText;
                 AuthorizationVersionText = _selectedRow?.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? AuthorizationVersionText;
             }
@@ -322,7 +338,11 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         set
         {
             if (!SetProperty(ref _selectedConflictDevice, value)) return;
-            if (value is not null) SelectedDeviceId = value.DeviceId;
+            if (value is not null)
+            {
+                SelectedDeviceId = value.DeviceId;
+                ExpectedVersionText = _selectedRow?.Version.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+            }
             foreach (var device in SelectedConflictDevices) device.IsSelected = ReferenceEquals(device, value);
         }
     }
@@ -354,7 +374,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var operation = ++_collectionRequestVersion;
         var cursor = _collectionCursors.GetValueOrDefault(examId);
         var added = 0;
-        CollectionCompletedNotification? newest = null;
+        var notifications = new List<CollectionCompletedNotification>();
         CollectionStatus = "正在查询收齐记录…";
         try
         {
@@ -386,7 +406,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
                     if (_seenCollectionEventVersions.TryAdd(item.EventId, item.RosterVersion))
                     {
                         CollectionEvents.Add(item);
-                        if (reminded.Remember(item)) newest = item;
+                        if (reminded.Remember(item)) notifications.Add(item);
                         added++;
                         if (CollectionEvents.Count > 500)
                         {
@@ -414,8 +434,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         }
         finally
         {
-            if (newest is not null && context == _contextVersion && operation == _collectionRequestVersion)
-                CollectionCompleted?.Invoke(newest);
+            if (context == _contextVersion && operation == _collectionRequestVersion)
+                foreach (var item in notifications) CollectionCompleted?.Invoke(item);
         }
     }
 
@@ -507,6 +527,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     /// </summary>
     private async Task RefreshFromSnapshotAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsPageActive || !ConnectionReady) return;
         var examId = ExamId.Trim();
         if (examId.Length == 0) return;
         var context = _contextVersion;
@@ -659,6 +681,11 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 
     private void Apply(MonitoringSnapshot snapshot)
     {
+        // 手动读取与周期读取可能并行；较早开始的响应不得把新状态覆盖回去。
+        if (_asOf is { } current && snapshot.AsOf < current) return;
+        _applyingSnapshot = true;
+        try
+        {
         var selectedId = _selectedRow?.ParticipationId;
         Rows.Clear();
         UncollectedRows.Clear();
@@ -685,6 +712,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(RoomGroupOptions));
         OnPropertyChanged(nameof(CountsText));
         OnPropertyChanged(nameof(AsOfText));
+        }
+        finally { _applyingSnapshot = false; }
     }
 
     /// <summary>本次读取的汇总文案；只由手动刷新写入状态栏，自动刷新不覆盖考务的操作反馈。</summary>
@@ -728,7 +757,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             throw new InvalidOperationException("设备裁决回执与当前请求不匹配，已拒绝应用。");
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         inputVersion = _decisionInputVersion;
-        var success = $"已保留设备 {result.AuthorizedDeviceId} 继续答题，设备 {result.RevokedDeviceId} 已停止答题（操作人 {result.OperatorId}，原因：{result.Reason}）。";
+        var retainedNumber = SelectedRow?.ConflictingDevices.FirstOrDefault(device => device.DeviceId == result.AuthorizedDeviceId)?.ClientNumber;
+        var success = $"已保留设备{(retainedNumber is null ? string.Empty : " " + retainedNumber)}继续答题，另一设备已停止答题（原因：{result.Reason}）。";
         try
         {
             await LoadAsync();
@@ -776,6 +806,12 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 
     public async Task ResendAsync()
     {
+        if (_selectedRow is { } row && (!row.AvailableCommands.Any(c => c.EventId == EventId && c.CanResend) ||
+            row.ParticipationId != ResendParticipationId || row.AuthorizedDeviceId != ResendDeviceId))
+        {
+            Status = "所选指令或设备状态已变化，请重新选择可重发的指令。";
+            return;
+        }
         if (string.IsNullOrWhiteSpace(ExamId) || string.IsNullOrWhiteSpace(EventId) || string.IsNullOrWhiteSpace(ResendParticipationId) ||
             string.IsNullOrWhiteSpace(ResendDeviceId) || !long.TryParse(EntryVersionText, out var entryVersion) || entryVersion < 0 ||
             !long.TryParse(AuthorizationVersionText, out var authorizationVersion) || authorizationVersion < 0)
@@ -807,7 +843,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             !StringComparer.Ordinal.Equals(result.TargetDeviceId, deviceId) ||
             result.TargetAuthorizationVersion != authorizationVersion || result.DeliveryAttempts < 1)
             throw new InvalidOperationException("补发回执与当前考试或请求不匹配，已拒绝应用。");
-        Status = $"已重发指令（累计发送 {result.DeliveryAttempts} 次）。";
+        Status = $"已重发指令，等待学生端确认（累计发送 {result.DeliveryAttempts} 次）。";
     }
 
     private bool MatchesFilter(MonitoringRow row)
@@ -896,7 +932,7 @@ public sealed record MonitoringRow(
         string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未分组" : participant.RoomGroupName,
         MonitoringDisplay.ConnectionState(participant.ConnectionState),
         string.IsNullOrWhiteSpace(participant.Page) ? "未报告" : participant.Page,
-        MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers),
+        MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers, participant.CurrentQuestionNo),
         MonitoringDisplay.PaperState(participant.InstalledPaperVersion, participant.TargetPaperVersion, participant.DownloadState),
         MonitoringDisplay.CommandSummary(participant.Commands),
         MonitoringDisplay.LastCommunication(participant.LastCommunicationAt),

@@ -118,6 +118,7 @@ public sealed partial class StudentExamRuntime(
     public string? ConnectionError => (_feed as SignalRExamCommandFeed)?.LastError ?? _handlingError;
     public bool NotificationsStarted => _feed is not null;
     public event EventHandler? StateChanged;
+    public event EventHandler? SubmissionRetryRequested;
 
     /// <summary>Read existing fixed work before any new entry/unlock; this never authorizes editing.</summary>
     public async Task<bool> InitializeLocalRecoveryAsync(CancellationToken ct = default)
@@ -477,6 +478,8 @@ public sealed partial class StudentExamRuntime(
                 if (Manager.IsRecordedPaperUpdate(delivery)) _paperUpdate?.Notify(delivery);
             }
             await SynchronizeLocalAnswersAsync(ct);
+            if (delivery.EventType == CommandEventType.End && await packageCommand && Manager.ExamEnded && HasFixedSubmission)
+                SubmissionRetryRequested?.Invoke(this, EventArgs.Empty);
             _handlingError = null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested || _lifetime.IsCancellationRequested)

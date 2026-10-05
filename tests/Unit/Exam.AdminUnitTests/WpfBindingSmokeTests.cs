@@ -119,6 +119,18 @@ public sealed class WpfBindingSmokeTests
                     if ((string)tab.Header == "设备监控")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
+                        AdminUiFixture.Until(() => viewModel.Monitoring.Rows.Count != 0);
+                        viewModel.Monitoring.SelectedRow = viewModel.Monitoring.Rows.First(row => row.AvailableCommands.Any(command => command.CanResend));
+                        viewModel.Monitoring.DecisionReason = "合成界面保留输入检查";
+                        DrainDispatcher();
+                        var participant = viewModel.Monitoring.SelectedRow.ParticipationId;
+                        var commandId = viewModel.Monitoring.EventId;
+                        viewModel.Monitoring.LoadCommand.Execute(null);
+                        AdminUiFixture.Until(() => viewModel.Monitoring.Status.Contains("实际参试"));
+                        DrainDispatcher();
+                        Assert.Equal(participant, viewModel.Monitoring.SelectedRow?.ParticipationId);
+                        Assert.Equal(commandId, viewModel.Monitoring.EventId);
+                        Assert.Equal("合成界面保留输入检查", viewModel.Monitoring.DecisionReason);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐记录") && button.Command is not null);
                         var screenshotPath = Environment.GetEnvironmentVariable("EXAM_C04_SCREENSHOT_PATH");
                         if (!string.IsNullOrWhiteSpace(screenshotPath))

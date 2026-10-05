@@ -27,8 +27,8 @@ public sealed class MonitoringViewModelTests
             MonitoringFixture.Participant(
                 businessState: ParticipationBusinessState.Answering,
                 connectionState: DeviceConnectionState.Offline,
-                currentQuestionId: "2",
-                answers: new Dictionary<string, AnswerValue> { ["2"] = AnswerValue.Selected("A", "C") },
+                currentQuestionId: "synthetic-internal-question", currentQuestionNo: 2,
+                answers: new Dictionary<string, AnswerValue> { ["synthetic-internal-question"] = AnswerValue.Selected("A", "C") },
                 installedPaperVersion: 1, targetPaperVersion: 2, downloadState: "失败",
                 focusLossCount: 2, focusLossMilliseconds: 4500,
                 revisionStatus: new ParticipantVersionStatus("part-1", ParticipationBusinessState.Answering, 2, 2,
@@ -54,7 +54,7 @@ public sealed class MonitoringViewModelTests
         Assert.Equal("离线", answering.ConnectionState);
         Assert.Equal("第一试场", answering.RoomGroup);
         Assert.Equal("正在答题", answering.Page);
-        Assert.Equal("第 2 题：A/C", answering.QuestionAnswer);
+        Assert.Equal("第 2 题：AC", answering.QuestionAnswer);
         Assert.Equal("第 1 版 → 第 2 版（失败）", answering.PaperState);
         Assert.Equal("2 次 / 共 4 秒", answering.FocusSummary);
         Assert.Equal("未复核", answering.PaperReviewState);
