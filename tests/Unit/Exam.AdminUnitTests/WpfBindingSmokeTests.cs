@@ -89,6 +89,12 @@ public sealed class WpfBindingSmokeTests
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
+                    if ((string)tab.Header == "设备监控")
+                    {
+                        var monitoringFilter = Assert.Single(Descendants<ComboBox>(window), input =>
+                            BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == "Monitoring.RoomFilter");
+                        Assert.Equal("全部试场", monitoringFilter.SelectedItem);
+                    }
                     if ((string)tab.Header == "激活与试场分组")
                     {
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);

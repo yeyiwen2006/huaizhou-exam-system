@@ -24,4 +24,7 @@ public sealed record MonitoringParticipant(string ParticipationId,string Candida
     IReadOnlyList<MonitoringCommand> Commands,IReadOnlyList<ConflictDevice> ConflictDevices);
 public sealed record MonitoringSnapshot(string ExamId,DateTimeOffset AsOf,VersionVector Versions,
     ExamLifecycle Lifecycle,long ActualRosterVersion,int ActualCount,int CollectedCount,
-    IReadOnlyList<MonitoringParticipant> Participants,IReadOnlyList<MonitoringParticipant> Uncollected);
+    IReadOnlyList<MonitoringParticipant> Participants,IReadOnlyList<MonitoringParticipant> Uncollected)
+{
+    public IReadOnlyList<PaperQuestionStructure> Questions { get; init; } = [];
+}

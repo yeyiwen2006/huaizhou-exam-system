@@ -19,6 +19,7 @@ public sealed partial class MonitoringViewModel
     private CreateCommandEventRequest? _pendingUpload;
     private long _pendingUploadContext = -1;
     private ExamLifecycle _snapshotLifecycle;
+    private IReadOnlyDictionary<string, PaperQuestionStructure> _questions = new Dictionary<string, PaperQuestionStructure>();
 
     public string SnapshotStatus { get => _snapshotStatus; private set => SetProperty(ref _snapshotStatus, value); }
     public ObservableCollection<string> RoomFilters { get; } = ["全部试场"];
@@ -33,18 +34,18 @@ public sealed partial class MonitoringViewModel
             device.IsAuthorized ? "当前授权" : "申请进入", device.Page,
             device.LastSyncedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "尚无已保存进度",
             $"已保存 {device.SavedAnswerCount} 题答案")) ?? [];
-    public IEnumerable<AnswerDetail> AnswerDetails => SelectedDetails?.Answers.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-        .Select(pair => new AnswerDetail(pair.Key, pair.Value.Kind switch
+    public IEnumerable<AnswerDetail> AnswerDetails => SelectedDetails?.Answers.OrderBy(pair => _questions.GetValueOrDefault(pair.Key)?.QuestionNo ?? int.MaxValue)
+        .Select(pair => new AnswerDetail(QuestionLabel(pair.Key), pair.Value.Kind switch
         {
             AnswerKind.Empty => "未作答", AnswerKind.Abstain => "不作答",
-            _ => string.Join("、", pair.Value.OptionIds)
+            _ => string.Join("、", pair.Value.OptionIds.Select(option => OptionLabel(pair.Key, option)))
         })) ?? [];
     public IEnumerable<CommandDetail> CommandDetails => SelectedDetails?.Commands.Select(command =>
         new CommandDetail(command.EventType switch
         {
             CommandEventType.Start => "开始考试", CommandEventType.End => "结束考试",
             CommandEventType.ScheduleChanged => "调整时间", CommandEventType.PaperUpdated => "更新试卷",
-            CommandEventType.DeviceDecided => "设备裁决", _ => "其他通知"
+            CommandEventType.DeviceDecided => "设备裁决", CommandEventType.UploadRequested => "请求补传原答卷", _ => "其他通知"
         }, command.Confirmation, command.CreatedAt.ToLocalTime(), command.AcknowledgedAt?.ToLocalTime())) ?? [];
     public ConflictDevice? SelectedConflictDevice
     {
@@ -109,6 +110,7 @@ public sealed partial class MonitoringViewModel
         if (snapshot.AsOf < _snapshotAsOf) return;
         _snapshotAsOf = snapshot.AsOf;
         _snapshotLifecycle = snapshot.Lifecycle;
+        _questions = snapshot.Questions.ToDictionary(question => question.QuestionId, StringComparer.Ordinal);
         var selectedId = SelectedRow?.ParticipationId;
         var chosenDevice = SelectedConflictDevice?.DeviceId;
         var rows = snapshot.Participants.Select(ToRow).ToArray();
@@ -126,21 +128,26 @@ public sealed partial class MonitoringViewModel
         var rooms = new[] { "全部试场" }.Concat(rows.Select(row => row.RoomGroupName).Distinct().Order(StringComparer.CurrentCulture)).ToArray();
         if (!RoomFilters.SequenceEqual(rooms))
         {
-            var selectedRoom = RoomFilter;
-            RoomFilters.Clear();
-            foreach (var room in rooms) RoomFilters.Add(room);
-            RoomFilter = RoomFilters.Contains(selectedRoom) ? selectedRoom : "全部试场";
-            OnPropertyChanged(nameof(RoomFilter));
+            if (!rooms.Contains(RoomFilter)) RoomFilter = "全部试场";
+            // Keep the selected item in the collection: clearing it makes WPF replace
+            // a valid two-way selection with null during every list rebuild.
+            foreach (var room in RoomFilters.Where(room => !rooms.Contains(room)).ToArray()) RoomFilters.Remove(room);
+            foreach (var room in rooms.Where(room => !RoomFilters.Contains(room))) RoomFilters.Add(room);
         }
         OnPropertyChanged(nameof(FilteredRows));
         SnapshotStatus = $"状态更新时间：{snapshot.AsOf.ToLocalTime():HH:mm:ss}；本页每秒读取一次。";
-        Status = $"实际参试 {snapshot.ActualCount} 人，已回收 {snapshot.CollectedCount} 份，待回收 {snapshot.ActualCount - snapshot.CollectedCount} 份。";
+        // Counts belong to the live status; preserve feedback from an operator's action.
+        SnapshotStatus += $" 实际参试 {snapshot.ActualCount} 人，已回收 {snapshot.CollectedCount} 份，待回收 {snapshot.ActualCount - snapshot.CollectedCount} 份。";
     }
 
     private static void ValidateSnapshot(MonitoringSnapshot snapshot)
     {
         var rows = snapshot.Participants;
-        if (snapshot.AsOf == default || rows.Any(row => row is null) || snapshot.ActualCount != rows.Count ||
+        if (snapshot.Questions is null || snapshot.Questions.Any(question => question is null ||
+                string.IsNullOrWhiteSpace(question.QuestionId) || question.QuestionNo < 1 || question.OptionIds is null) ||
+            snapshot.Questions.Select(question => question.QuestionId).Distinct(StringComparer.Ordinal).Count() != snapshot.Questions.Count ||
+            snapshot.Questions.Select(question => question.QuestionNo).Distinct().Count() != snapshot.Questions.Count ||
+            snapshot.AsOf == default || rows.Any(row => row is null) || snapshot.ActualCount != rows.Count ||
             snapshot.CollectedCount != rows.Count(row => row.ReceiptId is not null) ||
             rows.Select(row => row.ParticipationId).Distinct(StringComparer.Ordinal).Count() != rows.Count ||
             rows.Select(row => row.CandidateId).Distinct(StringComparer.Ordinal).Count() != rows.Count ||
@@ -157,7 +164,18 @@ public sealed partial class MonitoringViewModel
             throw new InvalidOperationException("监控快照的考生、授权、版本或回收人数无效，已拒绝显示。");
     }
 
-    private static MonitoringRow ToRow(MonitoringParticipant item) => new(
+    private string QuestionLabel(string? id) => id is null ? "—" :
+        _questions.TryGetValue(id, out var question) ? $"第 {question.QuestionNo} 题" : "题号待核对";
+
+    private string OptionLabel(string questionId, string optionId)
+    {
+        if (!_questions.TryGetValue(questionId, out var question)) return "选项待核对";
+        var index = question.OptionIds.ToList().IndexOf(optionId);
+        if (index < 0) return "选项待核对";
+        return optionId.Length == 1 && optionId[0] is >= 'A' and <= 'Z' ? optionId : $"第 {index + 1} 个选项";
+    }
+
+    private MonitoringRow ToRow(MonitoringParticipant item) => new(
         item.ParticipationId, item.CandidateId, ToChinese(item.BusinessState), item.AuthorizedDeviceId,
         item.EntryVersion, item.AuthorizationVersion, item.ParticipationVersion, item.CollectionState,
         $"{item.FocusLossCount} 次 / 共 {FormatDuration(item.FocusLossMilliseconds)}",
@@ -170,7 +188,7 @@ public sealed partial class MonitoringViewModel
         Name = item.Name, ClassText = item.ClassText, AdmissionNo = item.AdmissionNo,
         ClientNumber = item.ClientNumber, RoomGroupName = item.RoomGroupName,
         ConnectionText = ConnectionText(item.ConnectionState), Page = $"{ToChinese(item.BusinessState)} · {item.Page}",
-        CurrentQuestion = item.CurrentQuestionId ?? "—",
+        CurrentQuestion = QuestionLabel(item.CurrentQuestionId),
         LastCommunicationText = item.LastCommunicationAt?.ToLocalTime().ToString("HH:mm:ss") ?? "未通信",
         PaperStatus = $"{item.InstalledPaperVersion}/{item.TargetPaperVersion} · {item.DownloadState}",
         ConflictText = item.ConflictDevices.Count > 1 ? "待处理" : "无", Details = item

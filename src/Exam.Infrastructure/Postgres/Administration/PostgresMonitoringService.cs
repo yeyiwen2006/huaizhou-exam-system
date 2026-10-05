@@ -143,7 +143,8 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
             (string.IsNullOrWhiteSpace(query)||new[]{x.Name,x.ClassText,x.AdmissionNo,x.ClientNumber}.Any(s=>s.Contains(query.Trim(),StringComparison.OrdinalIgnoreCase)))).ToArray();
         await t.CommitAsync(ct);
         return new(examId,now,version?.Versions??new(0,0,0),version?.LifecycleState??ExamLifecycle.Scheduled,
-            rosterVersion,rows.Count,rows.Count-missing.Length,filtered,missing);
+            rosterVersion,rows.Count,rows.Count-missing.Length,filtered,missing)
+        { Questions = version?.Paper?.Structure.Questions ?? [] };
     }
     private static long Long(NpgsqlDataReader r,string name){var i=r.GetOrdinal(name);return r.IsDBNull(i)?0:r.GetInt64(i);}
 }

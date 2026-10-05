@@ -21,6 +21,27 @@ public sealed class MonitoringWorkflowTests
     });
 
     [Fact]
+    public async Task QuestionDetailsUsePublishedNumbersAndDoNotExposeInternalIdentifiers()
+    {
+        var snapshot = Snapshot();
+        snapshot = snapshot with
+        {
+            Questions = [new("private-question-key", 12, "subject", "group", "single", ["private-option-key", "other"])],
+            Participants = [snapshot.Participants[0] with
+            { CurrentQuestionId = "private-question-key", Answers = new Dictionary<string, Exam.Contracts.Submissions.AnswerValue>
+                { ["private-question-key"] = Exam.Contracts.Submissions.AnswerValue.Selected("private-option-key") } }]
+        };
+        using var handler = new Handler(_ => Task.FromResult(Success(snapshot)));
+        using var api = Api(handler);
+        using var model = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        await model.LoadAsync(); model.SelectedRow = Assert.Single(model.Rows);
+        Assert.Equal("第 12 题", model.SelectedRow.CurrentQuestion);
+        var answer = Assert.Single(model.AnswerDetails);
+        Assert.Equal("第 12 题", answer.Question);
+        Assert.Equal("第 1 个选项", answer.Answer);
+    }
+
+    [Fact]
     public async Task BusinessResend_UsesSelectedAuthorizationAndRealDeliveryResponse()
     {
         var snapshot = Snapshot();

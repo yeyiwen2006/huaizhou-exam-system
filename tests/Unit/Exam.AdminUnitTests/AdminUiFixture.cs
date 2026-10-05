@@ -136,7 +136,8 @@ internal sealed class AdminUiFixture : IDisposable
                     { LastSyncedAt = Start.AddMinutes(-1), SavedAnswerCount = 3 },
                 new("synthetic-device-2", "20261002002", "合成试场B", DeviceConnectionState.Online, Start, false, 0, "等待裁决")]
         };
-        return new(ExamId, DateTimeOffset.UtcNow, new(1, 1, 1), ExamLifecycle.Running, 1, 1, 0, [participant], [participant]);
+        return new(ExamId, DateTimeOffset.UtcNow, new(1, 1, 1), ExamLifecycle.Running, 1, 1, 0, [participant], [participant])
+        { Questions = [new("1", 1, "synthetic-subject", "synthetic-group", "single", ["A", "B"])] };
     }
 
     public void Dispose() { Window.Close(); _api.Dispose(); }

@@ -13,7 +13,8 @@ internal static class MonitoringFixture
         var participants = rows.Select(item => Participant(item)).ToArray();
         return new(examId, DateTimeOffset.UtcNow, new(1, 1, 1), ExamLifecycle.Running, 1,
             participants.Length, participants.Count(item => item.ReceiptId is not null), participants,
-            participants.Where(item => item.ReceiptId is null).ToArray());
+            participants.Where(item => item.ReceiptId is null).ToArray())
+        { Questions = [new("1", 1, "subject-1", "group-1", "single", ["A", "B"])] };
     }
 
     public static MonitoringParticipant Participant(ParticipationResult item) => new(item.ParticipationId,
