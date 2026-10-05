@@ -5,7 +5,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = [System.IO.Path]::GetFullPath($SourcePath)
+Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
+$source = Assert-ControlledPath ([System.IO.Path]::GetFullPath($SourcePath))
 if (-not [System.IO.File]::Exists($source)) {
     throw "WAL source does not exist: $source"
 }
@@ -13,7 +14,7 @@ if (([System.IO.File]::GetAttributes($source) -band [System.IO.FileAttributes]::
     throw 'WAL source must not be a reparse point.'
 }
 
-if ($WalFileName -in @('.', '..') -or [System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
+if ($WalFileName -notmatch '^(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$') {
     throw 'WAL file name must not contain a directory component.'
 }
 
@@ -23,7 +24,7 @@ if (-not [System.IO.Path]::IsPathRooted($ArchiveRoot) -or
     -not ($pathRoot.EndsWith('\') -or $pathRoot.EndsWith('/'))) {
     throw 'WAL archive root must be an absolute path.'
 }
-$root = [System.IO.Path]::GetFullPath($ArchiveRoot)
+$root = Assert-ControlledPath $ArchiveRoot -AllowMissing
 
 [System.IO.Directory]::CreateDirectory($root) | Out-Null
 if (([System.IO.File]::GetAttributes($root) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
