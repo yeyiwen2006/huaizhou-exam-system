@@ -94,6 +94,20 @@ public sealed class CollectionWatchTests
         Assert.Equal(4, watch.Cursor);
     }
 
+    [Fact]
+    public void Accept_RejectsARedeliveredEventWhoseContentChanged()
+    {
+        var watch = new CollectionWatch();
+        watch.Accept("exam-1", [Event("event-1", 1, 10)]);
+
+        // 同一事件内容变了（人数不同）且同页还有新事件：整页拒绝、游标不前进，
+        // 与考务端弹窗对“同一标识内容不一致”的处理口径一致。
+        Assert.Throws<InvalidOperationException>(() =>
+            watch.Accept("exam-1", [Event("event-1", 1, 99), Event("event-2", 2, 10)]));
+        Assert.Equal(1, watch.Cursor);
+        Assert.Equal(new[] { 2L }, watch.Accept("exam-1", [Event("event-2", 2, 10)]).Select(item => item.RosterVersion));
+    }
+
     private static CollectionCompletedNotification Event(string eventId, long rosterVersion, int participantCount,
         string examId = "exam-1") =>
         new(eventId, examId, rosterVersion, participantCount, new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8)));
