@@ -1,12 +1,19 @@
 using System.Collections.ObjectModel;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
+using Exam.Contracts.Administration;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
 
 namespace Exam.Admin.ViewModels;
 
+/// <summary>
+/// 设备监控。参试列表、字段、回收人数与未回收名单全部来自服务器一次事务内的权威聚合快照
+/// （<c>GET /exams/{examId}/monitoring</c>），不再由考务端拼接多个来源或使用占位值。
+/// 收齐记录仍按历史补取轮询，用于页面重开与断线恢复。
+/// </summary>
 public sealed class MonitoringViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
@@ -20,6 +27,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     // Keep reminder history across exam switches and reconnects, but isolate different logical servers.
     private readonly Dictionary<(string ServerId, string ExamId), CollectionEventHistory> _remindedCollectionEvents = [];
     private string _examId = string.Empty;
+    private string _examName = string.Empty;
     private long _contextVersion;
     private long _loadVersion;
     private long _collectionRequestVersion;
@@ -28,6 +36,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private long _decisionInputVersion;
     private long _resendInputVersion;
     private MonitoringRow? _selectedRow;
+    private int _actualCount;
+    private int _collectedCount;
+    private DateTimeOffset? _asOf;
+    private ExamLifecycle _lifecycle = ExamLifecycle.Scheduled;
     public event Action<CollectionCompletedNotification>? CollectionCompleted;
 
     public MonitoringRow? SelectedRow
@@ -35,16 +47,24 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         get => _selectedRow;
         set
         {
-            if (SetProperty(ref _selectedRow, value) && value is not null)
-            {
-                ParticipationId = value.ParticipationId;
-                SelectedDeviceId = value.AuthorizedDeviceId;
-                ExpectedVersionText = value.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                ResendParticipationId = value.ParticipationId;
-                ResendDeviceId = value.AuthorizedDeviceId;
-                EntryVersionText = value.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                AuthorizationVersionText = value.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            }
+            if (!SetProperty(ref _selectedRow, value)) return;
+            SelectedCommands.Clear();
+            SelectedConflictDevices.Clear();
+            _resendInputVersion++;
+            if (value is null) return;
+            ParticipationId = value.ParticipationId;
+            SelectedDeviceId = value.AuthorizedDeviceId;
+            ExpectedVersionText = value.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ResendParticipationId = value.ParticipationId;
+            ResendDeviceId = value.AuthorizedDeviceId;
+            EntryVersionText = value.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            AuthorizationVersionText = value.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            EventId = string.Empty;
+            foreach (var command in value.AvailableCommands)
+                SelectedCommands.Add(new MonitoringCommandRow(command, row => SelectedCommand = row));
+            foreach (var conflict in value.ConflictingDevices)
+                SelectedConflictDevices.Add(new ConflictDeviceRow(conflict, row => SelectedConflictDevice = row));
+            SelectedCommand = SelectedCommands.FirstOrDefault(command => command.CanResend) ?? SelectedCommands.FirstOrDefault();
         }
     }
 
@@ -55,18 +75,33 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         _decisionRequestVersion++;
         _resendRequestVersion++;
         Rows.Clear();
+        UncollectedRows.Clear();
+        SelectedCommands.Clear();
+        SelectedConflictDevices.Clear();
         CollectionEvents.Clear();
         _collectionCursors.Clear();
         _seenCollectionEventVersions.Clear();
+        _actualCount = 0;
+        _collectedCount = 0;
+        _asOf = null;
+        _lifecycle = ExamLifecycle.Scheduled;
         SelectedRow = null;
         ParticipationId = SelectedDeviceId = ExpectedVersionText = DecisionReason = string.Empty;
         EventId = ResendParticipationId = ResendDeviceId = EntryVersionText = AuthorizationVersionText = string.Empty;
         OnPropertyChanged(nameof(FilteredRows));
+        OnPropertyChanged(nameof(RoomGroupOptions));
+        OnPropertyChanged(nameof(CountsText));
+        OnPropertyChanged(nameof(AsOfText));
         Status = "考试或服务器已切换，请点击“刷新”。";
         CollectionStatus = "打开本页时会自动查询收齐记录，也可以点击“查询收齐记录”。";
     }
     private string _filterText = string.Empty;
-    private bool _onlySubmitted;
+    private string _roomGroupFilter = string.Empty;
+    private string _clientNumberFilter = string.Empty;
+    private string _nameFilter = string.Empty;
+    private string _classFilter = string.Empty;
+    private string _admissionNoFilter = string.Empty;
+    private bool _onlyUncollected;
     private string _participationId = string.Empty;
     private string _selectedDeviceId = string.Empty;
     private string _expectedVersionText = string.Empty;
@@ -76,8 +111,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private string _resendDeviceId = string.Empty;
     private string _entryVersionText = string.Empty;
     private string _authorizationVersionText = string.Empty;
-    private string _status = "填写考试编号后点击“刷新”，查看实际参试考生。";
+    private string _status = "选择考试后点击“刷新”，查看实际参试考生的在线、作答和回收状态。";
     private string _collectionStatus = "尚未查询收齐记录。";
+    private MonitoringCommandRow? _selectedCommand;
+    private ConflictDeviceRow? _selectedConflictDevice;
 
     public MonitoringViewModel(AdminApiClient api, TimeSpan? collectionPollInterval = null)
     {
@@ -89,12 +126,36 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         LoadCommand = new AsyncRelayCommand(LoadAsync, onError: SetError);
         DecideDeviceCommand = new AsyncRelayCommand(DecideDeviceAsync, onError: SetError);
         ResendCommand = new AsyncRelayCommand(ResendAsync, onError: SetError);
+        RequestReuploadCommand = new AsyncRelayCommand(RequestReuploadAsync, onError: SetError);
         RefreshCollectionEventsCommand = new AsyncRelayCommand(() => RefreshCollectionEventsAsync(), onError: SetCollectionError);
+        ClearFiltersCommand = new RelayCommand(ClearFilters);
     }
 
     public ObservableCollection<MonitoringRow> Rows { get; } = [];
+    public ObservableCollection<MonitoringRow> UncollectedRows { get; } = [];
+    public ObservableCollection<MonitoringCommandRow> SelectedCommands { get; } = [];
+    public ObservableCollection<ConflictDeviceRow> SelectedConflictDevices { get; } = [];
     public ObservableCollection<CollectionCompletedNotification> CollectionEvents { get; } = [];
+
+    /// <summary>按现场使用的信息筛选：试场、学生端编号、姓名、班级、准考证号，可组合。</summary>
     public IEnumerable<MonitoringRow> FilteredRows => Rows.Where(MatchesFilter);
+
+    public IReadOnlyList<string> RoomGroupOptions =>
+        Rows.Select(row => row.RoomGroup).Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+
+    public string CountsText => $"实际参试 {_actualCount} 人；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
+
+    public string AsOfText => _asOf is { } asOf
+        ? $"状态读取时间 {asOf:yyyy-MM-dd HH:mm:ss}（考试状态：{LifecycleText}）。"
+        : string.Empty;
+
+    private string LifecycleText => _lifecycle switch
+    {
+        ExamLifecycle.Scheduled => "未开始",
+        ExamLifecycle.Running => "进行中",
+        ExamLifecycle.Ended => "已结束",
+        _ => "未知"
+    };
 
     public bool IsPageActive
     {
@@ -120,15 +181,49 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    /// <summary>当前考试名称；界面只显示考试名称，不显示内部标识。</summary>
+    public string ExamName
+    {
+        get => _examName;
+        set => SetProperty(ref _examName, value);
+    }
+
     public string FilterText
     {
         get => _filterText;
         set { if (SetProperty(ref _filterText, value)) OnPropertyChanged(nameof(FilteredRows)); }
     }
-    public bool OnlySubmitted
+    public string RoomGroupFilter
     {
-        get => _onlySubmitted;
-        set { if (SetProperty(ref _onlySubmitted, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        get => _roomGroupFilter;
+        set { if (SetProperty(ref _roomGroupFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+    }
+    public string ClientNumberFilter
+    {
+        get => _clientNumberFilter;
+        set { if (SetProperty(ref _clientNumberFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+    }
+    public string NameFilter
+    {
+        get => _nameFilter;
+        set { if (SetProperty(ref _nameFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+    }
+    public string ClassFilter
+    {
+        get => _classFilter;
+        set { if (SetProperty(ref _classFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+    }
+    public string AdmissionNoFilter
+    {
+        get => _admissionNoFilter;
+        set { if (SetProperty(ref _admissionNoFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+    }
+    /// <summary>只看未回收：对应回收统计中的未回收名单。</summary>
+    public bool OnlyUncollected
+    {
+        get => _onlyUncollected;
+        set { if (SetProperty(ref _onlyUncollected, value)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string ParticipationId { get => _participationId; set { if (SetProperty(ref _participationId, value)) _decisionInputVersion++; } }
     public string SelectedDeviceId { get => _selectedDeviceId; set { if (SetProperty(ref _selectedDeviceId, value)) _decisionInputVersion++; } }
@@ -142,15 +237,58 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string CollectionStatus { get => _collectionStatus; private set => SetProperty(ref _collectionStatus, value); }
 
+    /// <summary>选中考生后可重发的权威指令；重发不再需要手填事件标识。</summary>
+    public MonitoringCommandRow? SelectedCommand
+    {
+        get => _selectedCommand;
+        set
+        {
+            if (!SetProperty(ref _selectedCommand, value)) return;
+            if (value is not null)
+            {
+                EventId = value.Command.EventId;
+                EntryVersionText = _selectedRow?.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? EntryVersionText;
+                AuthorizationVersionText = _selectedRow?.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? AuthorizationVersionText;
+            }
+            foreach (var command in SelectedCommands) command.IsSelected = ReferenceEquals(command, value);
+        }
+    }
+
+    /// <summary>冲突对照中选中的设备：选中即填入“保留的设备”，核对后再确认。</summary>
+    public ConflictDeviceRow? SelectedConflictDevice
+    {
+        get => _selectedConflictDevice;
+        set
+        {
+            if (!SetProperty(ref _selectedConflictDevice, value)) return;
+            if (value is not null) SelectedDeviceId = value.DeviceId;
+            foreach (var device in SelectedConflictDevices) device.IsSelected = ReferenceEquals(device, value);
+        }
+    }
+
     public AsyncRelayCommand LoadCommand { get; }
     public AsyncRelayCommand DecideDeviceCommand { get; }
     public AsyncRelayCommand ResendCommand { get; }
+    public AsyncRelayCommand RequestReuploadCommand { get; }
     public AsyncRelayCommand RefreshCollectionEventsCommand { get; }
+    public RelayCommand ClearFiltersCommand { get; }
+
+    /// <summary>清除全部筛选条件：试场、编号、姓名、班级、准考证号和未回收过滤。</summary>
+    private void ClearFilters()
+    {
+        RoomGroupFilter = string.Empty;
+        ClientNumberFilter = string.Empty;
+        NameFilter = string.Empty;
+        ClassFilter = string.Empty;
+        AdmissionNoFilter = string.Empty;
+        FilterText = string.Empty;
+        OnlyUncollected = false;
+    }
 
     public async Task RefreshCollectionEventsAsync(CancellationToken cancellationToken = default)
     {
         var examId = ExamId.Trim();
-        if (examId.Length == 0) { CollectionStatus = "请先填写考试编号。"; return; }
+        if (examId.Length == 0) { CollectionStatus = "请先选择考试。"; return; }
         var context = _contextVersion;
         var operation = ++_collectionRequestVersion;
         var cursor = _collectionCursors.GetValueOrDefault(examId);
@@ -307,25 +445,31 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     {
         if (string.IsNullOrWhiteSpace(ExamId))
         {
-            Status = "请填写考试编号。";
+            Status = "请先选择考试。";
             return;
         }
 
         var examId = ExamId.Trim();
         var context = _contextVersion;
         var operation = ++_loadVersion;
-        Status = "正在读取参试考生…";
-        IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results;
+        Status = "正在读取考试监测状态…";
+        MonitoringSnapshot snapshot;
         try
         {
-            results = await _api.ListActualParticipationsAsync(examId);
+            snapshot = await _api.GetMonitoringSnapshotAsync(examId);
+        }
+        catch (AdminApiException exception) when (exception.Code == "INVALID_RESPONSE")
+        {
+            // 快照被边界校验拒绝：保留上一次可信结果，不显示半份状态。
+            if (context == _contextVersion && operation == _loadVersion)
+                Status = $"监测状态读取失败：{FriendlyErrors.Describe(exception)}已保留上一次结果。";
+            throw;
         }
         catch
         {
             if (context == _contextVersion && operation == _loadVersion)
             {
-                Rows.Clear();
-                OnPropertyChanged(nameof(FilteredRows));
+                ClearLoadedRows();
                 throw;
             }
             return;
@@ -334,100 +478,51 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         {
             return;
         }
-        ValidateParticipations(results, examId);
+        Apply(snapshot);
+    }
+
+    private void ClearLoadedRows()
+    {
         Rows.Clear();
+        UncollectedRows.Clear();
+        _actualCount = 0;
+        _collectedCount = 0;
+        _asOf = null;
         SelectedRow = null;
-
-        // B06 失焦与复核监测：与参试列表合并展示；查询失败不阻止主列表，显示占位并提示。
-        var (focusResult, focusError) = await LoadFocusSummariesAsync(examId, context, operation);
-        var focusByParticipation = focusResult ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        var reviewByParticipation = await LoadReviewStatesAsync(examId, context, operation) ?? [];
-        foreach (var item in results)
-        {
-            focusByParticipation.TryGetValue(item.ParticipationId, out var focusSummary);
-            reviewByParticipation.TryGetValue(item.ParticipationId, out var reviewState);
-            Rows.Add(new MonitoringRow(
-                item.ParticipationId,
-                item.CandidateId,
-                ToChinese(item.BusinessState),
-                item.AuthorizedDeviceId,
-                item.EntryVersion,
-                item.AuthorizationVersion,
-                item.Version,
-                item.BusinessState == ParticipationBusinessState.Submitted ? "已提交" : "未提交",
-                focusSummary ?? "暂无记录",
-                reviewState ?? "—"));
-        }
         OnPropertyChanged(nameof(FilteredRows));
-        Status = focusError is null
-            ? $"共 {Rows.Count} 名实际参试考生。"
-            : $"共 {Rows.Count} 名实际参试考生；{focusError}";
+        OnPropertyChanged(nameof(RoomGroupOptions));
+        OnPropertyChanged(nameof(CountsText));
+        OnPropertyChanged(nameof(AsOfText));
     }
 
-    /// <summary>失焦监测汇总；网络或权限异常时返回错误说明，不阻塞参试列表。</summary>
-    private async Task<(Dictionary<string, string>? Map, string? Error)> LoadFocusSummariesAsync(
-        string examId, long context, long operation)
+    private void Apply(MonitoringSnapshot snapshot)
     {
-        try
+        Rows.Clear();
+        UncollectedRows.Clear();
+        SelectedRow = null;
+        var byId = new Dictionary<string, MonitoringRow>(StringComparer.Ordinal);
+        foreach (var participant in snapshot.Participants)
         {
-            var summaries = await _api.ListFocusSummariesAsync(examId);
-            if (context != _contextVersion || operation != _loadVersion) return (null, null);
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var summary in summaries)
-            {
-                if (summary is null || !StringComparer.Ordinal.Equals(summary.ExamId, examId) ||
-                    string.IsNullOrWhiteSpace(summary.ParticipationId) || summary.EventCount < 0 ||
-                    summary.TotalDurationMilliseconds < 0) continue;
-                map[summary.ParticipationId] = summary.EventCount == 0 ? "0 次" :
-                    $"{summary.EventCount} 次 / 共 {FormatDuration(summary.TotalDurationMilliseconds)}";
-            }
-            return (map, null);
+            var row = MonitoringRow.From(participant);
+            Rows.Add(row);
+            byId[row.ParticipationId] = row;
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        // 未回收名单与参试列表是同一批行对象：在任一表格中选中都作用于同一名考生。
+        foreach (var participant in snapshot.Uncollected)
         {
-            return (null, $"失焦监测查询失败：{FriendlyErrors.Describe(exception)}");
+            if (byId.TryGetValue(participant.ParticipationId, out var row)) UncollectedRows.Add(row);
         }
-    }
-
-    /// <summary>修订复核状态；考生尚未进入修订流程时显示“—”。</summary>
-    private async Task<Dictionary<string, string>?> LoadReviewStatesAsync(string examId, long context, long operation)
-    {
-        try
-        {
-            var snapshot = await _api.GetExamAsync(examId);
-            if (context != _contextVersion || operation != _loadVersion) return null;
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (snapshot.Participants is not null)
-            {
-                foreach (var (participantId, status) in snapshot.Participants)
-                {
-                    if (status is null || string.IsNullOrWhiteSpace(participantId)) continue;
-                    map[participantId] = status.PaperUpdateState switch
-                    {
-                        Exam.Contracts.Versioning.PaperUpdateState.ReviewRequired => "未复核",
-                        Exam.Contracts.Versioning.PaperUpdateState.Updated => "已复核",
-                        Exam.Contracts.Versioning.PaperUpdateState.DownloadFailed => "修订未安装",
-                        _ => "—",
-                    };
-                }
-            }
-            return map;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // 复核状态属于增强信息，失败不阻塞监测列表。
-            return null;
-        }
-    }
-
-    private static string FormatDuration(long milliseconds)
-    {
-        var time = TimeSpan.FromMilliseconds(milliseconds);
-        return time.TotalHours >= 1
-            ? $"{(int)time.TotalHours} 时 {time.Minutes} 分 {time.Seconds} 秒"
-            : time.TotalMinutes >= 1
-                ? $"{(int)time.TotalMinutes} 分 {time.Seconds} 秒"
-                : $"{time.Seconds} 秒";
+        _actualCount = snapshot.ActualCount;
+        _collectedCount = snapshot.CollectedCount;
+        _asOf = snapshot.AsOf;
+        _lifecycle = snapshot.Lifecycle;
+        OnPropertyChanged(nameof(FilteredRows));
+        OnPropertyChanged(nameof(RoomGroupOptions));
+        OnPropertyChanged(nameof(CountsText));
+        OnPropertyChanged(nameof(AsOfText));
+        Status = _actualCount == 0
+            ? "本场考试还没有实际参试考生。"
+            : $"共 {_actualCount} 名实际参试考生；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
     }
 
     public async Task DecideDeviceAsync()
@@ -435,7 +530,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         if (string.IsNullOrWhiteSpace(ParticipationId) || string.IsNullOrWhiteSpace(SelectedDeviceId) ||
             string.IsNullOrWhiteSpace(DecisionReason) || !long.TryParse(ExpectedVersionText, out var expectedVersion) || expectedVersion < 0)
         {
-            Status = "请先在上表选中考生，再填写要保留的设备和原因。";
+            Status = "请先在上表选中考生，再在冲突对照中选择要保留的设备并填写原因。";
             return;
         }
 
@@ -480,13 +575,39 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>未回收名单的补传入口：重发该考生最近一条仍可重发的结束指令（原答卷补传）。</summary>
+    public async Task RequestReuploadAsync()
+    {
+        var row = SelectedRow;
+        if (row is null)
+        {
+            Status = "请先在未回收名单中选中要补传的考生。";
+            return;
+        }
+        var command = row.AvailableCommands.FirstOrDefault(item => item.EventType == CommandEventType.End && item.CanResend);
+        if (command is null)
+        {
+            var known = row.AvailableCommands.FirstOrDefault(item => item.EventType == CommandEventType.End);
+            Status = known is null
+                ? "该考生还没有结束指令，无法请求补传。"
+                : "该结束指令已确认或已被拒绝，不能重复请求补传。";
+            return;
+        }
+        EventId = command.EventId;
+        ResendParticipationId = row.ParticipationId;
+        ResendDeviceId = row.AuthorizedDeviceId;
+        EntryVersionText = row.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        AuthorizationVersionText = row.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await ResendAsync();
+    }
+
     public async Task ResendAsync()
     {
         if (string.IsNullOrWhiteSpace(ExamId) || string.IsNullOrWhiteSpace(EventId) || string.IsNullOrWhiteSpace(ResendParticipationId) ||
             string.IsNullOrWhiteSpace(ResendDeviceId) || !long.TryParse(EntryVersionText, out var entryVersion) || entryVersion < 0 ||
             !long.TryParse(AuthorizationVersionText, out var authorizationVersion) || authorizationVersion < 0)
         {
-            Status = "请先在上表选中考生，并填写要重发的指令编号。";
+            Status = "请先在上表选中考生，再选择要重发的指令。";
             return;
         }
 
@@ -497,7 +618,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var context = _contextVersion;
         var operation = ++_resendRequestVersion;
         var inputVersion = _resendInputVersion;
-        Exam.Contracts.Commands.CommandEventView result;
+        CommandEventView result;
         try
         {
             result = await _api.ResendCommandAsync(eventId, participationId, entryVersion, deviceId, authorizationVersion);
@@ -516,41 +637,28 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         Status = $"已重发指令（累计发送 {result.DeliveryAttempts} 次）。";
     }
 
-    private static void ValidateParticipations(
-        IReadOnlyList<Exam.Contracts.Participation.ParticipationResult> results,
-        string examId)
-    {
-        if (results.Any(item => item is null || !StringComparer.Ordinal.Equals(item.ExamId, examId) ||
-            string.IsNullOrWhiteSpace(item.ParticipationId) || string.IsNullOrWhiteSpace(item.CandidateId) ||
-            string.IsNullOrWhiteSpace(item.AuthorizedDeviceId) || item.EntryVersion < 1 ||
-            item.AuthorizationVersion < 1 || item.Version < 1 || !Enum.IsDefined(item.BusinessState) ||
-            item.BusinessState == ParticipationBusinessState.NotParticipating ||
-            item.Lifecycle is { } lifecycle && !Enum.IsDefined(lifecycle)) ||
-            results.Select(item => item.ParticipationId).Distinct(StringComparer.Ordinal).Count() != results.Count ||
-            results.Select(item => item.CandidateId).Distinct(StringComparer.Ordinal).Count() != results.Count)
-            throw new InvalidOperationException("参与记录的考试、标识、版本或状态无效，已拒绝显示。");
-    }
-
     private bool MatchesFilter(MonitoringRow row)
     {
-        if (OnlySubmitted && row.CollectionState != "已提交")
+        if (OnlyUncollected && row.CollectionState != "未回收")
         {
             return false;
         }
-        var filter = FilterText.Trim();
-        return filter.Length == 0 || row.CandidateId.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-               row.ParticipationId.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-               row.AuthorizedDeviceId.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        if (RoomGroupFilter.Length != 0 && !StringComparer.Ordinal.Equals(row.RoomGroup, RoomGroupFilter))
+        {
+            return false;
+        }
+        return Matches(row.ClientNumber, ClientNumberFilter) && Matches(row.Name, NameFilter) &&
+               Matches(row.ClassText, ClassFilter) && Matches(row.AdmissionNo, AdmissionNoFilter) &&
+               MatchesAny(row, FilterText.Trim());
+
+        static bool Matches(string value, string filter) =>
+            filter.Length == 0 || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ToChinese(ParticipationBusinessState state) => state switch
-    {
-        ParticipationBusinessState.NotParticipating => "未参加",
-        ParticipationBusinessState.Waiting => "候考",
-        ParticipationBusinessState.Answering => "作答中",
-        ParticipationBusinessState.Submitted => "已交卷",
-        _ => state.ToString()
-    };
+    private static bool MatchesAny(MonitoringRow row, string filter) =>
+        filter.Length == 0 ||
+        new[] { row.Name, row.ClassText, row.AdmissionNo, row.ClientNumber, row.RoomGroup }
+            .Any(value => value.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
     private void SetError(Exception exception) => Status = $"操作失败：{FriendlyErrors.Describe(exception)}";
 
@@ -558,6 +666,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         CollectionStatus = $"收齐记录查询失败：{FriendlyErrors.Describe(exception)}";
 }
 
+/// <summary>监测列表的一行；字段全部来自服务器权威快照，业务状态与连接状态分开显示。</summary>
 public sealed record MonitoringRow(
     string ParticipationId,
     string CandidateId,
@@ -568,4 +677,79 @@ public sealed record MonitoringRow(
     long Version,
     string CollectionState,
     string FocusSummary,
-    string PaperReviewState);
+    string PaperReviewState,
+    string Name = "",
+    string ClassText = "",
+    string AdmissionNo = "",
+    string ClientNumber = "",
+    string RoomGroup = "未分组",
+    string ConnectionState = "未登录",
+    string Page = "未报告",
+    string QuestionAnswer = "—",
+    string PaperState = "—",
+    string CommandSummary = "暂无指令",
+    string LastCommunicationText = "无通信记录",
+    string ReceivedText = "—",
+    IReadOnlyList<MonitoringCommand>? Commands = null,
+    IReadOnlyList<ConflictDevice>? ConflictDevices = null)
+{
+    public IReadOnlyList<MonitoringCommand> AvailableCommands => Commands ?? [];
+    public IReadOnlyList<ConflictDevice> ConflictingDevices => ConflictDevices ?? [];
+
+    public static MonitoringRow From(MonitoringParticipant participant) => new(
+        participant.ParticipationId,
+        participant.CandidateId,
+        MonitoringDisplay.BusinessState(participant.BusinessState),
+        participant.AuthorizedDeviceId,
+        participant.EntryVersion,
+        participant.AuthorizationVersion,
+        participant.ParticipationVersion,
+        participant.CollectionState,
+        MonitoringDisplay.FocusSummary(participant.FocusLossCount, participant.FocusLossMilliseconds),
+        MonitoringDisplay.PaperReviewState(participant.RevisionStatus),
+        participant.Name,
+        participant.ClassText,
+        participant.AdmissionNo,
+        participant.ClientNumber,
+        string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未分组" : participant.RoomGroupName,
+        MonitoringDisplay.ConnectionState(participant.ConnectionState),
+        participant.Page,
+        MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers),
+        MonitoringDisplay.PaperState(participant.InstalledPaperVersion, participant.TargetPaperVersion, participant.DownloadState),
+        MonitoringDisplay.CommandSummary(participant.Commands),
+        MonitoringDisplay.LastCommunication(participant.LastCommunicationAt),
+        MonitoringDisplay.ReceivedAt(participant.ReceivedAt),
+        participant.Commands,
+        participant.ConflictDevices);
+}
+
+/// <summary>可重发的权威指令，供界面按名称选择，不再手填事件标识。</summary>
+public sealed class MonitoringCommandRow(MonitoringCommand command, Action<MonitoringCommandRow> select) : BindableBase
+{
+    private bool _isSelected;
+    public MonitoringCommand Command { get; } = command;
+    public Action<MonitoringCommandRow> Select { get; } = select;
+    public bool CanResend => Command.CanResend;
+    public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
+    public string DisplayText => $"{MonitoringDisplay.CommandType(Command.EventType)}" +
+        (Command.AcknowledgedAt is { } acknowledged
+            ? $"（{Command.Confirmation}，{acknowledged:HH:mm:ss}）"
+            : $"（{Command.Confirmation}）") +
+        (Command.CanResend ? "｜可重发" : "｜不可重发");
+}
+
+/// <summary>冲突考生的两台设备对照信息，用于选择保留哪一台。</summary>
+public sealed class ConflictDeviceRow(ConflictDevice device, Action<ConflictDeviceRow> select) : BindableBase
+{
+    private bool _isSelected;
+    public ConflictDevice Device { get; } = device;
+    public Action<ConflictDeviceRow> Select { get; } = select;
+    public string DeviceId => Device.DeviceId;
+    public string ClientNumber => Device.ClientNumber;
+    public string RoomGroupName => Device.RoomGroupName;
+    public string ConnectionState => MonitoringDisplay.ConnectionState(Device.ConnectionState);
+    public string AuthorizationText => Device.IsAuthorized ? "当前授权" : "等待裁决";
+    public string LastCommunicationText => MonitoringDisplay.LastCommunication(Device.LastCommunicationAt);
+    public string ProgressText => $"第 {Device.AnswerVersion} 版答案｜{Device.Page}";
+    public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
+}

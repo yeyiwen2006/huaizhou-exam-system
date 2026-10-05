@@ -86,6 +86,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = exam;
         _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
+        Monitoring.ExamName = exam.Name;
         Import.SetCurrentExam(exam);
         GradingRevision.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
@@ -99,6 +100,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = null;
         Roster.Reset();
         Monitoring.ExamId = string.Empty;
+        Monitoring.ExamName = string.Empty;
         Import.SetCurrentExam(null);
         GradingRevision.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
@@ -115,6 +117,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         if (!StringComparer.Ordinal.Equals(Roster.ExamId, detail.Summary.ExamId))
             _ = Roster.OpenAsync(detail.Summary.ExamId);
         Monitoring.ExamId = detail.Summary.ExamId;
+        Monitoring.ExamName = detail.Summary.Name;
         Import.SetCurrentExam(detail.Summary);
         GradingRevision.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
@@ -151,6 +154,18 @@ public sealed class MainViewModel : BindableBase, IDisposable
     /// <summary>只改答案与计分规则的入口（不重新编译、不组包）。</summary>
     public GradingRevisionViewModel GradingRevision { get; }
     public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
+
+    /// <summary>
+    /// 把内部考试标识换成考务可读的考试名称；宿主列表里查不到时返回 null，
+    /// 由调用方改用中性说法，绝不把内部标识显示给考务。
+    /// </summary>
+    public string? DescribeExam(string examId)
+    {
+        if (string.IsNullOrWhiteSpace(examId)) return null;
+        if (CurrentExam is { } current && StringComparer.Ordinal.Equals(current.ExamId, examId)) return current.Name;
+        return Home.Exams
+            .FirstOrDefault(card => StringComparer.Ordinal.Equals(card.Exam.ExamId, examId))?.Exam.Name;
+    }
 
     private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

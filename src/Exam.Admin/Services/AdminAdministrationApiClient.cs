@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using Exam.Contracts.Administration;
+using Exam.Contracts.Common;
 
 namespace Exam.Admin.Services;
 
@@ -77,11 +78,89 @@ public sealed partial class AdminApiClient
     {
         var result = await SendAsync<MonitoringSnapshot>(HttpMethod.Get,
             "api/v1/exams/" + Uri.EscapeDataString(examId) + "/monitoring", null, ct);
-        if (!StringComparer.Ordinal.Equals(result.ExamId, examId) || result.Participants is null ||
-            result.Uncollected is null || result.Versions is null || result.ActualCount < 0 ||
-            result.CollectedCount < 0 || result.CollectedCount > result.ActualCount)
-            throw new AdminApiException("INVALID_RESPONSE", "监控快照不属于当前考试或人数无效，未应用该结果。", HttpStatusCode.BadGateway);
+        RequireMonitoringSnapshot(examId, result);
         return result;
+    }
+
+    /// <summary>
+    /// 返回前校验完毕：本客户端按考试整取快照（不做服务端筛选），因此人数、未回收名单与参试列表必须互相自洽；
+    /// 任一字段越界、枚举未知或身份不符都整体拒绝，不把半份状态交给界面。
+    /// </summary>
+    internal static void RequireMonitoringSnapshot(string examId, MonitoringSnapshot? result)
+    {
+        const string message = "监控快照不属于当前考试或记录无效，未应用该结果。";
+        if (result is null || !StringComparer.Ordinal.Equals(result.ExamId, examId))
+            throw Invalid();
+        var versions = result.Versions as Exam.Contracts.Versioning.VersionVector;
+        if (versions is null || versions.PaperVersion < 0 || versions.GradingVersion < 0 || versions.ScheduleVersion < 0 ||
+            result.Participants is null || result.Uncollected is null || result.AsOf == default ||
+            !Enum.IsDefined(result.Lifecycle) || result.ActualRosterVersion < 0 ||
+            result.ActualCount < 0 || result.CollectedCount < 0 || result.CollectedCount > result.ActualCount ||
+            result.Participants.Count != result.ActualCount ||
+            result.Uncollected.Count != result.ActualCount - result.CollectedCount)
+            throw Invalid();
+
+        var byId = new Dictionary<string, MonitoringParticipant>(StringComparer.Ordinal);
+        var candidateIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var participant in result.Participants)
+        {
+            // 同一名考生在一场考试里只能有一条权威参试记录。
+            if (!IsWellFormed(participant) || !byId.TryAdd(participant.ParticipationId, participant) ||
+                !candidateIds.Add(participant.CandidateId))
+                throw Invalid();
+        }
+        var uncollected = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var participant in result.Uncollected)
+        {
+            if (!IsWellFormed(participant) || !uncollected.Add(participant.ParticipationId) ||
+                !byId.TryGetValue(participant.ParticipationId, out var matching) ||
+                matching.ReceiptId is not null || participant.ReceiptId is not null)
+                throw Invalid();
+        }
+        // 已回收的参试记录必须带持久化回执标识——未持久保存不得显示为已回收。
+        if (result.Participants.Any(participant => participant.CollectionState switch
+            {
+                "已回收" => string.IsNullOrWhiteSpace(participant.ReceiptId) || participant.ReceivedAt is null,
+                "未回收" or "回收中" => participant.ReceiptId is not null,
+                _ => true
+            }))
+            throw Invalid();
+        return;
+
+        AdminApiException Invalid() => new("INVALID_RESPONSE", message, HttpStatusCode.BadGateway);
+    }
+
+    private static bool IsWellFormed(MonitoringParticipant? participant)
+    {
+        if (participant is null ||
+            string.IsNullOrWhiteSpace(participant.ParticipationId) || string.IsNullOrWhiteSpace(participant.CandidateId) ||
+            string.IsNullOrWhiteSpace(participant.Name) || string.IsNullOrWhiteSpace(participant.ClassText) ||
+            string.IsNullOrWhiteSpace(participant.AdmissionNo) || string.IsNullOrWhiteSpace(participant.ClientNumber) ||
+            string.IsNullOrWhiteSpace(participant.AuthorizedDeviceId) ||
+            !Enum.IsDefined(participant.BusinessState) || participant.BusinessState == ParticipationBusinessState.NotParticipating ||
+            !Enum.IsDefined(participant.ConnectionState) ||
+            participant.EntryVersion < 1 || participant.AuthorizationVersion < 1 || participant.ParticipationVersion < 1 ||
+            participant.AnswerVersion < 0 || participant.InstalledPaperVersion < 0 || participant.TargetPaperVersion < 0 ||
+            participant.FocusLossCount < 0 || participant.FocusLossMilliseconds < 0 ||
+            participant.Answers is null || participant.Commands is null || participant.ConflictDevices is null ||
+            participant.RevisionStatus is { } revision && !Enum.IsDefined(revision.PaperUpdateState))
+            return false;
+        if (participant.Page.Length > 64 || participant.DownloadState.Length > 64 ||
+            participant.CollectionState is not ("未回收" or "回收中" or "已回收"))
+            return false;
+        if (participant.Answers.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null ||
+                pair.Value.OptionIds is null || !Enum.IsDefined(pair.Value.Kind) ||
+                pair.Value.Kind != AnswerKind.Selected && pair.Value.OptionIds.Count != 0 ||
+                pair.Value.OptionIds.Any(string.IsNullOrWhiteSpace)))
+            return false;
+        if (participant.Commands.Any(command => command is null || string.IsNullOrWhiteSpace(command.EventId) ||
+                !Enum.IsDefined(command.EventType) || command.StateVersion < 1 || command.CreatedAt == default ||
+                string.IsNullOrWhiteSpace(command.Confirmation)))
+            return false;
+        return participant.ConflictDevices.All(conflict => conflict is not null &&
+            !string.IsNullOrWhiteSpace(conflict.DeviceId) && !string.IsNullOrWhiteSpace(conflict.ClientNumber) &&
+            !string.IsNullOrWhiteSpace(conflict.RoomGroupName) && Enum.IsDefined(conflict.ConnectionState) &&
+            conflict.AnswerVersion >= 0);
     }
 
     private static string RosterPath(string examId)
