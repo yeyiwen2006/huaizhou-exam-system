@@ -245,7 +245,7 @@ public sealed class ReliableCommandService
                 "只能补发给当前有效授权设备。");
         }
 
-        if (!CanDeliver(commandEvent, authorization!))
+        if (!CanDeliver(commandEvent, authorization!, manualResend: true))
         {
             return CommandOperationResult<CommandDelivery>.Failure(
                 commandEvent.EventType == CommandEventType.Start
@@ -256,7 +256,7 @@ public sealed class ReliableCommandService
 
         var now = _timeProvider.GetUtcNow();
         var nextAttempt = commandEvent.DeliveryAttempts + 1;
-        var updated = await _store.RecordDeliveryAttemptAsync(
+        var updated = await _store.RecordManualDeliveryAttemptAsync(
             eventId,
             now,
             now + ReliableCommandPolicy.RetryDelay(nextAttempt),
@@ -449,10 +449,14 @@ public sealed class ReliableCommandService
 
     private static bool CanDeliver(
         PersistentCommandEvent commandEvent,
-        ParticipationAccessSnapshot authorization)
+        ParticipationAccessSnapshot authorization, bool manualResend = false)
     {
-        if (commandEvent.Acknowledgement?.ProcessingResult is
-            CommandProcessingResult.Applied or CommandProcessingResult.RejectedAsStale)
+        // 已执行 END 只说明停止答题，不能证明答卷已回收。考务可请求当前设备补传原固定答卷。
+        var reupload = manualResend && commandEvent.EventType == CommandEventType.End &&
+            authorization.ExamLifecycle == ExamLifecycle.Ended &&
+            authorization.BusinessState is ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering;
+        if (commandEvent.Acknowledgement?.ProcessingResult == CommandProcessingResult.RejectedAsStale ||
+            commandEvent.Acknowledgement?.ProcessingResult == CommandProcessingResult.Applied && !reupload)
         {
             return false;
         }
@@ -462,7 +466,8 @@ public sealed class ReliableCommandService
             CommandEventType.Start => authorization.ExamLifecycle == ExamLifecycle.Running &&
                                       authorization.BusinessState is ParticipationBusinessState.Waiting or
                                           ParticipationBusinessState.Answering,
-            CommandEventType.End => authorization.ExamLifecycle == ExamLifecycle.Ended,
+            CommandEventType.End => authorization.ExamLifecycle == ExamLifecycle.Ended &&
+                (!manualResend || authorization.BusinessState != ParticipationBusinessState.Submitted),
             _ => true
         };
     }

@@ -81,6 +81,56 @@ public sealed class BusinessConfirmationTransportTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/replication/v1/confirmation")).StatusCode);
     }
 
+    [Fact]
+    public async Task ManualResend_PushesOnlyAfterConfirmationAndPreservesOriginalCommand()
+    {
+        var gate = new TransportGate { HandlerCompleted = true };
+        var proxy = new CommandProxy();
+        var clients = System.Reflection.DispatchProxy.Create<IHubClients, ClientsProxy>();
+        ((ClientsProxy)(object)clients).Target = proxy;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IBusinessConfirmation>(gate);
+        builder.Services.AddSingleton<IHubContext<Exam.Server.Realtime.ExamEventHub>>(new CommandHub(clients));
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>();
+        app.UseMiddleware<BusinessConfirmationMiddleware>();
+        var delivery = new Exam.Contracts.Commands.CommandDelivery(new("server", "node", 1), "event", "exam", "part", 1,
+            CommandEventType.End, 2, "device", 1, 1, null, new Dictionary<string,string>(), DateTimeOffset.UtcNow, 2);
+        app.MapPost("/api/v1/manual-resend", () => new Exam.Server.Realtime.ManualCommandDeliveryResult(Results.Ok(), delivery))
+            .WithMetadata(new ConfirmationBeforeResult());
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.PostAsync("/api/v1/manual-resend", null)).StatusCode);
+        Assert.Empty(proxy.Deliveries);
+        gate.Fail = false;
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/api/v1/manual-resend", null)).StatusCode);
+        Assert.Same(delivery, Assert.Single(proxy.Deliveries));
+        Assert.Equal(2, gate.Calls);
+    }
+
+    public class ClientsProxy : System.Reflection.DispatchProxy
+    {
+        public IClientProxy Target { get; set; } = null!;
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            Assert.Equal("Group", method!.Name);
+            Assert.Equal("participation:part", args![0]);
+            return Target;
+        }
+    }
+    private sealed class CommandProxy : IClientProxy
+    {
+        public List<object?> Deliveries { get; } = [];
+        public Task SendCoreAsync(string method, object?[] args, CancellationToken ct = default)
+        { Assert.Equal("Command", method); Deliveries.Add(Assert.Single(args)); return Task.CompletedTask; }
+    }
+    private sealed class CommandHub(IHubClients clients) : IHubContext<Exam.Server.Realtime.ExamEventHub>
+    {
+        public IHubClients Clients => clients;
+        public IGroupManager Groups => throw new NotSupportedException();
+    }
+
     private sealed class TransportGate : IBusinessConfirmation
     {
         public bool Fail { get; set; } = true;

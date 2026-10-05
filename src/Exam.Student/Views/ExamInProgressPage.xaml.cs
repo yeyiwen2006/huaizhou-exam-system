@@ -630,6 +630,7 @@ public partial class ExamInProgressPage : UserControl
         var window = Window.GetWindow(this);
         if (window is null) { return; }
         _submitting = true;
+        App.Services.SetPresencePage("交卷确认", _exam.ExamId);
         RefreshStatus();
         try
         {
@@ -680,6 +681,7 @@ public partial class ExamInProgressPage : UserControl
         {
             Busy.IsBusy = false;
             _submitting = false;
+            if (!_lifetime.IsCancellationRequested) App.Services.SetPresencePage("正在答题", _exam.ExamId);
             RefreshStatus();
         }
     }

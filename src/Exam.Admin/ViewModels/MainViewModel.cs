@@ -8,13 +8,18 @@ namespace Exam.Admin.ViewModels;
 
 /// <summary>
 /// 考务端主窗口。主页列出全部考试；进入某场考试后，考试设置、设备监控和成绩统计都作用于这场考试。
-/// 导航页序号：0 全部考试，1 考试设置，2 考生名单，3 激活与试场分组，4 设备监控，5 成绩统计，6 考务账号（仅管理员）。
+/// 导航页序号：0 全部考试，1 考试设置，2 试卷导入与发布，3 考生名单，4 设备监控，5 成绩统计，6 激活与试场分组，7 考务账号（仅管理员）。
 /// </summary>
 public sealed class MainViewModel : BindableBase, IDisposable
 {
     public const int HomePage = 0;
     public const int SettingsPage = 1;
-    public const int ActivationPage = 5; // 激活与试场分组：不与具体考试挂钩，不显示当前考试条。
+    public const int ImportPage = 2;
+    public const int RosterPage = 3;
+    public const int MonitoringPage = 4;
+    public const int ReportsPage = 5;
+    public const int ActivationPage = 6; // 激活与试场分组：不与具体考试挂钩，不显示当前考试条。
+    public const int AccountsPage = 7;
     private readonly AdminApiClient _api;
     private ExamSummary? _currentExam;
     private bool _isCreatingExam;
@@ -129,6 +134,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Roster.Reset();
         Import.SetCurrentExam(null);
         GradingRevision.ExamId = string.Empty;
+        // 收齐提醒不依赖监测页是否打开：更换服务器时必须清掉考试上下文，
+        // 否则会拿上一台服务器的旧考试继续轮询并弹出无关的收齐提醒。
+        Monitoring.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
@@ -151,6 +159,18 @@ public sealed class MainViewModel : BindableBase, IDisposable
     /// <summary>只改答案与计分规则的入口（不重新编译、不组包）。</summary>
     public GradingRevisionViewModel GradingRevision { get; }
     public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
+
+    /// <summary>
+    /// 把内部考试标识换成考务可读的考试名称；宿主列表里查不到时返回 null，
+    /// 由调用方改用中性说法，绝不把内部标识显示给考务。
+    /// </summary>
+    public string? DescribeExam(string examId)
+    {
+        if (string.IsNullOrWhiteSpace(examId)) return null;
+        if (CurrentExam is { } current && StringComparer.Ordinal.Equals(current.ExamId, examId)) return current.Name;
+        return Home.Exams
+            .FirstOrDefault(card => StringComparer.Ordinal.Equals(card.Exam.ExamId, examId))?.Exam.Name;
+    }
 
     private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

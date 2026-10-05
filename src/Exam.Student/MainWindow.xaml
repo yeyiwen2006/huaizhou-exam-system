@@ -10,5 +10,19 @@
         Background="{DynamicResource Brush.Background}"
         FontFamily="{DynamicResource Font.Family}">
     <!-- B06 将在此窗口实现普通账户全屏霸屏；B01 先保证页面流程完整 -->
-    <ContentControl x:Name="PageRegion" />
+    <DockPanel>
+        <TextBlock x:Name="PresenceStatus" DockPanel.Dock="Bottom" Text="{Binding PresenceStatus}"
+                   Foreground="#B45309" TextAlignment="Center" TextWrapping="Wrap">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding PresenceStatus}" Value="">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <ContentControl x:Name="PageRegion" />
+    </DockPanel>
 </Window>

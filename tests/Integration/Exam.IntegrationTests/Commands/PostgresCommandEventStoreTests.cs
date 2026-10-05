@@ -131,6 +131,25 @@ public sealed class PostgresCommandEventStoreTests(PostgresDatabaseFixture fixtu
         Assert.Equal(CommandProcessingResult.Applied, stored!.Acknowledgement!.ProcessingResult);
     }
 
+    [Fact]
+    public async Task ManualEndRetry_RecordsAttemptWithoutErasingAppliedAcknowledgement()
+    {
+        var store = new PostgresCommandEventStore(fixture.DataSource);
+        var command = CreateEvent(Id("end-retry")) with { EventType = CommandEventType.End, ProtectedUnlockReference = null };
+        await store.CreateOrGetAsync(Id("create-end"), command);
+        var acknowledgement = new CommandAcknowledgement(command.EventId, Id("ack-end"), CommandProcessingResult.Applied,
+            1, null, DateTimeOffset.UtcNow);
+        await store.AcknowledgeAsync(acknowledgement.RequestId, command.EventId, acknowledgement);
+        var now = DateTimeOffset.UtcNow;
+        Assert.Null(await store.RecordDeliveryAttemptAsync(command.EventId, now, now));
+        var retry = await store.RecordManualDeliveryAttemptAsync(command.EventId, now, now);
+        Assert.NotNull(retry);
+        Assert.Equal(1, retry.DeliveryAttempts);
+        Assert.Equal(CommandProcessingResult.Applied, retry.Acknowledgement!.ProcessingResult);
+        Assert.Equal(acknowledgement.RequestId, retry.Acknowledgement.RequestId);
+        Assert.Empty(await ClaimAsync(store, command, now.AddMinutes(1)));
+    }
+
     private static PersistentCommandEvent CreateEvent(
         string eventId,
         DateTimeOffset? createdAt = null)

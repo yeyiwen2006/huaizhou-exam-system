@@ -17,7 +17,8 @@ public sealed record MonitoringParticipant(string ParticipationId,string Candida
     long AnswerVersion,long InstalledPaperVersion,long TargetPaperVersion,string DownloadState,
     IReadOnlyDictionary<string,AnswerValue> Answers,string CollectionState,string? ReceiptId,DateTimeOffset? ReceivedAt,
     int FocusLossCount,long FocusLossMilliseconds,ParticipantVersionStatus? RevisionStatus,
-    IReadOnlyList<MonitoringCommand> Commands,IReadOnlyList<ConflictDevice> ConflictDevices);
+    IReadOnlyList<MonitoringCommand> Commands,IReadOnlyList<ConflictDevice> ConflictDevices,
+    int? CurrentQuestionNo = null);
 public sealed record MonitoringSnapshot(string ExamId,DateTimeOffset AsOf,VersionVector Versions,
     ExamLifecycle Lifecycle,long ActualRosterVersion,int ActualCount,int CollectedCount,
     IReadOnlyList<MonitoringParticipant> Participants,IReadOnlyList<MonitoringParticipant> Uncollected);
