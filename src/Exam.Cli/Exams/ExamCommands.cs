@@ -7,7 +7,7 @@ using Exam.Contracts.Exams;
 using Exam.Domain.Exams;
 
 /// <summary>
-/// 考试目录 CLI，与考务端主页使用同一组服务器接口。考试一律按名称指定（名称即考试类别，唯一），
+/// 考试目录 CLI，与考务端主页使用同一组服务器接口。考试一律按唯一的考试名称指定，
 /// 不需要输入内部编号。
 /// </summary>
 internal static partial class ExamCli

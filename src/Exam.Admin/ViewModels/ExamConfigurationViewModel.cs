@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -337,7 +337,8 @@ public sealed class GroupDraftViewModel : BindableBase
 
     public string GroupId { get => _groupId; set => SetProperty(ref _groupId, value); }
     public string Name { get => _name; set => SetProperty(ref _name, value); }
-    public string Type { get => _type; set => SetProperty(ref _type, value); }
+    public string Type { get => _type; set { if (SetProperty(ref _type, value)) OnPropertyChanged(nameof(TypeLabel)); } }
+    public string TypeLabel => Type switch { "single" => "单项选择题", "multiple" => "多项选择题", "indeterminate" => "不定项选择题", _ => "未选择" };
     public int Order { get => _order; set => SetProperty(ref _order, value); }
     public int QuestionCount { get => _questionCount; set => SetProperty(ref _questionCount, value); }
     public string MaxScore { get => _maxScore; set => SetProperty(ref _maxScore, value); }

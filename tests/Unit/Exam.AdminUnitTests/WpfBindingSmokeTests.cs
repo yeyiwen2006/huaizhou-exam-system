@@ -76,6 +76,16 @@ public sealed class WpfBindingSmokeTests
                 typeSelector.SelectedValue = "multiple";
                 DrainDispatcher();
                 Assert.Equal("multiple", group.Type);
+                Assert.Equal("多项选择题", group.TypeLabel);
+                var oneCorrect = Assert.Single(Descendants<TextBox>(window), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Correct");
+                var allCorrect = Assert.Single(Descendants<TextBox>(window), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "AllCorrect");
+                Assert.False(oneCorrect.IsVisible);
+                Assert.True(allCorrect.IsVisible);
+                allCorrect.Text = "3";
+                allCorrect.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                Assert.Equal("3", group.AllCorrect);
                 var instructions = Assert.Single(Descendants<TextBox>(window), box =>
                     BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Exam.InstructionsText");
                 Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);

@@ -251,32 +251,98 @@
                                 <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                             </WrapPanel>
                             <DataGrid ItemsSource="{Binding Exam.SelectedSubject.Groups}" SelectedItem="{Binding Exam.SelectedSubject.SelectedGroup}"
-                                      IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="False" Height="245" HorizontalScrollBarVisibility="Auto">
+                                      IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="True" Height="180">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Visibility="Collapsed" IsReadOnly="True" Header="题组编号" Binding="{Binding GroupId, UpdateSourceTrigger=PropertyChanged}" Width="160"/>
-                                    <DataGridTextColumn Header="题组名" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
-                                    <DataGridTemplateColumn Header="题型" Width="150">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ComboBox SelectedValue="{Binding Type, UpdateSourceTrigger=PropertyChanged}" MinHeight="28"
-                                                          SelectedValuePath="Value" DisplayMemberPath="Label"
-                                                          ItemsSource="{Binding DataContext.Exam.QuestionTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
-                                    <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
-                                    <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
-                                    <DataGridCheckBoxColumn Header="可选不作答" Binding="{Binding AllowAbstain}" Width="100"/>
-                                    <DataGridTextColumn Header="单答案选对" Binding="{Binding Correct}" Width="100"/>
-                                    <DataGridTextColumn Header="单答案不选" Binding="{Binding OneBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="单答案选错" Binding="{Binding OneWrong}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案全对" Binding="{Binding AllCorrect}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案对但不全" Binding="{Binding PartialCorrect}" Width="110"/>
-                                    <DataGridTextColumn Header="多答案不选" Binding="{Binding MultipleBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案选错" Binding="{Binding MultipleWrong}" Width="100"/>
+                                    <DataGridTextColumn Header="题组名" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="题型" Binding="{Binding TypeLabel}" Width="150"/>
+                                    <DataGridTextColumn Header="顺序" Binding="{Binding Order}" Width="80"/>
+                                    <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount}" Width="80"/>
+                                    <DataGridTextColumn Header="满分" Binding="{Binding MaxScore}" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>
+                            <TextBlock Text="选中题组后在下方编辑；计分分支随题型显示。" Style="{StaticResource CardNote}" Margin="0,10,0,10"/>
+                            <StackPanel IsEnabled="{Binding Exam.IsSettingsEditable}">
+                                <StackPanel DataContext="{Binding Exam.SelectedSubject.SelectedGroup}">
+                                    <WrapPanel>
+                                        <StackPanel Width="280" Margin="0,0,16,0">
+                                            <TextBlock Text="题组名称" Style="{StaticResource FormLabel}"/>
+                                            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                        </StackPanel>
+                                        <StackPanel Width="210" Margin="0,0,16,0">
+                                            <TextBlock Text="题型" Style="{StaticResource FormLabel}"/>
+                                            <ComboBox SelectedValue="{Binding Type, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Value" DisplayMemberPath="Label"
+                                                ItemsSource="{Binding DataContext.Exam.QuestionTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                        </StackPanel>
+                                        <StackPanel Width="100" Margin="0,0,16,0">
+                                            <TextBlock Text="顺序" Style="{StaticResource FormLabel}"/>
+                                            <TextBox Text="{Binding Order, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                        </StackPanel>
+                                        <StackPanel Width="100" Margin="0,0,16,0">
+                                            <TextBlock Text="题量" Style="{StaticResource FormLabel}"/>
+                                            <TextBox Text="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                        </StackPanel>
+                                        <StackPanel Width="100" Margin="0,0,16,0">
+                                            <TextBlock Text="满分" Style="{StaticResource FormLabel}"/>
+                                            <TextBox Text="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                        </StackPanel>
+                                    </WrapPanel>
+                                    <CheckBox Content="允许考生选择“不作答”" IsChecked="{Binding AllowAbstain}" Margin="0,8,0,14"/>
+                                    <StackPanel>
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Type}" Value="multiple"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <TextBlock Text="一个正确答案 · 每题得分" Style="{StaticResource FormLabel}"/>
+                                        <WrapPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="选对" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding Correct, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="不选" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding OneBlank, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="选错" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding OneWrong, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Type}" Value="single"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <TextBlock Text="多个正确答案 · 每题得分" Style="{StaticResource FormLabel}"/>
+                                        <WrapPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="全部选对" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding AllCorrect, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="选对但不全" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding PartialCorrect, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="不选" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding MultipleBlank, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                            <StackPanel Width="160" Margin="0,0,16,0">
+                                                <TextBlock Text="选错" Style="{StaticResource FormLabel}"/>
+                                                <TextBox Text="{Binding MultipleWrong, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
                             <WrapPanel Margin="0,12,0,0">
                                 <Button Content="新增题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddGroupCommand}"/>
                                 <Button Content="删除题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveGroupCommand}"/>
