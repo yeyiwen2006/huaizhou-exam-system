@@ -5,6 +5,7 @@ using System.Text.Json;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
+using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Exams;
 
@@ -63,6 +64,24 @@ internal static partial class ExamCli
                 if(rows.Count>100000)throw new InvalidDataException("设备数量超出本次命令允许范围，请按试场筛选。");offset=page.NextOffset;
             }
             return rows.ToArray();
+        }
+        // 读取一批收齐事件并按名单版本发出；返回 0 表示本轮已读完。
+        async Task DrainCollectionAsync(ExamSummary exam,CollectionWatch watch)
+        {
+            while(true)
+            {
+                var before=watch.Cursor;
+                var page=await Send<CollectionCompletedNotification[]>(HttpMethod.Get,
+                    $"/api/v1/submissions/collection/events?examId={Uri.EscapeDataString(exam.ExamId)}&afterRosterVersion={watch.Cursor}");
+                foreach(var item in watch.Accept(exam.ExamId,page))
+                {
+                    // 事件写 stdout（一行一个，便于脚本消费）；可读提醒写 stderr。
+                    Console.WriteLine(JsonSerializer.Serialize(item,json));
+                    WriteSuccessDiagnostic($"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。");
+                }
+                Console.Out.Flush();
+                if(page.Length==0||watch.Cursor==before)return;
+            }
         }
         try
         {
@@ -125,6 +144,44 @@ internal static partial class ExamCli
                 {
                     var exam=await FindExam(examName);var path=$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}";
                     result=action=="show"?await Send<MonitoringSnapshot>(HttpMethod.Get,path+"/monitoring"):(object)await Send<MonitoringParticipant[]>(HttpMethod.Get,path+"/uncollected");break;
+                }
+                case ("monitor",["watch",var watchExam,.. var watchArguments]):
+                {
+                    // 单次读取并发出收齐事件后退出：可给位置参数指定起始名单版本（默认 0），
+                    // 便于脚本只发出上次之后的新事件。
+                    var startVersion=0L;
+                    if(watchArguments.Length>1)return UnknownCommand(["monitor","watch",watchExam,..watchArguments]);
+                    if(watchArguments.Length==1&&(!long.TryParse(watchArguments[0],out startVersion)||startVersion<0))
+                        return UnknownCommand(["monitor","watch",watchExam,..watchArguments]);
+                    await DrainCollectionAsync(await FindExam(watchExam),new CollectionWatch(startVersion));return 0;
+                }
+                case ("monitor",["follow",var followExam,.. var followArguments]):
+                {
+                    // 持续等待并发出；可选位置参数：间隔秒数（默认 20）与轮数（默认不设上限）。
+                    var interval=TimeSpan.FromSeconds(20);int? rounds=null;
+                    if(followArguments.Length>2)return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                    if(followArguments.Length>0)
+                    {
+                        if(!int.TryParse(followArguments[0],out var seconds)||seconds<=0)
+                            return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                        interval=TimeSpan.FromSeconds(seconds);
+                    }
+                    if(followArguments.Length>1)
+                    {
+                        if(!int.TryParse(followArguments[1],out var parsed)||parsed<=0)
+                            return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                        rounds=parsed;
+                    }
+                    var followTarget=await FindExam(followExam);var watch=new CollectionWatch();var completed=0;
+                    do
+                    {
+                        await DrainCollectionAsync(followTarget,watch);
+                        completed++;
+                        if(rounds is { } limit&&completed>=limit)return 0;
+                        try{await Task.Delay(interval,ct);}
+                        catch(OperationCanceledException){return 0;}
+                    }
+                    while(true);
                 }
                 case ("publications",["publish",var examName]):
                 {

@@ -122,8 +122,15 @@ devices show <学生端编号>
 devices history <学生端编号>
 monitor show <考试名称>
 monitor missing <考试名称>
+monitor watch <考试名称> [起始名单版本]
+monitor follow <考试名称> [间隔秒] [轮数]
 publications publish <考试名称> --input <JSON文件或->
 ```
+
+`monitor watch` 读取一次收齐事件后退出（可给位置参数指定起始名单版本，默认 0），`monitor follow` 按间隔
+（默认 20 秒）持续发出，给了轮数时达到轮数正常退出。两者都把「本场考试全部答卷已成功回收」事件以
+**一行一个 JSON** 写到 stdout 便于脚本消费，可读提醒写 stderr；与考务端弹窗同一端点、同一校验口径：
+**每个名单版本只发出一次，零参试者不触发**，事件标识与名单版本冲突或考试不符时整页拒绝、游标不前进。
 
 沿用 `--server` 和已有凭据环境约定，不把凭据写进示例。批量 JSON 使用契约字段；可带 `expectedVersion` 和稳定的 `requestId`。公开编号和班级、准考证号必须写成 JSON 字符串。`roster import` 校验失败返回非零退出码，即使服务器返回了有效的逐行预览结果。
 
