@@ -34,7 +34,12 @@ public sealed partial class AdminApiClient
     /// <summary>新建与保存的回执同样要结构完整（考试身份由调用方按各自回执核对）。</summary>
     internal static void RequireExamDetailStructure(ExamDetail? detail)
     {
-        if (detail?.Summary is null || detail.Settings?.Subjects is null) throw InvalidExamDetail();
+        if (detail?.Summary is null || string.IsNullOrWhiteSpace(detail.Summary.ExamId) || detail.Summary.Name is null ||
+            detail.Settings?.Subjects is null || detail.Settings.Subjects.Any(subject => subject is null ||
+                subject.SubjectId is null || subject.Name is null || subject.MaxScore is null || subject.Groups is null ||
+                subject.Groups.Any(group => group is null || group.GroupId is null || group.Name is null ||
+                    group.Type is null || group.MaxScore is null)))
+            throw InvalidExamDetail();
     }
 
     private static AdminApiException InvalidExamDetail() => new("INVALID_RESPONSE",
@@ -55,7 +60,7 @@ public sealed partial class AdminApiClient
     {
         var detail = await SendAsync<ExamDetail>(HttpMethod.Put, $"api/v1/exams/{Uri.EscapeDataString(examId)}/settings",
             new UpdateExamSettingsRequest(string.Empty, expectedVersion, name, settings), cancellationToken);
-        RequireExamDetailStructure(detail);
+        RequireExamDetail(examId, detail);
         return detail;
     }
 

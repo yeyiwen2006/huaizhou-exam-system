@@ -311,7 +311,9 @@ public sealed partial class ExamConfigurationViewModel
         {
             // A settings write may have committed before a schedule/readback failed. Do not claim all-or-nothing.
             _catalogReady = false;
-            var prefix = structureSaved || timeSaved ? "部分请求已完成，请重新读取核对；" : "保存未完成；";
+            var uncertain = error is AdminApiException { Code: "INVALID_RESPONSE" } or HttpRequestException or TaskCanceledException;
+            var prefix = structureSaved || timeSaved ? "部分请求已完成，请重新读取核对；"
+                : uncertain ? "无法确认保存结果，请重新读取核对；" : "保存未完成；";
             Status = prefix + FriendlyErrors.Describe(error);
             throw;
         }

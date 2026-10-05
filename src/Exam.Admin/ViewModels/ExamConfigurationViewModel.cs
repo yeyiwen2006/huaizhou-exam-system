@@ -291,8 +291,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             shown = savedLines;
             source = differs
-                ? "以下为服务器保存的说明（学生端当前显示这一份）；本页生成结果与它不同，请核对填写内容。"
-                : "以下说明由服务器按已保存的计分规则生成，与学生端显示一致。";
+                ? "以下为服务器保存、供学生端读取的说明；本页生成结果与它不同，请核对填写内容。"
+                : "以下为服务器保存、供学生端读取的说明，与本页生成结果一致。";
         }
         InstructionPreview.Clear();
         foreach (var line in shown) InstructionPreview.Add(InstructionLineViewModel.From(line));

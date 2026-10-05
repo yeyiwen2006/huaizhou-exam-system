@@ -129,26 +129,20 @@ public sealed class MonitoringViewModelTests
             : Success(collectedOnServer ? collected : uncollected));
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
-        using var viewModel = new MonitoringViewModel(api,
-            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
-        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
-        await UntilAsync(() => viewModel.Rows.Count == 1);
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        await viewModel.LoadAsync();
         Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
 
         // 补传：服务器在之后拿到回执，考务端下一次权威读取即更新计数。
-        collectedOnServer = true;
         viewModel.SelectedRow = viewModel.Rows[0];
         await viewModel.RequestReuploadAsync();
-        await UntilAsync(() => viewModel.CountsText.Contains("已回收 1 份", StringComparison.Ordinal));
+        Assert.Contains("已回收 0 份", viewModel.CountsText);
+        collectedOnServer = true;
+        await viewModel.LoadAsync();
+        Assert.Contains("已回收 1 份", viewModel.CountsText);
 
         Assert.Equal("已回收", viewModel.Rows[0].CollectionState);
         Assert.Empty(viewModel.UncollectedRows);
-    }
-
-    private static async Task UntilAsync(Func<bool> condition)
-    {
-        for (var attempt = 0; attempt < 600 && !condition(); attempt++) await Task.Delay(10);
-        Assert.True(condition(), "等待条件超时。");
     }
 
     [Fact]

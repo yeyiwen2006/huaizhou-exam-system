@@ -82,9 +82,12 @@ public sealed class WpfBindingSmokeTests
                 Assert.Single(Descendants<TextBlock>(window), block =>
                     BindingOperations.GetBinding(block, TextBlock.TextProperty)?.Path.Path == "Exam.InstructionSourceText");
                 var rendered = Descendants<TextBlock>(window)
-                    .Where(block => block.DataContext is InstructionSegment).ToArray();
-                Assert.Contains(rendered, block => Equals(block.FontFamily.Source, InstructionText.NumberFont));
-                Assert.Contains(rendered, block => Equals(block.FontFamily.Source, InstructionText.BodyFont));
+                    .Where(block => block.DataContext is InstructionLineViewModel).ToArray();
+                var runs = rendered.SelectMany(block => block.Inlines.OfType<System.Windows.Documents.Run>()).ToArray();
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.NumberFont));
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.BodyFont));
+                Assert.All(rendered, block => Assert.Equal(((InstructionLineViewModel)block.DataContext).Text,
+                    string.Concat(block.Inlines.OfType<System.Windows.Documents.Run>().Select(run => run.Text))));
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);

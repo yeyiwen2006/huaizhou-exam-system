@@ -65,7 +65,7 @@ public sealed class InstructionPreviewTests
         var saved = ExamSettingsRules.BuildInstructions(settings);
         Assert.Equal(saved, viewModel.InstructionPreview.Select(line => line.Text));
         Assert.Equal(saved, InstructionText.SplitLines(viewModel.InstructionsText));
-        Assert.Contains("与学生端显示一致", viewModel.InstructionSourceText, StringComparison.Ordinal);
+        Assert.Contains("与本页生成结果一致", viewModel.InstructionSourceText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public sealed class InstructionPreviewTests
 
         await viewModel.OpenAsync("exam-1");
 
-        Assert.Contains("与学生端显示一致", viewModel.InstructionSourceText, StringComparison.Ordinal);
+        Assert.Contains("与本页生成结果一致", viewModel.InstructionSourceText, StringComparison.Ordinal);
         Assert.DoesNotContain("不同", viewModel.InstructionSourceText, StringComparison.Ordinal);
     }
 
@@ -169,6 +169,45 @@ public sealed class InstructionPreviewTests
                 DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(1)), Settings("3")));
 
         Assert.Equal("INVALID_RESPONSE", error.Code);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Load_IncompleteNestedSettingsNeverEnablesTheEditor(bool missingSubject)
+    {
+        var settings = missingSubject ? new ExamSettings([null!])
+            : new ExamSettings([Settings("3").Subjects[0] with { Groups = null! }]);
+        using var api = Configured(new Handler(_ => Success(Detail(Settings("3")) with { Settings = settings })));
+        var viewModel = new ExamConfigurationViewModel(api);
+        var error = await Assert.ThrowsAsync<AdminApiException>(() => viewModel.OpenAsync("exam-1"));
+        Assert.Equal("INVALID_RESPONSE", error.Code);
+        Assert.False(viewModel.CanSave);
+        Assert.Empty(viewModel.InstructionPreview);
+    }
+
+    [Fact]
+    public async Task Save_InvalidReceiptReportsUncertaintyAndRequiresReload()
+    {
+        using var api = Configured(new Handler(request => Success(request.Method == HttpMethod.Get
+            ? Detail(Settings("3")) : Detail(Settings("3")) with { Settings = null! })));
+        var viewModel = new ExamConfigurationViewModel(api);
+        await viewModel.OpenAsync("exam-1");
+        await Assert.ThrowsAsync<AdminApiException>(() => viewModel.SaveAsync());
+        Assert.Contains("无法确认保存结果", viewModel.Status);
+        Assert.False(viewModel.CanSave);
+    }
+
+    [Fact]
+    public async Task Load_LegacyExamWithoutCatalogSettingsCanStillBeEdited()
+    {
+        using var api = Configured(new Handler(_ => Success(Detail(Settings("3")) with
+            { Settings = new ExamSettings([]), InstructionLines = [] })));
+        var viewModel = new ExamConfigurationViewModel(api);
+        await viewModel.OpenAsync("exam-1");
+        Assert.True(viewModel.CanSave);
+        Assert.True(viewModel.IsSettingsEditable);
+        Assert.Empty(viewModel.Subjects);
     }
 
     private static ExamSummary Summary() =>
