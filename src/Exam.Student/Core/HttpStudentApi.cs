@@ -124,6 +124,16 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
         ReportFocusEventsRequest request, CancellationToken ct = default) =>
         SendAsync<FocusEventsReceipt>(HttpMethod.Post, "/api/v1/submissions/focus-events", request, true, ct);
 
+    public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceLease>> OpenPresenceAsync(
+        Exam.Contracts.Administration.OpenDevicePresenceRequest request, CancellationToken ct = default) =>
+        SendAsync<Exam.Contracts.Administration.DevicePresenceLease>(
+            HttpMethod.Post, "/api/v1/student/presence/open", request, true, ct);
+
+    public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceReceipt>> UpdatePresenceAsync(
+        Exam.Contracts.Administration.UpdateDevicePresenceRequest request, CancellationToken ct = default) =>
+        SendAsync<Exam.Contracts.Administration.DevicePresenceReceipt>(
+            HttpMethod.Post, "/api/v1/student/presence", request, true, ct);
+
     public Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(
         string examId, string participantId,
         Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default)

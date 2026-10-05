@@ -93,7 +93,31 @@ public sealed class AppServices
     public ServerClock Clock { get; private set; } = new();
     public DeviceRecord? Device { get; private set; }
 
-    public AppServices() => Activation = new ActivationWorkflow(DeviceStore, Api);
+    /// <summary>在线状态上报：页面/题号/试卷版本/下载状态，考务端监测与回收统计据此显示真实状态。</summary>
+    public StudentPresenceReporter Presence { get; }
+
+    public AppServices()
+    {
+        Activation = new ActivationWorkflow(DeviceStore, Api);
+        Presence = new StudentPresenceReporter(Api, SnapshotPresence);
+    }
+
+    /// <summary>供上报读取的当前上下文；尚未登录或尚未准入时除页面外全部为空。</summary>
+    private StudentPresenceSnapshot SnapshotPresence()
+    {
+        if (Session.ActiveExam is not { } runtime) return StudentPresenceSnapshot.None;
+        var manager = runtime.Manager;
+        var sessionId = string.IsNullOrWhiteSpace(manager.SessionId) ? null : manager.SessionId;
+        var examId = string.IsNullOrWhiteSpace(manager.ExamId) ? null : manager.ExamId;
+        // 未登录时不得携带考生信息（服务端同样拒绝“登录页夹带上一名考生”）。
+        if (sessionId is null || examId is null) return StudentPresenceSnapshot.None;
+        return new StudentPresenceSnapshot(
+            sessionId, examId,
+            runtime.Answers?.CurrentQuestionId,
+            runtime.Answers?.PaperVersion ?? manager.Descriptor?.PaperVersion ?? 0,
+            StudentPresenceDownloads.From(manager, runtime.PaperUpdate),
+            runtime.Reconnecting);
+    }
 
     public void ConfigureDevice(DeviceRecord device)
     {
@@ -125,6 +149,8 @@ public sealed class AppServices
             try
             {
                 await clock.SynchronizeAsync(Api, ct);
+                // 需求：60 秒校时带完整状态补全——同一轮顺手刷新在线状态（内容未变也刷新最后通信时间）。
+                await Presence.HeartbeatAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

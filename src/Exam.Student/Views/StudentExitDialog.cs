@@ -7,7 +7,7 @@ namespace Exam.Student.Views;
 internal static class StudentExitDialog
 {
     public static Task<bool> ShowAsync(Window window, StudentSession session) =>
-        new StudentExitWorkflow(session).ExitAsync(
+        new StudentExitWorkflow(session, ct => App.Services.Presence.ExitAsync(ct)).ExitAsync(
             () => ConfirmDialog.ShowAsync(window, "退出系统",
                 "退出后设备仍保持激活；下次启动需重新登录。确定退出系统吗？", "退出", "取消", isDanger: true),
             () =>

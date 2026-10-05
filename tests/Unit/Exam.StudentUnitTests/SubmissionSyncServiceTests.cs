@@ -441,6 +441,15 @@ public sealed partial class SubmissionSyncServiceTests
             return Task.FromResult(Ok(receipt));
         }
 
+        public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceLease>> OpenPresenceAsync(
+            Exam.Contracts.Administration.OpenDevicePresenceRequest request, CancellationToken ct = default) =>
+            Task.FromResult(Ok(new Exam.Contracts.Administration.DevicePresenceLease(request.ConnectionId, 1, DateTimeOffset.UtcNow)));
+
+        public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceReceipt>> UpdatePresenceAsync(
+            Exam.Contracts.Administration.UpdateDevicePresenceRequest request, CancellationToken ct = default) =>
+            Task.FromResult(Ok(new Exam.Contracts.Administration.DevicePresenceReceipt(
+                request.Generation, request.Sequence, DateTimeOffset.UtcNow)));
+
         public Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(
             string examId, string participantId,
             Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default)

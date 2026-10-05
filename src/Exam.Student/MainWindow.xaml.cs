@@ -141,26 +141,31 @@ public partial class MainWindow : Window
         public void GoToLogin()
         {
             Set(new LoginPage(this));
+            App.Services.Presence.ReportPage(StudentPresencePages.Login);
         }
 
         public void GoToExamSelection()
         {
             Set(new ExamSelectionPage(this));
+            App.Services.Presence.ReportPage(StudentPresencePages.SelectingExam);
         }
 
         public void GoToWaitingExam(ExamOverview exam)
         {
             Set(new WaitingExamPage(this, exam));
+            App.Services.Presence.ReportPage(StudentPresencePages.Waiting);
         }
 
         public void GoToExamInProgress(ExamOverview exam, StudentExamRuntime runtime)
         {
             Set(new ExamInProgressPage(this, exam, runtime));
+            App.Services.Presence.ReportPage(StudentPresencePages.Answering);
         }
 
         public void GoToSubmitted(SubmissionReceipt receipt)
         {
             Set(new SubmittedPage(this, receipt));
+            App.Services.Presence.ReportPage(StudentPresencePages.SubmitFeedback);
         }
     }
 }

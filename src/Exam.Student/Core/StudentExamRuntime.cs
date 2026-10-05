@@ -116,6 +116,9 @@ public sealed partial class StudentExamRuntime(
             _ => "本地答题恢复尚未完成，不能开始修改答案。"
         };
     public string? ConnectionError => (_feed as SignalRExamCommandFeed)?.LastError ?? _handlingError;
+
+    /// <summary>指令连接是否处于未连接（重连中）状态；用于在线状态上报的“恢复中”标记。</summary>
+    public bool Reconnecting => _feed is SignalRExamCommandFeed feed && !feed.IsConnected;
     public bool NotificationsStarted => _feed is not null;
     public event EventHandler? StateChanged;
 

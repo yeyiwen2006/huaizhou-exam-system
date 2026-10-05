@@ -1,4 +1,5 @@
 using Exam.Contracts.Activation;
+using Exam.Contracts.Administration;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
@@ -49,6 +50,20 @@ public interface IStudentApi
     /// <summary>B06：批量补报复焦事件；服务器按 (ParticipationId, EventId) 幂等留痕，回执列出全部受理标识。</summary>
     Task<ApiEnvelope<FocusEventsReceipt>> ReportFocusEventsAsync(
         ReportFocusEventsRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// C04：为本次运行建立在线连接（设备凭据路由）。返回代次；之后的上报必须带同一连接标识与该代次，
+    /// 并且序号严格递增。重复请求按请求标识幂等处理。
+    /// </summary>
+    Task<ApiEnvelope<DevicePresenceLease>> OpenPresenceAsync(
+        OpenDevicePresenceRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// C04：上报页面、题号、试卷版本、下载状态与恢复中标记。
+    /// 同一序号同一内容按幂等重放返回原结果；序号倒退或同序号不同内容会被拒绝。
+    /// </summary>
+    Task<ApiEnvelope<DevicePresenceReceipt>> UpdatePresenceAsync(
+        UpdateDevicePresenceRequest request, CancellationToken ct = default);
 
     /// <summary>B06：向服务端确认已复核修订试卷；同一版本重复确认按幂等重放处理。</summary>
     Task<ApiEnvelope<Exam.Contracts.Versioning.ExamVersionSnapshot>> ConfirmPaperReviewAsync(

@@ -1,7 +1,7 @@
 namespace Exam.Student.Core;
 
 /// <summary>登录页与选择考试页的正常退出；不持有设备存储或激活 API，不能撤销设备。</summary>
-public sealed class StudentExitWorkflow(StudentSession session)
+public sealed class StudentExitWorkflow(StudentSession session, Func<CancellationToken, Task>? beforeClose = null)
 {
     private int _exiting;
 
@@ -18,6 +18,17 @@ public sealed class StudentExitWorkflow(StudentSession session)
             if (!await confirm()) return false;
             if (session.ActiveExam is not null || !ReferenceEquals(originalLogin, session.LoginResult))
                 throw new InvalidOperationException("会话已发生变化，未退出系统，请重新核对当前页面。");
+            // 关闭前上报“已退出”（限时 3 秒）：否则进程立刻结束时考务端要等连接断开才知道。
+            if (beforeClose is not null)
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try
+                {
+                    await beforeClose(deadline.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+            }
             session.Logout();
             releaseKioskAndClose();
             return true;

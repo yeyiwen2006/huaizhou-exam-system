@@ -119,6 +119,8 @@ public partial class WaitingExamPage : UserControl
             {
                 DownloadBar.Value = value.TotalBytes > 0 ? Math.Clamp(value.ReceivedBytes * 100.0 / value.TotalBytes, 0, 100) : 0;
                 DownloadDetail.Text = $"{value.ReceivedBytes / 1024.0:F0} / {value.TotalBytes / 1024.0:F0} KB";
+                // 下载状态变化按短窗口合并上报（未下载/下载中/已下载…）。
+                App.Services.Presence.ReportProgress();
             });
             var prepared = await _runtime.Manager.PrepareAndDownloadAsync(progress, _lifetime.Token);
             if (_runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Withdrawn)
@@ -180,6 +182,8 @@ public partial class WaitingExamPage : UserControl
             }
 
             await ConnectNotificationsAsync();
+            // 已准入：带上会话与考试上报，考务端才能把该设备计入实际参试并显示在线状态。
+            App.Services.Presence.ReportPage(StudentPresencePages.Waiting);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {

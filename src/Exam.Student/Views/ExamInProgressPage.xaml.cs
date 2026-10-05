@@ -438,7 +438,11 @@ public partial class ExamInProgressPage : UserControl
                     ? value : AnswerValue.Empty());
                 if (_regionMap is not null && _regionError is null && answers.Status == AnswerSessionStatus.Active &&
                     !_runtime.HasFixedSubmission && answers.CurrentQuestionId != question.QuestionId)
+                {
                     await answers.SetCurrentQuestionAsync(question.QuestionId, ct);
+                    // 题号变化进入合并上报窗口：考务端的“题号及已选答案”随之上报。
+                    App.Services.Presence.ReportProgress();
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -497,6 +501,8 @@ public partial class ExamInProgressPage : UserControl
                 ? saved
                 : AnswerValue.Empty();
             QuestionView.UpdateAnswer(persisted);
+            // 答案已可靠保存：合并上报在线状态（页面/题号），保证监测滞后不超过 2 秒。
+            App.Services.Presence.ReportProgress();
             RefreshNav();
             RefreshStatus();
             // 只在本次选择已经可靠保存、页面与授权仍有效时前进；取消选择和多选普通选项留在原题。
@@ -647,6 +653,7 @@ public partial class ExamInProgressPage : UserControl
                 _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked) return;
             Busy.IsBusy = true;
             RefreshStatus();
+            App.Services.Presence.ReportPage(StudentPresencePages.SubmitConfirmation);
             // 提前交卷与 END 共用同一固定提交入口；失败时原标识与快照保留，由同步服务自动重试。
             var fix = await answers.FixSubmissionAsync($"subm-{Guid.NewGuid():N}", _lifetime.Token);
             if (!fix.Succeeded)
@@ -656,6 +663,8 @@ public partial class ExamInProgressPage : UserControl
                 PaperBanner.IsOpen = true;
                 return;
             }
+            // 交卷处理中：让考务端看到“回收中”，而不是把仍在保存的答卷当成已回收。
+            App.Services.Presence.ReportPage(StudentPresencePages.Collecting);
             await _sync.KickAsync(_lifetime.Token);
             if (_sync.ConfirmedReceipt is { } receipt)
             {
