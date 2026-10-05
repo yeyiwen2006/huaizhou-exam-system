@@ -58,7 +58,7 @@
                             <StackPanel><TextBlock Text="考务账号" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1"><TextBlock Text="口令" Style="{StaticResource FieldLabel}"/>
+                            <StackPanel Grid.Column="1"><TextBlock Text="密码" Style="{StaticResource FieldLabel}"/>
                                 <PasswordBox x:Name="LoginPassword" Margin="0,4,12,12"/>
                             </StackPanel>
                             <Button x:Name="LoginButton" Grid.Column="2" Content="登录管理" Style="{StaticResource Btn.Primary}" Margin="0,20,0,12" Click="OnLogin"/>
