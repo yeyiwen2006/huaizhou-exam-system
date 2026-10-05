@@ -76,9 +76,15 @@ public sealed class WpfBindingSmokeTests
                 typeSelector.SelectedValue = "multiple";
                 DrainDispatcher();
                 Assert.Equal("multiple", group.Type);
-                var instructions = Assert.Single(Descendants<TextBox>(window), box =>
-                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Exam.InstructionsText");
-                Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);
+                // 考生说明预览按字形分段渲染：正文黑体、数字 Times New Roman，并显示预览来源说明。
+                Assert.Single(Descendants<ItemsControl>(window), control =>
+                    BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "Exam.InstructionPreview");
+                Assert.Single(Descendants<TextBlock>(window), block =>
+                    BindingOperations.GetBinding(block, TextBlock.TextProperty)?.Path.Path == "Exam.InstructionSourceText");
+                var rendered = Descendants<TextBlock>(window)
+                    .Where(block => block.DataContext is InstructionSegment).ToArray();
+                Assert.Contains(rendered, block => Equals(block.FontFamily.Source, InstructionText.NumberFont));
+                Assert.Contains(rendered, block => Equals(block.FontFamily.Source, InstructionText.BodyFont));
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 foreach (var tab in tabs.Items.Cast<TabItem>())

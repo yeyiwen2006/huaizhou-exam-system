@@ -52,6 +52,10 @@ public sealed partial class ExamConfigurationViewModel
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
+        InstructionSourceText = string.Empty;
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
+        InstructionPreview.Clear();
         OnPropertyChanged(nameof(ExamId));
         OnPropertyChanged(nameof(ScheduleVersionText));
         NotifyCatalog();
@@ -94,6 +98,9 @@ public sealed partial class ExamConfigurationViewModel
     {
         _contextVersion++;
         IsNewExam = true;
+        // 新建考试不得沿用上一场考试的服务器说明。
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
         _catalogReady = true;
         _catalogBusy = _visibilityBusy = false;
         _requestedExamId = null;
@@ -133,6 +140,10 @@ public sealed partial class ExamConfigurationViewModel
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
+        InstructionSourceText = string.Empty;
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
+        InstructionPreview.Clear();
         OnPropertyChanged(nameof(ExamId));
         OnPropertyChanged(nameof(ScheduleVersionText));
         NotifyCatalog();
@@ -209,6 +220,12 @@ public sealed partial class ExamConfigurationViewModel
             Subjects.Add(draft);
         }
         SelectedSubject = Subjects.FirstOrDefault();
+        _serverInstructionLines.Clear();
+        foreach (var line in detail.InstructionLines)
+        {
+            if (!string.IsNullOrWhiteSpace(line)) _serverInstructionLines.Add(InstructionLineViewModel.From(line));
+        }
+        _loadedSettingsFingerprint = SettingsFingerprint();
         NotifyCatalog();
         RefreshInstructions();
     }

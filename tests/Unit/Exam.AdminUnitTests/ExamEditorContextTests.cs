@@ -62,7 +62,8 @@ public sealed class ExamEditorContextTests
     {
         using var api = Client(_ => Task.FromResult(Ok(Detail("another-exam"))));
         var vm = new ExamConfigurationViewModel(api);
-        await Assert.ThrowsAsync<System.IO.InvalidDataException>(() => vm.OpenAsync("requested-exam"));
+        // 边界读取现在在客户端返回前整体校验（含考试身份），因此在页面使用前即以 AdminApiException 拒绝。
+        await Assert.ThrowsAsync<AdminApiException>(() => vm.OpenAsync("requested-exam"));
         Assert.False(vm.CanSave);
         Assert.Empty(vm.ExamId);
     }
