@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using Exam.Admin;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
+using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Grading;
@@ -191,16 +192,16 @@ public sealed class UiScreenshotTests
 
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-01", "synthetic-candidate-01", "作答中", "synthetic-device-01", 1, 1, 3, "未提交", "—", "—"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-02", "synthetic-candidate-02", "已交卷", "synthetic-device-02", 1, 1, 5, "已提交", "—", "—"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-03", "synthetic-candidate-03", "候考", "synthetic-device-17", 1, 2, 2, "未提交", "—", "—"));
-        monitoring.Rows.Add(new MonitoringRow("synthetic-participation-04", "synthetic-candidate-04", "未参加", "", 0, 0, 1, "未提交", "—", "—"));
+        // 与 /monitoring 权威快照路由共用同一份合成参与者：自动刷新后页面内容保持不变。
+        foreach (var participant in AdminUiFixture.MonitoringParticipants)
+            monitoring.Rows.Add(MonitoringRow.From(participant));
+        foreach (var row in monitoring.Rows.Where(item => item.CollectionState == "未回收"))
+            monitoring.UncollectedRows.Add(row);
         // FilteredRows 是计算属性，借过滤条件的属性通知让表格重新读取。
         monitoring.FilterText = "synthetic";
         monitoring.FilterText = string.Empty;
         monitoring.SelectedRow = monitoring.Rows[0];
         monitoring.DecisionReason = "合成示例：更换故障设备";
-        monitoring.EventId = "synthetic-event-07";
         var completedAt = new DateTimeOffset(2027, 1, 15, 11, 2, 30, TimeSpan.FromHours(8));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-1", "synthetic-exam", 1, 3, completedAt));
         monitoring.CollectionEvents.Add(new CollectionCompletedNotification("synthetic-event-2", "synthetic-exam", 2, 4, completedAt.AddMinutes(6)));

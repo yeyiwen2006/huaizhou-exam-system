@@ -38,7 +38,7 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                    p.business_state,p.entry_version,p.authorization_version,p.version,p.current_paper_version,
                    coalesce(progress.answer_version,0) AS answer_version,
                    coalesce(progress.paper_version,presence.installed_paper_version,0) AS installed_paper_version,
-                   coalesce(progress.answers,'{}'::jsonb)::text AS answers,
+                   coalesce(final.frozen_answers,progress.answers,'{}'::jsonb)::text AS answers,
                    coalesce(presence.current_question_id,progress.current_question_id) AS current_question_id,
                    presence.page,presence.download_state,presence.last_seen_at,presence.disconnected_at,presence.recovering,
                    final.receipt_id,final.received_at,coalesce(focus.count,0) AS focus_count,
@@ -50,6 +50,8 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
               LEFT JOIN exam.participation_progress progress ON progress.participation_id=p.participation_id
                   AND progress.entry_version=p.entry_version
               LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id AND presence.exam_id=p.exam_id
+                  AND EXISTS (SELECT 1 FROM exam.student_sessions s WHERE s.session_id=presence.session_id
+                      AND s.device_id=d.device_id AND s.candidate_ids_by_exam->>p.exam_id=p.candidate_id)
               LEFT JOIN exam.final_submissions final ON final.participation_id=p.participation_id
               LEFT JOIN focus ON focus.participation_id=p.participation_id
              WHERE p.exam_id=$1 AND p.business_state IN ('waiting','answering','submitted')
@@ -92,8 +94,8 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                 var eventType=Enum.Parse<CommandEventType>(Text(reader,"event_type")!);
                 var ack=Text(reader,"acknowledgement_result");
                 var canResend=(eventType is CommandEventType.Start or CommandEventType.End)&&
-                    ack is not ("Applied" or "RejectedAsStale")&&participant.ReceiptId is null&&
-                    (eventType!=CommandEventType.Start||version?.LifecycleState!=ExamLifecycle.Ended);
+                    ack!="RejectedAsStale"&&(ack!="Applied"||eventType==CommandEventType.End)&&participant.ReceiptId is null&&
+                    (eventType==CommandEventType.End?version?.LifecycleState==ExamLifecycle.Ended:version?.LifecycleState==ExamLifecycle.Running);
                 if(!commands.TryGetValue(id,out var list))commands[id]=list=[];
                 list.Add(new(Text(reader,"event_id")!,eventType,Long(reader,"state_version"),
                     ack switch {"Applied"=>"已执行","Received"=>"已收到","ResourceUpdateFailed"=>"资源更新失败","RejectedAsStale"=>"已拒绝过期指令",_=>"待确认"},
@@ -126,7 +128,13 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                     seen,Bool(reader,"authorized"),Long(reader,"answer_version"),Text(reader,"page")??"未报告"));
             }
         }
-        rows=rows.Select(row=>row with{Commands=commands.GetValueOrDefault(row.ParticipationId)??[],ConflictDevices=conflicts.GetValueOrDefault(row.ParticipationId)??[]}).ToList();
+        var questionNumbers=version?.Paper?.Structure.Questions.ToDictionary(q=>q.QuestionId,q=>q.QuestionNo,StringComparer.Ordinal);
+        rows=rows.Select(row=>row with
+        {
+            Commands=commands.GetValueOrDefault(row.ParticipationId)??[],
+            ConflictDevices=conflicts.GetValueOrDefault(row.ParticipationId)??[],
+            CurrentQuestionNo=row.CurrentQuestionId is {} questionId&&questionNumbers?.TryGetValue(questionId,out var number)==true?number:null
+        }).ToList();
         long rosterVersion=0;
         await using(var head=AdministrationSql.Command(c,t,"SELECT roster_version FROM exam.actual_roster_versions WHERE exam_id=$1;",examId))
             if(await head.ExecuteScalarAsync(ct) is long v)rosterVersion=v;

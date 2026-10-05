@@ -31,10 +31,13 @@ namespace Exam.IntegrationTests.Submissions;
 // Reuses the existing synthetic A05/D04 fixture to test the actual G wiring.
 public sealed partial class PostgresSubmissionStoreTests
 {
-    [Fact]
-    public async Task Reporting_RealApiRequiresOperatorAndExportsTheSameDurableSnapshot()
+    [Theory]
+    [InlineData("single", "A")]
+    [InlineData("multiple", "BD")]
+    [InlineData("indeterminate", "BD")]
+    public async Task Reporting_RealApiRequiresOperatorAndExportsTheSameDurableSnapshot(string type, string expectedAnswer)
     {
-        var (context, versions) = await SeedReportExamAsync();
+        var (context, versions) = await SeedReportExamAsync(type);
         var source = ReportSource();
         var reports = new ReportPublicationService(source);
         Assert.Equal(ReportState.ExamNotEnded, (await reports.StatusAsync(context.ExamId)).State);
@@ -65,7 +68,7 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.Equal(5, workbook.Worksheets.Count);
         Assert.Equal(calculation.StudentTotals[0].Participant.ExamNumber, workbook.Worksheet(1).Cell(2, 2).GetString());
         Assert.Equal(3d, workbook.Worksheet(1).Cell(2, 5).GetDouble());
-        Assert.Equal("A", workbook.Worksheet(3).Cell(2, 6).GetString());
+        Assert.Equal(expectedAnswer, workbook.Worksheet(3).Cell(2, 6).GetString());
         Assert.Equal(XLColor.Black, workbook.Worksheet(3).Cell(2, 6).Style.Font.FontColor);
         Assert.Equal(HttpStatusCode.Conflict, (await client.GetAsync(path+"/xlsx?snapshotId=stale")).StatusCode);
         var concurrent = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => reports.ReadAsync(context.ExamId)));
@@ -162,15 +165,18 @@ public sealed partial class PostgresSubmissionStoreTests
     private string ReportTestToken = string.Empty;
     private PostgresReportSource ReportSource() => new(fixture.DataSource,
         new PostgresActiveNodeWriteGuard(new("synthetic-report-server", "node-a", 1), allowUninitializedState: true));
-    private async Task<(ParticipationContext Context, PostgresExamVersioningService Versions)> SeedReportExamAsync()
+    private async Task<(ParticipationContext Context, PostgresExamVersioningService Versions)> SeedReportExamAsync(string type = "single")
     {
         var context = await SeedParticipationAsync();
         var now = DateTimeOffset.UtcNow;
+        string[] selected = type == "single" ? ["A"] : ["B", "D"];
+        var scoring = new ManifestGroupScoring(type == "multiple" ? null : new("3", "0", "-0.75"),
+            type == "single" ? null : new("3", "1", "0", "-0.75"));
         var manifest = new ExamManifest(1, context.ExamId, "合成报表联调", [new("subject", "Synthetic subject", "3")],
-            [new("group", "subject", "Synthetic group", "single", 1, 1, false, "3", new(new("3", "0", "-0.75"), null))],
-            [new("q-1", 1, "subject", "group", "questions/合成报表联调_1.tex", ["A", "B"], null)], []);
+            [new("group", "subject", "Synthetic group", type, 1, 1, false, "3", scoring)],
+            [new("q-1", 1, "subject", "group", "questions/合成报表联调_1.tex", ["A", "B", "C", "D"], null)], []);
         var manifestJson = JsonSerializer.Serialize(manifest, ImportJson.Create());
-        var keyJson = JsonSerializer.Serialize(new AnswerKeyFile(1, context.ExamId, [new("q-1", 1, ["A"])]), ImportJson.Create());
+        var keyJson = JsonSerializer.Serialize(new AnswerKeyFile(1, context.ExamId, [new("q-1", 1, selected)]), ImportJson.Create());
         var versions = new PostgresExamVersioningService(fixture.DataSource);
         Assert.True(versions.CreateExam(new(context.ExamId, new(now.AddHours(1), now.AddHours(2)), now, Id("g-create"))).Succeeded);
         var resource = Id("g-paper"); await StoreGradingPipelinePaperAsync(context.ExamId, resource, now);
@@ -180,7 +186,8 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.True(versions.PublishGradingRules(new(context.ExamId, 0, "synthetic-rules", new(true,true,true),
             "synthetic-review", "合成报表", now, Id("g-rules-request"), manifestJson, keyJson)).Succeeded);
         var saved = await new PostgresSubmissionStore(fixture.DataSource).SaveSubmissionAsync(
-            context.Submission(Id("g-submit"), Id("g-submission"), Answer("A")), now, Id("g-receipt"));
+            context.Submission(Id("g-submit"), Id("g-submission"), new Dictionary<string, Exam.Contracts.Submissions.AnswerValue>
+                { ["q-1"] = Exam.Contracts.Submissions.AnswerValue.Selected(selected) }), now, Id("g-receipt"));
         await GradeReportSubmissionAsync(saved.Submission!.SubmissionId, context.ExamId);
         return (context, versions);
     }

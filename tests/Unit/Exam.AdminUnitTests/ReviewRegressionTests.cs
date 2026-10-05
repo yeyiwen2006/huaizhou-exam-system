@@ -7,6 +7,7 @@ using ClosedXML.Excel;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Activation;
+using Exam.Contracts.Administration;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
@@ -246,7 +247,7 @@ public sealed partial class ReviewRegressionTests
         var pending = viewModel.LoadAsync();
         viewModel.ExamId = "exam-2";
         viewModel.ExamId = "exam-1";
-        release.SetResult(Success(new[] { Participation("exam-1") }));
+        release.SetResult(Success(MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant())));
         await pending;
         Assert.Empty(viewModel.Rows);
         Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
@@ -258,12 +259,13 @@ public sealed partial class ReviewRegressionTests
         var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
         using var handler = new AsyncHandler(_ => ++calls == 1 ? release.Task
-            : Task.FromResult(Success(new[] { Participation("exam-1") with { CandidateId = "new-candidate" } })));
+            : Task.FromResult(Success(MonitoringFixture.Snapshot("exam-1",
+                MonitoringFixture.Participant(candidateId: "new-candidate")))));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         var oldRequest = viewModel.LoadAsync();
         await viewModel.LoadAsync();
-        release.SetResult(Success(new[] { Participation("exam-1") }));
+        release.SetResult(Success(MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant())));
         await oldRequest;
         Assert.Equal("new-candidate", Assert.Single(viewModel.Rows).CandidateId);
     }
@@ -273,15 +275,15 @@ public sealed partial class ReviewRegressionTests
     {
         using var handler = new Handler(_ => Success(new[]
         {
-            Participation("exam-1"),
-            Participation("exam-1") with { CandidateId = "candidate-2" }
+            MonitoringFixture.Participant(),
+            MonitoringFixture.Participant(candidateId: "candidate-2")
         }));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
             "未提交", "接口未提供", "接口未提供"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
+        await Assert.ThrowsAsync<AdminApiException>(() => viewModel.LoadAsync());
 
         Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
     }
@@ -289,13 +291,14 @@ public sealed partial class ReviewRegressionTests
     [Fact]
     public async Task Monitoring_RejectsNullAuthoritativeRowWithoutReplacingExistingRows()
     {
-        using var handler = new Handler(_ => Success(new ParticipationResult?[] { null }));
+        using var handler = new Handler(_ => Success(MonitoringFixture.Snapshot("exam-1",
+            new MonitoringParticipant[] { null! }, Array.Empty<MonitoringParticipant>())));
         using var api = Configured(handler);
         var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
             "未提交", "接口未提供", "接口未提供"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.LoadAsync());
+        await Assert.ThrowsAsync<AdminApiException>(() => viewModel.LoadAsync());
 
         Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
     }
@@ -502,9 +505,6 @@ public sealed partial class ReviewRegressionTests
         }
         finally { File.Delete(path); }
     }
-
-    private static ParticipationResult Participation(string examId) => new("part-1", examId, "candidate-1",
-        ParticipationBusinessState.Waiting, "device-1", 1, 1, 1, null);
 
     private static MonitoringViewModel DecisionViewModel(AdminApiClient api) => new(api)
     {
