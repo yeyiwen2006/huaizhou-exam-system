@@ -8,13 +8,18 @@ namespace Exam.Admin.ViewModels;
 
 /// <summary>
 /// 考务端主窗口。主页列出全部考试；进入某场考试后，考试设置、设备监控和成绩统计都作用于这场考试。
-/// 导航页序号：0 全部考试，1 考试设置，2 考生名单，3 激活与试场分组，4 设备监控，5 成绩统计，6 考务账号（仅管理员）。
+/// 导航页序号：0 全部考试，1 考试设置，2 试卷导入与发布，3 考生名单，4 设备监控，5 成绩统计，6 激活与试场分组，7 考务账号（仅管理员）。
 /// </summary>
 public sealed class MainViewModel : BindableBase, IDisposable
 {
     public const int HomePage = 0;
     public const int SettingsPage = 1;
-    public const int ActivationPage = 5; // 激活与试场分组：不与具体考试挂钩，不显示当前考试条。
+    public const int ImportPage = 2;
+    public const int RosterPage = 3;
+    public const int MonitoringPage = 4;
+    public const int ReportsPage = 5;
+    public const int ActivationPage = 6; // 激活与试场分组：不与具体考试挂钩，不显示当前考试条。
+    public const int AccountsPage = 7;
     private readonly AdminApiClient _api;
     private ExamSummary? _currentExam;
     private bool _isCreatingExam;
