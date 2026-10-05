@@ -76,9 +76,18 @@ public sealed class WpfBindingSmokeTests
                 typeSelector.SelectedValue = "multiple";
                 DrainDispatcher();
                 Assert.Equal("multiple", group.Type);
-                var instructions = Assert.Single(Descendants<TextBox>(window), box =>
-                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Exam.InstructionsText");
-                Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);
+                // 考生说明预览按字形分段渲染：正文黑体、数字 Times New Roman，并显示预览来源说明。
+                Assert.Single(Descendants<ItemsControl>(window), control =>
+                    BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "Exam.InstructionPreview");
+                Assert.Single(Descendants<TextBlock>(window), block =>
+                    BindingOperations.GetBinding(block, TextBlock.TextProperty)?.Path.Path == "Exam.InstructionSourceText");
+                var rendered = Descendants<TextBlock>(window)
+                    .Where(block => block.DataContext is InstructionLineViewModel).ToArray();
+                var runs = rendered.SelectMany(block => block.Inlines.OfType<System.Windows.Documents.Run>()).ToArray();
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.NumberFont));
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.BodyFont));
+                Assert.All(rendered, block => Assert.Equal(((InstructionLineViewModel)block.DataContext).Text,
+                    string.Concat(block.Inlines.OfType<System.Windows.Documents.Run>().Select(run => run.Text))));
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);

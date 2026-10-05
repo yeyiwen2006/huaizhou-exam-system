@@ -126,7 +126,7 @@ public sealed class MonitoringRefreshTests
             collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(20))
         { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
 
-        await Task.Delay(600);
+        await UntilAsync(() => handler.Calls >= 2);
 
         // 慢响应不得叠加请求：上一轮结束前不发下一轮。
         Assert.Equal(1, handler.MaxConcurrent);
