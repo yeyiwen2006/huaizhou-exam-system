@@ -43,13 +43,13 @@
                         <TextBlock Text="使用部署提供的本机管理端口。业务停止或数据库不可用时，管理宿主按已启用账号的受保护缓存认证。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,16"/>
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                            <StackPanel><TextBlock Text="管理 HTTPS 根地址" Style="{StaticResource FieldLabel}"/>
+                            <StackPanel><TextBlock Text="本机服务管理入口HTTPS地址" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="管理地址"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1"><TextBlock Text="预期逻辑服务器" Style="{StaticResource FieldLabel}"/>
+                            <StackPanel Grid.Column="1"><TextBlock Text="当前考试系统标识" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding ServerId, UpdateSourceTrigger=PropertyChanged}"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="2"><TextBlock Text="预期本机节点" Style="{StaticResource FieldLabel}"/>
+                            <StackPanel Grid.Column="2"><TextBlock Text="当前服务器标识" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding NodeId, UpdateSourceTrigger=PropertyChanged}"/>
                             </StackPanel>
                         </Grid>
