@@ -178,6 +178,32 @@ public sealed class ServerRoomViewModelTests
     }
 
     [Fact]
+    public async Task AutomaticRefreshKeepsAppliedQueryWhileSearchInputsAreBeingEdited()
+    {
+        using var test = new RoomServer();
+        test.Model.QueryDeviceId = "合成考生";
+        test.Model.FilterRoomGroupId = "room-a";
+        await test.Model.QueryDeviceAsync();
+        test.Requests.Clear();
+        test.Model.QueryDeviceId = "尚未查询的新条件";
+        test.Model.FilterRoomGroupId = null;
+        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        test.Model.Devices.CollectionChanged += (_, _) =>
+        {
+            if (test.Model.Devices.Count == 1) loaded.TrySetResult();
+        };
+        test.Model.StartPolling();
+        await loaded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        test.Model.StopPolling();
+
+        var request = Assert.Single(test.Requests, request => request.Path == "/api/v1/devices");
+        Assert.Contains("query=" + Uri.EscapeDataString("合成考生"), request.Query, StringComparison.Ordinal);
+        Assert.Contains("roomGroupId=room-a", request.Query, StringComparison.Ordinal);
+        Assert.Equal("尚未查询的新条件", test.Model.QueryDeviceId);
+        Assert.Null(test.Model.FilterRoomGroupId);
+    }
+
+    [Fact]
     public async Task ReloadClearsSearchAndRoomFilter_AndLoadsTheWholePaginatedDirectory()
     {
         using var test = new RoomServer();

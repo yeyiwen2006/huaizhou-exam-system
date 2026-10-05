@@ -250,10 +250,6 @@
                                 <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
                                 <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                             </WrapPanel>
-                            <WrapPanel Margin="0,0,0,6">
-                                <Button Content="新增题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddGroupCommand}"/>
-                                <Button Content="删除题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveGroupCommand}"/>
-                            </WrapPanel>
                             <DataGrid ItemsSource="{Binding Exam.SelectedSubject.Groups}" SelectedItem="{Binding Exam.SelectedSubject.SelectedGroup}"
                                       IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="False" Height="245" HorizontalScrollBarVisibility="Auto">
                                 <DataGrid.Columns>
@@ -271,16 +267,20 @@
                                     <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                     <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                     <DataGridTextColumn Header="满分" Binding="{Binding MaxScore, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
-                                    <DataGridCheckBoxColumn Header="允许不答" Binding="{Binding AllowAbstain}" Width="85"/>
-                                    <DataGridTextColumn Header="单答案·选对" Binding="{Binding Correct}" Width="100"/>
-                                    <DataGridTextColumn Header="单答案·不选" Binding="{Binding OneBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="单答案·选错" Binding="{Binding OneWrong}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案·全对" Binding="{Binding AllCorrect}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案·对但不全" Binding="{Binding PartialCorrect}" Width="110"/>
-                                    <DataGridTextColumn Header="多答案·不选" Binding="{Binding MultipleBlank}" Width="100"/>
-                                    <DataGridTextColumn Header="多答案·选错" Binding="{Binding MultipleWrong}" Width="100"/>
+                                    <DataGridCheckBoxColumn Header="可选不作答" Binding="{Binding AllowAbstain}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案选对" Binding="{Binding Correct}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案不选" Binding="{Binding OneBlank}" Width="100"/>
+                                    <DataGridTextColumn Header="单答案选错" Binding="{Binding OneWrong}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案全对" Binding="{Binding AllCorrect}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案对但不全" Binding="{Binding PartialCorrect}" Width="110"/>
+                                    <DataGridTextColumn Header="多答案不选" Binding="{Binding MultipleBlank}" Width="100"/>
+                                    <DataGridTextColumn Header="多答案选错" Binding="{Binding MultipleWrong}" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button Content="新增题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddGroupCommand}"/>
+                                <Button Content="删除题组" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveGroupCommand}"/>
+                            </WrapPanel>
                         </StackPanel>
                     </Border>
                     <Grid>
