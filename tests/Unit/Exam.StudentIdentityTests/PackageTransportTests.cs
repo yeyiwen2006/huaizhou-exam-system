@@ -55,7 +55,7 @@ public sealed class PackageTransportTests
             response.Headers.Add(header, value);
             return response;
         });
-        await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        await Assert.ThrowsAnyAsync<HttpRequestException>(async () =>
         {
             await foreach (var _ in api.DownloadPackageChunksAsync(Descriptor(), "prep", "session")) { }
         });

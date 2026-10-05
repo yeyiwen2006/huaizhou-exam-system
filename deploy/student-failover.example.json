@@ -1,0 +1,10 @@
+{
+  "ExamServer": { "ServerId": "synthetic-logical-server", "NodeId": "primary", "ServerEpoch": 1 },
+  "HighAvailability": { "RequiredNodeIds": ["primary", "standby"] },
+  "StudentFailover": {
+    "Nodes": [
+      { "Host": "127.0.0.1", "Port": 5101, "NodeId": "primary", "CertificateSha256": "1111111111111111111111111111111111111111111111111111111111111111" },
+      { "Host": "127.0.0.2", "Port": 5102, "NodeId": "standby", "CertificateSha256": "2222222222222222222222222222222222222222222222222222222222222222" }
+    ]
+  }
+}

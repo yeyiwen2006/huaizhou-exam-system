@@ -21,6 +21,11 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     private long _serverEpoch;
     private readonly object _connectionGate = new();
     private long _connectionGeneration;
+    private long _identityGeneration;
+    private string? _nodeId;
+    private readonly SemaphoreSlim _failoverGate = new(1, 1);
+    public Action<DeviceRecord>? PersistTrustedConnection { get; set; }
+    public event EventHandler? TrustedEndpointChanged;
 
     /// <summary>
     /// B07 部署指纹校验失败（或证书链不受信任）时抛出；继承 HttpRequestException，
@@ -31,11 +36,11 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         public UntrustedServerException(string message, Exception inner) : base(message, inner) { }
     }
 
-    public HttpStudentApi() : this(CreateDefaultHandler()) { }
+    public HttpStudentApi() : this(null) { }
 
-    public HttpStudentApi(HttpMessageHandler handler)
+    public HttpStudentApi(HttpMessageHandler? handler)
     {
-        _client = new HttpClient(handler)
+        _client = new HttpClient(handler ?? CreateDefaultHandler())
         {
             Timeout = TimeSpan.FromSeconds(30),
             MaxResponseContentBufferSize = 4 * 1024 * 1024
@@ -46,10 +51,12 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     /// TLS 校验遵循 ServerTrust：部署配置提供证书指纹时精确 pin，否则保持 Windows 标准链校验。
     /// 回调在每次 TLS 握手时读取当前配置，应用启动完成前发出的请求同样受最终配置约束。
     /// </summary>
-    private static SocketsHttpHandler CreateDefaultHandler() => new()
+    private SocketsHttpHandler CreateDefaultHandler() => new()
     {
         AllowAutoRedirect = false,
-        SslOptions = { RemoteCertificateValidationCallback = ServerTrust.ValidateCertificate }
+        SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
+            _device?.Topology is { } topology ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
+                : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
     };
 
     public void ConfigureConnection(DeviceRecord device)
@@ -62,13 +69,22 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         }
 
         var server = new UriBuilder(Uri.UriSchemeHttps, device.Host, device.Port).Uri;
+        device.Topology?.Validate();
+        if (device.Topology is { } topology && (topology.ServerId != device.ServerId ||
+            !topology.Nodes.Any(node => node.Address == server) ||
+            device.ActiveNodeId is not null && !topology.Nodes.Any(node => node.NodeId == device.ActiveNodeId)))
+            throw new InvalidOperationException("主备逻辑身份与设备登记不一致。");
         lock (_connectionGate)
         {
-            if (_server != server || _device?.DeviceId != device.DeviceId || _device?.Credential != device.Credential)
+            if (_device?.Host != device.Host || _device?.Port != device.Port ||
+                _device?.DeviceId != device.DeviceId || _device?.Credential != device.Credential)
             {
+                _identityGeneration++;
                 _connectionGeneration++;
                 _serverEpoch = device.ServerEpoch;
                 _trustedServerId = device.ServerId;
+                _server = device.Topology?.Nodes.SingleOrDefault(node => node.NodeId == device.ActiveNodeId)?.Address ?? server;
+                _nodeId = device.Topology?.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId;
             }
             else
             {
@@ -76,12 +92,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
                 {
                     throw new InvalidOperationException("服务器身份与已验证连接不一致。");
                 }
+                if (_device?.Topology is { } previous && (device.Topology is null || !previous.Equivalent(device.Topology)))
+                    throw new InvalidOperationException("主备信任配置不可由连接刷新替换。");
                 _serverEpoch = Math.Max(_serverEpoch, device.ServerEpoch);
                 _trustedServerId ??= device.ServerId;
+                _nodeId ??= device.Topology?.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId;
             }
 
-            _device = device;
-            _server = server;
+            _device = device with { ServerEpoch = _serverEpoch, ActiveNodeId = _nodeId ?? device.ActiveNodeId };
         }
     }
 
@@ -175,11 +193,17 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     {
         var server = _server ?? throw new InvalidOperationException("请先配置并验证服务器地址。");
         if (!Uri.TryCreate(server, path, out var result) || result.Scheme != Uri.UriSchemeHttps ||
-            !string.Equals(result.Host, server.Host, StringComparison.OrdinalIgnoreCase) ||
-            result.Port != server.Port || !string.IsNullOrEmpty(result.UserInfo) ||
+            !string.IsNullOrEmpty(result.UserInfo) ||
             !string.IsNullOrEmpty(result.Fragment))
         {
             throw new InvalidOperationException("服务器返回了不可信的资源地址。");
+        }
+        if (result.GetLeftPart(UriPartial.Authority) != server.GetLeftPart(UriPartial.Authority))
+        {
+            // An old package descriptor may still name the prior trusted node after takeover.
+            if (_device?.Topology?.Nodes.Any(node => node.Address.GetLeftPart(UriPartial.Authority) == result.GetLeftPart(UriPartial.Authority)) != true)
+                throw new InvalidOperationException("服务器返回了不可信的资源地址。");
+            result = new Uri(server, result.PathAndQuery);
         }
         return result;
     }
@@ -197,11 +221,12 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     }
 
     /// <summary>发送请求；TLS 层不受信任（指纹不匹配或链校验失败）时转成 UntrustedServerException。</summary>
-    private async Task<HttpResponseMessage> SendTrustedAsync(HttpRequestMessage request, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendTrustedAsync(HttpRequestMessage request, CancellationToken ct,
+        HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
     {
         try
         {
-            return await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
+            return await _client.SendAsync(request, completion, ct);
         }
         catch (HttpRequestException error) when (ContainsAuthenticationError(error))
         {
@@ -224,17 +249,44 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     private async Task<ApiEnvelope<T>> SendAsync<T>(
         HttpMethod method, string path, object? body, bool authenticated, CancellationToken ct)
     {
+        // Freeze bytes once: retries must not invent request IDs or rebuild final answers.
+        var bytes = body is null ? null : JsonSerializer.SerializeToUtf8Bytes(body, body.GetType(), _json);
+        long identityGeneration;
+        long generation;
+        lock (_connectionGate) { identityGeneration = _identityGeneration; generation = _connectionGeneration; }
+        ApiEnvelope<T> result;
+        try
+        {
+            result = await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+        }
+        catch (Exception error) when (error is HttpRequestException and not UntrustedServerException and not IdentityRejectedException ||
+            error is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            if (!await TryReconnectAsync(identityGeneration, generation, ct)) throw;
+            return await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+        }
+        if (result.Error?.Code is ErrorCodes.NotActiveServer or ErrorCodes.ServiceRecovering or ErrorCodes.StaleServerEpoch or ErrorCodes.ReplicaUnavailable &&
+            await TryReconnectAsync(identityGeneration, generation, ct))
+            return await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+        return result;
+    }
+
+    private async Task<ApiEnvelope<T>> SendOnceAsync<T>(
+        HttpMethod method, string path, byte[]? body, bool authenticated, long identityGeneration, CancellationToken ct)
+    {
         HttpRequestMessage message;
         long generation;
         lock (_connectionGate)
         {
+            if (identityGeneration != _identityGeneration) throw new IdentityRejectedException("设备身份已切换，停止原请求。");
             message = CreateRequest(method, path, authenticated);
             generation = _connectionGeneration;
         }
         using var request = message;
         if (body is not null)
         {
-            request.Content = JsonContent.Create(body, body.GetType(), options: _json);
+            request.Content = new ByteArrayContent(body);
+            request.Content.Headers.ContentType = new("application/json");
         }
         using var response = await SendTrustedAsync(request, ct);
         if ((int)response.StatusCode is >= 300 and < 400)
@@ -254,15 +306,21 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             {
                 throw new HttpRequestException("连接已切换，已忽略旧连接的响应。");
             }
+            ValidateIdentity(envelope.ServerId, envelope.NodeId, envelope.ServerEpoch);
             if (envelope.IsSuccess)
             {
-                ValidateServer(envelope.ServerId, envelope.ServerEpoch);
                 if (string.IsNullOrWhiteSpace(envelope.NodeId) || envelope.Result is null)
                 {
                     throw new HttpRequestException("服务器没有返回有效业务结果。");
                 }
+                if (envelope.Result is ServerTimeSnapshot time &&
+                    time.Server != new ServerNodeEnvelope(envelope.ServerId, envelope.NodeId, envelope.ServerEpoch))
+                    throw new IdentityRejectedException("服务器时间与外层身份信息不一致。");
+                ValidateServer(envelope.ServerId, envelope.ServerEpoch);
+                _nodeId = envelope.NodeId;
             }
         }
+        if (generation != _connectionGeneration) TrustedEndpointChanged?.Invoke(this, EventArgs.Empty);
         return envelope;
     }
 
@@ -272,7 +330,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             (_trustedServerId is not null && !string.Equals(_trustedServerId, serverId, StringComparison.Ordinal)) ||
             epoch < _serverEpoch)
         {
-            throw new HttpRequestException("服务器身份或服务代次不匹配，已停止处理响应。");
+            throw new IdentityRejectedException("服务器身份或服务代次不匹配，已停止处理响应。");
+        }
+        if (epoch > _serverEpoch && _device?.Topology is not null)
+        {
+            var updated = _device with { ServerEpoch = epoch, ActiveNodeId = _nodeId };
+            (PersistTrustedConnection ?? throw new InvalidOperationException("主备连接缺少受保护持久化入口。"))(updated);
+            _device = updated;
+            _connectionGeneration++;
         }
         _trustedServerId ??= serverId;
         _serverEpoch = epoch;

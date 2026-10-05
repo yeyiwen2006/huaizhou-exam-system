@@ -83,6 +83,8 @@ public partial class MainWindow : Window
 
         if (device is { Status: ActivationStatus.Active })
         {
+            device = await App.Services.EnsureTrustedTopologyAsync(device);
+            App.Services.ConfigureDevice(device);
             App.Services.StartClock();
             _navigation.GoToLogin();
             return;

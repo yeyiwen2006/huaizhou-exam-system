@@ -16,6 +16,26 @@ public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture
     private const string Token = "0123456789abcdef0123456789abcdef";
     private readonly ServerNodeEnvelope server = new($"middleware-{Guid.NewGuid():N}", "node-a", 1);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrustedTopologyRequiresActiveDeviceCredentials(bool credentialSupplied)
+    {
+        var invoked = false;
+        var middleware = CreateMiddleware(() => invoked = true);
+        var context = CreateJsonContext("/api/v1/student/server-topology", "application/json", "{}");
+        context.Request.Method = HttpMethods.Get;
+        if (credentialSupplied)
+        {
+            context.Request.Headers["X-Exam-Device-Id"] = "device-a";
+            context.Request.Headers["X-Exam-Device-Credential"] = "credential-a";
+        }
+        await middleware.InvokeAsync(context, new FixedOperatorAuthenticator(Token, "operator-a"),
+            new AcceptingCredentialValidator(), CreateGuard(), server);
+        Assert.Equal(credentialSupplied, invoked);
+        Assert.Equal(credentialSupplied ? StatusCodes.Status204NoContent : StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
     [Fact]
     public async Task Operator_route_rejects_spoofed_audit_identity()
     {

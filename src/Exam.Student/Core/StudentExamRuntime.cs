@@ -16,7 +16,8 @@ public sealed partial class StudentExamRuntime(
     ExamPackageManager manager,
     DeviceRecord device,
     ILocalStateStore? localState = null,
-    string? candidateId = null) : IAsyncDisposable
+    string? candidateId = null,
+    Func<DeviceRecord, ServerNodeEnvelope, IExamCommandFeed>? commandFeedFactory = null) : IAsyncDisposable
 {
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _answerGate = new(1, 1);
@@ -26,6 +27,10 @@ public sealed partial class StudentExamRuntime(
         !string.IsNullOrWhiteSpace(candidateId) && candidateId == manager.CandidateId ? candidateId :
             throw new ArgumentException("本地答题记录必须使用当前考试的考生标识。", nameof(candidateId)));
     private IExamCommandFeed? _feed;
+    private readonly SemaphoreSlim _notificationGate = new(1, 1);
+    private Task? _transportRecovery;
+    private ParticipationResult? _recoveryParticipation;
+    private volatile bool _authorizationLost;
     private ParticipationResult? _connectedParticipation;
     private ServerNodeEnvelope? _connectedServer;
     private bool _disposed;
@@ -89,6 +94,7 @@ public sealed partial class StudentExamRuntime(
 
     public Task RevokeSubmissionAuthorizationAsync()
     {
+        _authorizationLost = true;
         var dispatcher = Application.Current?.Dispatcher;
         return dispatcher is null || dispatcher.CheckAccess()
             ? InvalidateAuthorizationOnUiAsync()
@@ -368,6 +374,42 @@ public sealed partial class StudentExamRuntime(
 
     public async Task StartNotificationsAsync(ParticipationResult participation, ServerNodeEnvelope server)
     {
+        await _notificationGate.WaitAsync(_lifetime.Token);
+        try
+        {
+            if (_authorizationLost) throw new InvalidOperationException("当前设备授权已失效，不能重新建立答题连接。");
+            if (Manager.Transport is { } transport && transport.CurrentTrustedEndpoint is { } endpoint)
+                server = endpoint.Server;
+            _recoveryParticipation = participation;
+            if (Manager.Transport is { } http && device.Topology is not null)
+                _transportRecovery ??= Task.Run(() => RecoverTransportAsync(http, _lifetime.Token));
+            await StartNotificationsCoreAsync(participation, server);
+        }
+        finally { _notificationGate.Release(); }
+    }
+
+    private async Task RecoverTransportAsync(HttpStudentApi transport, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_authorizationLost)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                if (_authorizationLost || _disposed) return;
+                if (_feed is SignalRExamCommandFeed { IsConnected: true } && transport.CurrentTrustedEndpoint?.Server == _connectedServer) continue;
+                var response = await transport.GetServerTimeAsync(ct);
+                var server = HttpStudentApi.RequireResult(response).Server;
+                if (_recoveryParticipation is { } participation && !_authorizationLost && !_disposed)
+                    await StartNotificationsAsync(participation, server);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException or TimeoutException or CryptographicException or UnauthorizedAccessException)
+            { _handlingError = "正在核对可信服务器并恢复指令连接；原登记、答案与待传答卷保持不变。"; NotifyStateChanged(); }
+        }
+    }
+
+    private async Task StartNotificationsCoreAsync(ParticipationResult participation, ServerNodeEnvelope server)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_feed is SignalRExamCommandFeed { IsConnected: true } &&
             _connectedServer == server && _connectedParticipation is { } previous &&
@@ -384,13 +426,19 @@ public sealed partial class StudentExamRuntime(
             _feed = null;
         }
 
-        var feed = new SignalRExamCommandFeed(device, server)
-        {
-            AuthorizationLost = InvalidateAuthorizationAsync,
-        };
+        var endpoint = Manager.Transport?.CurrentTrustedEndpoint;
+        var feed = commandFeedFactory?.Invoke(endpoint?.Device ?? device, server)
+            ?? new SignalRExamCommandFeed(endpoint?.Device ?? device, server);
+        if (feed is SignalRExamCommandFeed signalR)
+            signalR.AuthorizationLost = token => InvalidateAuthorizationAsync(token, endpoint?.Generation);
         try
         {
-            await feed.StartAsync(participation, ReceiveCommandAsync, _lifetime.Token);
+            await feed.StartAsync(participation, (delivery, token) =>
+                _authorizationLost || _disposed || endpoint is { } captured && Manager.Transport?.IsCurrentEndpoint(captured.Generation) != true
+                    ? Task.CompletedTask : ReceiveCommandAsync(delivery, token, endpoint?.Generation), _lifetime.Token);
+            if (_authorizationLost || _disposed ||
+                endpoint is { } current && Manager.Transport?.IsCurrentEndpoint(current.Generation) != true)
+                throw new InvalidOperationException("授权或可信连接已变化，停止原通知连接。");
             _feed = feed;
             _connectedParticipation = participation;
             _connectedServer = server;
@@ -404,27 +452,32 @@ public sealed partial class StudentExamRuntime(
         }
     }
 
-    private Task ReceiveCommandAsync(CommandDelivery delivery, CancellationToken ct)
+    private Task ReceiveCommandAsync(CommandDelivery delivery, CancellationToken ct, long? generation = null)
     {
         var dispatcher = Application.Current?.Dispatcher
             ?? throw new InvalidOperationException("学生端界面尚未启动。");
-        return dispatcher.CheckAccess()
-            ? ApplyCommandAsync(delivery, ct)
-            : dispatcher.InvokeAsync(() => ApplyCommandAsync(delivery, ct), DispatcherPriority.Normal, ct).Task.Unwrap();
+        Task ApplyIfCurrent() => _authorizationLost || _disposed ||
+            generation is { } expected && Manager.Transport?.IsCurrentEndpoint(expected) != true
+                ? Task.CompletedTask : ApplyCommandAsync(delivery, ct);
+        return dispatcher.CheckAccess() ? ApplyIfCurrent()
+            : dispatcher.InvokeAsync(ApplyIfCurrent, DispatcherPriority.Normal, ct).Task.Unwrap();
     }
 
-    private Task InvalidateAuthorizationAsync(CancellationToken ct)
+    private Task InvalidateAuthorizationAsync(CancellationToken ct, long? generation = null)
     {
         var dispatcher = Application.Current?.Dispatcher
             ?? throw new InvalidOperationException("学生端界面尚未启动。");
         // 连接自己的取消信号可能正是由撤销触发，不能因此跳过本地停用。
-        return dispatcher.CheckAccess()
-            ? InvalidateAuthorizationOnUiAsync()
-            : dispatcher.InvokeAsync(InvalidateAuthorizationOnUiAsync, DispatcherPriority.Send).Task.Unwrap();
+        Task InvalidateIfCurrent() => _disposed ||
+            generation is { } expected && Manager.Transport?.IsCurrentEndpoint(expected) != true
+                ? Task.CompletedTask : InvalidateAuthorizationOnUiAsync();
+        return dispatcher.CheckAccess() ? InvalidateIfCurrent()
+            : dispatcher.InvokeAsync(InvalidateIfCurrent, DispatcherPriority.Send).Task.Unwrap();
     }
 
     private async Task InvalidateAuthorizationOnUiAsync()
     {
+        _authorizationLost = true;
         if (_disposed)
         {
             return;
@@ -506,6 +559,8 @@ public sealed partial class StudentExamRuntime(
         _paper = null;
         var stopAnswers = Answers?.SuspendAsync("考试会话已关闭，原记录保留。", CancellationToken.None) ?? Task.CompletedTask;
         _lifetime.Cancel();
+        if (_transportRecovery is { } recovery) await recovery;
+        await _notificationGate.WaitAsync();
         try
         {
             // B06：先停更新编排器，避免其后台循环再触碰正在关闭的管理器与会话。
@@ -549,6 +604,7 @@ public sealed partial class StudentExamRuntime(
                 _connectedServer = null;
                 Manager.Dispose();
                 _lifetime.Dispose();
+                _notificationGate.Release();
             }
         }
     }
