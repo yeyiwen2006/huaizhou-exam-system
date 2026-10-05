@@ -105,14 +105,14 @@ public sealed class MonitoringRefreshTests
         await UntilAsync(() => viewModel.Rows.Count == 1);
 
         failing = true;
-        await UntilAsync(() => viewModel.Status.Contains("自动刷新失败", StringComparison.Ordinal));
+        await UntilAsync(() => viewModel.RefreshNote.Contains("自动刷新失败", StringComparison.Ordinal));
         // 自动刷新失败不得清空列表：显示的是上一次可信结果，并标明读取时间。
         Assert.Single(viewModel.Rows);
-        Assert.Contains("读取的状态", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("读取的状态", viewModel.RefreshNote, StringComparison.Ordinal);
         Assert.NotEmpty(viewModel.AsOfText);
 
         failing = false;
-        await UntilAsync(() => viewModel.Status.Contains("自动刷新已恢复", StringComparison.Ordinal));
+        await UntilAsync(() => viewModel.RefreshNote.Length == 0);
         Assert.Single(viewModel.Rows);
     }
 
@@ -229,16 +229,94 @@ public sealed class MonitoringRefreshTests
         { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
         await UntilAsync(() => viewModel.Rows.Count == 1);
         failing = true;
-        await UntilAsync(() => viewModel.Status.Contains("自动刷新失败", StringComparison.Ordinal));
+        await UntilAsync(() => viewModel.RefreshNote.Contains("自动刷新失败", StringComparison.Ordinal));
 
-        // 刷新失败期间做一次补传：这条操作反馈不能被随后的“自动刷新已恢复”改写。
+        // 刷新失败期间做一次补传：失败与恢复都只写新鲜度提示，状态栏的操作反馈必须保留。
         viewModel.SelectedRow = viewModel.Rows[0];
         await viewModel.RequestReuploadAsync();
         Assert.Contains("已重发指令", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("自动刷新失败", viewModel.RefreshNote, StringComparison.Ordinal);
         failing = false;
-        await Task.Delay(150);
+        await UntilAsync(() => viewModel.RefreshNote.Length == 0);
 
         Assert.Contains("已重发指令", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AutoRefresh_KeepsSelectedCommandAndConflictDeviceAcrossRefreshes()
+    {
+        var snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(
+            commands:
+            [
+                MonitoringFixture.Command(CommandEventType.Start, canResend: false, eventId: "start-1",
+                    confirmation: "已执行", acknowledgedAt: MonitoringFixture.At),
+                MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "end-1"),
+            ],
+            conflicts:
+            [
+                MonitoringFixture.Conflict("device-part-1", authorized: true),
+                MonitoringFixture.Conflict("synthetic-device-17", authorized: false,
+                    connectionState: DeviceConnectionState.Offline, answerVersion: 2, page: "交卷确认"),
+            ]));
+        using var handler = new SyntheticHandler(_ => Success(snapshot));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
+        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+        viewModel.SelectedRow = viewModel.Rows[0];
+        viewModel.SelectedCommand = viewModel.SelectedCommands.Single(item => item.Command.EventId == "end-1");
+        viewModel.SelectedConflictDevice = viewModel.SelectedConflictDevices
+            .Single(item => item.DeviceId == "synthetic-device-17");
+        await Task.Delay(150);
+
+        // 自动刷新只换行对象：已选中的指令与对照设备要选回新实例，
+        // 否则下拉框与对照表会变空，而 EventId/SelectedDeviceId 仍是“已武装”状态。
+        Assert.NotNull(viewModel.SelectedCommand);
+        Assert.Equal("end-1", viewModel.SelectedCommand!.Command.EventId);
+        Assert.True(viewModel.SelectedCommand.IsSelected);
+        Assert.NotNull(viewModel.SelectedConflictDevice);
+        Assert.Equal("synthetic-device-17", viewModel.SelectedConflictDevice!.DeviceId);
+        Assert.True(viewModel.SelectedConflictDevice.IsSelected);
+        Assert.Equal("end-1", viewModel.EventId);
+        Assert.Equal("synthetic-device-17", viewModel.SelectedDeviceId);
+    }
+
+    [Fact]
+    public async Task AutoRefresh_ReplacesThePlaceholderStatusOnceDataArrives()
+    {
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Default()));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
+        { ExamId = "exam-1" };
+
+        // 进入考试后状态栏还是占位说明，自动刷新读到数据就要换成计数汇总，不能继续叫考务点“刷新”。
+        viewModel.ConnectionReady = true;
+        viewModel.IsPageActive = true;
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+
+        Assert.DoesNotContain("请点击", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal("共 1 名实际参试考生；已回收 0 份；未回收 1 份。", viewModel.Status);
+    }
+
+    [Fact]
+    public async Task Load_RejectedSnapshotExplainsTheKeptRowsInTheRefreshNote()
+    {
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Default() with { ActualCount = 2 }));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        viewModel.Rows.Add(new MonitoringRow("existing", "candidate-existing", "候考", "device-existing", 1, 1, 1,
+            "未回收", "暂无记录", "—"));
+
+        await Assert.ThrowsAsync<AdminApiException>(() => viewModel.LoadAsync());
+
+        // “已保留上一次结果”写在新鲜度提示里：命令的错误处理只写状态栏，不会把它覆盖掉。
+        Assert.Contains("已保留上一次结果", viewModel.RefreshNote, StringComparison.Ordinal);
+        Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
     }
 
     [Fact]

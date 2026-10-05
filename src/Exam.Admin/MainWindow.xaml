@@ -366,7 +366,7 @@
                                 <Button DockPanel.Dock="Right" Content="刷新" Style="{StaticResource Btn.Primary}" MinWidth="108" Margin="0" VerticalAlignment="Top" Command="{Binding Monitoring.LoadCommand}"/>
                                 <StackPanel>
                                     <TextBlock Text="考生参试与在线状态" Style="{StaticResource CardHeading}" />
-                                    <TextBlock Text="全部字段来自服务器同一次权威读取；打开本页时每 2 秒自动刷新，收齐记录每 20 秒补取一次。业务状态与连接状态分列显示，离线不会改变业务状态，没有有效通信记录时标识未登录。" Style="{StaticResource CardNote}" />
+                                    <TextBlock Text="全部字段来自服务器同一次权威读取；本页在前台时每 2 秒自动刷新，收齐记录每 20 秒补取一次（离开本页也会继续提醒）。业务状态与连接状态分列显示，离线不会改变业务状态，没有有效通信记录时标识未登录。" Style="{StaticResource CardNote}" />
                                 </StackPanel>
                             </DockPanel>
                             <WrapPanel Margin="0,8,0,8">
@@ -395,6 +395,7 @@
                             </WrapPanel>
                             <TextBlock Text="{Binding Monitoring.CountsText}" Style="{StaticResource CardNote}" />
                             <TextBlock Text="{Binding Monitoring.AsOfText}" Style="{StaticResource CardNote}" />
+                            <TextBlock Text="{Binding Monitoring.RefreshNote}" Style="{StaticResource CardNote}" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding Monitoring.Status}" Style="{StaticResource CaptionText}" Margin="0,6,0,10"/>
                             <DataGrid ItemsSource="{Binding Monitoring.FilteredRows}" SelectedItem="{Binding Monitoring.SelectedRow}" Height="300" IsReadOnly="True">
                                 <DataGrid.Columns>

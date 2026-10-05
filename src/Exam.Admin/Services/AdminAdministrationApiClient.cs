@@ -110,6 +110,10 @@ public sealed partial class AdminApiClient
                 !candidateIds.Add(participant.CandidateId))
                 throw Invalid();
         }
+        // 已回收份数必须等于真正带回执的参试记录数，否则会出现“未回收名单为空却显示已回收 3 份”的半份状态。
+        // 放在逐个校验之后：列表里可能含 null 元素，必须先由 IsWellFormed 拒绝。
+        if (result.CollectedCount != result.Participants.Count(item => item.ReceiptId is not null))
+            throw Invalid();
         var uncollected = new HashSet<string>(StringComparer.Ordinal);
         foreach (var participant in result.Uncollected)
         {

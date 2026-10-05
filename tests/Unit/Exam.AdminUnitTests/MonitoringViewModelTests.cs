@@ -44,7 +44,7 @@ public sealed class MonitoringViewModelTests
         using var handler = new SyntheticHandler(_ => Success(snapshot));
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
-        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1", ExamName = "合成考试" };
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
 
         await viewModel.LoadAsync();
 
@@ -202,7 +202,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal("INVALID_RESPONSE", error.Code);
         Assert.Equal("existing", Assert.Single(viewModel.Rows).ParticipationId);
-        Assert.Contains("已保留上一次结果", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("已保留上一次结果", viewModel.RefreshNote, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -213,6 +213,8 @@ public sealed class MonitoringViewModelTests
         {
             ("别的考试", valid with { ExamId = "exam-2" }),
             ("人数与列表不一致", valid with { ActualCount = 2 }),
+            // 条数与回执对不上：声称已回收 1 份却没有任何回执，未回收名单会是空的。
+            ("已回收份数与回执数不符", valid with { CollectedCount = 1 }),
             ("已回收却没有持久化回执", MonitoringFixture.Snapshot("exam-1",
                 MonitoringFixture.Participant(collectionState: "已回收"))),
             ("未回收却带持久化回执", MonitoringFixture.Snapshot("exam-1",
@@ -422,7 +424,7 @@ public sealed class MonitoringViewModelTests
     public void ChangingExam_ClearsRowsCollectionEventsAndFilters()
     {
         using var api = new AdminApiClient();
-        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1", ExamName = "合成考试" };
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         viewModel.Rows.Add(new MonitoringRow("part-1", "candidate-1", "候考", "device-1",
             1, 1, 1, "未回收", "暂无记录", "—"));
         viewModel.UncollectedRows.Add(viewModel.Rows[0]);

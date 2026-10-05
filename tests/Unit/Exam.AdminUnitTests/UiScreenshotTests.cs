@@ -192,7 +192,6 @@ public sealed class UiScreenshotTests
 
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";
-        monitoring.ExamName = "合成模拟考试";
         // 与 /monitoring 权威快照路由共用同一份合成参与者：自动刷新后页面内容保持不变。
         foreach (var participant in AdminUiFixture.MonitoringParticipants)
             monitoring.Rows.Add(MonitoringRow.From(participant));

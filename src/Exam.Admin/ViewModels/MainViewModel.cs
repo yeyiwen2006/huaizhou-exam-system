@@ -86,7 +86,6 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = exam;
         _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
-        Monitoring.ExamName = exam.Name;
         Import.SetCurrentExam(exam);
         GradingRevision.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
@@ -100,7 +99,6 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = null;
         Roster.Reset();
         Monitoring.ExamId = string.Empty;
-        Monitoring.ExamName = string.Empty;
         Import.SetCurrentExam(null);
         GradingRevision.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
@@ -117,7 +115,6 @@ public sealed class MainViewModel : BindableBase, IDisposable
         if (!StringComparer.Ordinal.Equals(Roster.ExamId, detail.Summary.ExamId))
             _ = Roster.OpenAsync(detail.Summary.ExamId);
         Monitoring.ExamId = detail.Summary.ExamId;
-        Monitoring.ExamName = detail.Summary.Name;
         Import.SetCurrentExam(detail.Summary);
         GradingRevision.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
@@ -132,6 +129,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Roster.Reset();
         Import.SetCurrentExam(null);
         GradingRevision.ExamId = string.Empty;
+        // 收齐提醒不依赖监测页是否打开：更换服务器时必须清掉考试上下文，
+        // 否则会拿上一台服务器的旧考试继续轮询并弹出无关的收齐提醒。
+        Monitoring.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }

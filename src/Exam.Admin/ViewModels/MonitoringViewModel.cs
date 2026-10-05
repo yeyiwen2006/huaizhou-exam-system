@@ -21,8 +21,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private readonly TimeSpan _monitoringRefreshInterval;
     private CancellationTokenSource? _collectionPolling;
     private CancellationTokenSource? _monitoringRefresh;
-    private bool _refreshFailed;
-    private string? _autoRefreshFailureStatus;
+    /// <summary>状态栏仍是占位说明（尚未读到数据），首次成功读取后换成计数汇总。</summary>
+    private bool _statusIsPlaceholder = true;
     private bool _isPageActive;
     private bool _connectionReady;
     private bool _disposed;
@@ -31,7 +31,6 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     // Keep reminder history across exam switches and reconnects, but isolate different logical servers.
     private readonly Dictionary<(string ServerId, string ExamId), CollectionEventHistory> _remindedCollectionEvents = [];
     private string _examId = string.Empty;
-    private string _examName = string.Empty;
     private long _contextVersion;
     private long _loadVersion;
     private long _collectionRequestVersion;
@@ -61,6 +60,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private void SelectRow(MonitoringRow? row, bool fillOperatorInputs)
     {
         if (!SetProperty(ref _selectedRow, row)) return;
+        var selectedEventId = _selectedCommand?.Command.EventId;
+        var selectedConflictDeviceId = _selectedConflictDevice?.DeviceId;
         SelectedCommands.Clear();
         SelectedConflictDevices.Clear();
         if (row is null) return;
@@ -68,7 +69,13 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             SelectedCommands.Add(new MonitoringCommandRow(command, item => SelectedCommand = item));
         foreach (var conflict in row.ConflictingDevices)
             SelectedConflictDevices.Add(new ConflictDeviceRow(conflict, item => SelectedConflictDevice = item));
-        if (!fillOperatorInputs) return;
+        if (!fillOperatorInputs)
+        {
+            // 自动刷新只换了行对象：把操作者已选中的指令与对照设备按标识选回新实例，
+            // 否则下拉框与对照表会变空，而 EventId/SelectedDeviceId 仍是“已武装”状态。
+            RestoreSelection(selectedEventId, selectedConflictDeviceId);
+            return;
+        }
         _resendInputVersion++;
         ParticipationId = row.ParticipationId;
         SelectedDeviceId = row.AuthorizedDeviceId;
@@ -79,6 +86,27 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         AuthorizationVersionText = row.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         EventId = string.Empty;
         SelectedCommand = SelectedCommands.FirstOrDefault(command => command.CanResend) ?? SelectedCommands.FirstOrDefault();
+    }
+
+    /// <summary>安静地选回指令与对照设备：不写 EventId/SelectedDeviceId，也不使在途请求失效。</summary>
+    private void RestoreSelection(string? eventId, string? conflictDeviceId)
+    {
+        var command = eventId is null
+            ? null
+            : SelectedCommands.FirstOrDefault(item => StringComparer.Ordinal.Equals(item.Command.EventId, eventId));
+        if (!ReferenceEquals(_selectedCommand, command))
+        {
+            SetProperty(ref _selectedCommand, command, nameof(SelectedCommand));
+            foreach (var item in SelectedCommands) item.IsSelected = ReferenceEquals(item, command);
+        }
+        var device = conflictDeviceId is null
+            ? null
+            : SelectedConflictDevices.FirstOrDefault(item => StringComparer.Ordinal.Equals(item.DeviceId, conflictDeviceId));
+        if (!ReferenceEquals(_selectedConflictDevice, device))
+        {
+            SetProperty(ref _selectedConflictDevice, device, nameof(SelectedConflictDevice));
+            foreach (var item in SelectedConflictDevices) item.IsSelected = ReferenceEquals(item, device);
+        }
     }
 
     private void ResetContext()
@@ -109,7 +137,9 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(CountsText));
         OnPropertyChanged(nameof(AsOfText));
         Status = "考试或服务器已切换，请点击“刷新”。";
-        CollectionStatus = "打开本页时会自动查询收齐记录，也可以点击“查询收齐记录”。";
+        _statusIsPlaceholder = true;
+        RefreshNote = string.Empty;
+        CollectionStatus = "打开本页时会查询收齐记录；连接期间每 20 秒自动补取，离开本页也会继续提醒。";
     }
     private string _filterText = string.Empty;
     private string _roomGroupFilter = string.Empty;
@@ -128,6 +158,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private string _entryVersionText = string.Empty;
     private string _authorizationVersionText = string.Empty;
     private string _status = "选择考试后点击“刷新”，查看实际参试考生的在线、作答和回收状态。";
+    private string _refreshNote = string.Empty;
     private string _collectionStatus = "尚未查询收齐记录。";
     private MonitoringCommandRow? _selectedCommand;
     private ConflictDeviceRow? _selectedConflictDevice;
@@ -203,13 +234,6 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>当前考试名称；界面只显示考试名称，不显示内部标识。</summary>
-    public string ExamName
-    {
-        get => _examName;
-        set => SetProperty(ref _examName, value);
-    }
-
     public string FilterText
     {
         get => _filterText;
@@ -256,6 +280,12 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public string EntryVersionText { get => _entryVersionText; set { if (SetProperty(ref _entryVersionText, value)) _resendInputVersion++; } }
     public string AuthorizationVersionText { get => _authorizationVersionText; set { if (SetProperty(ref _authorizationVersionText, value)) _resendInputVersion++; } }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
+
+    /// <summary>
+    /// 数据新鲜度提示（自动刷新失败、被拒绝的快照保留上一次结果等），与 <see cref="Status"/> 分开：
+    /// 状态栏只放考务的操作反馈与手动刷新汇总，自动刷新不得覆盖它。
+    /// </summary>
+    public string RefreshNote { get => _refreshNote; private set => SetProperty(ref _refreshNote, value); }
     public string CollectionStatus { get => _collectionStatus; private set => SetProperty(ref _collectionStatus, value); }
 
     /// <summary>选中考生后可重发的权威指令；重发不再需要手填事件标识。</summary>
@@ -473,21 +503,24 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var snapshot = await _api.GetMonitoringSnapshotAsync(examId, cancellationToken);
         if (context != _contextVersion || !IsPageActive) return;
         Apply(snapshot);
-        if (!_refreshFailed) return;
-        _refreshFailed = false;
-        // 只有状态栏仍然是自动刷新的失败提示时才改写：裁决、补传等操作反馈必须留着给考务看。
-        if (_autoRefreshFailureStatus is not null && StringComparer.Ordinal.Equals(Status, _autoRefreshFailureStatus))
-            Status = "自动刷新已恢复。";
-        _autoRefreshFailureStatus = null;
+        RefreshNote = string.Empty;
+        AdoptPlaceholderStatus();
+    }
+
+    /// <summary>读到数据后把“请点击刷新”这类占位说明换成计数汇总（只做一次，不覆盖操作反馈）。</summary>
+    private void AdoptPlaceholderStatus()
+    {
+        if (!_statusIsPlaceholder) return;
+        _statusIsPlaceholder = false;
+        Status = Summarize();
     }
 
     private void ReportAutoRefreshFailure(Exception exception)
     {
-        _refreshFailed = true;
-        _autoRefreshFailureStatus = _asOf is { } asOf
+        // 只写数据新鲜度提示：状态栏留给考务的操作反馈，自动刷新不覆盖它。
+        RefreshNote = _asOf is { } asOf
             ? $"自动刷新失败：{FriendlyErrors.Describe(exception)}当前显示的是 {asOf:HH:mm:ss} 读取的状态，请核对网络后重试。"
             : $"自动刷新失败：{FriendlyErrors.Describe(exception)}";
-        Status = _autoRefreshFailureStatus;
     }
 
     /// <summary>
@@ -575,8 +608,9 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         catch (AdminApiException exception) when (exception.Code == "INVALID_RESPONSE")
         {
             // 快照被边界校验拒绝：保留上一次可信结果，不显示半份状态。
+            // 说明写进新鲜度提示，这样命令的错误处理不会把它覆盖掉。
             if (context == _contextVersion && operation == _loadVersion)
-                Status = $"监测状态读取失败：{FriendlyErrors.Describe(exception)}已保留上一次结果。";
+                RefreshNote = $"监测状态读取失败：{FriendlyErrors.Describe(exception)}已保留上一次结果，可稍后重试。";
             throw;
         }
         catch
@@ -593,13 +627,14 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             return;
         }
         Apply(snapshot);
-        _refreshFailed = false;
-        _autoRefreshFailureStatus = null;
+        RefreshNote = string.Empty;
+        _statusIsPlaceholder = false;
         Status = Summarize();
     }
 
     private void ClearLoadedRows()
     {
+        RefreshNote = string.Empty;
         Rows.Clear();
         UncollectedRows.Clear();
         _actualCount = 0;
