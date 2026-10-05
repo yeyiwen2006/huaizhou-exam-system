@@ -22,6 +22,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private CancellationTokenSource? _collectionPolling;
     private CancellationTokenSource? _monitoringRefresh;
     private bool _refreshFailed;
+    private string? _autoRefreshFailureStatus;
     private bool _isPageActive;
     private bool _connectionReady;
     private bool _disposed;
@@ -45,30 +46,39 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private ExamLifecycle _lifecycle = ExamLifecycle.Scheduled;
     public event Action<CollectionCompletedNotification>? CollectionCompleted;
 
+    /// <summary>操作者选中的行；自动刷新重建行对象时由 <see cref="SelectRow"/> 安静地换回同一名考生。</summary>
     public MonitoringRow? SelectedRow
     {
         get => _selectedRow;
-        set
-        {
-            if (!SetProperty(ref _selectedRow, value)) return;
-            SelectedCommands.Clear();
-            SelectedConflictDevices.Clear();
-            _resendInputVersion++;
-            if (value is null) return;
-            ParticipationId = value.ParticipationId;
-            SelectedDeviceId = value.AuthorizedDeviceId;
-            ExpectedVersionText = value.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            ResendParticipationId = value.ParticipationId;
-            ResendDeviceId = value.AuthorizedDeviceId;
-            EntryVersionText = value.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            AuthorizationVersionText = value.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            EventId = string.Empty;
-            foreach (var command in value.AvailableCommands)
-                SelectedCommands.Add(new MonitoringCommandRow(command, row => SelectedCommand = row));
-            foreach (var conflict in value.ConflictingDevices)
-                SelectedConflictDevices.Add(new ConflictDeviceRow(conflict, row => SelectedConflictDevice = row));
-            SelectedCommand = SelectedCommands.FirstOrDefault(command => command.CanResend) ?? SelectedCommands.FirstOrDefault();
-        }
+        set => SelectRow(value, fillOperatorInputs: true);
+    }
+
+    /// <summary>
+    /// 切换选中行。只有操作者主动选中（<paramref name="fillOperatorInputs"/>）才改写裁决与重发输入，
+    /// 并使早先发出的请求按既有规则失效；自动刷新重建行时只换实例，不动操作者已填写的内容，
+    /// 否则每 2 秒一次的刷新会把选中和正在进行的操作抹掉。
+    /// </summary>
+    private void SelectRow(MonitoringRow? row, bool fillOperatorInputs)
+    {
+        if (!SetProperty(ref _selectedRow, row)) return;
+        SelectedCommands.Clear();
+        SelectedConflictDevices.Clear();
+        if (row is null) return;
+        foreach (var command in row.AvailableCommands)
+            SelectedCommands.Add(new MonitoringCommandRow(command, item => SelectedCommand = item));
+        foreach (var conflict in row.ConflictingDevices)
+            SelectedConflictDevices.Add(new ConflictDeviceRow(conflict, item => SelectedConflictDevice = item));
+        if (!fillOperatorInputs) return;
+        _resendInputVersion++;
+        ParticipationId = row.ParticipationId;
+        SelectedDeviceId = row.AuthorizedDeviceId;
+        ExpectedVersionText = row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        ResendParticipationId = row.ParticipationId;
+        ResendDeviceId = row.AuthorizedDeviceId;
+        EntryVersionText = row.EntryVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        AuthorizationVersionText = row.AuthorizationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        EventId = string.Empty;
+        SelectedCommand = SelectedCommands.FirstOrDefault(command => command.CanResend) ?? SelectedCommands.FirstOrDefault();
     }
 
     private void ResetContext()
@@ -85,6 +95,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         CollectionEvents.Clear();
         _collectionCursors.Clear();
         _seenCollectionEventVersions.Clear();
+        // 上一场考试的筛选条件对新考试没有意义，且试场可能根本不存在。
+        ClearFilters();
         _actualCount = 0;
         _collectedCount = 0;
         _asOf = null;
@@ -201,32 +213,32 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public string FilterText
     {
         get => _filterText;
-        set { if (SetProperty(ref _filterText, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _filterText, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string RoomGroupFilter
     {
         get => _roomGroupFilter;
-        set { if (SetProperty(ref _roomGroupFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _roomGroupFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string ClientNumberFilter
     {
         get => _clientNumberFilter;
-        set { if (SetProperty(ref _clientNumberFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _clientNumberFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string NameFilter
     {
         get => _nameFilter;
-        set { if (SetProperty(ref _nameFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _nameFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string ClassFilter
     {
         get => _classFilter;
-        set { if (SetProperty(ref _classFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _classFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     public string AdmissionNoFilter
     {
         get => _admissionNoFilter;
-        set { if (SetProperty(ref _admissionNoFilter, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _admissionNoFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
     }
     /// <summary>只看未回收：对应回收统计中的未回收名单。</summary>
     public bool OnlyUncollected
@@ -463,21 +475,30 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         Apply(snapshot);
         if (!_refreshFailed) return;
         _refreshFailed = false;
-        Status = "自动刷新已恢复。";
+        // 只有状态栏仍然是自动刷新的失败提示时才改写：裁决、补传等操作反馈必须留着给考务看。
+        if (_autoRefreshFailureStatus is not null && StringComparer.Ordinal.Equals(Status, _autoRefreshFailureStatus))
+            Status = "自动刷新已恢复。";
+        _autoRefreshFailureStatus = null;
     }
 
     private void ReportAutoRefreshFailure(Exception exception)
     {
         _refreshFailed = true;
-        Status = _asOf is { } asOf
+        _autoRefreshFailureStatus = _asOf is { } asOf
             ? $"自动刷新失败：{FriendlyErrors.Describe(exception)}当前显示的是 {asOf:HH:mm:ss} 读取的状态，请核对网络后重试。"
             : $"自动刷新失败：{FriendlyErrors.Describe(exception)}";
+        Status = _autoRefreshFailureStatus;
     }
 
+    /// <summary>
+    /// 收齐记录轮询：只要连接就绪且已选考试就运行，**不依赖监测页是否在前台**——
+    /// 需求要求“全部答卷持久保存后 GUI 弹出”，考务在任意页面都必须收到提醒；
+    /// 权威状态的实时刷新仍只在监测页前台进行（见 <see cref="UpdateMonitoringRefresh"/>）。
+    /// </summary>
     private void UpdateCollectionPolling()
     {
         StopCollectionPolling();
-        if (_disposed || !IsPageActive || !ConnectionReady || string.IsNullOrWhiteSpace(ExamId)) return;
+        if (_disposed || !ConnectionReady || string.IsNullOrWhiteSpace(ExamId)) return;
         var source = new CancellationTokenSource();
         _collectionPolling = source;
         _ = PollCollectionEventsAsync(source);
@@ -573,6 +594,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         }
         Apply(snapshot);
         _refreshFailed = false;
+        _autoRefreshFailureStatus = null;
         Status = Summarize();
     }
 
@@ -592,9 +614,9 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 
     private void Apply(MonitoringSnapshot snapshot)
     {
+        var selectedId = _selectedRow?.ParticipationId;
         Rows.Clear();
         UncollectedRows.Clear();
-        SelectedRow = null;
         var byId = new Dictionary<string, MonitoringRow>(StringComparer.Ordinal);
         foreach (var participant in snapshot.Participants)
         {
@@ -611,6 +633,9 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         _collectedCount = snapshot.CollectedCount;
         _asOf = snapshot.AsOf;
         _lifecycle = snapshot.Lifecycle;
+        // 自动刷新会重建行对象：安静地选回同一名考生，不覆盖操作者正在填写的裁决与重发输入。
+        SelectRow(selectedId is not null && byId.TryGetValue(selectedId, out var restored) ? restored : null,
+            fillOperatorInputs: false);
         OnPropertyChanged(nameof(FilteredRows));
         OnPropertyChanged(nameof(RoomGroupOptions));
         OnPropertyChanged(nameof(CountsText));
@@ -736,26 +761,35 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 
     private bool MatchesFilter(MonitoringRow row)
     {
-        if (OnlyUncollected && row.CollectionState != "未回收")
+        // “未回收”与回收统计、未回收名单同口径：已回收＝已有持久化回执，因此“回收中”也属于未回收。
+        if (OnlyUncollected && row.CollectionState == "已回收")
         {
             return false;
         }
-        if (RoomGroupFilter.Length != 0 && !StringComparer.Ordinal.Equals(row.RoomGroup, RoomGroupFilter))
+        var roomGroup = RoomGroupFilter.Trim();
+        if (roomGroup.Length != 0 && !StringComparer.Ordinal.Equals(row.RoomGroup, roomGroup))
         {
             return false;
         }
         return Matches(row.ClientNumber, ClientNumberFilter) && Matches(row.Name, NameFilter) &&
                Matches(row.ClassText, ClassFilter) && Matches(row.AdmissionNo, AdmissionNoFilter) &&
-               MatchesAny(row, FilterText.Trim());
+               MatchesAny(row, FilterText);
 
-        static bool Matches(string value, string filter) =>
-            filter.Length == 0 || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
+        static bool Matches(string value, string filter)
+        {
+            // 只输了空白的筛选按“未筛选”处理，不能悄悄匹配全部仍然算作“已筛选”。
+            var trimmed = filter.Trim();
+            return trimmed.Length == 0 || value.Contains(trimmed, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
-    private static bool MatchesAny(MonitoringRow row, string filter) =>
-        filter.Length == 0 ||
-        new[] { row.Name, row.ClassText, row.AdmissionNo, row.ClientNumber, row.RoomGroup }
-            .Any(value => value.Contains(filter, StringComparison.OrdinalIgnoreCase));
+    private static bool MatchesAny(MonitoringRow row, string filter)
+    {
+        var trimmed = filter.Trim();
+        return trimmed.Length == 0 ||
+            new[] { row.Name, row.ClassText, row.AdmissionNo, row.ClientNumber, row.RoomGroup }
+                .Any(value => value.Contains(trimmed, StringComparison.OrdinalIgnoreCase));
+    }
 
     private void SetError(Exception exception) => Status = $"操作失败：{FriendlyErrors.Describe(exception)}";
 

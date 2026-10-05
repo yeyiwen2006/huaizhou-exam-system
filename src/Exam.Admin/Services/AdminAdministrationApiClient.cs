@@ -83,7 +83,8 @@ public sealed partial class AdminApiClient
     }
 
     /// <summary>
-    /// 返回前校验完毕：本客户端按考试整取快照（不做服务端筛选），因此人数、未回收名单与参试列表必须互相自洽；
+    /// 返回前校验完毕：本客户端按考试**整取**快照（从不传 roomGroupId/query），因此人数、未回收名单与参试列表互相自洽；
+    /// 服务端筛选只过滤参试列表、不调整计数与未回收名单，所以一旦将来启用筛选，这些自洽条件必须改为按返回列表计算；
     /// 任一字段越界、枚举未知或身份不符都整体拒绝，不把半份状态交给界面。
     /// </summary>
     internal static void RequireMonitoringSnapshot(string examId, MonitoringSnapshot? result)

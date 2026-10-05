@@ -446,7 +446,7 @@
                                 <Button DockPanel.Dock="Right" Content="查询收齐记录" Style="{StaticResource ActionButton}" Margin="0" Command="{Binding Monitoring.RefreshCollectionEventsCommand}"/>
                                 <StackPanel>
                                     <TextBlock Text="答卷收齐记录" Style="{StaticResource CardHeading}"/>
-                                    <TextBlock Text="打开本页时每 20 秒自动补取一次，用于重开页面和断线后的历史恢复。" Style="{StaticResource CardNote}" />
+                                    <TextBlock Text="连接期间每 20 秒自动补取一次：离开本页也会继续提醒，重开页面和断线后按名单版本补齐历史。" Style="{StaticResource CardNote}" />
                                 </StackPanel>
                             </DockPanel>
                             <TextBlock Text="{Binding Monitoring.CollectionStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,8"/>

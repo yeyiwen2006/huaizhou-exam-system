@@ -79,15 +79,19 @@ internal static class MonitoringDisplay
     public static string ReceivedAt(DateTimeOffset? receivedAt) =>
         receivedAt is { } at ? at.ToString("yyyy-MM-dd HH:mm:ss") : "—";
 
+    /// <summary>
+    /// 失焦汇总。用整型秒数换算而不是 <see cref="TimeSpan"/>：设备上报的时长只校验过非负，
+    /// 极大值会让 TimeSpan 溢出并把整页拖成失败。
+    /// </summary>
     public static string FocusSummary(int count, long milliseconds)
     {
         if (count <= 0) return "暂无记录";
-        var duration = TimeSpan.FromMilliseconds(milliseconds);
-        var text = duration.TotalHours >= 1
-            ? $"{(int)duration.TotalHours} 时 {duration.Minutes} 分 {duration.Seconds} 秒"
-            : duration.TotalMinutes >= 1
-                ? $"{(int)duration.TotalMinutes} 分 {duration.Seconds} 秒"
-                : $"{duration.Seconds} 秒";
+        var totalSeconds = milliseconds / 1000;
+        var text = totalSeconds >= 3600
+            ? $"{totalSeconds / 3600} 时 {totalSeconds % 3600 / 60} 分 {totalSeconds % 60} 秒"
+            : totalSeconds >= 60
+                ? $"{totalSeconds / 60} 分 {totalSeconds % 60} 秒"
+                : $"{totalSeconds} 秒";
         return $"{count} 次 / 共 {text}";
     }
 

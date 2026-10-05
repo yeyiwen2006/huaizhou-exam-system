@@ -5,6 +5,7 @@ using System.Text.Json;
 using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.Administration;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
@@ -161,6 +162,101 @@ public sealed class MonitoringRefreshTests
         Assert.Single(viewModel.Rows);
     }
 
+    [Fact]
+    public async Task AutoRefresh_KeepsTheOperatorsSelectionAndInputs()
+    {
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Default()));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
+        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+
+        viewModel.SelectedRow = viewModel.Rows[0];
+        viewModel.DecisionReason = "合成原因";
+        var selected = viewModel.SelectedRow;
+        await Task.Delay(200);
+
+        // 自动刷新重建行对象后仍要保住选中与操作者填写的输入，否则补传/裁决会被每 2 秒一次的刷新打断。
+        Assert.NotNull(viewModel.SelectedRow);
+        Assert.Equal(selected!.ParticipationId, viewModel.SelectedRow!.ParticipationId);
+        Assert.Equal(selected.ParticipationId, viewModel.ParticipationId);
+        Assert.Equal("合成原因", viewModel.DecisionReason);
+    }
+
+    [Fact]
+    public async Task AutoRefresh_DoesNotDiscardAResendResponseArrivingAfterATick()
+    {
+        var released = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(
+            commands: [MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "end-1")]));
+        using var handler = new AsyncHandler(request => request.Method == HttpMethod.Post
+            ? released.Task
+            : Task.FromResult(Success(snapshot)));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(20))
+        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+        viewModel.SelectedRow = viewModel.Rows[0];
+
+        var pending = viewModel.ResendAsync();
+        // 回执到达之前至少发生一次自动刷新；命令已经送达，考务必须看到成功提示。
+        await Task.Delay(100);
+        released.SetResult(Success(new CommandEventView("end-1", "exam-1", "part-1", 1, CommandEventType.End, 1,
+            "device-part-1", 2, null, MonitoringFixture.At, false, 2)));
+        await pending;
+
+        Assert.Contains("已重发指令", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AutoRefresh_RecoveryNoticeDoesNotOverwriteOperatorFeedback()
+    {
+        var failing = false;
+        var snapshot = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(
+            commands: [MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "end-1")]));
+        using var handler = new AsyncHandler(request => Task.FromResult(request.Method == HttpMethod.Post
+            ? Success(new CommandEventView("end-1", "exam-1", "part-1", 1, CommandEventType.End, 1,
+                "device-part-1", 2, null, MonitoringFixture.At, false, 2))
+            : failing ? throw new HttpRequestException("synthetic outage") : Success(snapshot)));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
+        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+        failing = true;
+        await UntilAsync(() => viewModel.Status.Contains("自动刷新失败", StringComparison.Ordinal));
+
+        // 刷新失败期间做一次补传：这条操作反馈不能被随后的“自动刷新已恢复”改写。
+        viewModel.SelectedRow = viewModel.Rows[0];
+        await viewModel.RequestReuploadAsync();
+        Assert.Contains("已重发指令", viewModel.Status, StringComparison.Ordinal);
+        failing = false;
+        await Task.Delay(150);
+
+        Assert.Contains("已重发指令", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AutoRefresh_SurvivesAnOutOfRangeFocusDuration()
+    {
+        // 设备上报的失焦时长只校验过非负：极大值只能影响该列，不能把整页拖成失败。
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Snapshot("exam-1",
+            MonitoringFixture.Participant(focusLossCount: 1, focusLossMilliseconds: long.MaxValue))));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+
+        await viewModel.LoadAsync();
+
+        Assert.StartsWith("1 次 / 共 ", Assert.Single(viewModel.Rows).FocusSummary, StringComparison.Ordinal);
+        Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
+    }
+
     private static void InterlockedMax(ref int target, int value)
     {
         int current;
@@ -189,6 +285,12 @@ public sealed class MonitoringRefreshTests
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(route(request));
+    }
+
+    private sealed class AsyncHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> route) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) => route(request);
     }
 
     /// <summary>监测快照响应很慢的处理器：用于验证自动刷新不会叠加在途请求。</summary>
