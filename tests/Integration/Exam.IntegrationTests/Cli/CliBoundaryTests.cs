@@ -250,6 +250,83 @@ public sealed class CliBoundaryTests
     }
 
     /// <summary>
+    /// 服务器错误正文绝不能进终端（错误层就是为此存在的），且非 JSON 的 5xx 正文要按 5xx 处理而不是输入错误。
+    /// </summary>
+    [Fact]
+    public async Task MonitorNeverPrintsServerErrorTextAndRetriesHtmlFiveHundreds()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Ok<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Ok(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+        {
+            // 第一次返回网关样式的 503（HTML 正文），之后正常：follow 必须重试而不是当成输入错误退出。
+            if (Interlocked.Increment(ref calls) == 1)
+                return Results.Content("<html><body>SENSITIVE-LEAK-12345</body></html>", "text/html", statusCode: 503);
+            return Ok(new[] { valid }.Where(item => item.RosterVersion > afterRosterVersion).ToArray());
+        });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "2", "--server", address);
+        Assert.Equal(0, follow.Exit);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+        Assert.Contains("收齐事件读取失败", follow.Error, StringComparison.Ordinal);
+        // 服务器正文（含网关页里的敏感串）不得出现在终端。
+        Assert.DoesNotContain("SENSITIVE-LEAK-12345", follow.Out + follow.Error);
+    }
+
+    /// <summary>
+    /// --error-format json 时 stderr 必须保持“只有一个 JSON 错误信封”，实时提醒不能混进去。
+    /// </summary>
+    [Fact]
+    public async Task MonitorFollowKeepsStderrSingleJsonWhenJsonErrorsAreRequested()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Envelope<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Envelope(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+            Interlocked.Increment(ref calls) == 1
+                ? Envelope(new[] { valid })
+                : Results.Json(new ApiEnvelope<object>("synthetic-server", "synthetic-node", 1, "synthetic-request",
+                    null, new ApiError("ACCESS_DENIED", "synthetic-private-response")), json, statusCode: 401));
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "2",
+            "--error-format", "json", "--server", address);
+
+        // 401 不可重试，按退出码约定失败；stderr 必须仍是单个 JSON 文档（提醒不得混入）。
+        Assert.Equal(3, follow.Exit);
+        using var document = JsonDocument.Parse(follow.Error);
+        Assert.Equal("ACCESS_DENIED", document.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("全部答卷已成功回收", follow.Error, StringComparison.Ordinal);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+    }
+
+    /// <summary>
     /// 单页整页无效不能让长时运行的持续监控退出：与考务端弹窗同口径，游标不前进、提示后继续等待。
     /// </summary>
     [Fact]

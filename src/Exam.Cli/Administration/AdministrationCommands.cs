@@ -11,6 +11,14 @@ using Exam.Domain.Exams;
 
 internal static partial class ExamCli
 {
+    /// <summary>原始的 --error-format 是否要求 JSON 错误格式（该模式下 stderr 不能被实时提醒污染）。</summary>
+    internal static bool IsJsonErrorFormat(string[] arguments)
+    {
+        for(var index=0;index<arguments.Length-1;index++)
+            if(arguments[index]=="--error-format")return arguments[index+1]=="json";
+        return false;
+    }
+
     private static async Task<int> RunAdministrationAsync(string category,string[] arguments,CancellationToken ct)
     {
         var firstOption=Array.FindIndex(arguments,x=>x.StartsWith("--",StringComparison.Ordinal));
@@ -26,8 +34,11 @@ internal static partial class ExamCli
             using var message=new HttpRequestMessage(method,path);AddCredentials(message);
             if(body is not null)message.Content=JsonContent.Create(body,options:json);
             using var response=await http.SendAsync(message,ct);
+            // 先按状态码判定：错误响应常常是网关或重启页的非 JSON 正文，
+            // 解析它会抛 JsonException 被当成输入错误（退出 2），重试与日志都会因此走偏。
+            if(!response.IsSuccessStatusCode)throw new ExamCliException(response.StatusCode,"服务器未完成操作。");
             var envelope=await response.Content.ReadFromJsonAsync<ApiEnvelope<T>>(json,ct);
-            if(!response.IsSuccessStatusCode||envelope?.Error is not null||envelope?.Result is null)
+            if(envelope?.Error is not null||envelope?.Result is null)
                 throw new ExamCliException(response.StatusCode,envelope?.Error?.Message??"服务器未完成操作。");
             if(string.IsNullOrWhiteSpace(envelope.ServerId)||envelope.ServerEpoch<1||logicalServer is not null&&logicalServer!=envelope.ServerId)
                 throw new InvalidDataException("响应服务器身份发生变化，停止当前操作。");
@@ -65,8 +76,12 @@ internal static partial class ExamCli
             }
             return rows.ToArray();
         }
+        // --error-format json 时 stderr 是机器读取的单个错误信封，实时提醒会污染它：
+        // 该模式下提醒改走成功诊断缓冲（退出码 0 时输出），实时信号由 stdout 的 JSON 事件承担。
+        var streamReminders=!IsJsonErrorFormat(Environment.GetCommandLineArgs());
         // 读取一批收齐事件并按名单版本发出，读到没有新事件为止。
-        // 可读提醒直接写 stderr：长时运行的 follow 必须实时输出，且不能因最终退出码非零而被错误层的缓冲丢弃。
+        // 文本模式下可读提醒直接实时写 stderr：长时运行的 follow 必须即时可见，
+        // 且不能因最终退出码非零而被错误层的缓冲丢弃。
         async Task DrainCollectionAsync(ExamSummary exam,CollectionWatch watch)
         {
             while(true)
@@ -78,20 +93,33 @@ internal static partial class ExamCli
                 {
                     // 事件写 stdout（一行一个，便于脚本消费）；可读提醒写 stderr。
                     Console.WriteLine(JsonSerializer.Serialize(item,json));
-                    Console.Error.Write($"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。{Environment.NewLine}");
+                    var reminder=$"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt:yyyy-MM-dd HH:mm:ss}）。";
+                    if(streamReminders)Console.Error.Write(reminder+Environment.NewLine);
+                    else WriteSuccessDiagnostic(reminder);
                 }
                 Console.Out.Flush();
                 if(page.Length==0||watch.Cursor==before)return;
             }
         }
-        // 可重试的收齐轮询失败：整页校验拒绝（游标未前进）、网络异常与 5xx/超时/限流。
-        static bool IsRetryableWatchFailure(Exception error)=>error switch
+        // 可重试的收齐轮询失败：整页校验拒绝（游标未前进）、网络异常、本机请求超时与 5xx/限流。
+        // 取消（Ctrl+C 或 --timeout-seconds 到点）不算可重试失败，交给外层按约定退出。
+        bool IsRetryableWatchFailure(Exception error)=>error switch
         {
             InvalidOperationException=>true,
             HttpRequestException=>true,
+            TaskCanceledException when !ct.IsCancellationRequested=>true,
             ExamCliException{Status:HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests}=>true,
             ExamCliException{Status:var status}=>(int)status>=500,
             _=>false,
+        };
+        // 只写本地判定的原因：服务器正文绝不能进终端（错误层就是为此存在的）。
+        static string DescribeWatchFailure(Exception error)=>error switch
+        {
+            InvalidOperationException=>"服务器返回的收齐事件无效，本页未采用。",
+            TaskCanceledException=>"请求超时。",
+            HttpRequestException=>"无法连接服务器。",
+            ExamCliException{Status:var status}=>$"服务器暂时不可用（{(int)status}）。",
+            _=>"未预期的错误。",
         };
         try
         {
@@ -187,19 +215,23 @@ internal static partial class ExamCli
                     var followTarget=await FindExam(followExam);var watch=new CollectionWatch(startVersion);var completed=0;var failures=0;
                     do
                     {
+                        var succeeded=false;
                         try
                         {
                             await DrainCollectionAsync(followTarget,watch);
-                            failures=0;
+                            failures=0;succeeded=true;
                         }
                         catch(Exception error)when(IsRetryableWatchFailure(error))
                         {
                             // 与考务端弹窗同口径：整页无效不前进游标、网络与 5xx 都继续等待重试；
                             // 鉴权或请求本身无效无法靠重试解决，交给外层按退出码约定失败。
                             failures++;
-                            Console.Error.Write($"收齐事件读取失败（连续第 {failures} 次）：{error.Message}{Environment.NewLine}");
+                            var note=$"收齐事件读取失败（连续第 {failures} 次）：{DescribeWatchFailure(error)}";
+                            if(streamReminders)Console.Error.Write(note+Environment.NewLine);
+                            else WriteSuccessDiagnostic(note);
                         }
-                        completed++;
+                        // 只有成功读完一轮才算一轮：持续失败不得因为“轮数到点”而以 0 退出。
+                        if(succeeded)completed++;
                         if(rounds is { } limit&&completed>=limit)return 0;
                         try{await Task.Delay(interval,ct);}
                         catch(OperationCanceledException){return 0;}

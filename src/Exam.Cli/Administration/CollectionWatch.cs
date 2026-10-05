@@ -7,6 +7,7 @@ using Exam.Contracts.Submissions;
 /// </summary>
 public sealed class CollectionWatch
 {
+    private readonly Dictionary<string, CollectionCompletedNotification> _emittedById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _versionByEventId = new(StringComparer.Ordinal);
     private readonly Dictionary<long, string> _eventIdByVersion = [];
 
@@ -34,6 +35,9 @@ public sealed class CollectionWatch
                 string.IsNullOrWhiteSpace(item.EventId) || item.RosterVersion < 1 || item.ParticipantCount <= 0 ||
                 item.CompletedAt == default))
             throw new InvalidOperationException("收齐事件的考试、标识、名单版本或参试人数无效，未发出该页结果。");
+        // 同一事件重复投递时内容必须一致：内容变过的重投与考务端弹窗同口径地拒绝整页。
+        if (page.Any(item => _emittedById.TryGetValue(item.EventId, out var previous) && previous != item))
+            throw new InvalidOperationException("收齐事件的内容与已发出的不一致，未发出该页结果。");
         // 同一名单版本只对应一个事件，同一事件只对应一个名单版本。
         if (page.GroupBy(item => item.RosterVersion).Any(group => group.Distinct().Count() != 1) ||
             page.GroupBy(item => item.EventId, StringComparer.Ordinal).Any(group => group.Distinct().Count() != 1) ||
@@ -46,7 +50,11 @@ public sealed class CollectionWatch
         foreach (var item in page.Distinct().OrderBy(item => item.RosterVersion))
         {
             if (item.RosterVersion <= Cursor) continue;
-            if (_versionByEventId.TryAdd(item.EventId, item.RosterVersion)) emitted.Add(item);
+            if (_versionByEventId.TryAdd(item.EventId, item.RosterVersion))
+            {
+                _emittedById[item.EventId] = item;
+                emitted.Add(item);
+            }
             _eventIdByVersion[item.RosterVersion] = item.EventId;
             Cursor = item.RosterVersion;
         }
