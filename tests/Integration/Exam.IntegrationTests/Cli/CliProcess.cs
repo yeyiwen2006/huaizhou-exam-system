@@ -14,6 +14,9 @@ internal static class CliProcess
     }
 
     public static async Task<(int Exit, string Out, string Error)> RunAsync(params string[] args)
+        => await RunWithTokenAsync("synthetic-sensitive-sentinel", args);
+
+    public static async Task<(int Exit, string Out, string Error)> RunWithTokenAsync(string token, params string[] args)
     {
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
@@ -21,7 +24,7 @@ internal static class CliProcess
         start.ArgumentList.Add(Path.Combine(Repository(), "src/Exam.Cli/bin/Release/net10.0/Exam.Cli.dll"));
         foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("EXAM_", StringComparison.Ordinal)).ToArray()) start.Environment.Remove(key);
         start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"] = "true";
-        start.Environment["EXAM_OPERATOR_TOKEN"] = "synthetic-sensitive-sentinel";
+        start.Environment["EXAM_OPERATOR_TOKEN"] = token;
         foreach (var arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();

@@ -252,8 +252,11 @@ public sealed class CliBoundaryTests
     /// <summary>
     /// 服务器错误正文绝不能进终端（错误层就是为此存在的），且非 JSON 的 5xx 正文要按 5xx 处理而不是输入错误。
     /// </summary>
-    [Fact]
-    public async Task MonitorNeverPrintsServerErrorTextAndRetriesHtmlFiveHundreds()
+    [Theory]
+    [InlineData(503, "<html>SENSITIVE-LEAK-12345</html>")]
+    [InlineData(200, "{SENSITIVE-LEAK-12345")]
+    [InlineData(200, "null")]
+    public async Task MonitorNeverPrintsServerErrorTextAndRetriesInvalidResponses(int status, string invalid)
     {
         var json = JsonDefaults.Create();
         var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
@@ -273,7 +276,7 @@ public sealed class CliBoundaryTests
         {
             // 第一次返回网关样式的 503（HTML 正文），之后正常：follow 必须重试而不是当成输入错误退出。
             if (Interlocked.Increment(ref calls) == 1)
-                return Results.Content("<html><body>SENSITIVE-LEAK-12345</body></html>", "text/html", statusCode: 503);
+                return Results.Content(invalid, "application/json", statusCode: status);
             return Ok(new[] { valid }.Where(item => item.RosterVersion > afterRosterVersion).ToArray());
         });
         await app.StartAsync();
@@ -362,6 +365,31 @@ public sealed class CliBoundaryTests
         Assert.Equal(0, follow.Exit);
         Assert.Contains("收齐事件读取失败", follow.Error, StringComparison.Ordinal);
         Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+    }
+
+    [Fact]
+    public async Task MonitorFollow_ContinuousFailureCannotSucceedAtTheRoundLimitOrDeadline()
+    {
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Results.Json(new ApiEnvelope<ExamSummary[]>("synthetic-server", "node", 1, "request",
+            [new("exam", "合成考试", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running,
+                false, false, 1, 0, 1)], null), JsonDefaults.Create()));
+        var calls = 0;
+        app.MapGet("/api/v1/submissions/collection/events", () =>
+        {
+            Interlocked.Increment(ref calls);
+            return Results.StatusCode(503);
+        });
+        await app.StartAsync();
+        var result = await RunAsync("monitor", "follow", "合成考试", "0", "1", "1", "--server", app.Urls.Single(),
+            "--timeout-seconds", "3", "--error-format", "json");
+        Assert.Equal(5, result.Exit);
+        Assert.Empty(result.Out);
+        Assert.True(calls >= 2);
+        using var error = JsonDocument.Parse(result.Error);
+        Assert.Equal("NETWORK_UNAVAILABLE", error.RootElement.GetProperty("code").GetString());
     }
 
     private static CollectionCompletedNotification[] Emitted(string output, JsonSerializerOptions json) =>
