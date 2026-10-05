@@ -335,6 +335,75 @@ public sealed class MonitoringRefreshTests
         Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
     }
 
+    [Fact]
+    public async Task AutoRefresh_ClearsArmedInputsWhenTheSelectedCandidateIsGone()
+    {
+        var present = MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(
+            commands: [MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "end-1")],
+            conflicts: [MonitoringFixture.Conflict("device-part-1", authorized: true)]));
+        var gone = MonitoringFixture.Snapshot("exam-1", Array.Empty<MonitoringParticipant>());
+        var rowGone = false;
+        using var handler = new SyntheticHandler(_ => Success(rowGone ? gone : present));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api,
+            collectionPollInterval: TimeSpan.FromMinutes(5), monitoringRefreshInterval: TimeSpan.FromMilliseconds(25))
+        { ExamId = "exam-1", ConnectionReady = true, IsPageActive = true };
+        await UntilAsync(() => viewModel.Rows.Count == 1);
+        viewModel.SelectedRow = viewModel.Rows[0];
+        Assert.NotEmpty(viewModel.EventId);
+
+        // 该考生不再出现在本次读取的参试列表里：裁决与重发的输入必须一起清掉，
+        // 否则界面上没有可选项、命令却仍然“已武装”，会向已不可见的考生发出请求。
+        rowGone = true;
+        await UntilAsync(() => viewModel.SelectedRow is null);
+
+        Assert.Empty(viewModel.EventId);
+        Assert.Empty(viewModel.ParticipationId);
+        Assert.Empty(viewModel.SelectedDeviceId);
+        Assert.Empty(viewModel.ResendParticipationId);
+        Assert.Empty(viewModel.ResendDeviceId);
+        Assert.Null(viewModel.SelectedCommand);
+        Assert.Null(viewModel.SelectedConflictDevice);
+        Assert.Empty(viewModel.SelectedCommands);
+    }
+
+    [Fact]
+    public async Task Load_ToleratesMissingPageAndDownloadState()
+    {
+        // 服务器可能不带 page / download_state 字段：缺失只影响该两列的显示，
+        // 不能抛空引用（那会绕过“整份拒绝但保留上一次结果”的路径并清掉列表）。
+        var participant = MonitoringFixture.Participant() with { Page = null!, DownloadState = null! };
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Snapshot("exam-1", participant)));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal("未报告", Assert.Single(viewModel.Rows).Page);
+        Assert.Contains("未报告", viewModel.Rows[0].PaperState, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RequestReupload_SaysTheAnswerIsAlreadyCollected()
+    {
+        // 已回收的考生没有可重发的结束指令，但真实原因是“答卷已回收”，不能报成“指令已确认或已拒绝”。
+        using var handler = new SyntheticHandler(_ => Success(MonitoringFixture.Default()));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        viewModel.Rows.Add(MonitoringRow.From(MonitoringFixture.Participant(
+            receiptId: "receipt-1",
+            commands: [MonitoringFixture.Command(CommandEventType.End, canResend: false, eventId: "end-1",
+                confirmation: "已执行", acknowledgedAt: MonitoringFixture.At)])));
+        viewModel.SelectedRow = viewModel.Rows[0];
+
+        await viewModel.RequestReuploadAsync();
+
+        Assert.Contains("已经回收", viewModel.Status, StringComparison.Ordinal);
+    }
+
     private static void InterlockedMax(ref int target, int value)
     {
         int current;

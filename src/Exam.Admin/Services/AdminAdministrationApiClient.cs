@@ -150,7 +150,9 @@ public sealed partial class AdminApiClient
             participant.Answers is null || participant.Commands is null || participant.ConflictDevices is null ||
             participant.RevisionStatus is { } revision && !Enum.IsDefined(revision.PaperUpdateState))
             return false;
-        if (participant.Page.Length > 64 || participant.DownloadState.Length > 64 ||
+        // Page/DownloadState 允许为空（服务器可能不带这两个字段）：显示层按“未报告”呈现，
+        // 这里用空条件访问，否则缺失字段会抛空引用、绕过“整份拒绝但保留上一次结果”的路径。
+        if (participant.Page?.Length > 64 || participant.DownloadState?.Length > 64 ||
             participant.CollectionState is not ("未回收" or "回收中" or "已回收"))
             return false;
         if (participant.Answers.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null ||

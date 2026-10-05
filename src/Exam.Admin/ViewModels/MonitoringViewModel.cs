@@ -64,7 +64,17 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var selectedConflictDeviceId = _selectedConflictDevice?.DeviceId;
         SelectedCommands.Clear();
         SelectedConflictDevices.Clear();
-        if (row is null) return;
+        if (row is null)
+        {
+            // 该考生已经不在本次读取的参试列表里：裁决与重发的输入必须一起清掉，
+            // 否则界面上没有可选项、命令却仍然“已武装”，会向已不可见的考生发出请求。
+            ParticipationId = SelectedDeviceId = ExpectedVersionText = string.Empty;
+            ResendParticipationId = ResendDeviceId = EntryVersionText = AuthorizationVersionText = string.Empty;
+            EventId = string.Empty;
+            SetProperty(ref _selectedCommand, null, nameof(SelectedCommand));
+            SetProperty(ref _selectedConflictDevice, null, nameof(SelectedConflictDevice));
+            return;
+        }
         foreach (var command in row.AvailableCommands)
             SelectedCommands.Add(new MonitoringCommandRow(command, item => SelectedCommand = item));
         foreach (var conflict in row.ConflictingDevices)
@@ -744,6 +754,12 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var command = row.AvailableCommands.FirstOrDefault(item => item.EventType == CommandEventType.End && item.CanResend);
         if (command is null)
         {
+            // 说出真实原因：答卷已回收同样会让结束指令不可重发，别把考务引到“指令状态”上去找。
+            if (row.CollectionState == "已回收")
+            {
+                Status = "该考生的答卷已经回收，无需请求补传。";
+                return;
+            }
             var known = row.AvailableCommands.FirstOrDefault(item => item.EventType == CommandEventType.End);
             Status = known is null
                 ? "该考生还没有结束指令，无法请求补传。"
@@ -879,7 +895,7 @@ public sealed record MonitoringRow(
         participant.ClientNumber,
         string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未分组" : participant.RoomGroupName,
         MonitoringDisplay.ConnectionState(participant.ConnectionState),
-        participant.Page,
+        string.IsNullOrWhiteSpace(participant.Page) ? "未报告" : participant.Page,
         MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers),
         MonitoringDisplay.PaperState(participant.InstalledPaperVersion, participant.TargetPaperVersion, participant.DownloadState),
         MonitoringDisplay.CommandSummary(participant.Commands),
