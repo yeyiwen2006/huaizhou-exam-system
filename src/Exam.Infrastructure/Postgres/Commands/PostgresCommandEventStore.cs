@@ -222,11 +222,19 @@ public sealed class PostgresCommandEventStore : ICommandEventStore
         return events;
     }
 
-    public async ValueTask<PersistentCommandEvent?> RecordDeliveryAttemptAsync(
+    public ValueTask<PersistentCommandEvent?> RecordDeliveryAttemptAsync(
         string eventId,
         DateTimeOffset attemptedAt,
         DateTimeOffset nextDeliveryAt,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RecordAttemptAsync(eventId, attemptedAt, nextDeliveryAt, false, cancellationToken);
+
+    public ValueTask<PersistentCommandEvent?> RecordManualDeliveryAttemptAsync(string eventId,
+        DateTimeOffset attemptedAt, DateTimeOffset nextDeliveryAt, CancellationToken cancellationToken = default) =>
+        RecordAttemptAsync(eventId, attemptedAt, nextDeliveryAt, true, cancellationToken);
+
+    private async ValueTask<PersistentCommandEvent?> RecordAttemptAsync(string eventId, DateTimeOffset attemptedAt,
+        DateTimeOffset nextDeliveryAt, bool manual, CancellationToken cancellationToken)
     {
         var sql = $$"""
             UPDATE exam.command_events AS event
@@ -235,7 +243,8 @@ public sealed class PostgresCommandEventStore : ICommandEventStore
                    next_delivery_at = @next_delivery_at
              WHERE event_id = @event_id
                AND (acknowledgement_result IS NULL OR
-                    acknowledgement_result NOT IN ('Applied', 'RejectedAsStale'))
+                    acknowledgement_result NOT IN ('Applied', 'RejectedAsStale') OR
+                    (@manual AND event_type='End' AND acknowledgement_result='Applied'))
             RETURNING {{QualifyColumns("event")}};
             """;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -243,6 +252,7 @@ public sealed class PostgresCommandEventStore : ICommandEventStore
         command.Parameters.AddWithValue("event_id", NpgsqlDbType.Text, eventId);
         command.Parameters.AddWithValue("attempted_at", NpgsqlDbType.TimestampTz, attemptedAt);
         command.Parameters.AddWithValue("next_delivery_at", NpgsqlDbType.TimestampTz, nextDeliveryAt);
+        command.Parameters.AddWithValue("manual", NpgsqlDbType.Boolean, manual);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadEvent(reader) : null;
     }

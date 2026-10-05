@@ -147,12 +147,96 @@ public sealed class ServerRoomViewModelTests
         var pending = NewResponse();
         test.Intercept = (request, _) => request.RequestUri!.AbsolutePath == "/api/v1/devices" ? pending.Task : Task.FromResult<HttpResponseMessage?>(null);
         test.Model.QueryDeviceId = "旧条件";
-        var reading = test.Model.RefreshDirectoryAsync();
+        var reading = test.Model.QueryDeviceAsync();
         test.Model.QueryDeviceId = "新条件";
         pending.SetResult(Ok(new DeviceDirectoryPage(test.Devices.ToArray(), null, RoomServer.Now)));
         await reading;
         Assert.Empty(test.Model.Devices);
         Assert.Contains("条件已变化", test.Model.DirectoryStatus, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpeningDirectoryIgnoresConditionsThatHaveNotBeenQueried()
+    {
+        using var test = new RoomServer();
+        test.Devices.Add(test.Devices[0] with { DeviceId = "device-b", ClientNumber = "20261002002", RoomGroupId = null });
+        test.Model.QueryDeviceId = "尚未点击查询";
+        test.Model.FilterRoomGroupId = "room-a";
+        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        test.Model.Devices.CollectionChanged += (_, _) =>
+        {
+            if (test.Model.Devices.Count == 2) loaded.TrySetResult();
+        };
+        test.Model.StartPolling();
+        await loaded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        test.Model.StopPolling();
+        Assert.Equal(2, test.Model.Devices.Count);
+        var request = Assert.Single(test.Requests, request => request.Path == "/api/v1/devices");
+        Assert.DoesNotContain("query=", request.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("roomGroupId=", request.Query, StringComparison.Ordinal);
+        Assert.Equal("尚未点击查询", test.Model.QueryDeviceId);
+    }
+
+    [Fact]
+    public async Task AutomaticRefreshKeepsAppliedQueryWhileSearchInputsAreBeingEdited()
+    {
+        using var test = new RoomServer();
+        test.Model.QueryDeviceId = "合成考生";
+        test.Model.FilterRoomGroupId = "room-a";
+        await test.Model.QueryDeviceAsync();
+        test.Requests.Clear();
+        test.Model.QueryDeviceId = "尚未查询的新条件";
+        test.Model.FilterRoomGroupId = null;
+        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        test.Model.Devices.CollectionChanged += (_, _) =>
+        {
+            if (test.Model.Devices.Count == 1) loaded.TrySetResult();
+        };
+        test.Model.StartPolling();
+        await loaded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        test.Model.StopPolling();
+
+        var request = Assert.Single(test.Requests, request => request.Path == "/api/v1/devices");
+        Assert.Contains("query=" + Uri.EscapeDataString("合成考生"), request.Query, StringComparison.Ordinal);
+        Assert.Contains("roomGroupId=room-a", request.Query, StringComparison.Ordinal);
+        Assert.Equal("尚未查询的新条件", test.Model.QueryDeviceId);
+        Assert.Null(test.Model.FilterRoomGroupId);
+    }
+
+    [Fact]
+    public async Task ReloadClearsSearchAndRoomFilter_AndLoadsTheWholePaginatedDirectory()
+    {
+        using var test = new RoomServer();
+        var second = test.Devices[0] with { DeviceId = "device-b", ClientNumber = "20261002002", RoomGroupId = null };
+        test.Intercept = (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/api/v1/devices") return Task.FromResult<HttpResponseMessage?>(null);
+            var query = request.RequestUri.Query;
+            return Task.FromResult<HttpResponseMessage?>(Ok(
+                query.Contains("query=", StringComparison.Ordinal)
+                    ? new DeviceDirectoryPage(test.Devices.ToArray(), null, RoomServer.Now)
+                    : query.Contains("offset=1", StringComparison.Ordinal)
+                        ? new DeviceDirectoryPage([second], null, RoomServer.Now)
+                        : new DeviceDirectoryPage(test.Devices.ToArray(), 1, RoomServer.Now)));
+        };
+        test.Model.QueryDeviceId = "20261002001";
+        test.Model.FilterRoomGroupId = "room-a";
+        await test.Model.QueryDeviceAsync();
+        Assert.Single(test.Model.Devices);
+        test.Requests.Clear();
+
+        await test.Model.RefreshDirectoryAsync();
+
+        Assert.Empty(test.Model.QueryDeviceId);
+        Assert.Null(test.Model.FilterRoomGroupId);
+        Assert.Equal(new[] { "20261002001", "20261002002" }, test.Model.Devices.Select(row => row.ClientNumber));
+        var reads = test.Requests.Where(request => request.Path == "/api/v1/devices").ToArray();
+        Assert.Equal(2, reads.Length);
+        Assert.All(reads, request =>
+        {
+            Assert.DoesNotContain("query=", request.Query, StringComparison.Ordinal);
+            Assert.DoesNotContain("roomGroupId=", request.Query, StringComparison.Ordinal);
+        });
     }
 
     [Fact]

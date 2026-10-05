@@ -11,7 +11,7 @@ using Exam.Contracts.Submissions;
 namespace Exam.Student.Core;
 
 /// <summary>Authenticated HTTPS transport. TLS validation is never bypassed and redirects are disabled.</summary>
-public sealed partial class HttpStudentApi : IStudentApi, IDisposable
+public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, IDisposable
 {
     private readonly HttpClient _client;
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
@@ -111,6 +111,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IDisposable
 
     public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) =>
         SendAsync<ServerTimeSnapshot>(HttpMethod.Get, "/api/v1/commands/time", null, false, ct);
+
+    public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceLease>> OpenPresenceAsync(
+        Exam.Contracts.Administration.OpenDevicePresenceRequest request, CancellationToken ct = default) =>
+        SendAsync<Exam.Contracts.Administration.DevicePresenceLease>(HttpMethod.Post, "/api/v1/student/presence/open", request, true, ct);
+
+    public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceReceipt>> ReportPresenceAsync(
+        Exam.Contracts.Administration.UpdateDevicePresenceRequest request, CancellationToken ct = default) =>
+        SendAsync<Exam.Contracts.Administration.DevicePresenceReceipt>(HttpMethod.Post, "/api/v1/student/presence", request, true, ct);
 
     public Task<ApiEnvelope<PersistedProgress>> SyncProgressAsync(
         SyncProgressRequest request, CancellationToken ct = default) =>

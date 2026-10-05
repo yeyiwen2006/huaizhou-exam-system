@@ -407,18 +407,17 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
-            return ApiEndpointResults.FromCommand(
-                context,
-                configuration,
-                request.RequestId,
-                await service.ResendAsync(
+            var resent = await service.ResendAsync(
                     eventId,
                     request.ParticipationId,
                     request.EntryVersion,
                     request.DeviceId,
                     request.AuthorizationVersion,
-                    cancellationToken));
-        });
+                    cancellationToken);
+            var response = ApiEndpointResults.FromCommand(context, configuration, request.RequestId, resent);
+            return resent.IsSuccess && resent.Value is { } delivery
+                ? (IResult)new Exam.Server.Realtime.ManualCommandDeliveryResult(response, delivery) : response;
+        }).WithMetadata(new ConfirmationBeforeResult()); // 结果自身在推送和返回前完成持久确认。
 
         group.MapPost("/acknowledgements", async (
             AcknowledgeCommandRequest request,

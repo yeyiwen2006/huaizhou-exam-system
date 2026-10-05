@@ -13,6 +13,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     private string _newGroupName = string.Empty, _selectedGroupName = string.Empty;
     private string _activationRequestId = string.Empty, _approvalRoomGroupId = string.Empty, _queryDeviceId = string.Empty;
     private string? _filterRoomGroupId;
+    private string _appliedDirectoryQuery = string.Empty;
+    private string? _appliedDirectoryFilter;
     private string _moveToRoomGroupId = string.Empty, _moveReason = string.Empty;
     private string _status = "读取服务器试场和设备目录；未激活设备的申请在待审批列表中处理。";
     private string _directoryStatus = "尚未读取服务器设备目录。";
@@ -159,15 +161,21 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         catch (Exception error) { if (!silent) SetError(error); }
     }
 
-    public Task RefreshDirectoryAsync() => RefreshDirectoryCoreAsync(CancellationToken.None, silent: false);
-    public Task QueryDeviceAsync() => RefreshDirectoryAsync();
-    private async Task RefreshDirectoryCoreAsync(CancellationToken cancellationToken, bool silent)
+    public Task RefreshDirectoryAsync()
+    {
+        if (!Ready || _reading) return Task.CompletedTask;
+        QueryDeviceId = _appliedDirectoryQuery = string.Empty;
+        FilterRoomGroupId = _appliedDirectoryFilter = null;
+        return RefreshDirectoryCoreAsync(CancellationToken.None, silent: false);
+    }
+    public Task QueryDeviceAsync() => RefreshDirectoryCoreAsync(CancellationToken.None, silent: false, queryRequested: true);
+    private async Task RefreshDirectoryCoreAsync(CancellationToken cancellationToken, bool silent, bool queryRequested = false)
     {
         if (!Ready || _reading) return;
         var context = _context;
         var operation = ++_directoryOperation;
-        var filter = FilterRoomGroupId;
-        var query = QueryDeviceId.Trim();
+        var filter = queryRequested ? FilterRoomGroupId : _appliedDirectoryFilter;
+        var query = queryRequested ? QueryDeviceId.Trim() : _appliedDirectoryQuery;
         _reading = true;
         NotifyCommands();
         try
@@ -196,8 +204,10 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
                 incoming.Select(x => x.ClientNumber).Distinct(StringComparer.Ordinal).Count() != incoming.Count)
                 throw new InvalidDataException("设备目录出现重复身份，未应用该次查询。");
             if (query.Length == 11 && query.All(char.IsAsciiDigit)) incoming = incoming.Where(x => x.ClientNumber == query).ToList();
-            if (filter != FilterRoomGroupId || query != QueryDeviceId.Trim())
+            if (queryRequested && (filter != FilterRoomGroupId || query != QueryDeviceId.Trim()))
             { DirectoryStatus = "查询条件已变化，请重新查询；未应用旧条件的结果。"; return; }
+            _appliedDirectoryQuery = query;
+            _appliedDirectoryFilter = filter;
             var marked = Devices.Where(x => x.IsSelected).Select(x => x.DeviceId).ToHashSet(StringComparer.Ordinal);
             var selectedId = SelectedDevice?.DeviceId;
             ApplyGroups(groups);
@@ -295,7 +305,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             "服务器已整批保存转组，正在重新读取版本与归属。");
         if (moved && context == _context)
         {
-            await RefreshDirectoryAsync();
+            await RefreshDirectoryCoreAsync(CancellationToken.None, silent: false);
             if (context == _context && _groupsLoaded) Status = $"已完成 {rows.Length} 台设备的转组，编号、考生和成绩不变。";
         }
     }
@@ -375,6 +385,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         ApprovalRoomGroupId = Groups.Any(x => x.RoomGroupId == approval) ? approval : "";
         MoveToRoomGroupId = Groups.Any(x => x.RoomGroupId == move) ? move : "";
         FilterRoomGroupId = filter is null || filter == "" || Groups.Any(x => x.RoomGroupId == filter) ? filter : null;
+        if (_appliedDirectoryFilter is not null && _appliedDirectoryFilter != "" &&
+            !Groups.Any(x => x.RoomGroupId == _appliedDirectoryFilter)) _appliedDirectoryFilter = null;
     }
     private static ActivationDeviceRow FromDevice(DeviceDirectoryEntry device, bool selected) =>
         new(device.DeviceId, device.ClientNumber, ActivationText(device.ActivationStatus), device.RoomGroupId ?? "",
@@ -405,6 +417,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     }
     private void OnConnectionChanged(object? sender, EventArgs args)
     {
+        _appliedDirectoryQuery = string.Empty;
+        _appliedDirectoryFilter = null;
         StopPolling(); _context++; _directoryOperation++; _pendingOperation++; _historyOperation++;
         _busy = _reading = _groupsLoaded = false;
         PendingRequests.Clear(); Devices.Clear(); Groups.Clear(); DeviceHistory.Clear();
