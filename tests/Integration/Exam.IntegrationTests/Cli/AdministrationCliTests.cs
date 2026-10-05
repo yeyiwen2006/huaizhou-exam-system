@@ -213,10 +213,11 @@ public sealed class AdministrationCliTests
         Assert.Equal(0, history.Exit);
         Assert.Equal("合成试场A", Assert.Single(JsonSerializer.Deserialize<DeviceRoomHistory[]>(history.Out, Json)!).ToGroupName);
 
-        // 没有该编号时必须失败且不发转组请求。
+        // 没有该编号时必须失败，并且不产生新的转组请求（前面的成功用例已经发出过一次，所以要看增量）。
+        var movesBefore = host.Calls.Count(call => call == "POST /api/v1/rooms/move-devices");
         var missing = await CliProcess.RunAsync("devices", "show", "20270115999", "--server", host.Address);
         Assert.NotEqual(0, missing.Exit);
-        Assert.Contains(host.Calls, call => call == "POST /api/v1/rooms/move-devices");
+        Assert.Equal(movesBefore, host.Calls.Count(call => call == "POST /api/v1/rooms/move-devices"));
     }
 
     [Fact]

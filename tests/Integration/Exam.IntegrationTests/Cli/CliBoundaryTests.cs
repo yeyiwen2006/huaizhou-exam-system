@@ -20,8 +20,6 @@ namespace Exam.IntegrationTests.Cli;
 /// <summary>Real CLI processes against a controlled loopback HTTP host, synthetic input only.</summary>
 public sealed class CliBoundaryTests
 {
-    private static string Repository() => CliProcess.Repository();
-
     private static Task<(int Exit, string Out, string Error)> RunAsync(params string[] args) =>
         CliProcess.RunAsync(args);
 
@@ -226,20 +224,67 @@ public sealed class CliBoundaryTests
         Assert.Equal(0, tail.Exit);
         Assert.Equal("event-b", Assert.Single(Emitted(tail.Out, json)).EventId);
 
-        // follow：按间隔读取，达到指定轮数后正常退出，同一名单版本只发出一次。
-        var follow = await RunAsync("monitor", "follow", "合成回收考试", "1", "1", "--server", address);
+        // follow：位置参数依次是起始名单版本、间隔秒数、轮数；达到轮数后正常退出，同一名单版本只发出一次。
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "1", "--server", address);
         Assert.Equal(0, follow.Exit);
         Assert.Equal(new[] { "event-a", "event-b" }, Emitted(follow.Out, json).Select(item => item.EventId));
+        // 可读提醒要实时写 stderr（不能等进程退出、也不能因退出码非零而被丢弃）。
+        Assert.Contains("全部答卷已成功回收", follow.Error, StringComparison.Ordinal);
+
+        // 指定起始名单版本：持续监控也不重播历史。
+        var followFrom = await RunAsync("monitor", "follow", "合成回收考试", "1", "1", "1", "--server", address);
+        Assert.Equal(0, followFrom.Exit);
+        Assert.Equal("event-b", Assert.Single(Emitted(followFrom.Out, json)).EventId);
 
         // 位置参数非法时是用例错误（退出码 2），不发请求。
-        var badInterval = await RunAsync("monitor", "follow", "合成回收考试", "0", "--server", address);
+        var badInterval = await RunAsync("monitor", "follow", "合成回收考试", "0", "0", "--server", address);
         Assert.Equal(2, badInterval.Exit);
-        var badRounds = await RunAsync("monitor", "follow", "合成回收考试", "1", "0", "--server", address);
+        var tooLongInterval = await RunAsync("monitor", "follow", "合成回收考试", "0", "5000000", "--server", address);
+        Assert.Equal(2, tooLongInterval.Exit);
+        var badRounds = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "0", "--server", address);
         Assert.Equal(2, badRounds.Exit);
         var badStart = await RunAsync("monitor", "watch", "合成回收考试", "-1", "--server", address);
         Assert.Equal(2, badStart.Exit);
         var missingName = await RunAsync("monitor", "watch", "--server", address);
         Assert.Equal(2, missingName.Exit);
+    }
+
+    /// <summary>
+    /// 单页整页无效不能让长时运行的持续监控退出：与考务端弹窗同口径，游标不前进、提示后继续等待。
+    /// </summary>
+    [Fact]
+    public async Task MonitorFollowKeepsRunningWhenAPageIsRejected()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Envelope<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Envelope(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+        {
+            // 第一页混入别的考试的事件（整页拒绝），之后恢复正常。
+            var page = Interlocked.Increment(ref calls) == 1
+                ? new[] { valid with { ExamId = "other-exam" } }
+                : new[] { valid }.Where(item => item.RosterVersion > afterRosterVersion).ToArray();
+            return Envelope(page);
+        });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "3", "--server", address);
+
+        Assert.Equal(0, follow.Exit);
+        Assert.Contains("收齐事件读取失败", follow.Error, StringComparison.Ordinal);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
     }
 
     private static CollectionCompletedNotification[] Emitted(string output, JsonSerializerOptions json) =>
