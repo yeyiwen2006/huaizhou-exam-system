@@ -114,17 +114,66 @@ public sealed class InstructionPreviewTests
     }
 
     [Fact]
-    public async Task ExamDetailWithoutInstructionsIsRejectedBeforeThePageUsesIt()
+    public async Task Load_WithoutServerInstructionsKeepsThePageUsableAndSaysSo()
     {
-        var api = Configured(new Handler(_ => Success(Detail(Settings("3")) with
+        // 服务器还没有生成说明（例如学生端说明尚未就绪）不是读取失败：页面必须仍可改设置、时间与可见性，
+        // 并如实说明“无法确认学生端当前显示”，改为预览本地填写内容。
+        var settings = Settings("3");
+        var api = Configured(new Handler(_ => Success(Detail(settings) with
         {
             InstructionLines = Array.Empty<string>(),
         })));
+        var viewModel = new ExamConfigurationViewModel(api);
 
-        var error = await Assert.ThrowsAsync<AdminApiException>(() => api.GetExamDetailAsync("exam-1"));
+        await viewModel.OpenAsync("exam-1");
+
+        Assert.Contains("服务器没有返回已保存的说明", viewModel.InstructionSourceText, StringComparison.Ordinal);
+        Assert.Equal(InstructionText.SplitLines(viewModel.InstructionsText),
+            viewModel.InstructionPreview.Select(line => line.Text));
+        Assert.True(viewModel.CanSave);
+        Assert.True(viewModel.CanEditTime);
+    }
+
+    [Fact]
+    public async Task Load_PaddedStoredSettingsDoNotWarnAboutDifferences()
+    {
+        // 服务端可能存着补齐空格的设置，而说明由域层按 Trim 后的值生成：本地预览必须同口径，
+        // 否则一打开考试就会误报“本页生成结果与它不同，请核对填写内容”。
+        var padded = new ExamSettings(
+        [
+            new ExamSubjectSettings("math", " 合成数学 ", " 6 ",
+            [
+                new ExamGroupSettings("math-1", "一、单项选择题 ", "single", 1, 2, " 6 ", false,
+                    new ManifestOneCorrect(" 3 ", "0", "-0.75"), null),
+            ]),
+        ]);
+        var api = Configured(new Handler(_ => Success(new ExamDetail(Summary(), padded, 1,
+            ExamSettingsRules.BuildInstructions(padded)))));
+        var viewModel = new ExamConfigurationViewModel(api);
+
+        await viewModel.OpenAsync("exam-1");
+
+        Assert.Contains("与学生端显示一致", viewModel.InstructionSourceText, StringComparison.Ordinal);
+        Assert.DoesNotContain("不同", viewModel.InstructionSourceText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateReceiptWithoutStructuredSettingsIsRejected()
+    {
+        // 新建/保存的回执也校验结构：缺字段必须在页面接上之前失败，
+        // 否则会先抛空引用、把一次已经提交的写入报成“保存未完成”。
+        var api = Configured(new Handler(_ => Success(Detail(Settings("3")) with { Settings = null! })));
+
+        var error = await Assert.ThrowsAsync<AdminApiException>(() =>
+            api.CreateExamAsync("合成新考试", new Exam.Contracts.Versioning.ScheduleWindow(
+                DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(1)), Settings("3")));
 
         Assert.Equal("INVALID_RESPONSE", error.Code);
     }
+
+    private static ExamSummary Summary() =>
+        new("exam-1", "合成模拟考试", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2),
+            ExamLifecycle.Scheduled, false, false, 0, 0, 1);
 
     private static ExamSettings Settings(string correct) => new(
     [
@@ -135,10 +184,8 @@ public sealed class InstructionPreviewTests
         ]),
     ]);
 
-    private static ExamDetail Detail(ExamSettings settings) => new(
-        new ExamSummary("exam-1", "合成模拟考试", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2),
-            ExamLifecycle.Scheduled, false, false, 0, 0, 1),
-        settings, 1, ExamSettingsRules.BuildInstructions(settings));
+    private static ExamDetail Detail(ExamSettings settings) =>
+        new(Summary(), settings, 1, ExamSettingsRules.BuildInstructions(settings));
 
     private static AdminApiClient Configured(HttpMessageHandler handler)
     {

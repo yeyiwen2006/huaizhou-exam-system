@@ -308,7 +308,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var builder = new StringBuilder();
         foreach (var subject in Subjects)
         {
-            builder.AppendLine($"{subject.Name}（满分{subject.MaxScore}分）");
+            builder.AppendLine($"{subject.Name.Trim()}（满分{subject.MaxScore.Trim()}分）");
             foreach (var group in subject.Groups.OrderBy(group => group.Order))
             {
                 var pointsPerQuestion = group.Type switch
@@ -327,7 +327,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                     _ => "题型无效，无法生成计分说明。"
                 };
                 var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
-                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore}分。{scoring}{abstain}");
+                // 与域层生成器同口径：名称与满分先 Trim，避免因服务端存了补齐空格的设置而误报“与服务器上的说明不同”。
+                builder.AppendLine($"{group.Name.Trim()}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore.Trim()}分。{scoring}{abstain}");
             }
         }
         return builder.ToString().TrimEnd();

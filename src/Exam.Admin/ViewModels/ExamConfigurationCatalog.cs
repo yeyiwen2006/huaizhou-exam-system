@@ -221,7 +221,8 @@ public sealed partial class ExamConfigurationViewModel
         }
         SelectedSubject = Subjects.FirstOrDefault();
         _serverInstructionLines.Clear();
-        foreach (var line in detail.InstructionLines)
+        // 说明缺失＝服务器还没有这份副本（不是读取失败）：界面会如实说明并改为预览本地填写内容。
+        foreach (var line in detail.InstructionLines ?? [])
         {
             if (!string.IsNullOrWhiteSpace(line)) _serverInstructionLines.Add(InstructionLineViewModel.From(line));
         }
