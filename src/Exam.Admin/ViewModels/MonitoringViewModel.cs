@@ -18,7 +18,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
     private readonly TimeSpan _collectionPollInterval;
+    private readonly TimeSpan _monitoringRefreshInterval;
     private CancellationTokenSource? _collectionPolling;
+    private CancellationTokenSource? _monitoringRefresh;
+    private bool _refreshFailed;
     private bool _isPageActive;
     private bool _connectionReady;
     private bool _disposed;
@@ -71,6 +74,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private void ResetContext()
     {
         StopCollectionPolling();
+        StopMonitoringRefresh();
         _contextVersion++;
         _decisionRequestVersion++;
         _resendRequestVersion++;
@@ -116,12 +120,17 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private MonitoringCommandRow? _selectedCommand;
     private ConflictDeviceRow? _selectedConflictDevice;
 
-    public MonitoringViewModel(AdminApiClient api, TimeSpan? collectionPollInterval = null)
+    public MonitoringViewModel(AdminApiClient api, TimeSpan? collectionPollInterval = null,
+        TimeSpan? monitoringRefreshInterval = null)
     {
         _api = api;
         _collectionPollInterval = collectionPollInterval ?? TimeSpan.FromSeconds(20);
         if (_collectionPollInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(collectionPollInterval));
+        // 权威状态自动刷新：需求要求正常联网时监测滞后不超过 2 秒；刷新周期可注入，便于回归与替换实现。
+        _monitoringRefreshInterval = monitoringRefreshInterval ?? TimeSpan.FromSeconds(2);
+        if (_monitoringRefreshInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(monitoringRefreshInterval));
         _api.ConfigurationChanged += OnConfigurationChanged;
         LoadCommand = new AsyncRelayCommand(LoadAsync, onError: SetError);
         DecideDeviceCommand = new AsyncRelayCommand(DecideDeviceAsync, onError: SetError);
@@ -160,13 +169,13 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public bool IsPageActive
     {
         get => _isPageActive;
-        set { if (SetProperty(ref _isPageActive, value)) UpdateCollectionPolling(); }
+        set { if (SetProperty(ref _isPageActive, value)) UpdatePolling(); }
     }
 
     public bool ConnectionReady
     {
         get => _connectionReady;
-        set { if (SetProperty(ref _connectionReady, value)) UpdateCollectionPolling(); }
+        set { if (SetProperty(ref _connectionReady, value)) UpdatePolling(); }
     }
 
     public string ExamId
@@ -177,7 +186,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             if (SetProperty(ref _examId, value))
             {
                 ResetContext();
-                UpdateCollectionPolling();
+                UpdatePolling();
             }
         }
     }
@@ -382,6 +391,89 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         ResetContext();
     }
 
+    private void UpdatePolling()
+    {
+        UpdateCollectionPolling();
+        UpdateMonitoringRefresh();
+    }
+
+    /// <summary>只在监测页处于前台且连接就绪时自动刷新权威状态。</summary>
+    private void UpdateMonitoringRefresh()
+    {
+        StopMonitoringRefresh();
+        if (_disposed || !IsPageActive || !ConnectionReady || string.IsNullOrWhiteSpace(ExamId)) return;
+        var source = new CancellationTokenSource();
+        _monitoringRefresh = source;
+        _ = PollMonitoringAsync(source);
+    }
+
+    private void StopMonitoringRefresh()
+    {
+        var source = _monitoringRefresh;
+        _monitoringRefresh = null;
+        source?.Cancel();
+    }
+
+    private async Task PollMonitoringAsync(CancellationTokenSource source)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_monitoringRefreshInterval);
+            do
+            {
+                try
+                {
+                    // 进入页面立即读一次，随后按周期刷新；失败保留上一次可信结果。
+                    await RefreshFromSnapshotAsync(source.Token);
+                }
+                catch (OperationCanceledException) when (source.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    if (!source.IsCancellationRequested && ReferenceEquals(_monitoringRefresh, source))
+                        ReportAutoRefreshFailure(exception);
+                }
+            }
+            while (await timer.WaitForNextTickAsync(source.Token));
+        }
+        catch (OperationCanceledException) when (source.IsCancellationRequested)
+        {
+            // 离开页面、切换考试或关闭窗口会停止这条循环。
+        }
+        finally
+        {
+            if (ReferenceEquals(_monitoringRefresh, source)) _monitoringRefresh = null;
+            source.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 自动刷新：失败时保留上一次可信结果并标注数据可能过期，不清空列表、不覆盖考务的操作反馈。
+    /// 手动“刷新”仍按 A 的既有语义处理（传输失败清空列表）。
+    /// </summary>
+    private async Task RefreshFromSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var examId = ExamId.Trim();
+        if (examId.Length == 0) return;
+        var context = _contextVersion;
+        var snapshot = await _api.GetMonitoringSnapshotAsync(examId, cancellationToken);
+        if (context != _contextVersion || !IsPageActive) return;
+        Apply(snapshot);
+        if (!_refreshFailed) return;
+        _refreshFailed = false;
+        Status = "自动刷新已恢复。";
+    }
+
+    private void ReportAutoRefreshFailure(Exception exception)
+    {
+        _refreshFailed = true;
+        Status = _asOf is { } asOf
+            ? $"自动刷新失败：{FriendlyErrors.Describe(exception)}当前显示的是 {asOf:HH:mm:ss} 读取的状态，请核对网络后重试。"
+            : $"自动刷新失败：{FriendlyErrors.Describe(exception)}";
+    }
+
     private void UpdateCollectionPolling()
     {
         StopCollectionPolling();
@@ -438,6 +530,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         if (_disposed) return;
         _disposed = true;
         StopCollectionPolling();
+        StopMonitoringRefresh();
         _api.ConfigurationChanged -= OnConfigurationChanged;
     }
 
@@ -479,6 +572,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
             return;
         }
         Apply(snapshot);
+        _refreshFailed = false;
+        Status = Summarize();
     }
 
     private void ClearLoadedRows()
@@ -520,10 +615,12 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(RoomGroupOptions));
         OnPropertyChanged(nameof(CountsText));
         OnPropertyChanged(nameof(AsOfText));
-        Status = _actualCount == 0
-            ? "本场考试还没有实际参试考生。"
-            : $"共 {_actualCount} 名实际参试考生；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
     }
+
+    /// <summary>本次读取的汇总文案；只由手动刷新写入状态栏，自动刷新不覆盖考务的操作反馈。</summary>
+    private string Summarize() => _actualCount == 0
+        ? "本场考试还没有实际参试考生。"
+        : $"共 {_actualCount} 名实际参试考生；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
 
     public async Task DecideDeviceAsync()
     {

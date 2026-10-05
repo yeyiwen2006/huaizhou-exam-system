@@ -20,6 +20,7 @@ internal static class MonitoringFixture
         string classText = "001",
         string admissionNo = "00001",
         string clientNumber = "20261005001",
+        string? authorizedDeviceId = null,
         string? roomGroupId = "room-1",
         string roomGroupName = "第一试场",
         ParticipationBusinessState businessState = ParticipationBusinessState.Waiting,
@@ -44,7 +45,7 @@ internal static class MonitoringFixture
         IReadOnlyList<MonitoringCommand>? commands = null,
         IReadOnlyList<ConflictDevice>? conflicts = null) => new(
             participationId, candidateId, name, classText, admissionNo,
-            "device-" + participationId, clientNumber, roomGroupId, roomGroupName,
+            authorizedDeviceId ?? "device-" + participationId, clientNumber, roomGroupId, roomGroupName,
             businessState, connectionState, page, currentQuestionId,
             // 没有有效通信记录时不存在最后通信时间（与“未登录”一致）。
             lastCommunicationAt ?? (connectionState == DeviceConnectionState.Unknown ? null : At),
@@ -62,10 +63,11 @@ internal static class MonitoringFixture
     public static MonitoringSnapshot Default() => Snapshot("exam-1", Participant());
 
     public static MonitoringSnapshot Snapshot(string examId, IReadOnlyList<MonitoringParticipant> participants,
-        IReadOnlyList<MonitoringParticipant>? uncollected, ExamLifecycle lifecycle = ExamLifecycle.Running)
+        IReadOnlyList<MonitoringParticipant>? uncollected, ExamLifecycle lifecycle = ExamLifecycle.Running,
+        DateTimeOffset? asOf = null)
     {
         var missing = uncollected ?? participants.Where(item => item.ReceiptId is null).ToArray();
-        return new MonitoringSnapshot(examId, At, new VersionVector(3, 2, 1), lifecycle, 7,
+        return new MonitoringSnapshot(examId, asOf ?? At, new VersionVector(3, 2, 1), lifecycle, 7,
             participants.Count, participants.Count - missing.Count, participants, missing);
     }
 

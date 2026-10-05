@@ -193,57 +193,10 @@ public sealed class UiScreenshotTests
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";
         monitoring.ExamName = "合成模拟考试";
-        var commandAt = new DateTimeOffset(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
-        var monitoringRows = new[]
-        {
-            MonitoringRow.From(MonitoringFixture.Participant(
-                participationId: "synthetic-participation-01", candidateId: "synthetic-candidate-01",
-                name: "合成考生01", classText: "01", admissionNo: "2027001", clientNumber: "20270115001",
-                businessState: ParticipationBusinessState.Answering, connectionState: DeviceConnectionState.Online,
-                currentQuestionId: "3",
-                answers: new Dictionary<string, AnswerValue> { ["3"] = AnswerValue.Selected("B", "D") },
-                downloadState: "已下载", focusLossCount: 1, focusLossMilliseconds: 3200,
-                commands: [MonitoringFixture.Command(CommandEventType.Start, canResend: false,
-                    eventId: "synthetic-event-01", confirmation: "已执行", acknowledgedAt: commandAt)],
-                conflicts:
-                [
-                    MonitoringFixture.Conflict("synthetic-device-01", authorized: true, answerVersion: 4),
-                    MonitoringFixture.Conflict("synthetic-device-17", authorized: false,
-                        connectionState: DeviceConnectionState.Offline, answerVersion: 2, page: "交卷确认"),
-                ])),
-            MonitoringRow.From(MonitoringFixture.Participant(
-                participationId: "synthetic-participation-02", candidateId: "synthetic-candidate-02",
-                name: "合成考生02", classText: "02", admissionNo: "2027002", clientNumber: "20270115002",
-                roomGroupId: "synthetic-room-2", roomGroupName: "第二试场",
-                businessState: ParticipationBusinessState.Submitted, connectionState: DeviceConnectionState.Online,
-                currentQuestionId: "10",
-                answers: new Dictionary<string, AnswerValue> { ["10"] = AnswerValue.Selected("A") },
-                receiptId: "synthetic-receipt-02", targetPaperVersion: 2, installedPaperVersion: 2,
-                commands:
-                [
-                    MonitoringFixture.Command(CommandEventType.Start, canResend: false, eventId: "synthetic-event-03",
-                        confirmation: "已执行", acknowledgedAt: commandAt),
-                    MonitoringFixture.Command(CommandEventType.End, canResend: false, eventId: "synthetic-event-04",
-                        confirmation: "已执行", acknowledgedAt: commandAt.AddHours(1)),
-                ])),
-            MonitoringRow.From(MonitoringFixture.Participant(
-                participationId: "synthetic-participation-03", candidateId: "synthetic-candidate-03",
-                name: "合成考生03", classText: "01", admissionNo: "2027003", clientNumber: "20270115003",
-                roomGroupId: "synthetic-room-2", roomGroupName: "第二试场",
-                businessState: ParticipationBusinessState.Waiting, connectionState: DeviceConnectionState.Recovering,
-                currentQuestionId: null, answers: new Dictionary<string, AnswerValue>(),
-                installedPaperVersion: 1, targetPaperVersion: 2, downloadState: "更新中",
-                commands: [MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "synthetic-event-07")])),
-            MonitoringRow.From(MonitoringFixture.Participant(
-                participationId: "synthetic-participation-04", candidateId: "synthetic-candidate-04",
-                name: "合成考生04", classText: "03", admissionNo: "2027004", clientNumber: "20270115004",
-                roomGroupId: null, roomGroupName: "未分组",
-                businessState: ParticipationBusinessState.Waiting, connectionState: DeviceConnectionState.Unknown,
-                currentQuestionId: null, answers: new Dictionary<string, AnswerValue>())),
-        };
-        foreach (var row in monitoringRows) monitoring.Rows.Add(row);
-        // 未回收名单与参试列表共享同一批行对象。
-        foreach (var row in monitoringRows.Where(item => item.CollectionState == "未回收"))
+        // 与 /monitoring 权威快照路由共用同一份合成参与者：自动刷新后页面内容保持不变。
+        foreach (var participant in AdminUiFixture.MonitoringParticipants)
+            monitoring.Rows.Add(MonitoringRow.From(participant));
+        foreach (var row in monitoring.Rows.Where(item => item.CollectionState == "未回收"))
             monitoring.UncollectedRows.Add(row);
         // FilteredRows 是计算属性，借过滤条件的属性通知让表格重新读取。
         monitoring.FilterText = "synthetic";
