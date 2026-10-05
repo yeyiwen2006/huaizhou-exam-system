@@ -20,30 +20,10 @@ namespace Exam.IntegrationTests.Cli;
 /// <summary>Real CLI processes against a controlled loopback HTTP host, synthetic input only.</summary>
 public sealed class CliBoundaryTests
 {
-    private static string Repository()
-    {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Huaizhou.ExamSystem.sln"))) root = root.Parent;
-        return root?.FullName ?? throw new InvalidOperationException("Repository root missing.");
-    }
+    private static string Repository() => CliProcess.Repository();
 
-    private static async Task<(int Exit, string Out, string Error)> RunAsync(params string[] args)
-    {
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
-                StandardOutputEncoding = new UTF8Encoding(false, true), StandardErrorEncoding = new UTF8Encoding(false, true) };
-        start.ArgumentList.Add(Path.Combine(Repository(), "src/Exam.Cli/bin/Release/net10.0/Exam.Cli.dll"));
-        foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("EXAM_", StringComparison.Ordinal)).ToArray()) start.Environment.Remove(key);
-        start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"] = "true";
-        start.Environment["EXAM_OPERATOR_TOKEN"] = "synthetic-sensitive-sentinel";
-        foreach (var arg in args) start.ArgumentList.Add(arg);
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        try { await process.WaitForExitAsync(deadline.Token); }
-        finally { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        return (process.ExitCode, await output, await error);
-    }
+    private static Task<(int Exit, string Out, string Error)> RunAsync(params string[] args) =>
+        CliProcess.RunAsync(args);
 
     [Theory]
     [InlineData("help")]
