@@ -9,6 +9,7 @@ using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Grading;
 using Exam.Contracts.Operators;
+using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Scoring;
 using Exam.Infrastructure.Packaging;
@@ -19,30 +20,8 @@ namespace Exam.IntegrationTests.Cli;
 /// <summary>Real CLI processes against a controlled loopback HTTP host, synthetic input only.</summary>
 public sealed class CliBoundaryTests
 {
-    private static string Repository()
-    {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Huaizhou.ExamSystem.sln"))) root = root.Parent;
-        return root?.FullName ?? throw new InvalidOperationException("Repository root missing.");
-    }
-
-    private static async Task<(int Exit, string Out, string Error)> RunAsync(params string[] args)
-    {
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
-                StandardOutputEncoding = new UTF8Encoding(false, true), StandardErrorEncoding = new UTF8Encoding(false, true) };
-        start.ArgumentList.Add(Path.Combine(Repository(), "src/Exam.Cli/bin/Release/net10.0/Exam.Cli.dll"));
-        foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("EXAM_", StringComparison.Ordinal)).ToArray()) start.Environment.Remove(key);
-        start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"] = "true";
-        start.Environment["EXAM_OPERATOR_TOKEN"] = "synthetic-sensitive-sentinel";
-        foreach (var arg in args) start.ArgumentList.Add(arg);
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        try { await process.WaitForExitAsync(deadline.Token); }
-        finally { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        return (process.ExitCode, await output, await error);
-    }
+    private static Task<(int Exit, string Out, string Error)> RunAsync(params string[] args) =>
+        CliProcess.RunAsync(args);
 
     [Theory]
     [InlineData("help")]
@@ -199,4 +178,222 @@ public sealed class CliBoundaryTests
         }
         finally { File.Delete(path); }
     }
+
+    /// <summary>
+    /// 需求“全部实际参试答卷持久保存后 GUI 弹窗、CLI 发出对应事件；每个名单版本一次，零参试者不触发”：
+    /// 真 CLI 进程对环回宿主验证 watch（单次，可指定起始名单版本）与 follow（按间隔、可限轮数）。
+    /// </summary>
+    [Fact]
+    public async Task MonitorWatchAndFollowEmitEachCollectionEventOnce()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var events = new[]
+        {
+            new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt),
+            new CollectionCompletedNotification("event-b", "collection-exam", 2, 13, completedAt.AddMinutes(18)),
+        };
+        var cursors = new List<long>();
+        IResult Envelope<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Envelope(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 13, 13, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+        {
+            Assert.Equal("collection-exam", examId);
+            lock (cursors) cursors.Add(afterRosterVersion);
+            return Envelope(events.Where(item => item.RosterVersion > afterRosterVersion).ToArray());
+        });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var watch = await RunAsync("monitor", "watch", "合成回收考试", "--server", address);
+        Assert.Equal(0, watch.Exit);
+        Assert.Equal(new[] { "event-a", "event-b" }, Emitted(watch.Out, json).Select(item => item.EventId));
+        Assert.Contains("全部答卷已成功回收", watch.Error, StringComparison.Ordinal);
+        Assert.Contains("12 名实际参试考生", watch.Error, StringComparison.Ordinal);
+
+        // 位置参数指定起始名单版本：只发出之后的新事件，不重复通知。
+        var tail = await RunAsync("monitor", "watch", "合成回收考试", "1", "--server", address);
+        Assert.Equal(0, tail.Exit);
+        Assert.Equal("event-b", Assert.Single(Emitted(tail.Out, json)).EventId);
+
+        // follow：位置参数依次是起始名单版本、间隔秒数、轮数；达到轮数后正常退出，同一名单版本只发出一次。
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "1", "--server", address);
+        Assert.Equal(0, follow.Exit);
+        Assert.Equal(new[] { "event-a", "event-b" }, Emitted(follow.Out, json).Select(item => item.EventId));
+        // 可读提醒要实时写 stderr（不能等进程退出、也不能因退出码非零而被丢弃）。
+        Assert.Contains("全部答卷已成功回收", follow.Error, StringComparison.Ordinal);
+
+        // 指定起始名单版本：持续监控也不重播历史。
+        var followFrom = await RunAsync("monitor", "follow", "合成回收考试", "1", "1", "1", "--server", address);
+        Assert.Equal(0, followFrom.Exit);
+        Assert.Equal("event-b", Assert.Single(Emitted(followFrom.Out, json)).EventId);
+
+        // 位置参数非法时是用例错误（退出码 2），不发请求。
+        var badInterval = await RunAsync("monitor", "follow", "合成回收考试", "0", "0", "--server", address);
+        Assert.Equal(2, badInterval.Exit);
+        var tooLongInterval = await RunAsync("monitor", "follow", "合成回收考试", "0", "5000000", "--server", address);
+        Assert.Equal(2, tooLongInterval.Exit);
+        var badRounds = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "0", "--server", address);
+        Assert.Equal(2, badRounds.Exit);
+        var badStart = await RunAsync("monitor", "watch", "合成回收考试", "-1", "--server", address);
+        Assert.Equal(2, badStart.Exit);
+        var missingName = await RunAsync("monitor", "watch", "--server", address);
+        Assert.Equal(2, missingName.Exit);
+    }
+
+    /// <summary>
+    /// 服务器错误正文绝不能进终端（错误层就是为此存在的），且非 JSON 的 5xx 正文要按 5xx 处理而不是输入错误。
+    /// </summary>
+    [Theory]
+    [InlineData(503, "<html>SENSITIVE-LEAK-12345</html>")]
+    [InlineData(200, "{SENSITIVE-LEAK-12345")]
+    [InlineData(200, "null")]
+    public async Task MonitorNeverPrintsServerErrorTextAndRetriesInvalidResponses(int status, string invalid)
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Ok<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Ok(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+        {
+            // 第一次返回网关样式的 503（HTML 正文），之后正常：follow 必须重试而不是当成输入错误退出。
+            if (Interlocked.Increment(ref calls) == 1)
+                return Results.Content(invalid, "application/json", statusCode: status);
+            return Ok(new[] { valid }.Where(item => item.RosterVersion > afterRosterVersion).ToArray());
+        });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "2", "--server", address);
+        Assert.Equal(0, follow.Exit);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+        Assert.Contains("收齐事件读取失败", follow.Error, StringComparison.Ordinal);
+        // 服务器正文（含网关页里的敏感串）不得出现在终端。
+        Assert.DoesNotContain("SENSITIVE-LEAK-12345", follow.Out + follow.Error);
+    }
+
+    /// <summary>
+    /// --error-format json 时 stderr 必须保持“只有一个 JSON 错误信封”，实时提醒不能混进去。
+    /// </summary>
+    [Fact]
+    public async Task MonitorFollowKeepsStderrSingleJsonWhenJsonErrorsAreRequested()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Envelope<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Envelope(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+            Interlocked.Increment(ref calls) == 1
+                ? Envelope(new[] { valid })
+                : Results.Json(new ApiEnvelope<object>("synthetic-server", "synthetic-node", 1, "synthetic-request",
+                    null, new ApiError("ACCESS_DENIED", "synthetic-private-response")), json, statusCode: 401));
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "2",
+            "--error-format", "json", "--server", address);
+
+        // 401 不可重试，按退出码约定失败；stderr 必须仍是单个 JSON 文档（提醒不得混入）。
+        Assert.Equal(3, follow.Exit);
+        using var document = JsonDocument.Parse(follow.Error);
+        Assert.Equal("ACCESS_DENIED", document.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("全部答卷已成功回收", follow.Error, StringComparison.Ordinal);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+    }
+
+    /// <summary>
+    /// 单页整页无效不能让长时运行的持续监控退出：与考务端弹窗同口径，游标不前进、提示后继续等待。
+    /// </summary>
+    [Fact]
+    public async Task MonitorFollowKeepsRunningWhenAPageIsRejected()
+    {
+        var json = JsonDefaults.Create();
+        var completedAt = new DateTimeOffset(2026, 10, 5, 11, 2, 30, TimeSpan.FromHours(8));
+        var valid = new CollectionCompletedNotification("event-a", "collection-exam", 1, 12, completedAt);
+        var calls = 0;
+        IResult Envelope<T>(T value) => Results.Json(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1,
+            "synthetic-request", value, null), json);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Envelope(new[]
+        {
+            new ExamSummary("collection-exam", "合成回收考试", DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running, false, false, 12, 12, 1),
+        }));
+        app.MapGet("/api/v1/submissions/collection/events", (string examId, long afterRosterVersion) =>
+        {
+            // 第一页混入别的考试的事件（整页拒绝），之后恢复正常。
+            var page = Interlocked.Increment(ref calls) == 1
+                ? new[] { valid with { ExamId = "other-exam" } }
+                : new[] { valid }.Where(item => item.RosterVersion > afterRosterVersion).ToArray();
+            return Envelope(page);
+        });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var follow = await RunAsync("monitor", "follow", "合成回收考试", "0", "1", "3", "--server", address);
+
+        Assert.Equal(0, follow.Exit);
+        Assert.Contains("收齐事件读取失败", follow.Error, StringComparison.Ordinal);
+        Assert.Equal("event-a", Assert.Single(Emitted(follow.Out, json)).EventId);
+    }
+
+    [Fact]
+    public async Task MonitorFollow_ContinuousFailureCannotSucceedAtTheRoundLimitOrDeadline()
+    {
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.MapGet("/api/v1/exams", () => Results.Json(new ApiEnvelope<ExamSummary[]>("synthetic-server", "node", 1, "request",
+            [new("exam", "合成考试", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(2), ExamLifecycle.Running,
+                false, false, 1, 0, 1)], null), JsonDefaults.Create()));
+        var calls = 0;
+        app.MapGet("/api/v1/submissions/collection/events", () =>
+        {
+            Interlocked.Increment(ref calls);
+            return Results.StatusCode(503);
+        });
+        await app.StartAsync();
+        var result = await RunAsync("monitor", "follow", "合成考试", "0", "1", "1", "--server", app.Urls.Single(),
+            "--timeout-seconds", "3", "--error-format", "json");
+        Assert.Equal(5, result.Exit);
+        Assert.Empty(result.Out);
+        Assert.True(calls >= 2);
+        using var error = JsonDocument.Parse(result.Error);
+        Assert.Equal("NETWORK_UNAVAILABLE", error.RootElement.GetProperty("code").GetString());
+    }
+
+    private static CollectionCompletedNotification[] Emitted(string output, JsonSerializerOptions json) =>
+        output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<CollectionCompletedNotification>(line, json)!)
+            .ToArray();
 }
