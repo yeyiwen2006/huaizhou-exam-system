@@ -5,6 +5,7 @@ using System.Text.Json;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
+using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Exams;
 
@@ -25,12 +26,17 @@ internal static partial class ExamCli
             using var message=new HttpRequestMessage(method,path);AddCredentials(message);
             if(body is not null)message.Content=JsonContent.Create(body,options:json);
             using var response=await http.SendAsync(message,ct);
+            // 先按状态码判定：错误响应常常是网关或重启页的非 JSON 正文，
+            // 解析它会抛 JsonException 被当成输入错误（退出 2），重试与日志都会因此走偏。
+            if(!response.IsSuccessStatusCode)throw new ExamCliException(response.StatusCode,"服务器未完成操作。");
             var envelope=await response.Content.ReadFromJsonAsync<ApiEnvelope<T>>(json,ct);
-            if(!response.IsSuccessStatusCode||envelope?.Error is not null||envelope?.Result is null)
+            if(envelope is null || (envelope.Error is null && envelope.Result is null))
+                throw new InvalidOperationException("服务器返回了不完整的响应。");
+            if(envelope.Error is not null)
                 throw new ExamCliException(response.StatusCode,envelope?.Error?.Message??"服务器未完成操作。");
             if(string.IsNullOrWhiteSpace(envelope.ServerId)||envelope.ServerEpoch<1||logicalServer is not null&&logicalServer!=envelope.ServerId)
                 throw new InvalidDataException("响应服务器身份发生变化，停止当前操作。");
-            logicalServer??=envelope.ServerId;return envelope.Result;
+            logicalServer??=envelope.ServerId;return envelope.Result!;
         }
         async Task<ExamSummary> FindExam(string name)=>
             (await Send<ExamSummary[]>(HttpMethod.Get,"/api/v1/exams"))
@@ -64,6 +70,51 @@ internal static partial class ExamCli
             }
             return rows.ToArray();
         }
+        // --error-format json 时 stderr 是机器读取的单个错误信封，实时提醒会污染它：
+        // 该模式下提醒改走成功诊断缓冲（退出码 0 时输出），实时信号由 stdout 的 JSON 事件承担。
+        // 读取一批收齐事件并按名单版本发出，读到没有新事件为止。
+        // 文本模式下可读提醒直接实时写 stderr：长时运行的 follow 必须即时可见，
+        // 且不能因最终退出码非零而被错误层的缓冲丢弃。
+        async Task DrainCollectionAsync(ExamSummary exam,CollectionWatch watch)
+        {
+            while(true)
+            {
+                var before=watch.Cursor;
+                var page=await Send<CollectionCompletedNotification[]>(HttpMethod.Get,
+                    $"/api/v1/submissions/collection/events?examId={Uri.EscapeDataString(exam.ExamId)}&afterRosterVersion={watch.Cursor}");
+                foreach(var item in watch.Accept(exam.ExamId,page))
+                {
+                    // 事件写 stdout（一行一个，便于脚本消费）；可读提醒写 stderr。
+                    Console.WriteLine(JsonSerializer.Serialize(item,json));
+                    var reminder=$"本场考试全部答卷已成功回收：{item.ParticipantCount} 名实际参试考生（名单版本 {item.RosterVersion}，{item.CompletedAt.ToOffset(TimeSpan.FromHours(8)):yyyy-MM-dd HH:mm:ss}）。";
+                    WriteLiveDiagnostic(reminder);
+                }
+                Console.Out.Flush();
+                if(page.Length==0||watch.Cursor==before)return;
+            }
+        }
+        // 可重试的收齐轮询失败：整页校验拒绝（游标未前进）、网络异常、本机请求超时与 5xx/限流。
+        // 取消（Ctrl+C 或 --timeout-seconds 到点）不算可重试失败，交给外层按约定退出。
+        bool IsRetryableWatchFailure(Exception error)=>error switch
+        {
+            InvalidOperationException=>true,
+            JsonException=>true,
+            HttpRequestException=>true,
+            TaskCanceledException when !ct.IsCancellationRequested=>true,
+            ExamCliException{Status:HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests}=>true,
+            ExamCliException{Status:var status}=>(int)status>=500,
+            _=>false,
+        };
+        // 只写本地判定的原因：服务器正文绝不能进终端（错误层就是为此存在的）。
+        static string DescribeWatchFailure(Exception error)=>error switch
+        {
+            InvalidOperationException=>"服务器返回的收齐事件无效，本页未采用。",
+            JsonException=>"服务器返回的收齐事件格式无效，本页未采用。",
+            TaskCanceledException=>"请求超时。",
+            HttpRequestException=>"无法连接服务器。",
+            ExamCliException{Status:var status}=>$"服务器暂时不可用（{(int)status}）。",
+            _=>"未预期的错误。",
+        };
         try
         {
             object result;var valid=true;
@@ -125,6 +176,59 @@ internal static partial class ExamCli
                 {
                     var exam=await FindExam(examName);var path=$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}";
                     result=action=="show"?await Send<MonitoringSnapshot>(HttpMethod.Get,path+"/monitoring"):(object)await Send<MonitoringParticipant[]>(HttpMethod.Get,path+"/uncollected");break;
+                }
+                case ("monitor",["watch",var watchExam,.. var watchArguments]):
+                {
+                    // 单次读取并发出收齐事件后退出：可给位置参数指定起始名单版本（默认 0），
+                    // 便于脚本只发出上次之后的新事件。
+                    var startVersion=0L;
+                    if(watchArguments.Length>1)return UnknownCommand(["monitor","watch",watchExam,..watchArguments]);
+                    if(watchArguments.Length==1&&(!long.TryParse(watchArguments[0],out startVersion)||startVersion<0))
+                        return UnknownCommand(["monitor","watch",watchExam,..watchArguments]);
+                    await DrainCollectionAsync(await FindExam(watchExam),new CollectionWatch(startVersion));return 0;
+                }
+                case ("monitor",["follow",var followExam,.. var followArguments]):
+                {
+                    // 持续等待并发出；位置参数依次为：起始名单版本（默认 0）、间隔秒数（默认 1，1..3600）、轮数（默认不设上限）。
+                    if(followArguments.Length>3)return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                    var startVersion=0L;var interval=TimeSpan.FromSeconds(1);int? rounds=null;
+                    if(followArguments.Length>0&&(!long.TryParse(followArguments[0],out startVersion)||startVersion<0))
+                        return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                    if(followArguments.Length>1)
+                    {
+                        if(!int.TryParse(followArguments[1],out var seconds)||seconds is <1 or >3600)
+                            return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                        interval=TimeSpan.FromSeconds(seconds);
+                    }
+                    if(followArguments.Length>2)
+                    {
+                        if(!int.TryParse(followArguments[2],out var parsed)||parsed<=0)
+                            return UnknownCommand(["monitor","follow",followExam,..followArguments]);
+                        rounds=parsed;
+                    }
+                    var followTarget=await FindExam(followExam);var watch=new CollectionWatch(startVersion);var completed=0;var failures=0;
+                    do
+                    {
+                        var succeeded=false;
+                        try
+                        {
+                            await DrainCollectionAsync(followTarget,watch);
+                            failures=0;succeeded=true;
+                        }
+                        catch(Exception error)when(IsRetryableWatchFailure(error))
+                        {
+                            // 与考务端弹窗同口径：整页无效不前进游标、网络与 5xx 都继续等待重试；
+                            // 鉴权或请求本身无效无法靠重试解决，交给外层按退出码约定失败。
+                            failures++;
+                            var note=$"收齐事件读取失败（连续第 {failures} 次）：{DescribeWatchFailure(error)}";
+                            WriteLiveDiagnostic(note);
+                        }
+                        // 只有成功读完一轮才算一轮：持续失败不得因为“轮数到点”而以 0 退出。
+                        if(succeeded)completed++;
+                        if(rounds is { } limit&&completed>=limit)return 0;
+                        await Task.Delay(interval,ct);
+                    }
+                    while(true);
                 }
                 case ("publications",["publish",var examName]):
                 {

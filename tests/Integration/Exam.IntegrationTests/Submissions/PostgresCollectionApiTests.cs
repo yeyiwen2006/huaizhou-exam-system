@@ -9,11 +9,15 @@ using Exam.Contracts.Common;
 using Exam.Contracts.Submissions;
 using Exam.Domain.Submissions;
 using Exam.Infrastructure.Postgres.Submissions;
+using Exam.Infrastructure.Postgres.Exams;
+using Exam.Infrastructure.Postgres.Versioning;
+using Exam.Contracts.Versioning;
+using Exam.IntegrationTests.Cli;
+using System.Text.Json;
 using Exam.Server.Api;
 using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Exam.IntegrationTests.Submissions;
@@ -24,12 +28,24 @@ public sealed partial class PostgresSubmissionStoreTests
     public async Task Collection_HttpApiRequiresOperatorAndReplaysAuthoritativeEvents()
     {
         var operatorToken = await SyntheticOperators.LoginAsync(fixture.DataSource, "operator-test");
-        var first = await SeedParticipationAsync();
+        var catalog = new PostgresExamCatalog(fixture.DataSource, new PostgresExamVersioningService(fixture.DataSource), TimeProvider.System);
+        var now = DateTimeOffset.UtcNow;
+        var created = await catalog.CreateAsync(new(Id("collection-create"), Id("合成回收考试"), new(now.AddHours(1), now.AddHours(2)),
+            new([new("subject", "合成科目", "3", [new("group", "合成题组", "single", 1, 1, "3", false,
+                new("3", "0", "0"), null)])])), "operator-test");
+        var first = await SeedParticipationAsync(examId: created.Summary.ExamId);
         var missing = await SeedParticipationAsync(examId: first.ExamId);
         await SaveFinalAsync(first);
         var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
+        var identity = new ServerNodeEnvelope(Id("api-server"), "node-a", 1);
+        builder.Configuration["ExamServer:ServerId"] = identity.ServerId;
+        builder.Configuration["ExamServer:NodeId"] = identity.NodeId;
+        builder.Configuration["ExamServer:ServerEpoch"] = "1";
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton(fixture.DataSource);
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IExamVersioningService, PostgresExamVersioningService>();
+        builder.Services.AddSingleton<PostgresExamCatalog>();
         builder.Services.AddSingleton<ISubmissionStore, PostgresSubmissionStore>();
         builder.Services.AddSingleton<IGradingTaskQueue, PostgresGradingTaskQueue>();
         builder.Services.AddSingleton<PostgresCollectionCompletionStore>();
@@ -42,16 +58,17 @@ public sealed partial class PostgresSubmissionStoreTests
         builder.Services.AddSingleton<FocusEventService>();
         builder.Services.AddPostgresOperatorAccounts();
         builder.Services.AddSingleton<IDeviceCredentialValidator, CollectionTestDeviceValidator>();
-        builder.Services.AddSingleton(new ServerNodeEnvelope(Id("api-server"), "node-a", 1));
+        builder.Services.AddSingleton(identity);
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource, new ServerIdentityOptions
         {
-            ServerId = Id("api-server"), NodeId = "node-a", ServerEpoch = 1
+            ServerId = identity.ServerId, NodeId = identity.NodeId, ServerEpoch = identity.ServerEpoch
         }, true));
         await using var app = builder.Build();
         app.UseMiddleware<ExamApiAccessMiddleware>();
         app.MapGroup("/api/v1").MapSubmissionApi();
+        app.MapGroup("/api/v1").MapExamCatalogApi();
         await app.StartAsync();
-        using var client = app.GetTestClient();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
         var url = $"/api/v1/submissions/collection/events?examId={first.ExamId}&afterRosterVersion=0";
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(url)).StatusCode);
         client.DefaultRequestHeaders.Add("X-Exam-Device-Id", first.DeviceId);
@@ -70,6 +87,14 @@ public sealed partial class PostgresSubmissionStoreTests
         Assert.Equal(2, item.ParticipantCount);
         Assert.Equal(2, item.RosterVersion);
         Assert.Equal(item, Assert.Single((await client.GetFromJsonAsync<ApiEnvelope<CollectionCompletedNotification[]>>(url))!.Result!));
+        var exam = (await app.Services.GetRequiredService<PostgresExamCatalog>().ListAsync()).Single(x => x.ExamId == first.ExamId);
+        var cli = await CliProcess.RunWithTokenAsync(operatorToken, "monitor", "watch", exam.Name, "--server", app.Urls.Single());
+        Assert.Equal(0, cli.Exit);
+        Assert.Equal(item, JsonSerializer.Deserialize<CollectionCompletedNotification>(cli.Out, JsonDefaults.Create()));
+        var tail = await CliProcess.RunWithTokenAsync(operatorToken, "monitor", "watch", exam.Name,
+            item.RosterVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), "--server", app.Urls.Single());
+        Assert.Equal(0, tail.Exit);
+        Assert.Empty(tail.Out);
         var next = await client.GetFromJsonAsync<ApiEnvelope<CollectionCompletedNotification[]>>(
             $"/api/v1/submissions/collection/events?examId={first.ExamId}&afterRosterVersion={item.RosterVersion}");
         Assert.Empty(next!.Result!);
