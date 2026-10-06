@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -379,6 +379,8 @@ public sealed class GroupDraftViewModel : BindableBase
     private string _type = "single";
     private int _order = 1;
     private int _questionCount = 1;
+    private string _orderText = "1";
+    private string _questionCountText = "1";
     private string _maxScore = "1";
     private bool _allowAbstain;
     private string _correct = "1";
@@ -393,8 +395,38 @@ public sealed class GroupDraftViewModel : BindableBase
     public string Name { get => _name; set => SetProperty(ref _name, value); }
     public string Type { get => _type; set { if (SetProperty(ref _type, value)) OnPropertyChanged(nameof(TypeLabel)); } }
     public string TypeLabel => Type switch { "single" => "单项选择题", "multiple" => "多项选择题", "indeterminate" => "不定项选择题", _ => "未选择" };
-    public int Order { get => _order; set => SetProperty(ref _order, value); }
-    public int QuestionCount { get => _questionCount; set => SetProperty(ref _questionCount, value); }
+    // Preserve invalid input in the draft instead of letting WPF retain a previously valid integer.
+    // The existing domain rules reject zero, so neither save path can submit that stale value.
+    public int Order
+    {
+        get => _order;
+        set { SetProperty(ref _order, value); OrderText = value.ToString(CultureInfo.InvariantCulture); }
+    }
+    public int QuestionCount
+    {
+        get => _questionCount;
+        set { SetProperty(ref _questionCount, value); QuestionCountText = value.ToString(CultureInfo.InvariantCulture); }
+    }
+    public string OrderText
+    {
+        get => _orderText;
+        set
+        {
+            if (SetProperty(ref _orderText, value))
+                SetProperty(ref _order, ParseDraftInteger(value), nameof(Order));
+        }
+    }
+    public string QuestionCountText
+    {
+        get => _questionCountText;
+        set
+        {
+            if (SetProperty(ref _questionCountText, value))
+                SetProperty(ref _questionCount, ParseDraftInteger(value), nameof(QuestionCount));
+        }
+    }
+    private static int ParseDraftInteger(string value) =>
+        int.TryParse(value?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
     public string MaxScore { get => _maxScore; set => SetProperty(ref _maxScore, value); }
     public bool AllowAbstain { get => _allowAbstain; set => SetProperty(ref _allowAbstain, value); }
     public string Correct { get => _correct; set => SetProperty(ref _correct, value); }

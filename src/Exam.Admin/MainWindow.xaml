@@ -276,11 +276,11 @@
                                         </StackPanel>
                                         <StackPanel Width="100" Margin="0,0,16,0">
                                             <TextBlock Text="顺序" Style="{StaticResource FormLabel}"/>
-                                            <TextBox Text="{Binding Order, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            <TextBox Text="{Binding OrderText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
                                         </StackPanel>
                                         <StackPanel Width="100" Margin="0,0,16,0">
                                             <TextBlock Text="题量" Style="{StaticResource FormLabel}"/>
-                                            <TextBox Text="{Binding QuestionCount, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
+                                            <TextBox Text="{Binding QuestionCountText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
                                         </StackPanel>
                                         <StackPanel Width="100" Margin="0,0,16,0">
                                             <TextBlock Text="满分" Style="{StaticResource FormLabel}"/>
