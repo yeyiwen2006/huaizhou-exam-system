@@ -6,9 +6,9 @@
 
 1. 两台主机安装完全相同的 PostgreSQL 18 补丁版本，并创建独立的 Windows 服务账户、数据库数据盘、WAL 归档盘和防火墙规则。
 2. 用实际局域网地址替换 `{{...}}` 占位符。复制 `primary/postgresql.conf.fragment` 和 `pg_hba.conf.fragment` 的有效项到主库配置；建立专用 `REPLICATION LOGIN` 角色，口令放入 Windows 受保护配置或服务账户的 `pgpass.conf`，不能写进本仓库。
-3. 重启主库后确认归档命令成功，再在空的备用数据目录运行 `scripts/Initialize-Standby.ps1`。脚本只允许空目录，不会删除或覆盖旧主机数据。
+3. 重启主库后确认归档命令成功，在服务账户受保护环境设置 `PGSSLMODE=verify-full`、`PGSSLROOTCERT` 和 `pgpass.conf`，再在空的备用数据目录运行 `scripts/Initialize-Standby.ps1`，传入从已核实部署取得的 `ExpectedSystemIdentifier`。脚本核对主库身份、角色和 PostgreSQL 18 补丁版本，不会删除或覆盖旧主机数据；失败保留临时数据和复制槽，不自动删槽。
 4. 将 `standby/postgresql.conf.fragment` 的内容并入备用库配置，确认 `standby.signal`、`primary_conninfo`、复制槽和证书/题包密钥材料齐备后启动备用服务。
-5. 运行 `scripts/Test-ReplicationReadiness.ps1`。只有主库显示 `synchronous_commit=remote_apply`、同步备用名正确，且备用库处于 recovery、WAL 接收和重放位置持续前进，才能进入双机保护模式。
+5. 运行 `scripts/Test-ReplicationReadiness.ps1`，显式传入预期集群标识；连接 URI 必须使用 `sslmode=verify-full` 且不包含口令。检查角色、同一集群/数据库/补丁版本、精确同步备用名、接收器主机/槽/时间线、采样落盘边界、归档回执和有限复制槽保留量。它是时间点检查，不证明持续保护，不授权提升或应急。
 
 ## 故障和接管边界
 
@@ -52,3 +52,5 @@ Backup__ProtectedConfigurationDirectory
 ## 尚需真实环境完成的验收
 
 本目录能在单机上检查配置、脚本参数和数据库行为，但不能代替两台独立 Windows 主机。S20/S21 必须在实际网络上记录隔离方式、复制等待、接管耗时、客户端恢复、旧主重建和 300 会话数据一致性；没有该记录时不得把“双机接管已通过”写入发布结论。
+
+配置生成、统一空间/复制监测、调用既有 F01/F02 管理命令、保留策略及失败处置见 [F05 运维入口](../../docs/operations/postgresql-maintenance.md)。归档部署需要复制完整 `scripts` 目录，包含共享 `Postgresql.Operations.psm1`；旧脚本调用增加集群标识/TLS 参数要求，不能只更新单个文件。

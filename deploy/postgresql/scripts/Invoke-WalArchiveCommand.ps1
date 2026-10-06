@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
 try {
     if ([string]::IsNullOrWhiteSpace($SourcePath) -or
         [string]::IsNullOrWhiteSpace($WalFileName) -or
@@ -24,8 +25,8 @@ try {
         ([System.IO.File]::GetAttributes($target) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw 'The WAL archive target is missing or is a reparse point.'
     }
-    $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-    $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    $sourceHash = Get-SharedFileHash $source
+    $targetHash = Get-SharedFileHash $target
     if (-not [string]::Equals($sourceHash, $targetHash, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'The WAL archive target does not match the source.'
     }

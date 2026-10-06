@@ -1,0 +1,18 @@
+{
+  "psqlPath": "C:\\SyntheticExam\\PostgreSQL18\\bin\\psql.exe",
+  "primaryConnectionUri": "postgresql://exam_monitor@192.0.2.10:5432/exam?sslmode=verify-full",
+  "standbyConnectionUri": "postgresql://exam_monitor@192.0.2.11:5432/exam?sslmode=verify-full",
+  "expectedSystemIdentifier": "123456789",
+  "standbyApplicationName": "exam_standby",
+  "replicationSlot": "exam_standby",
+  "maximumSlotWalBytes": 8589934592,
+  "storage": {
+    "dataDirectory": "C:\\SyntheticExam\\database",
+    "archiveDirectory": "C:\\SyntheticExam\\wal-archive",
+    "resourceDirectory": "C:\\SyntheticExam\\resources",
+    "backupDirectory": "C:\\SyntheticExam\\backups",
+    "protectedConfigurationDirectory": "C:\\SyntheticExam\\protected",
+    "minimumAvailableBytes": 1073741824,
+    "minimumAvailablePercent": 10
+  }
+}

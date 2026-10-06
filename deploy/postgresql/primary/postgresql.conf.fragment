@@ -4,9 +4,13 @@ wal_level = replica
 max_wal_senders = 10
 max_replication_slots = 10
 wal_keep_size = '4096MB'
+# Example budget only: size against the actual storage/runbook and monitor slot invalidation.
+max_slot_wal_keep_size = '8192MB'
+fsync = on
+full_page_writes = on
 
 # A transaction is acknowledged only after the named standby has replayed it.
-synchronous_standby_names = 'FIRST 1 (exam_standby)'
+synchronous_standby_names = 'FIRST 1 ("{{STANDBY_APPLICATION_NAME}}")'
 synchronous_commit = remote_apply
 
 archive_mode = on

@@ -75,6 +75,11 @@ public sealed class HighAvailabilityDeploymentTests : IDisposable
         var options = new HighAvailabilityManagementOptions("server", "node-b", nodes, SelectionPath, Path.Combine(_root, "rebuild"),
             Path.Combine(_root, "bin"), Path.Combine(_root, "data"), "SyntheticPostgres", "SyntheticBusiness", "synthetic-peer-token",
             Path.Combine(_root, "postgresql.conf"));
+        var archive = Path.Combine(_root, "archive"); var scripts = Path.Combine(_root, "scripts");
+        Directory.CreateDirectory(archive); Directory.CreateDirectory(scripts);
+        foreach (var file in new[] { "Invoke-WalArchiveCommand.ps1", "Invoke-WalArchive.ps1", "Postgresql.Operations.psm1" })
+            File.WriteAllText(Path.Combine(scripts, file), "# Synthetic, not executed.");
+        options = options with { WalArchiveDirectory = archive, WalArchiveScriptsDirectory = scripts };
         var command = PostgresHighAvailabilityManagementPlatform.BuildPostgresServiceCommand(options);
         Assert.DoesNotContain("listen_addresses=127.0.0.1", command);
         Assert.Contains("config_file=", command);
