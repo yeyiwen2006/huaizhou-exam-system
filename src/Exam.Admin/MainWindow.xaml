@@ -577,8 +577,8 @@
                         </StackPanel>
                     </Border>
                     <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,12">
                             <StackPanel>
                                 <TextBlock Text="多设备冲突处理" Style="{StaticResource CardHeading}" />
                                 <TextBlock Text="同一考生从两台设备进入时，先在上表选中该考生，核对两台设备的编号、试场、连接与答题进度，再选择保留哪一台继续答题。" Style="{StaticResource CardNote}" />
@@ -588,17 +588,21 @@
                                         <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="90"/>
                                         <DataGridTextColumn Header="授权" Binding="{Binding AuthorizationText}" Width="90"/>
                                         <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionState}" Width="80"/>
-                                        <DataGridTextColumn Header="最后通信" Binding="{Binding LastCommunicationText}" Width="150"/>
-                                        <DataGridTextColumn Header="答题进度" Binding="{Binding ProgressText}" Width="*"/>
+                                        <DataGridTextColumn Header="最后通信" Binding="{Binding LastCommunicationText}" Width="190"/>
+                                        <DataGridTextColumn Header="最后保存答案" Binding="{Binding LastSyncedText}" Width="190"/>
+                                        <DataGridTextColumn Header="答题进度" Binding="{Binding ProgressText}" Width="*" MinWidth="180"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
+                                <Expander Header="排查详情" Margin="0,6,0,0">
+                                    <TextBlock Text="{Binding Monitoring.SelectedConflictDevice.DiagnosticText}" Style="{StaticResource CardNote}"/>
+                                </Expander>
                                 <TextBlock Text="选中要保留的设备后确认，原因会写入操作记录。" Style="{StaticResource CardNote}" Margin="0,8,0,0"/>
                                 <TextBlock Text="原因" Style="{StaticResource FormLabel}"/>
                                 <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.DecisionReason}" ToolTip="填写保留该设备的原因"/>
                                 <Button Content="确认保留该设备" Style="{StaticResource Btn.Danger}" HorizontalAlignment="Left" MinWidth="120" Padding="14,0" Command="{Binding Monitoring.DecideDeviceCommand}"/>
                             </StackPanel>
                         </Border>
-                        <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
+                        <Border Grid.Row="1" Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="重发考试指令" Style="{StaticResource CardHeading}" />
                                 <TextBlock Text="考生没有收到开始或结束指令时重发。先在上表选中该考生，再按名称选择要重发的指令。" Style="{StaticResource CardNote}" />

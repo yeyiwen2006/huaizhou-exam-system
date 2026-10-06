@@ -112,6 +112,15 @@ public sealed class UiScreenshotTests
                     Settle(window);
                 }
 
+                tabs.SelectedIndex = MainViewModel.MonitoringPage;
+                viewModel.Monitoring.SelectedRow = viewModel.Monitoring.Rows.First();
+                Settle(window);
+                var monitoringTab = Assert.IsType<TabItem>(tabs.Items[MainViewModel.MonitoringPage]);
+                var monitoringScroller = Assert.IsType<ScrollViewer>(monitoringTab.Content);
+                monitoringScroller.ScrollToEnd();
+                Settle(window);
+                SaveScreenshots(window, directory, "admin-monitoring-details").ToArray();
+
                 listener.Flush();
                 File.WriteAllText(Path.Combine(directory, "admin-binding-trace.txt"), output.ToString(), new UTF8Encoding(false));
                 Assert.Equal(tabs.Items.Count * Scales.Length * 2, written.Count);
