@@ -116,8 +116,8 @@ public sealed class UiScreenshotTests
                 viewModel.Monitoring.SelectedRow = viewModel.Monitoring.Rows.First();
                 Settle(window);
                 var monitoringTab = Assert.IsType<TabItem>(tabs.Items[MainViewModel.MonitoringPage]);
-                var scroller = Assert.IsType<ScrollViewer>(monitoringTab.Content);
-                scroller.ScrollToEnd();
+                var monitoringScroller = Assert.IsType<ScrollViewer>(monitoringTab.Content);
+                monitoringScroller.ScrollToEnd();
                 Settle(window);
                 SaveScreenshots(window, directory, "admin-monitoring-details").ToArray();
 
