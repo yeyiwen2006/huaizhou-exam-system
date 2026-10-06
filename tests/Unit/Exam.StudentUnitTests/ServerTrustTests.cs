@@ -181,6 +181,81 @@ public sealed class ServerTrustTests : IDisposable
         finally { listener.Stop(); await server; }
     }
 
+    [Fact]
+    public async Task TrustedPairIdentityChangeCannotReuseTlsAuthenticatedUnderThePreviousPin()
+    {
+        using var oldCertificate = CreateCertificate();
+        using var newCertificate = CreateCertificate();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var leakedRequests = 0;
+        var server = Task.Run(async () =>
+        {
+            try
+            {
+                while (!lifetime.IsCancellationRequested)
+                {
+                    using var tcp = await listener.AcceptTcpClientAsync(lifetime.Token);
+                    using var ssl = new SslStream(tcp.GetStream(), false);
+                    try
+                    {
+                        await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                            { ServerCertificate = oldCertificate }, lifetime.Token);
+                        while (!lifetime.IsCancellationRequested)
+                        {
+                            var bytes = new byte[8192];
+                            var headers = new StringBuilder();
+                            while (!headers.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                            {
+                                var read = await ssl.ReadAsync(bytes, lifetime.Token);
+                                if (read == 0) break;
+                                headers.Append(Encoding.UTF8.GetString(bytes, 0, read));
+                            }
+                            if (headers.Length == 0) break;
+                            if (headers.ToString().Contains("second-credential", StringComparison.Ordinal))
+                                Interlocked.Increment(ref leakedRequests);
+                            var body = Encoding.UTF8.GetBytes("""
+                                {"serverId":"pair","nodeId":"primary","serverEpoch":1,"correlationId":"synthetic",
+                                 "result":{"serverTime":"2026-10-05T12:00:00+08:00","server":{"serverId":"pair","nodeId":"primary","serverEpoch":1}},"error":null}
+                                """);
+                            await ssl.WriteAsync(Encoding.UTF8.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: keep-alive\r\n\r\n"), lifetime.Token);
+                            await ssl.WriteAsync(body, lifetime.Token);
+                            await ssl.FlushAsync(lifetime.Token);
+                        }
+                    }
+                    catch (Exception error) when (error is IOException or AuthenticationException) { }
+                }
+            }
+            catch (Exception error) when (error is IOException or SocketException or OperationCanceledException) { }
+        });
+        var oldPin = oldCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant();
+        var newPin = newCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant();
+        var first = CreateDevice(port, "pair") with
+        {
+            ServerEpoch = 1, ActiveNodeId = "primary",
+            Topology = new("pair", [new("127.0.0.1", port, "primary", oldPin), new("127.0.0.2", port, "standby", oldPin)])
+        };
+        try
+        {
+            using var api = new HttpStudentApi();
+            api.ConfigureConnection(first);
+            Assert.True((await api.GetServerTimeAsync(lifetime.Token)).IsSuccess);
+            api.ConfigureConnection(first with
+            {
+                DeviceId = "second-device", Credential = "second-credential",
+                Topology = new("pair", [new("127.0.0.1", port, "primary", newPin), new("127.0.0.2", port, "standby", newPin)])
+            });
+            await Assert.ThrowsAsync<HttpStudentApi.UntrustedServerException>(() => api.GetTrustedTopologyAsync(lifetime.Token));
+            Assert.Equal(0, Volatile.Read(ref leakedRequests));
+        }
+        finally
+        {
+            lifetime.Cancel(); listener.Stop(); await server;
+        }
+    }
+
     private static DeviceRecord CreateDevice(int port, string serverId = "b07-srv") => new(
         "device-b07", "credential", "A-001", "127.0.0.1", port, DateTimeOffset.UtcNow, serverId,
         ActivationStatus.Active);

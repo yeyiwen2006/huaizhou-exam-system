@@ -1,4 +1,4 @@
-﻿using System.Net.Http;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Exam.Contracts.Activation;
@@ -13,7 +13,9 @@ namespace Exam.Student.Core;
 /// <summary>Authenticated HTTPS transport. TLS validation is never bypassed and redirects are disabled.</summary>
 public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, IDisposable
 {
-    private readonly HttpClient _client;
+    private HttpClient _client;
+    private readonly bool _usesDefaultTransport;
+    private static readonly HttpRequestOptionsKey<long> RequestIdentity = new("Exam.IdentityGeneration");
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
     private DeviceRecord? _device;
     private Uri? _server;
@@ -40,22 +42,22 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
 
     public HttpStudentApi(HttpMessageHandler? handler)
     {
-        _client = new HttpClient(handler ?? CreateDefaultHandler())
-        {
-            Timeout = TimeSpan.FromSeconds(30),
-            MaxResponseContentBufferSize = 4 * 1024 * 1024
-        };
+        _usesDefaultTransport = handler is null;
+        _client = CreateClient(handler ?? CreateDefaultHandler(null));
     }
 
-    /// <summary>
-    /// TLS 校验遵循 ServerTrust：部署配置提供证书指纹时精确 pin，否则保持 Windows 标准链校验。
-    /// 回调在每次 TLS 握手时读取当前配置，应用启动完成前发出的请求同样受最终配置约束。
-    /// </summary>
-    private SocketsHttpHandler CreateDefaultHandler() => new()
+    private static HttpClient CreateClient(HttpMessageHandler handler) => new(handler)
+    {
+        Timeout = TimeSpan.FromSeconds(30),
+        MaxResponseContentBufferSize = 4 * 1024 * 1024
+    };
+
+    // A pool belongs to one trust context. New device/trust contexts must perform a new TLS handshake.
+    private static SocketsHttpHandler CreateDefaultHandler(TrustedServerTopology? topology) => new()
     {
         AllowAutoRedirect = false,
         SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
-            _device?.Topology is { } topology ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
+            topology is not null ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
                 : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
     };
 
@@ -64,9 +66,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         ArgumentNullException.ThrowIfNull(device);
         if (device.Port is < 1 or > 65535 || string.IsNullOrWhiteSpace(device.Host) ||
             Uri.CheckHostName(device.Host) == UriHostNameType.Unknown)
-        {
             throw new ArgumentException("服务器地址或端口无效。");
-        }
 
         var server = new UriBuilder(Uri.UriSchemeHttps, device.Host, device.Port).Uri;
         device.Topology?.Validate();
@@ -74,10 +74,24 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             !topology.Nodes.Any(node => node.Address == server) ||
             device.ActiveNodeId is not null && !topology.Nodes.Any(node => node.NodeId == device.ActiveNodeId)))
             throw new InvalidOperationException("主备逻辑身份与设备登记不一致。");
+        HttpClient? retired = null;
         lock (_connectionGate)
         {
-            if (_device?.Host != device.Host || _device?.Port != device.Port ||
-                _device?.DeviceId != device.DeviceId || _device?.Credential != device.Credential)
+            var identityChanged = _device?.Host != device.Host || _device?.Port != device.Port ||
+                _device?.DeviceId != device.DeviceId || _device?.Credential != device.Credential;
+            var topologyChanged = _device?.Topology is { } previousTopology
+                ? device.Topology is null || !previousTopology.Equivalent(device.Topology)
+                : device.Topology is not null;
+            if (!identityChanged)
+            {
+                if (_trustedServerId is not null && device.ServerId is not null && _trustedServerId != device.ServerId)
+                    throw new InvalidOperationException("服务器身份与已验证连接不一致。");
+                if (_device?.Topology is not null && topologyChanged)
+                    throw new InvalidOperationException("主备信任配置不可由连接刷新替换。");
+            }
+            var replacement = _usesDefaultTransport && (identityChanged || topologyChanged)
+                ? CreateClient(CreateDefaultHandler(device.Topology)) : null;
+            if (identityChanged)
             {
                 _identityGeneration++;
                 _connectionGeneration++;
@@ -88,19 +102,16 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             }
             else
             {
-                if (_trustedServerId is not null && device.ServerId is not null && _trustedServerId != device.ServerId)
-                {
-                    throw new InvalidOperationException("服务器身份与已验证连接不一致。");
-                }
-                if (_device?.Topology is { } previous && (device.Topology is null || !previous.Equivalent(device.Topology)))
-                    throw new InvalidOperationException("主备信任配置不可由连接刷新替换。");
+                if (topologyChanged) _connectionGeneration++;
                 _serverEpoch = Math.Max(_serverEpoch, device.ServerEpoch);
                 _trustedServerId ??= device.ServerId;
                 _nodeId ??= device.Topology?.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId;
             }
-
             _device = device with { ServerEpoch = _serverEpoch, ActiveNodeId = _nodeId ?? device.ActiveNodeId };
+            if (replacement is not null) { retired = _client; _client = replacement; }
         }
+        // Cancel the old pool outside the state lock; its responses are fenced by the generation checks.
+        retired?.Dispose();
     }
 
     public Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(
@@ -211,6 +222,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     private HttpRequestMessage CreateRequest(HttpMethod method, string path, bool authenticated)
     {
         var request = new HttpRequestMessage(method, ResolveSameServer(path));
+        request.Options.Set(RequestIdentity, _identityGeneration);
         if (authenticated)
         {
             var device = _device ?? throw new InvalidOperationException("设备身份尚未配置。");
@@ -226,7 +238,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     {
         try
         {
-            return await _client.SendAsync(request, completion, ct);
+            Task<HttpResponseMessage> pending;
+            lock (_connectionGate)
+            {
+                if (request.Options.TryGetValue(RequestIdentity, out var identity) && identity != _identityGeneration)
+                    throw new IdentityRejectedException("设备身份已切换，停止原请求。");
+                pending = _client.SendAsync(request, completion, ct);
+            }
+            return await pending;
         }
         catch (HttpRequestException error) when (ContainsAuthenticationError(error))
         {
@@ -272,6 +291,17 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     }
 
     private async Task<ApiEnvelope<T>> SendOnceAsync<T>(
+        HttpMethod method, string path, byte[]? body, bool authenticated, long identityGeneration, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // A silent former primary must not stall the small read-only time probe for 30 seconds.
+        if (typeof(T) == typeof(ServerTimeSnapshot)) deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        try { return await SendOnceCoreAsync<T>(method, path, body, authenticated, identityGeneration, deadline.Token); }
+        catch (OperationCanceledException error) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        { throw new HttpRequestException("可信服务器探测超时，原登记和答卷已保留。", error); }
+    }
+
+    private async Task<ApiEnvelope<T>> SendOnceCoreAsync<T>(
         HttpMethod method, string path, byte[]? body, bool authenticated, long identityGeneration, CancellationToken ct)
     {
         HttpRequestMessage message;

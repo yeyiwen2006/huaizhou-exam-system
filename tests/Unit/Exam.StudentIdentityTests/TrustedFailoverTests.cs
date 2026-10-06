@@ -177,15 +177,24 @@ public sealed class TrustedFailoverTests : IDisposable
         Assert.Equal(2, store.Load()!.ServerEpoch);
     }
 
-    [Fact]
-    public async Task LiveRuntimeRecreatesNotificationFeedWithoutReplacingParticipationOrDevice()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LiveRuntimeRecreatesNotificationFeedWithoutReplacingParticipationOrDevice(bool silentPrimary)
     {
         var oldStopped = false;
         var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var participation = new ParticipationResult("participation", "exam", "candidate", ParticipationBusinessState.Answering,
             "device", 3, 4, 6, null);
-        using var api = new HttpStudentApi(new Handler(request => request.RequestUri!.Host == "127.0.0.1"
-            ? throw new HttpRequestException("primary unavailable") : Task.FromResult(Time())));
+        using var api = new HttpStudentApi(new CancelableHandler(async (request, ct) =>
+        {
+            if (request.RequestUri!.Host == "127.0.0.1")
+            {
+                if (silentPrimary) await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new HttpRequestException("primary unavailable");
+            }
+            return Time();
+        }));
         api.PersistTrustedConnection = _ => { };
         api.ConfigureConnection(Device());
         var session = new StudentSessionResult("session", "device", new("candidate", "合成考生", "01", "0001"), ["exam"], DateTimeOffset.UtcNow);
@@ -204,6 +213,24 @@ public sealed class TrustedFailoverTests : IDisposable
         Assert.Same(manager, runtime.Manager);
         await runtime.RevokeSubmissionAuthorizationAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.StartNotificationsAsync(participation, new("logical", "standby", 2)));
+    }
+
+    [Fact]
+    public async Task CallerCancellationNeverProbesAnotherNodeOrChangesProtectedIdentity()
+    {
+        var calls = 0;
+        using var api = new HttpStudentApi(new CancelableHandler(async (_, ct) =>
+        {
+            Interlocked.Increment(ref calls);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            throw new InvalidOperationException("unreachable");
+        }));
+        api.ConfigureConnection(Device());
+        api.PersistTrustedConnection = _ => throw new InvalidOperationException("must not persist");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => api.GetServerTimeAsync(cancellation.Token));
+        Assert.Equal(1, calls);
+        Assert.Equal("primary", api.CurrentTrustedEndpoint!.Value.Server.NodeId);
     }
 
     [Fact]
@@ -240,6 +267,8 @@ public sealed class TrustedFailoverTests : IDisposable
     }
 
     public void Dispose() { ServerTrust.Configure(null); if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+    private sealed class CancelableHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> route) : HttpMessageHandler
+    { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => route(request, ct); }
     private sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> route) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => route(request); }
 }

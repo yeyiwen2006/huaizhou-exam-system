@@ -70,7 +70,7 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         deadline.CancelAfter(TimeSpan.FromMinutes(5));
         HttpResponseMessage received;
         try { received = await SendTrustedAsync(request, deadline.Token, HttpCompletionOption.ResponseHeadersRead); }
-        catch (Exception error) when (error is HttpRequestException and not UntrustedServerException ||
+        catch (Exception error) when (error is HttpRequestException and not UntrustedServerException and not IdentityRejectedException ||
             error is OperationCanceledException && !ct.IsCancellationRequested)
         {
             if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
@@ -91,7 +91,7 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         }
         lock (_connectionGate)
         {
-            if (generation != _connectionGeneration) { throw new DownloadEndpointChangedException(); }
+            EnsureDownloadContext(identityGeneration, generation);
             ValidateIdentity(serverId, Header(response, "X-Exam-Node-Id"), epoch);
             ValidateServer(serverId, epoch);
         }
@@ -115,15 +115,23 @@ public sealed partial class HttpStudentApi : IExamPackageApi
             if (total > descriptor.PackageLength) { throw new IOException("试题包长度超出准备记录。"); }
             lock (_connectionGate)
             {
-                if (generation != _connectionGeneration) { throw new DownloadEndpointChangedException(); }
+                EnsureDownloadContext(identityGeneration, generation);
             }
             yield return buffer[..count];
         }
+        lock (_connectionGate) { EnsureDownloadContext(identityGeneration, generation); }
         if (total != descriptor.PackageLength)
         {
             if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
             throw new IOException("试题包未下载完整。");
         }
+    }
+
+    private void EnsureDownloadContext(long identityGeneration, long generation)
+    {
+        if (identityGeneration != _identityGeneration)
+            throw new IdentityRejectedException("设备身份已切换，停止原题包请求；原文件已保留。");
+        if (generation != _connectionGeneration) throw new DownloadEndpointChangedException();
     }
 
     private static string Header(HttpResponseMessage response, string name) =>

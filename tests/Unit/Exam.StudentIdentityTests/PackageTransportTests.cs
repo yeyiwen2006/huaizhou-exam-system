@@ -61,6 +61,30 @@ public sealed class PackageTransportTests
         });
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IdentityChangesBeforeHeadersOrAtEndOfStreamCannotRetryTheOldSession(bool beforeHeaders)
+    {
+        HttpStudentApi? current = null;
+        var calls = 0;
+        void ChangeIdentity() => current!.ConfigureConnection(new("other-device", "other-credential", "other-client",
+            "127.0.0.1", 5443, default, "server", ActivationStatus.Active, ServerEpoch: 1));
+        using var api = Create(_ =>
+        {
+            calls++;
+            if (beforeHeaders) ChangeIdentity();
+            return PackageResponse();
+        });
+        current = api;
+        await Assert.ThrowsAsync<HttpStudentApi.IdentityRejectedException>(async () =>
+        {
+            await foreach (var _ in api.DownloadPackageChunksAsync(Descriptor(), "original-preparation", "original-session"))
+                ChangeIdentity();
+        });
+        Assert.Equal(1, calls);
+    }
+
     private static ExamResourceDescriptor Descriptor() => new("/api/v1/resources/paper", 3, 1, 1);
 
     private static HttpStudentApi Create(Func<HttpRequestMessage, HttpResponseMessage> respond)
