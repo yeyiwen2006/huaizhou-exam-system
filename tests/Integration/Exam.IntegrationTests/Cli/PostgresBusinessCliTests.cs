@@ -16,6 +16,7 @@ using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -34,8 +35,14 @@ public sealed class WindowsBusinessCliFactAttribute : FactAttribute
 
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresBusinessCliTests(PostgresDatabaseFixture database)
+public sealed class PostgresBusinessCliTests : IAsyncLifetime
 {
+    // The real startup probe inspects the whole database. Other module tests intentionally
+    // leave incompatible recovery material; each CLI workflow therefore owns a fresh database.
+    private readonly PostgresDatabaseFixture database = new();
+    public Task InitializeAsync() => database.InitializeAsync();
+    public Task DisposeAsync() => database.DisposeAsync();
+
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
     private static string Id() => Guid.NewGuid().ToString("N");
 
@@ -151,7 +158,7 @@ public sealed class PostgresBusinessCliTests(PostgresDatabaseFixture database)
         public static async Task<Host> StartAsync(PostgresDatabaseFixture database)
         {
             var actor="cli-"+Id()[..28];var token=await SyntheticOperators.LoginAsync(database.DataSource,actor);
-            var builder=WebApplication.CreateBuilder();builder.Logging.ClearProviders();builder.WebHost.UseUrls("http://127.0.0.1:0");
+            var builder=WebApplication.CreateBuilder();builder.Configuration.Sources.Clear();builder.Configuration.AddInMemoryCollection();builder.Logging.ClearProviders();builder.WebHost.UseUrls("http://127.0.0.1:0");
             var identity=new ServerIdentityOptions{ServerId="cli-server-"+Id(),NodeId="node-a",ServerEpoch=1};
             builder.Configuration["ConnectionStrings:Exam"]=database.ConnectionString;
             builder.Configuration["ExamServer:ServerId"]=identity.ServerId;builder.Configuration["ExamServer:NodeId"]=identity.NodeId;builder.Configuration["ExamServer:ServerEpoch"]="1";
@@ -180,7 +187,9 @@ public sealed class PostgresBusinessCliTests(PostgresDatabaseFixture database)
                 await app.StartAsync();
                 using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 var guard = app.Services.GetRequiredService<BusinessRecoveryGuard>();
-                while (!guard.Snapshot.Ready) await Task.Delay(20, ready.Token);
+                try { while (!guard.Snapshot.Ready) await Task.Delay(20, ready.Token); }
+                catch (OperationCanceledException) when (ready.IsCancellationRequested)
+                { throw new TimeoutException("Synthetic CLI startup checks: " + JsonSerializer.Serialize(guard.Snapshot, Json)); }
                 return host;
             }
             catch{await app.DisposeAsync();throw;}
