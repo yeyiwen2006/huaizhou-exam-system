@@ -12,7 +12,7 @@ namespace Exam.Infrastructure.Postgres.Administration;
 public sealed class PostgresDevicePresenceService(NpgsqlDataSource source,TimeProvider? timeProvider=null)
 {
     private readonly TimeProvider _time=timeProvider??TimeProvider.System;
-    private static readonly HashSet<string> Pages = ["登录","选择考试","等待考试","正在答题","交卷确认","回收中","交卷反馈","已退出"];
+    private static readonly HashSet<string> Pages = ["登录","选择考试","等待考试","正在答题","正在答题（已切出）","本地保存失败","交卷确认","回收中","交卷反馈","已退出"];
     private static readonly HashSet<string> Downloads = ["未下载","下载中","已下载","更新中","已更新","失败"];
     public Task<DevicePresenceLease> OpenAsync(string deviceId,OpenDevicePresenceRequest request,CancellationToken ct=default)
     {

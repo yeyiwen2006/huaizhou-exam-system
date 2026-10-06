@@ -45,7 +45,7 @@ public sealed partial class CollectionPollingTests
     }
 
     [Fact]
-    public async Task Polling_StopsOnPageExitDisconnectAndDispose()
+    public async Task Polling_KeepsRemindingOffPageAndStopsOnDisconnectAndDispose()
     {
         var calls = 0;
         using var handler = new Handler((request, _) =>
@@ -59,13 +59,11 @@ public sealed partial class CollectionPollingTests
             ExamId = "exam-a", IsPageActive = true, ConnectionReady = true
         };
         await UntilAsync(() => Volatile.Read(ref calls) >= 2);
+        // 收齐提醒不依赖页面是否在前台：离开监测页仍要继续轮询（需求要求任意页面都能收到收齐提醒）。
+        var beforeExit = Volatile.Read(ref calls);
         vm.IsPageActive = false;
+        await UntilAsync(() => Volatile.Read(ref calls) > beforeExit);
         var stopped = Volatile.Read(ref calls);
-        await Task.Delay(85);
-        Assert.Equal(stopped, Volatile.Read(ref calls));
-
-        vm.IsPageActive = true;
-        await UntilAsync(() => Volatile.Read(ref calls) > stopped);
         api.Disconnect();
         stopped = Volatile.Read(ref calls);
         await Task.Delay(85);
@@ -205,7 +203,7 @@ public sealed partial class CollectionPollingTests
         api.Disconnect();
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         await vm.RefreshCollectionEventsAsync();
-        Assert.Equal(4, reminders.Count); // Identical event IDs from another server are independent.
+        Assert.Equal(5, reminders.Count); // 两个名单版本在另一服务器各自提醒一次。
         Assert.Equal(2, reminders[^1].RosterVersion);
     }
 
@@ -294,4 +292,24 @@ public sealed partial class CollectionPollingTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
             route(request, token);
     }
+
+    [Fact]
+    public async Task CollectionReminder_ArrivesWhileTheMonitoringPageIsNotOpen()
+    {
+        using var handler = new Handler((request, _) =>
+            Task.FromResult(Success(new[] { Event("exam-a", 1) })));
+        using var api = Configured(handler);
+        using var vm = new MonitoringViewModel(api, TimeSpan.FromMilliseconds(25)) { ExamId = "exam-a" };
+        var reminded = new List<CollectionCompletedNotification>();
+        vm.CollectionCompleted += reminded.Add;
+
+        // 连接就绪才开始轮询：没有打开监测页（IsPageActive=false）也要收到收齐提醒。
+        vm.ConnectionReady = true;
+        await UntilAsync(() => reminded.Count == 1);
+
+        Assert.False(vm.IsPageActive);
+        Assert.Single(vm.CollectionEvents);
+        Assert.Equal("exam-a", reminded[0].ExamId);
+    }
+
 }

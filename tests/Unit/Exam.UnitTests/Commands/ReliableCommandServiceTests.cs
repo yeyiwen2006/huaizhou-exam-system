@@ -7,31 +7,6 @@ namespace Exam.UnitTests.Commands;
 public sealed class ReliableCommandServiceTests
 {
     [Fact]
-    public async Task UploadRequest_CannotFreezeAnActiveExam()
-    {
-        var fixture = new CommandFixture(ExamLifecycle.Running);
-        var result = await fixture.Service.CreateAsync(fixture.CreateRequest(CommandEventType.UploadRequested));
-        Assert.Equal(CommandErrorCode.VersionConflict, result.ErrorCode);
-        Assert.Null(await fixture.Store.FindAsync("event-1"));
-    }
-
-    [Fact]
-    public async Task UploadRequest_IsDurableAndReplayableAfterExamEnd()
-    {
-        var fixture = new CommandFixture(ExamLifecycle.Ended);
-        var request = fixture.CreateRequest(CommandEventType.UploadRequested);
-        Assert.True((await fixture.Service.CreateAsync(request)).IsSuccess);
-        Assert.True((await fixture.Service.CreateAsync(request)).IsSuccess);
-        var delivery = Assert.Single((await fixture.GetDueAsync()).Value!);
-        Assert.Equal(CommandEventType.UploadRequested, delivery.EventType);
-        Assert.Null(delivery.ProtectedUnlockReference);
-        fixture.Access.Set(fixture.AccessState with { AuthorizedDeviceId = "replacement", AuthorizationVersion = 2 });
-        fixture.Clock.Advance(TimeSpan.FromSeconds(2));
-        var stale = await fixture.GetDueAsync();
-        Assert.Equal(CommandErrorCode.AuthorizationRevoked, stale.ErrorCode);
-    }
-
-    [Fact]
     public async Task ScheduleDelivery_CarriesPersistedTimesAndKeepsThemAcrossRetry()
     {
         var fixture = new CommandFixture();
@@ -298,6 +273,22 @@ public sealed class ReliableCommandServiceTests
         Assert.True(first.IsSuccess);
         Assert.True(replay.IsSuccess);
         Assert.Equal("event-1", replay.Value!.EventId);
+    }
+
+    [Fact]
+    public async Task ManualEndResend_WakesUncollectedDeviceWithoutReopeningAutomaticDelivery()
+    {
+        var fixture = new CommandFixture(ExamLifecycle.Ended);
+        await fixture.Service.CreateAsync(fixture.CreateRequest(CommandEventType.End));
+        await fixture.Service.AcknowledgeAsync(fixture.Ack(CommandProcessingResult.Applied, "ack-end"));
+        var resent = await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1);
+        Assert.True(resent.IsSuccess);
+        Assert.Equal(CommandEventType.End, resent.Value!.EventType);
+        Assert.Empty((await fixture.GetDueAsync()).Value!);
+        fixture.Access.Set(fixture.AccessState with { BusinessState = ParticipationBusinessState.Submitted });
+        Assert.False((await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1)).IsSuccess);
+        fixture.Access.Set(fixture.AccessState with { AuthorizedDeviceId = "new-device", AuthorizationVersion = 2 });
+        Assert.False((await fixture.Service.ResendAsync("event-1", "participation-1", 1, "device-1", 1)).IsSuccess);
     }
 
     private sealed class CommandFixture

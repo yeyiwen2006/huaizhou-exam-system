@@ -244,9 +244,8 @@ public sealed partial class AdminApiClient : IDisposable
         long entryVersion,
         string deviceId,
         long authorizationVersion,
-        CancellationToken cancellationToken = default)
-    {
-        var delivery = await SendAsync<CommandDelivery>(
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<CommandEventView>(
             HttpMethod.Post,
             $"api/v1/commands/{Uri.EscapeDataString(eventId)}/resend",
             new
@@ -258,10 +257,6 @@ public sealed partial class AdminApiClient : IDisposable
                 authorizationVersion
             },
             cancellationToken);
-        return new CommandEventView(delivery.EventId, delivery.ExamId, delivery.ParticipationId,
-            delivery.EntryVersion, delivery.EventType, delivery.StateVersion, delivery.TargetDeviceId,
-            delivery.TargetAuthorizationVersion, delivery.ResourceVersion, delivery.CreatedAt, false, delivery.DeliveryAttempt);
-    }
 
     private async Task<T> SendAsync<T>(
         HttpMethod method,

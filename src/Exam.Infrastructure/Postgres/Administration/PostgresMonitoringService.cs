@@ -38,7 +38,7 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                    p.business_state,p.entry_version,p.authorization_version,p.version,p.current_paper_version,
                    coalesce(progress.answer_version,0) AS answer_version,
                    coalesce(progress.paper_version,presence.installed_paper_version,0) AS installed_paper_version,
-                   coalesce(progress.answers,'{}'::jsonb)::text AS answers,
+                   coalesce(final.frozen_answers,progress.answers,'{}'::jsonb)::text AS answers,
                    coalesce(presence.current_question_id,progress.current_question_id) AS current_question_id,
                    presence.page,presence.download_state,presence.last_seen_at,presence.disconnected_at,presence.recovering,
                    final.receipt_id,final.received_at,coalesce(focus.count,0) AS focus_count,
@@ -50,6 +50,8 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
               LEFT JOIN exam.participation_progress progress ON progress.participation_id=p.participation_id
                   AND progress.entry_version=p.entry_version
               LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id AND presence.exam_id=p.exam_id
+                  AND EXISTS (SELECT 1 FROM exam.student_sessions s WHERE s.session_id=presence.session_id
+                      AND s.device_id=d.device_id AND s.candidate_ids_by_exam->>p.exam_id=p.candidate_id)
               LEFT JOIN exam.final_submissions final ON final.participation_id=p.participation_id
               LEFT JOIN focus ON focus.participation_id=p.participation_id
              WHERE p.exam_id=$1 AND p.business_state IN ('waiting','answering','submitted')
@@ -92,8 +94,8 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                 var eventType=Enum.Parse<CommandEventType>(Text(reader,"event_type")!);
                 var ack=Text(reader,"acknowledgement_result");
                 var canResend=(eventType is CommandEventType.Start or CommandEventType.End)&&
-                    ack is not ("Applied" or "RejectedAsStale")&&participant.ReceiptId is null&&
-                    (eventType!=CommandEventType.Start||version?.LifecycleState!=ExamLifecycle.Ended);
+                    ack!="RejectedAsStale"&&(ack!="Applied"||eventType==CommandEventType.End)&&participant.ReceiptId is null&&
+                    (eventType==CommandEventType.End?version?.LifecycleState==ExamLifecycle.Ended:version?.LifecycleState==ExamLifecycle.Running);
                 if(!commands.TryGetValue(id,out var list))commands[id]=list=[];
                 list.Add(new(Text(reader,"event_id")!,eventType,Long(reader,"state_version"),
                     ack switch {"Applied"=>"已执行","Received"=>"已收到","ResourceUpdateFailed"=>"资源更新失败","RejectedAsStale"=>"已拒绝过期指令",_=>"待确认"},
@@ -106,14 +108,19 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                    d.device_id=p.authorized_device_id AS authorized,presence.last_seen_at,presence.disconnected_at,
                    presence.recovering,presence.page,
                    CASE WHEN progress.device_id=d.device_id THEN progress.answer_version ELSE 0 END AS answer_version,
-                   CASE WHEN progress.device_id=d.device_id THEN progress.last_synced_at END AS last_synced_at,
-                   CASE WHEN progress.device_id=d.device_id THEN progress.answers::text ELSE '{}' END AS saved_answers
+                   CASE WHEN progress.device_id=d.device_id THEN progress.last_synced_at ELSE NULL END AS last_synced_at,
+                   CASE WHEN progress.device_id=d.device_id THEN
+                     (SELECT count(*)::integer FROM jsonb_each(progress.answers) answer
+                       WHERE answer.value->>'kind' IN ('selected','abstain')) ELSE 0 END AS saved_answer_count
               FROM exam.participation_device_conflicts x
               JOIN exam.participations p ON p.participation_id=x.participation_id
               JOIN exam.activation_devices d ON d.device_id IN (x.original_device_id,x.pending_device_id)
               LEFT JOIN exam.room_groups g ON g.group_id=d.room_group_id
-              LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id
+              LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id AND presence.exam_id=p.exam_id
+                  AND EXISTS (SELECT 1 FROM exam.student_sessions s WHERE s.session_id=presence.session_id
+                      AND s.device_id=d.device_id AND s.candidate_ids_by_exam->>p.exam_id=p.candidate_id)
               LEFT JOIN exam.participation_progress progress ON progress.participation_id=p.participation_id
+                  AND progress.entry_version=p.entry_version
              WHERE p.exam_id=$1 AND p.business_state IN ('waiting','answering')
              ORDER BY x.participation_id,authorized DESC,d.client_number;
             """,examId))
@@ -126,15 +133,17 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                 list.Add(new(Text(reader,"device_id")!,Text(reader,"client_number")!,Text(reader,"group_name")!,
                     ConnectionStatusPolicy.Evaluate(now,seen,Time(reader,"disconnected_at"),Bool(reader,"recovering")),
                     seen,Bool(reader,"authorized"),Long(reader,"answer_version"),Text(reader,"page")??"未报告")
-                {
-                    LastSyncedAt=Time(reader,"last_synced_at"),
-                    SavedAnswerCount=(JsonSerializer.Deserialize<Dictionary<string,AnswerValue>>(Text(reader,"saved_answers")!,AdministrationSql.Json)
-                        ??throw new InvalidDataException("冲突设备的已保存答案无效。"))
-                        .Count(pair=>pair.Value.Kind!=AnswerKind.Empty)
-                });
+                { LastSyncedAt=Time(reader,"last_synced_at"),SavedAnswerCount=reader.GetInt32(reader.GetOrdinal("saved_answer_count")) });
             }
         }
-        rows=rows.Select(row=>row with{Commands=commands.GetValueOrDefault(row.ParticipationId)??[],ConflictDevices=conflicts.GetValueOrDefault(row.ParticipationId)??[]}).ToList();
+        var questions=version?.Paper?.Structure.Questions.ToDictionary(q=>q.QuestionId,StringComparer.Ordinal);
+        rows=rows.Select(row=>row with
+        {
+            Commands=commands.GetValueOrDefault(row.ParticipationId)??[],
+            ConflictDevices=conflicts.GetValueOrDefault(row.ParticipationId)??[],
+            CurrentQuestionNo=row.CurrentQuestionId is {} questionId&&questions?.TryGetValue(questionId,out var question)==true?question.QuestionNo:null,
+            CurrentOptionIds=row.CurrentQuestionId is {} currentId&&questions?.TryGetValue(currentId,out var current)==true?current.OptionIds:null
+        }).ToList();
         long rosterVersion=0;
         await using(var head=AdministrationSql.Command(c,t,"SELECT roster_version FROM exam.actual_roster_versions WHERE exam_id=$1;",examId))
             if(await head.ExecuteScalarAsync(ct) is long v)rosterVersion=v;
@@ -143,8 +152,7 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
             (string.IsNullOrWhiteSpace(query)||new[]{x.Name,x.ClassText,x.AdmissionNo,x.ClientNumber}.Any(s=>s.Contains(query.Trim(),StringComparison.OrdinalIgnoreCase)))).ToArray();
         await t.CommitAsync(ct);
         return new(examId,now,version?.Versions??new(0,0,0),version?.LifecycleState??ExamLifecycle.Scheduled,
-            rosterVersion,rows.Count,rows.Count-missing.Length,filtered,missing)
-        { Questions = version?.Paper?.Structure.Questions ?? [] };
+            rosterVersion,rows.Count,rows.Count-missing.Length,filtered,missing);
     }
     private static long Long(NpgsqlDataReader r,string name){var i=r.GetOrdinal(name);return r.IsDBNull(i)?0:r.GetInt64(i);}
 }

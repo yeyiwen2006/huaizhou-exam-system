@@ -31,8 +31,7 @@ public enum CommandEventType
     ScheduleChanged,
     PaperUpdated,
     DeviceDecided,
-    CollectionCompleted,
-    UploadRequested
+    CollectionCompleted
 }
 
 public static class ErrorCodes

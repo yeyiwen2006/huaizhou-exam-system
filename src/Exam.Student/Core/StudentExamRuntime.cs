@@ -43,7 +43,6 @@ public sealed partial class StudentExamRuntime(
     private PaperUpdateCoordinator? _paperUpdate;
 
     public ExamPackageManager Manager { get; } = manager;
-    public event EventHandler? SupplementRequested;
     public AnswerSession? Answers { get; private set; }
     /// <summary>B06 在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
     public PaperUpdateCoordinator PaperUpdate
@@ -119,6 +118,7 @@ public sealed partial class StudentExamRuntime(
     public string? ConnectionError => (_feed as SignalRExamCommandFeed)?.LastError ?? _handlingError;
     public bool NotificationsStarted => _feed is not null;
     public event EventHandler? StateChanged;
+    public event EventHandler? SubmissionRetryRequested;
 
     /// <summary>Read existing fixed work before any new entry/unlock; this never authorizes editing.</summary>
     public async Task<bool> InitializeLocalRecoveryAsync(CancellationToken ct = default)
@@ -471,19 +471,15 @@ public sealed partial class StudentExamRuntime(
                     : Manager.ExamEnded ? FreezeEndedAnswersAsync(answers, CancellationToken.None) : Task.CompletedTask
                 : Task.CompletedTask;
             NotifyStateChanged();
-            try
-            {
-                await Task.WhenAll(packageCommand, answerStop);
-                if (delivery.EventType == CommandEventType.UploadRequested && await packageCommand &&
-                    Manager.CurrentPhase != ExamPackageManager.Phase.Revoked)
-                    SupplementRequested?.Invoke(this, EventArgs.Empty);
-            }
+            try { await Task.WhenAll(packageCommand, answerStop); }
             finally
             {
                 // 依据本机已验证的持久指令，而不是原始网络消息；Received 回执丢失也不丢掉更新任务。
                 if (Manager.IsRecordedPaperUpdate(delivery)) _paperUpdate?.Notify(delivery);
             }
             await SynchronizeLocalAnswersAsync(ct);
+            if (delivery.EventType == CommandEventType.End && await packageCommand && Manager.ExamEnded && HasFixedSubmission)
+                SubmissionRetryRequested?.Invoke(this, EventArgs.Empty);
             _handlingError = null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested || _lifetime.IsCancellationRequested)

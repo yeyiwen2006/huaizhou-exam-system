@@ -31,6 +31,70 @@ internal sealed class AdminUiFixture : IDisposable
         ExamLifecycle.Scheduled, true, false, 0, 0, 1);
     private static readonly OperatorAccount Account = new("synthetic-admin", "合成管理员", OperatorStatus.Active, true, Start.AddDays(-1), null);
 
+    /// <summary>
+    /// 监测页的合成参与者：截图夹具建行与 /monitoring 权威快照路由必须用同一份数据，
+    /// 否则页面打开后每 2 秒的自动刷新会把已有的行替换成空快照。
+    /// </summary>
+    public static readonly IReadOnlyList<MonitoringParticipant> MonitoringParticipants =
+    [
+        MonitoringFixture.Participant(
+            participationId: "synthetic-participation-01", candidateId: "synthetic-candidate-01",
+            name: "合成考生01", classText: "01", admissionNo: "2027001", clientNumber: "20270115001",
+            roomGroupId: "synthetic-room-a", roomGroupName: "合成试场A",
+            businessState: ParticipationBusinessState.Answering, connectionState: DeviceConnectionState.Online,
+            lastCommunicationAt: Start.AddMinutes(-1), currentQuestionId: "3", currentQuestionNo: 3,
+            answers: new Dictionary<string, AnswerValue> { ["3"] = AnswerValue.Selected("B", "D") },
+            downloadState: "已下载", focusLossCount: 1, focusLossMilliseconds: 3200,
+            commands:
+            [
+                MonitoringFixture.Command(CommandEventType.Start, canResend: false, eventId: "synthetic-event-01",
+                    confirmation: "已执行", acknowledgedAt: Start),
+            ],
+            conflicts:
+            [
+                MonitoringFixture.Conflict("device-synthetic-participation-01", authorized: true,
+                    connectionState: DeviceConnectionState.Online, answerVersion: 4, page: "正在答题")
+                    with { LastSyncedAt = MonitoringFixture.At.AddSeconds(-3), SavedAnswerCount = 1 },
+                MonitoringFixture.Conflict("synthetic-device-17", authorized: false,
+                    connectionState: DeviceConnectionState.Offline, answerVersion: 2, page: "交卷确认")
+                    with { ClientNumber = "20261005017" },
+            ]),
+        MonitoringFixture.Participant(
+            participationId: "synthetic-participation-02", candidateId: "synthetic-candidate-02",
+            name: "合成考生02", classText: "02", admissionNo: "2027002", clientNumber: "20270115002",
+            roomGroupId: "synthetic-room-b", roomGroupName: "合成试场B",
+            businessState: ParticipationBusinessState.Submitted, connectionState: DeviceConnectionState.Online,
+            lastCommunicationAt: Start.AddMinutes(-2), currentQuestionId: "10", currentQuestionNo: 10,
+            answers: new Dictionary<string, AnswerValue> { ["10"] = AnswerValue.Selected("A") },
+            receiptId: "synthetic-receipt-02", receivedAt: Start.AddMinutes(-1),
+            targetPaperVersion: 2, installedPaperVersion: 2,
+            commands:
+            [
+                MonitoringFixture.Command(CommandEventType.Start, canResend: false, eventId: "synthetic-event-03",
+                    confirmation: "已执行", acknowledgedAt: Start),
+                MonitoringFixture.Command(CommandEventType.End, canResend: false, eventId: "synthetic-event-04",
+                    confirmation: "已执行", acknowledgedAt: Start.AddHours(1)),
+            ]),
+        MonitoringFixture.Participant(
+            participationId: "synthetic-participation-03", candidateId: "synthetic-candidate-03",
+            name: "合成考生03", classText: "01", admissionNo: "2027003", clientNumber: "20270115003",
+            roomGroupId: "synthetic-room-b", roomGroupName: "合成试场B",
+            businessState: ParticipationBusinessState.Waiting, connectionState: DeviceConnectionState.Recovering,
+            lastCommunicationAt: Start.AddMinutes(-3), currentQuestionId: null,
+            answers: new Dictionary<string, AnswerValue>(),
+            installedPaperVersion: 1, targetPaperVersion: 2, downloadState: "更新中",
+            commands:
+            [
+                MonitoringFixture.Command(CommandEventType.End, canResend: true, eventId: "synthetic-event-07"),
+            ]),
+        MonitoringFixture.Participant(
+            participationId: "synthetic-participation-04", candidateId: "synthetic-candidate-04",
+            name: "合成考生04", classText: "03", admissionNo: "2027004", clientNumber: "20270115004",
+            roomGroupId: null, roomGroupName: "未分组",
+            businessState: ParticipationBusinessState.Waiting, connectionState: DeviceConnectionState.Unknown,
+            currentQuestionId: null, answers: new Dictionary<string, AnswerValue>()),
+    ];
+
     public AdminUiFixture(App application)
     {
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
@@ -113,7 +177,9 @@ internal sealed class AdminUiFixture : IDisposable
             if (path.Contains("/submissions/collection/events", StringComparison.Ordinal)) return Reply(Array.Empty<CollectionCompletedNotification>());
             if (path == "/api/v1/versioning/exams/" + ExamId) return Reply(new ExamVersionSnapshot(ExamId, new(1, 1, 1),
                 new(Start, Start.AddHours(2)), ExamLifecycle.Scheduled, null, null, null, null, new Dictionary<string, ParticipantVersionStatus>()));
-            if (path.EndsWith("/monitoring", StringComparison.Ordinal)) return Reply(MonitoringData());
+            if (path.EndsWith("/monitoring", StringComparison.Ordinal))
+                return Reply(MonitoringFixture.Snapshot(ExamId, MonitoringParticipants, null,
+                    ExamLifecycle.Scheduled, Start));
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = JsonContent.Create(new ApiEnvelope<object>("synthetic-server", "synthetic-node", 1, "ui-fixture", null,
@@ -122,22 +188,6 @@ internal sealed class AdminUiFixture : IDisposable
         }
         private static Task<HttpResponseMessage> Reply<T>(T result) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         { Content = JsonContent.Create(new ApiEnvelope<T>("synthetic-server", "synthetic-node", 1, "ui-fixture", result, null), options: JsonDefaults.Create()) });
-    }
-
-    public static MonitoringSnapshot MonitoringData()
-    {
-        var participant = MonitoringFixture.Participant(new("synthetic-part-1", ExamId, "synthetic-person-1",
-            ParticipationBusinessState.Answering, "synthetic-device-1", 1, 1, 1, null)) with
-        {
-            Name = "合成考生甲", ClientNumber = "20261002001", AdmissionNo = "000001", RoomGroupName = "合成试场A",
-            Commands = [new("synthetic-start", CommandEventType.Start, 1, "待确认", Start, null, true)],
-            ConflictDevices = [
-                new("synthetic-device-1", "20261002001", "合成试场A", DeviceConnectionState.Online, Start, true, 3, "答题页")
-                    { LastSyncedAt = Start.AddMinutes(-1), SavedAnswerCount = 3 },
-                new("synthetic-device-2", "20261002002", "合成试场B", DeviceConnectionState.Online, Start, false, 0, "等待裁决")]
-        };
-        return new(ExamId, DateTimeOffset.UtcNow, new(1, 1, 1), ExamLifecycle.Running, 1, 1, 0, [participant], [participant])
-        { Questions = [new("1", 1, "synthetic-subject", "synthetic-group", "single", ["A", "B"])] };
     }
 
     public void Dispose() { Window.Close(); _api.Dispose(); }

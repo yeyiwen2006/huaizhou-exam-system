@@ -75,6 +75,11 @@ public interface ICommandEventStore
         DateTimeOffset dueAtOrBefore,
         CancellationToken cancellationToken = default);
 
+    ValueTask<PersistentCommandEvent?> RecordManualDeliveryAttemptAsync(
+        string eventId, DateTimeOffset attemptedAt, DateTimeOffset nextDeliveryAt,
+        CancellationToken cancellationToken = default) =>
+        RecordDeliveryAttemptAsync(eventId, attemptedAt, nextDeliveryAt, cancellationToken);
+
     ValueTask<PersistentCommandEvent?> RecordDeliveryAttemptAsync(
         string eventId,
         DateTimeOffset attemptedAt,
@@ -98,7 +103,7 @@ public static class ReliableCommandPolicy
 
     public static string? Validate(CreateCommandEventRequest request)
     {
-        if (!Enum.IsDefined(request.EventType) || string.IsNullOrWhiteSpace(request.RequestId) ||
+        if (string.IsNullOrWhiteSpace(request.RequestId) ||
             string.IsNullOrWhiteSpace(request.EventId) ||
             string.IsNullOrWhiteSpace(request.ExamId) ||
             request.EntryVersion < 0 ||

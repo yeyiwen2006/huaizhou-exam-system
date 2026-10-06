@@ -161,7 +161,7 @@ public sealed class PostgresReportSource(NpgsqlDataSource dataSource, PostgresAc
         if (answer.Kind == AnswerKind.Abstain) return "不作答";
         var captions = question.DisplayMetadata?.OptionCaptions;
         if (captions is not null && captions.Count != question.Options!.Count) throw new ArgumentException("选项显示映射不完整。");
-        return string.Join("、", question.Options!.Select((option, index) => (option, index))
+        return string.Concat(question.Options!.Select((option, index) => (option, index))
             .Where(item => answer.OptionIds.Contains(item.option, StringComparer.Ordinal))
             .Select(item => captions is null ? item.option : captions[item.index]));
     }

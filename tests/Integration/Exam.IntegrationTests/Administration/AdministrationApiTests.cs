@@ -69,6 +69,54 @@ public sealed class AdministrationApiTests(PostgresDatabaseFixture database)
         client.DefaultRequestHeaders.Add("X-Exam-Device-Id","synthetic-device");client.DefaultRequestHeaders.Add("X-Exam-Device-Credential","wrong-synthetic-token");
         Assert.Equal(HttpStatusCode.Unauthorized,(await client.PostAsJsonAsync("/api/v1/student/presence/open",body,Json)).StatusCode);
     }
+    [Fact]
+    public async Task StudentPresenceHttpRoundTrip_ReachesMonitoringAndRejectsOlderSequence()
+    {
+        var exam = CreateExam();
+        var roster = await new PostgresCandidateRosterService(database.DataSource).ImportAsync(exam,
+            new(Guid.NewGuid().ToString("N"), 0, [new(1, "合成状态考生", "001", "000001")]), "synthetic-operator");
+        var candidate = Assert.Single(roster.Snapshot.Entries).CandidateId;
+        var session = Guid.NewGuid().ToString("N");
+        var part = Guid.NewGuid().ToString("N");
+        await using (var seed = database.DataSource.CreateCommand("""
+            WITH device AS (
+                INSERT INTO exam.activation_devices(device_id,client_number,activation_date,activation_status,protected_credential,credential_version,created_at,version)
+                VALUES('synthetic-device','20991005001',DATE '2099-10-05','active','synthetic-verifier',1,now(),1) RETURNING device_id),
+            session AS (
+                INSERT INTO exam.student_sessions(session_id,device_id,candidate_id,candidate_name,class_text,admission_no,exam_ids,authenticated_at,candidate_ids_by_exam)
+                SELECT $1,device_id,$2,'合成状态考生','001','000001',ARRAY[$3],now(),jsonb_build_object($3::text,$2::text)
+                FROM device RETURNING session_id)
+            INSERT INTO exam.participations(participation_id,exam_id,candidate_id,entry_version,business_state,authorized_device_id,authorization_version,version)
+                SELECT $4,$3,$2,1,'waiting','synthetic-device',1,1 FROM session;
+            """))
+        {
+            foreach (var value in new[] { session, candidate, exam, part }) seed.Parameters.AddWithValue(value);
+            await seed.ExecuteNonQueryAsync();
+        }
+        await using var app = await CreateApp();
+        using var student = app.GetTestClient();
+        student.DefaultRequestHeaders.Add("X-Exam-Device-Id", "synthetic-device");
+        student.DefaultRequestHeaders.Add("X-Exam-Device-Credential", "synthetic-device-token");
+        var open = await student.PostAsJsonAsync("/api/v1/student/presence/open", new OpenDevicePresenceRequest(session, session), Json);
+        open.EnsureSuccessStatusCode();
+        var lease = (await open.Content.ReadFromJsonAsync<ApiEnvelope<DevicePresenceLease>>(Json))!.Result!;
+        var update = new UpdateDevicePresenceRequest(lease.ConnectionId, lease.Generation, 2, session, exam,
+            "正在答题（已切出）", "opaque-question", 1, "已下载", false);
+        var reported = await student.PostAsJsonAsync("/api/v1/student/presence", update, Json);
+        reported.EnsureSuccessStatusCode();
+        Assert.Equal(2, (await reported.Content.ReadFromJsonAsync<ApiEnvelope<DevicePresenceReceipt>>(Json))!.Result!.Sequence);
+        using var admin = app.GetTestClient();
+        admin.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-operator-token");
+        var snapshot = (await admin.GetFromJsonAsync<ApiEnvelope<MonitoringSnapshot>>($"/api/v1/exams/{exam}/monitoring", Json))!.Result!;
+        var participant = Assert.Single(snapshot.Participants);
+        Assert.Equal("正在答题（已切出）", participant.Page);
+        Assert.Equal("已下载", participant.DownloadState);
+        Assert.Equal(DeviceConnectionState.Online, participant.ConnectionState);
+        Assert.Equal(ParticipationBusinessState.Waiting, participant.BusinessState);
+        Assert.Equal(HttpStatusCode.Conflict, (await student.PostAsJsonAsync("/api/v1/student/presence", update with { Sequence = 1 }, Json)).StatusCode);
+        Assert.Equal(0, snapshot.CollectedCount);
+    }
+
     private string CreateExam()
     {
         var exam="admin-api-"+Guid.NewGuid().ToString("N");var now=DateTimeOffset.UtcNow;

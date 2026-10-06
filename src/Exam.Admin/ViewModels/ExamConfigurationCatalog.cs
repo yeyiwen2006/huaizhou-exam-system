@@ -52,6 +52,10 @@ public sealed partial class ExamConfigurationViewModel
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
+        InstructionSourceText = string.Empty;
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
+        InstructionPreview.Clear();
         OnPropertyChanged(nameof(ExamId));
         OnPropertyChanged(nameof(ScheduleVersionText));
         NotifyCatalog();
@@ -94,6 +98,9 @@ public sealed partial class ExamConfigurationViewModel
     {
         _contextVersion++;
         IsNewExam = true;
+        // 新建考试不得沿用上一场考试的服务器说明。
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
         _catalogReady = true;
         _catalogBusy = _visibilityBusy = false;
         _requestedExamId = null;
@@ -133,6 +140,10 @@ public sealed partial class ExamConfigurationViewModel
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
+        InstructionSourceText = string.Empty;
+        _serverInstructionLines.Clear();
+        _loadedSettingsFingerprint = string.Empty;
+        InstructionPreview.Clear();
         OnPropertyChanged(nameof(ExamId));
         OnPropertyChanged(nameof(ScheduleVersionText));
         NotifyCatalog();
@@ -209,6 +220,13 @@ public sealed partial class ExamConfigurationViewModel
             Subjects.Add(draft);
         }
         SelectedSubject = Subjects.FirstOrDefault();
+        _serverInstructionLines.Clear();
+        // 说明缺失＝服务器还没有这份副本（不是读取失败）：界面会如实说明并改为预览本地填写内容。
+        foreach (var line in detail.InstructionLines ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(line)) _serverInstructionLines.Add(InstructionLineViewModel.From(line));
+        }
+        _loadedSettingsFingerprint = SettingsFingerprint();
         NotifyCatalog();
         RefreshInstructions();
     }
@@ -293,7 +311,9 @@ public sealed partial class ExamConfigurationViewModel
         {
             // A settings write may have committed before a schedule/readback failed. Do not claim all-or-nothing.
             _catalogReady = false;
-            var prefix = structureSaved || timeSaved ? "部分请求已完成，请重新读取核对；" : "保存未完成；";
+            var uncertain = error is AdminApiException { Code: "INVALID_RESPONSE" } or HttpRequestException or TaskCanceledException;
+            var prefix = structureSaved || timeSaved ? "部分请求已完成，请重新读取核对；"
+                : uncertain ? "无法确认保存结果，请重新读取核对；" : "保存未完成；";
             Status = prefix + FriendlyErrors.Describe(error);
             throw;
         }

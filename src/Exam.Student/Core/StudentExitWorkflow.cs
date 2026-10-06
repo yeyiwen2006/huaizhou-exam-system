@@ -5,7 +5,7 @@ public sealed class StudentExitWorkflow(StudentSession session)
 {
     private int _exiting;
 
-    public async Task<bool> ExitAsync(Func<Task<bool>> confirm, Action releaseKioskAndClose)
+    public async Task<bool> ExitAsync(Func<Task<bool>> confirm, Action releaseKioskAndClose, Func<Task>? beforeClose = null)
     {
         ArgumentNullException.ThrowIfNull(confirm);
         ArgumentNullException.ThrowIfNull(releaseKioskAndClose);
@@ -19,6 +19,7 @@ public sealed class StudentExitWorkflow(StudentSession session)
             if (session.ActiveExam is not null || !ReferenceEquals(originalLogin, session.LoginResult))
                 throw new InvalidOperationException("会话已发生变化，未退出系统，请重新核对当前页面。");
             session.Logout();
+            if (beforeClose is not null) await beforeClose();
             releaseKioskAndClose();
             return true;
         }

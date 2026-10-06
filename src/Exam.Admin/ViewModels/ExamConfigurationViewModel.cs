@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
@@ -21,6 +22,9 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private string _status = "请从“全部考试”进入一场考试，或新建考试。";
     private string _validationSummary = string.Empty;
     private string _instructionsText = string.Empty;
+    private string _instructionSourceText = string.Empty;
+    private readonly List<InstructionLineViewModel> _serverInstructionLines = [];
+    private string _loadedSettingsFingerprint = string.Empty;
     private long? _expectedScheduleVersion;
     private long _contextVersion;
     private long _editVersion;
@@ -59,6 +63,9 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     }
 
     public ObservableCollection<SubjectDraftViewModel> Subjects { get; } = [];
+
+    /// <summary>考生说明预览：正文黑体、数字 Times New Roman；内容来自服务器已保存的说明或当前填写内容。</summary>
+    public ObservableCollection<InstructionLineViewModel> InstructionPreview { get; } = [];
     /// <summary>题型下拉项：保存值沿用计分规则中的英文标识，界面显示中文名称。</summary>
     public IReadOnlyList<QuestionTypeOption> QuestionTypes { get; } =
     [
@@ -95,6 +102,9 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string ValidationSummary { get => _validationSummary; private set => SetProperty(ref _validationSummary, value); }
     public string InstructionsText { get => _instructionsText; private set => SetProperty(ref _instructionsText, value); }
+
+    /// <summary>预览来源说明：告诉考务这一份是服务器保存的（学生端所见）还是尚未保存的填写内容。</summary>
+    public string InstructionSourceText { get => _instructionSourceText; private set => SetProperty(ref _instructionSourceText, value); }
 
     public RelayCommand AddSubjectCommand { get; }
     public RelayCommand RemoveSubjectCommand { get; }
@@ -248,14 +258,57 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             ? "填写格式检查通过。计分规则能否算出正确的满分，要在导入试题和答案时再核对。"
             : string.Join(Environment.NewLine, errors.Select(error => $"• {error}"));
         InstructionsText = BuildInstructions();
+        UpdateInstructionPreview();
     }
+
+    /// <summary>
+    /// 选择预览来源：没有未保存的设置更改时回显服务器保存的说明（学生端当前显示的那一份），
+    /// 有更改时预览当前填写内容，并说明两者是否一致。
+    /// </summary>
+    private void UpdateInstructionPreview()
+    {
+        var localLines = InstructionText.SplitLines(InstructionsText);
+        var savedLines = _serverInstructionLines.Select(line => line.Text).ToArray();
+        var hasUnsavedChanges = !string.Equals(SettingsFingerprint(), _loadedSettingsFingerprint, StringComparison.Ordinal);
+        var differs = !localLines.SequenceEqual(savedLines, StringComparer.Ordinal);
+        IReadOnlyList<string> shown;
+        string source;
+        if (savedLines.Length == 0)
+        {
+            shown = localLines;
+            source = IsNewExam
+                ? "新建考试：以下为当前填写内容的预览，保存后由服务器按计分规则生成学生端说明。"
+                : "服务器没有返回已保存的说明，无法确认学生端当前显示；以下为当前填写内容的预览。";
+        }
+        else if (hasUnsavedChanges)
+        {
+            shown = localLines;
+            source = differs
+                ? "以下为尚未保存的更改预览，与服务器上的说明不同；保存后以服务器生成的说明为准。"
+                : "以下为尚未保存的更改预览；本页生成结果与服务器上的说明一致。";
+        }
+        else
+        {
+            shown = savedLines;
+            source = differs
+                ? "以下为服务器保存、供学生端读取的说明；本页生成结果与它不同，请核对填写内容。"
+                : "以下为服务器保存、供学生端读取的说明，与本页生成结果一致。";
+        }
+        InstructionPreview.Clear();
+        foreach (var line in shown) InstructionPreview.Add(InstructionLineViewModel.From(line));
+        InstructionSourceText = source;
+    }
+
+    /// <summary>设置指纹：只覆盖影响考生说明的字段（名称与科目题组），只改考试时间不算未保存的设置更改。</summary>
+    private string SettingsFingerprint() =>
+        JsonSerializer.Serialize(new { Name, Settings = ToSettings() });
 
     private string BuildInstructions()
     {
         var builder = new StringBuilder();
         foreach (var subject in Subjects)
         {
-            builder.AppendLine($"{subject.Name}（满分{subject.MaxScore}分）");
+            builder.AppendLine($"{subject.Name.Trim()}（满分{subject.MaxScore.Trim()}分）");
             foreach (var group in subject.Groups.OrderBy(group => group.Order))
             {
                 var pointsPerQuestion = group.Type switch
@@ -274,7 +327,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                     _ => "题型无效，无法生成计分说明。"
                 };
                 var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
-                builder.AppendLine($"{group.Name}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore}分。{scoring}{abstain}");
+                // 与域层生成器同口径：名称与满分先 Trim，避免因服务端存了补齐空格的设置而误报“与服务器上的说明不同”。
+                builder.AppendLine($"{group.Name.Trim()}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore.Trim()}分。{scoring}{abstain}");
             }
         }
         return builder.ToString().TrimEnd();

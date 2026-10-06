@@ -37,6 +37,8 @@ public sealed class StudentSession : ObservableObject
     private string? _clientNumber;
     private SessionCandidate? _candidate;
     private bool _isActivated;
+    private string _presenceStatus = string.Empty;
+    public string PresenceStatus { get => _presenceStatus; set => SetProperty(ref _presenceStatus, value); }
     private readonly HashSet<string> _submittedExams = new(StringComparer.Ordinal);
 
     public bool IsActivated

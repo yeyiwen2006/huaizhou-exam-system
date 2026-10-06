@@ -83,6 +83,16 @@ public partial class App : Application
 public sealed class AppServices
 {
     private CancellationTokenSource? _clockCancellation;
+    private CancellationTokenSource? _presenceCancellation;
+    private StudentPresenceReporter? _presence;
+    private StudentExamRuntime? _presenceRuntime;
+    private readonly System.Windows.Threading.DispatcherTimer _presenceTimer = new()
+        { Interval = TimeSpan.FromMilliseconds(500) };
+    private bool _presenceEnabled;
+    private bool _presenceBusy;
+    private string _page = "登录";
+    private string? _pageExamId;
+    private bool _focused = true;
 
     public IStudentApi Api { get; } = new HttpStudentApi();
     public StudentSession Session { get; } = new();
@@ -93,13 +103,107 @@ public sealed class AppServices
     public ServerClock Clock { get; private set; } = new();
     public DeviceRecord? Device { get; private set; }
 
-    public AppServices() => Activation = new ActivationWorkflow(DeviceStore, Api);
+    public AppServices()
+    {
+        Activation = new ActivationWorkflow(DeviceStore, Api);
+        _presenceTimer.Tick += (_, _) => RefreshPresence();
+        Session.PropertyChanged += (_, _) => RefreshPresence();
+    }
 
     public void ConfigureDevice(DeviceRecord device)
     {
+        var replacePresence = Device?.DeviceId != device.DeviceId || Device?.ServerId != device.ServerId ||
+            Device?.Credential != device.Credential;
         Device = device;
         Api.ConfigureConnection(device);
         Session.OnActivationChanged(device);
+        if (replacePresence)
+        {
+            _presenceCancellation?.Cancel();
+            _presenceCancellation?.Dispose();
+            _presenceCancellation = new();
+            _presence = Api is IStudentPresenceApi presenceApi ? new(presenceApi) : null;
+        }
+        RefreshPresence();
+    }
+
+    public void StartPresence()
+    {
+        _presenceEnabled = true;
+        _presenceTimer.Start();
+        RefreshPresence();
+    }
+
+    public void SetPresencePage(string page, string? examId = null)
+    {
+        _page = page;
+        _pageExamId = examId;
+        RefreshPresence();
+    }
+
+    public void SetPresenceFocus(bool focused)
+    {
+        _focused = focused;
+        RefreshPresence();
+    }
+
+    private void OnPresenceRuntimeChanged(object? sender, EventArgs e) => RefreshPresence();
+
+    private StudentPresenceState ReadPresence()
+    {
+        var session = Session.LoginResult;
+        var runtime = Session.ActiveExam;
+        var examId = session is null ? null : _pageExamId ?? runtime?.Manager.ExamId;
+        var page = session is null ? "登录" : _page == "登录" ? "选择考试" : _page;
+        if (page == "正在答题" && runtime?.HasFixedSubmission == true) page = "回收中";
+        if (!_focused && page == "正在答题") page = "正在答题（已切出）";
+        if (runtime?.Answers?.Status is AnswerSessionStatus.WriteBlocked or AnswerSessionStatus.FixPending)
+            page = "本地保存失败";
+        var manager = runtime?.Manager;
+        var download = manager?.LastError is not null ? "失败" :
+            manager?.CurrentPhase == ExamPackageManager.Phase.Downloading ? "下载中" :
+            runtime?.IsPaperUpdateInProgress == true ? "更新中" :
+            manager?.CurrentPhase is ExamPackageManager.Phase.Downloaded or ExamPackageManager.Phase.ConfirmedWaiting or
+                ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Ended ? "已下载" : "未下载";
+        var version = runtime?.Answers?.PaperVersion ?? (download == "已下载" ? manager?.Descriptor?.PaperVersion : 0) ?? 0;
+        return new(session?.SessionId, examId, page,
+            examId is null ? null : runtime?.Answers?.CurrentQuestionId, examId is null ? 0 : version,
+            examId is null ? "未下载" : download, runtime?.ConnectionError is not null);
+    }
+
+    private async void RefreshPresence()
+    {
+        if (!_presenceEnabled || _presenceBusy || _presence is not { } reporter ||
+            Device?.Status != Exam.Contracts.Activation.ActivationStatus.Active || _presenceCancellation is null) return;
+        if (!ReferenceEquals(_presenceRuntime, Session.ActiveExam))
+        {
+            if (_presenceRuntime is not null) _presenceRuntime.StateChanged -= OnPresenceRuntimeChanged;
+            _presenceRuntime = Session.ActiveExam;
+            if (_presenceRuntime is not null) _presenceRuntime.StateChanged += OnPresenceRuntimeChanged;
+        }
+        _presenceBusy = true;
+        var ct = _presenceCancellation.Token;
+        try
+        {
+            await reporter.ReportAsync(ReadPresence(), ct);
+            if (ReferenceEquals(reporter, _presence)) Session.PresenceStatus = reporter.Error ?? string.Empty;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally { _presenceBusy = false; }
+    }
+
+    public async Task StopPresenceAsync()
+    {
+        _presenceEnabled = false;
+        _presenceTimer.Stop();
+        if (_presenceRuntime is not null) _presenceRuntime.StateChanged -= OnPresenceRuntimeChanged;
+        if (_presence is { } reporter && Device?.Status == Exam.Contracts.Activation.ActivationStatus.Active)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { await reporter.ReportAsync(new(null, null, "已退出"), timeout.Token, disconnect: true); }
+            catch (OperationCanceledException) { }
+        }
+        _presenceCancellation?.Cancel();
     }
 
     public void StartClock()

@@ -4,7 +4,6 @@ using Exam.Application.Participation;
 using Exam.Application.Submissions;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
-using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
@@ -365,19 +364,11 @@ public static class ExamApiEndpointExtensions
             HttpContext context,
             IConfiguration configuration,
             CancellationToken cancellationToken) =>
-        {
-            if (request.EventType == CommandEventType.UploadRequested)
-            {
-                var actor = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
-                request = request with { Metadata = new Dictionary<string, string>(request.SafeMetadata)
-                    { ["operator"] = actor } };
-            }
-            return ApiEndpointResults.FromCommand(
+            ApiEndpointResults.FromCommand(
                 context,
                 configuration,
                 request.RequestId,
-                await service.CreateAsync(request, cancellationToken));
-        });
+                await service.CreateAsync(request, cancellationToken)));
 
         group.MapGet("/due", async (
             string participationId,
@@ -416,18 +407,17 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
-            return ApiEndpointResults.FromCommand(
-                context,
-                configuration,
-                request.RequestId,
-                await service.ResendAsync(
+            var resent = await service.ResendAsync(
                     eventId,
                     request.ParticipationId,
                     request.EntryVersion,
                     request.DeviceId,
                     request.AuthorizationVersion,
-                    cancellationToken));
-        });
+                    cancellationToken);
+            var response = ApiEndpointResults.FromCommand(context, configuration, request.RequestId, resent);
+            return resent.IsSuccess && resent.Value is { } delivery
+                ? (IResult)new Exam.Server.Realtime.ManualCommandDeliveryResult(response, delivery) : response;
+        }).WithMetadata(new ConfirmationBeforeResult()); // 结果自身在推送和返回前完成持久确认。
 
         group.MapPost("/acknowledgements", async (
             AcknowledgeCommandRequest request,
