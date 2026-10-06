@@ -34,7 +34,7 @@ internal static partial class ExamCli
                 ["health", .. var options] => await SendAsync(HttpMethod.Get, "/health/ready", options, cancellationToken),
                 ["time", .. var options] => await SendAsync(HttpMethod.Get, "/api/v1/commands/time", options, cancellationToken),
                 ["exams", .. var options] => await RunExamsAsync(options, cancellationToken),
-                [var administration, .. var options] when administration is "roster" or "rooms" or "devices" or "monitor" or "publications" =>
+                [var administration, .. var options] when administration is "roster" or "rooms" or "devices" or "monitor" or "publications" or "activation" or "decisions" or "commands" =>
                     await RunAdministrationAsync(administration, options, cancellationToken),
                 [var account, .. var options] when account is "register" or "login" or "logout" or "whoami" =>
                     await RunAccountAsync(account, options, cancellationToken),
@@ -128,6 +128,14 @@ internal static partial class ExamCli
         Console.WriteLine("  monitor show|missing 名称            查询权威监控快照或未回收名单");
         Console.WriteLine("  monitor watch 名称 [起始名单版本]    读取并发出“本场考试全部答卷已成功回收”事件后退出");
         Console.WriteLine("  monitor follow 名称 [起始名单版本] [间隔秒] [轮数]  持续发出收齐事件（默认 1 秒，不限轮数）");
+        Console.WriteLine("  monitor events 名称 [起始名单版本] [间隔秒] [轮数]");
+        Console.WriteLine("                                        订阅监测事件：收齐、设备冲突与失败（给间隔秒则持续订阅）");
+        Console.WriteLine("  activation pending                    列出待审批的激活申请");
+        Console.WriteLine("  activation approve 学生端编号 [试场名称]   批准激活并把设备分到试场（默认未分组）");
+        Console.WriteLine("  activation revoke 学生端编号 --input FILE   撤回激活（请求体给出 reason）");
+        Console.WriteLine("  decisions keep 考试名称 学生端编号 --input FILE  设备冲突裁决（请求体给出 device 与 reason）");
+        Console.WriteLine("  commands resend 考试名称 学生端编号 start|end   重发该考生仍可重发的开始或结束指令");
+        Console.WriteLine("  commands reupload 考试名称 学生端编号      请求补传原答卷（重发未回收考生的结束指令）");
         Console.WriteLine("  publications publish 名称 --input FILE  原子激活已验证的试卷及计分规则");
         Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
         Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
