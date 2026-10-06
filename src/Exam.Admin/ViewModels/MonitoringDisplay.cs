@@ -59,12 +59,17 @@ internal static class MonitoringDisplay
     private static string SelectedOptions(IReadOnlyList<string> selected, IReadOnlyList<string>? options)
     {
         if (selected.Count == 0) return "—";
-        var labels = selected.Select(id => OptionLabel(id, options)).ToArray();
+        // Stored selection order is not necessarily the published option order.
+        var ordered = options is null ? selected.Order(StringComparer.Ordinal) :
+            options.Where(id => selected.Contains(id, StringComparer.Ordinal))
+                .Concat(selected.Where(id => !options.Contains(id, StringComparer.Ordinal)));
+        var labels = ordered.Select(id => OptionLabel(id, options)).ToArray();
         return labels.All(label => label.Length == 1) ? string.Concat(labels) : string.Join("、", labels);
     }
 
     private static string OptionLabel(string id, IReadOnlyList<string>? options)
     {
+        if (options is not null && !options.Contains(id, StringComparer.Ordinal)) return "选项待核对";
         if (id.Length == 1 && id[0] is >= 'A' and <= 'Z') return id;
         if (options is not null)
             for (var index = 0; index < options.Count; index++)

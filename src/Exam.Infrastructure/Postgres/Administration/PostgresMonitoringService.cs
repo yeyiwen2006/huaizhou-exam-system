@@ -40,7 +40,11 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
                    coalesce(progress.paper_version,presence.installed_paper_version,0) AS installed_paper_version,
                    coalesce(final.frozen_answers,progress.answers,'{}'::jsonb)::text AS answers,
                    coalesce(presence.current_question_id,progress.current_question_id) AS current_question_id,
-                   presence.page,presence.download_state,presence.last_seen_at,presence.disconnected_at,presence.recovering,
+                   CASE WHEN presence.device_id IS NOT NULL THEN presence.page
+                        WHEN device_connection.device_id IS NULL THEN '未报告'
+                        WHEN device_connection.session_id IS NULL THEN '未登录'
+                        ELSE '已切换考生或考试' END AS page,
+                   presence.download_state,device_connection.last_seen_at,device_connection.disconnected_at,device_connection.recovering,
                    final.receipt_id,final.received_at,coalesce(focus.count,0) AS focus_count,
                    coalesce(focus.duration,0)::bigint AS focus_duration
               FROM exam.participations p
@@ -49,6 +53,7 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
               LEFT JOIN exam.room_groups g ON g.group_id=d.room_group_id
               LEFT JOIN exam.participation_progress progress ON progress.participation_id=p.participation_id
                   AND progress.entry_version=p.entry_version
+              LEFT JOIN exam.device_presence device_connection ON device_connection.device_id=d.device_id
               LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id AND presence.exam_id=p.exam_id
                   AND EXISTS (SELECT 1 FROM exam.student_sessions s WHERE s.session_id=presence.session_id
                       AND s.device_id=d.device_id AND s.candidate_ids_by_exam->>p.exam_id=p.candidate_id)
@@ -105,8 +110,12 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
         var conflicts=new Dictionary<string,List<ConflictDevice>>(StringComparer.Ordinal);
         await using(var command=AdministrationSql.Command(c,t,"""
             SELECT x.participation_id,d.device_id,d.client_number,coalesce(g.name,'未分组') AS group_name,
-                   d.device_id=p.authorized_device_id AS authorized,presence.last_seen_at,presence.disconnected_at,
-                   presence.recovering,presence.page,
+                   d.device_id=p.authorized_device_id AS authorized,device_connection.last_seen_at,device_connection.disconnected_at,
+                   device_connection.recovering,
+                   CASE WHEN presence.device_id IS NOT NULL THEN presence.page
+                        WHEN device_connection.device_id IS NULL THEN '未报告'
+                        WHEN device_connection.session_id IS NULL THEN '未登录'
+                        ELSE '已切换考生或考试' END AS page,
                    CASE WHEN progress.device_id=d.device_id THEN progress.answer_version ELSE 0 END AS answer_version,
                    CASE WHEN progress.device_id=d.device_id THEN progress.last_synced_at ELSE NULL END AS last_synced_at,
                    CASE WHEN progress.device_id=d.device_id THEN
@@ -116,6 +125,7 @@ public sealed class PostgresMonitoringService(NpgsqlDataSource source,TimeProvid
               JOIN exam.participations p ON p.participation_id=x.participation_id
               JOIN exam.activation_devices d ON d.device_id IN (x.original_device_id,x.pending_device_id)
               LEFT JOIN exam.room_groups g ON g.group_id=d.room_group_id
+              LEFT JOIN exam.device_presence device_connection ON device_connection.device_id=d.device_id
               LEFT JOIN exam.device_presence presence ON presence.device_id=d.device_id AND presence.exam_id=p.exam_id
                   AND EXISTS (SELECT 1 FROM exam.student_sessions s WHERE s.session_id=presence.session_id
                       AND s.device_id=d.device_id AND s.candidate_ids_by_exam->>p.exam_id=p.candidate_id)
