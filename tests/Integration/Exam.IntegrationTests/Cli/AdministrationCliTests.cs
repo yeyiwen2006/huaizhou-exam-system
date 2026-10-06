@@ -3,8 +3,11 @@ using System.Text.Json;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Importing;
+using Exam.Contracts.Operators;
+using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Exams;
@@ -252,6 +255,265 @@ public sealed class AdministrationCliTests
         Assert.Contains(host.Calls, call => call == "GET /api/v1/exams/exam-1/uncollected");
     }
 
+    [Fact]
+    public async Task Activation_ApprovalUsesPendingRequestAndRevokeUsesClientNumber()
+    {
+        var pending = new ActivationRequestResult("request-1", "device-1", ActivationStatus.Pending, null, 1, Start);
+        var bodies = new ConcurrentQueue<string>();
+        await using var host = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/activation/pending", () => self.Envelope(new[] { pending }));
+            app.MapGet("/api/v1/rooms", () => self.Envelope(new[] { new RoomGroup("room-a", "合成试场A", 1, 0) }));
+            app.MapPost("/api/v1/activation/approve", async (HttpContext context) =>
+            {
+                bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
+                return self.Envelope(new ActivationResult("device-1", "20261006001", new DateOnly(2026, 10, 6),
+                    ActivationStatus.Active, "room-a", 1, 1));
+            });
+            app.MapGet("/api/v1/devices", () => self.Envelope(new DeviceDirectoryPage(
+            [
+                new DeviceDirectoryEntry("device-1", "20261006001", "room-a", "合成试场A", ActivationStatus.Active,
+                    DeviceConnectionState.Online, null, null, null, null, null, "登录", null, Start, 1),
+            ], null, Start)));
+            app.MapPost("/api/v1/activation/revoke", async (HttpContext context) =>
+            {
+                bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
+                return self.Envelope(new ActivationResult("device-1", "20261006001", new DateOnly(2026, 10, 6),
+                    ActivationStatus.Revoked, "room-a", 1, 2));
+            });
+        });
+
+        var list = await CliProcess.RunAsync("activation", "pending", "--server", host.Address);
+        Assert.Equal(0, list.Exit);
+        Assert.Null(Assert.Single(JsonSerializer.Deserialize<ActivationRequestResult[]>(list.Out, Json)!).ClientNumber);
+
+        // 首次批准使用待审批列表中的申请标识；此时尚未分配学生端编号。
+        var approve = await CliProcess.RunAsync("activation", "approve", "request-1", "合成试场A", "--server", host.Address);
+        Assert.Equal(0, approve.Exit);
+        Assert.Equal("Active", JsonSerializer.Deserialize<ActivationResult>(approve.Out, Json)!.Status.ToString());
+        var approveJson = ReadBody(Assert.Single(bodies));
+        Assert.Equal("request-1", approveJson.GetProperty("activationRequestId").GetString());
+        Assert.Equal("room-a", approveJson.GetProperty("roomGroupId").GetString());
+
+        // 撤回：按学生端编号解析设备标识，原因从输入给出。
+        var revokeInput = CliProcess.WriteInput("""{"reason":"合成撤回原因"}""");
+        try
+        {
+            var revoke = await CliProcess.RunAsync("activation", "revoke", "20261006001", "--input", revokeInput, "--server", host.Address);
+            Assert.Equal(0, revoke.Exit);
+            Assert.Equal("Revoked", JsonSerializer.Deserialize<ActivationResult>(revoke.Out, Json)!.Status.ToString());
+            var revokeBody = bodies.Last();
+            // 正文是 JSON：按字段核对（中文会被转义，不能直接搜子串）。
+            Assert.Contains("\"deviceId\":\"device-1\"", revokeBody, StringComparison.Ordinal);
+            Assert.Equal("合成撤回原因", ReadBody(revokeBody).GetProperty("reason").GetString());
+        }
+        finally { File.Delete(revokeInput); }
+    }
+
+    [Fact]
+    public async Task Decisions_KeepResolvesTheConflictDeviceAndSignsWithTheSignedInOperator()
+    {
+        var conflict = new ConflictDevice("device-b", "20261006009", "第二试场", DeviceConnectionState.Online, Start, false, 2, "交卷确认");
+        var participant = Pres14_Participant(conflicts: [conflict]);
+        var bodies = new ConcurrentQueue<string>();
+        await using var host = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/exams", () => self.Envelope(new[] { Summary() }));
+            app.MapGet("/api/v1/exams/exam-1/monitoring", () => self.Envelope(
+                MonitoringSnapshot(participant)));
+            app.MapPost("/api/v1/participation/device-decisions", async (HttpContext context) =>
+            {
+                bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
+                return self.Envelope(new DeviceDecisionResult("part-1", "device-b", "device-a", 1, 2,
+                    "synthetic-operator", "合成裁决原因", Start));
+            });
+        });
+
+        var input = CliProcess.WriteInput("""{"device":"20261006009","reason":"合成裁决原因"}""");
+        try
+        {
+            var keep = await CliProcess.RunAsync("decisions", "keep", "合成考试", "20261006001",
+                "--input", input, "--server", host.Address);
+
+            Assert.Equal(0, keep.Exit);
+            var body = ReadBody(Assert.Single(bodies));
+            // 保留的是公开编号解析出的内部设备标识；版本取参试版本；操作者是登录身份而不是请求里自填。
+            Assert.Equal("device-b", body.GetProperty("selectedDeviceId").GetString());
+            Assert.Equal(3, body.GetProperty("expectedVersion").GetInt64());
+            Assert.Equal("synthetic-operator", body.GetProperty("operatorId").GetString());
+            Assert.Equal("合成裁决原因", body.GetProperty("reason").GetString());
+        }
+        finally { File.Delete(input); }
+    }
+
+    [Fact]
+    public async Task Commands_ResendAndReuploadPickTheResendableCommandForTheCandidate()
+    {
+        var paths = new ConcurrentQueue<string>();
+        var bodies = new ConcurrentQueue<string>();
+        var end = new MonitoringCommand("end-1", CommandEventType.End, 3, "待确认", Start, null, true);
+        var participant = Pres14_Participant(commands: [end]);
+        await using var host = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/exams", () => self.Envelope(new[] { Summary() }));
+            app.MapGet("/api/v1/exams/exam-1/monitoring", () => self.Envelope(MonitoringSnapshot(participant)));
+            app.MapPost("/api/v1/commands/{eventId}/resend", async (string eventId, HttpContext context) =>
+            {
+                paths.Enqueue(eventId);
+                bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
+                return self.Envelope(new CommandDelivery(new("synthetic-server","synthetic-node",1),"end-1", "exam-1", "part-1", 1, CommandEventType.End, 3,
+                    "device-a", 1, null, "synthetic-never-print-unlock", new Dictionary<string,string>(), Start, 2));
+            });
+        });
+
+        var resend = await CliProcess.RunAsync("commands", "resend", "合成考试", "20261006001", "end", "--server", host.Address);
+        Assert.Equal(0, resend.Exit);
+        Assert.Equal("end-1", Assert.Single(paths));
+        Assert.DoesNotContain("synthetic-never-print-unlock",resend.Out);
+        Assert.Equal(2,ReadBody(resend.Out).GetProperty("deliveryAttempt").GetInt32());
+        var resendBody = ReadBody(bodies.Last());
+        Assert.Equal("part-1", resendBody.GetProperty("participationId").GetString());
+        Assert.Equal(1, resendBody.GetProperty("authorizationVersion").GetInt64());
+        Assert.Equal(1, resendBody.GetProperty("entryVersion").GetInt64());
+
+        // 未回收的考生可以请求补传；已回收的必须被拒绝并说明原因，且不再发请求。
+        var reupload = await CliProcess.RunAsync("commands", "reupload", "合成考试", "20261006001", "--server", host.Address);
+        Assert.Equal(0, reupload.Exit);
+        Assert.Equal(2, paths.Count);
+
+        await using var collectedHost = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/exams", () => self.Envelope(new[] { Summary() }));
+            app.MapGet("/api/v1/exams/exam-1/monitoring", () => self.Envelope(
+                MonitoringSnapshot(Pres14_Participant(receiptId: "receipt-1"))));
+        });
+        var collected = await CliProcess.RunAsync("commands", "reupload", "合成考试", "20261006001", "--server", collectedHost.Address);
+        // 已回收的考生必须被拒绝：退出码 2；具体文案由统一错误层给出（不能断言命令自己的文案）。
+        Assert.Equal(2, collected.Exit);
+        Assert.Empty(collected.Out);
+    }
+
+    [Fact]
+    public async Task MonitorEventsSubscribesToConflictCollectionAndFailureNotifications()
+    {
+        await using var host = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/exams", () => self.Envelope(new[] { Summary() }));
+            app.MapGet("/api/v1/submissions/collection/events", () => self.Envelope(Array.Empty<CollectionCompletedNotification>()));
+            app.MapGet("/api/v1/exams/exam-1/monitoring", () => self.Envelope(MonitoringSnapshot(
+                Pres14_Participant(conflicts: [new ConflictDevice("device-b", "20261006009", "第二试场",
+                    DeviceConnectionState.Online, Start, false, 2, "交卷确认")]),
+                Pres14_Participant(participationId: "part-2", candidateId: "cand-2", clientNumber: "20261006002",
+                    downloadState: "失败"))));
+        });
+
+        var watch = await CliProcess.RunAsync("monitor", "events", "合成考试", "--server", host.Address);
+
+        Assert.Equal(0, watch.Exit);
+        var events = watch.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<CliMonitorEvent>(line, Json)!)
+            .ToArray();
+        Assert.Contains(events, item => item.Kind == "conflict");
+        Assert.Contains(events, item => item.Kind == "failure");
+        Assert.Contains("设备冲突待裁决", watch.Error, StringComparison.Ordinal);
+        Assert.Contains("试题包下载失败", watch.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(503,6)]
+    [InlineData(401,3)]
+    public async Task MonitorEventsSingleFailureCannotExitSuccessfully(int status,int exit)
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/submissions/collection/events",()=>self.Envelope(Array.Empty<CollectionCompletedNotification>()));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.StatusCode(status));
+        });
+        var result=await CliProcess.RunAsync("monitor","events","合成考试","--server",host.Address);
+        Assert.Equal(exit,result.Exit);Assert.Empty(result.Out);
+    }
+
+    [Fact]
+    public async Task MonitorEventsRetriesFailuresAndDoesNotRepeatUnchangedConflict()
+    {
+        var reads=0;
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/submissions/collection/events",()=>self.Envelope(Array.Empty<CollectionCompletedNotification>()));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>++reads==1?Results.StatusCode(503):
+                self.Envelope(MonitoringSnapshot(Pres14_Participant(conflicts:[new("device-b","20261006009","合成试场",DeviceConnectionState.Online,Start,false,0,"登录")]))));
+        });
+        var result=await CliProcess.RunAsync("monitor","events","合成考试","0","1","2","--server",host.Address);
+        Assert.Equal(0,result.Exit);Assert.Equal(3,reads);
+        Assert.Single(result.Out.Split('\n',StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("监测事件读取失败",result.Error);
+    }
+
+    [Fact]
+    public async Task MonitorStreamReturnsChangedAuthoritativeSnapshotsWithoutCollectionEndpoint()
+    {
+        var reads=0;
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>
+                self.Envelope(MonitoringSnapshot(Pres14_Participant() with{AnswerVersion=++reads}) with{AsOf=Start.AddSeconds(reads)}));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","2","--server",host.Address);
+        Assert.Equal(0,result.Exit);
+        var rows=result.Out.Split('\n',StringSplitOptions.RemoveEmptyEntries).Select(x=>JsonSerializer.Deserialize<MonitoringSnapshot>(x,Json)!).ToArray();
+        Assert.Equal(new long[]{1,2},rows.Select(x=>Assert.Single(x.Participants).AnswerVersion));
+        Assert.DoesNotContain(host.Calls,x=>x.Contains("collection",StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("other-server",2)]
+    [InlineData("synthetic-server",1)]
+    public async Task MonitorRejectsChangedServerOrRegressedEpoch(string server,long epoch)
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>Results.Json(new ApiEnvelope<ExamSummary[]>("synthetic-server","node-a",2,"test",[Summary()],null),Json));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.Json(new ApiEnvelope<MonitoringSnapshot>(server,"node-b",epoch,"test",MonitoringSnapshot(Pres14_Participant()),null),Json));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","1","--server",host.Address);
+        Assert.Equal(2,result.Exit);Assert.Empty(result.Out);
+    }
+
+    [Fact]
+    public async Task MonitorStreamPersistentFailureTimesOutWithOneJsonError()
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.StatusCode(503));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","1","--server",host.Address,"--timeout-seconds","2","--error-format","json");
+        Assert.Equal(5,result.Exit);Assert.Empty(result.Out);
+        Assert.Single(result.Error.Split('\n',StringSplitOptions.RemoveEmptyEntries));
+        using var error=JsonDocument.Parse(result.Error);Assert.Equal(JsonValueKind.Object,error.RootElement.ValueKind);
+    }
+
+    private static JsonElement ReadBody(string json) => JsonDocument.Parse(json).RootElement;
+
+    /// <summary>CLI 输出的监测事件形状（测试侧镜像；CLI 以一行一个 JSON 写到 stdout）。</summary>
+    private sealed record CliMonitorEvent(string ExamId, string Kind, string ParticipantId, string ClientNumber,
+        string Candidate, string Detail, DateTimeOffset ObservedAt);
+
+    private static MonitoringSnapshot MonitoringSnapshot(params MonitoringParticipant[] participants) =>
+        new("exam-1", Start, new VersionVector(1, 1, 1), ExamLifecycle.Running, 1, participants.Length, 0, participants, []);
+
+    private static MonitoringParticipant Pres14_Participant(string participationId = "part-1", string candidateId = "cand-1",
+        string clientNumber = "20261006001", string downloadState = "已下载", string? receiptId = null,
+        IReadOnlyList<ConflictDevice>? conflicts = null, IReadOnlyList<MonitoringCommand>? commands = null) => new(
+        participationId, candidateId, "合成考生", "001", "00001", "device-a", clientNumber, "room-1", "第一试场",
+        ParticipationBusinessState.Answering, DeviceConnectionState.Online, "正在答题", "q-1", Start,
+        1, 1, 3, 1, 1, 1, downloadState, new Dictionary<string, AnswerValue>(StringComparer.Ordinal),
+        receiptId is null ? "未回收" : "已回收", receiptId, receiptId is null ? null : Start.AddMinutes(-1),
+        0, 0, null, commands ?? [], conflicts ?? []);
+
     private static ExamSettings Settings() => new(
     [
         new ExamSubjectSettings("m", "合成数学", "6",
@@ -288,6 +550,8 @@ public sealed class AdministrationCliTests
                 await next();
             });
             var host = new CliHost(app, calls);
+            app.MapGet("/api/v1/operators/me", () => host.Envelope(
+                new OperatorAccount("synthetic-operator", "合成考务", OperatorStatus.Active, true, Start, null)));
             configure(host, app);
             await app.StartAsync();
             return host;

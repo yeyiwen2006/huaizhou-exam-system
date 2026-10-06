@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "source": "requirements.md / current source / Issue #30 #35",
+  "source": "requirements.md / current source / Issue #30 #35 #36 #46 / PR #131 review 2026-10-06",
   "redaction": "Roles and synthetic data only",
   "rows": [
     {
@@ -168,300 +168,300 @@
       "requirement": "主备服务器与接管 / 运维",
       "action": "状态",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management status",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C10",
       "requirement": "主备服务器与接管 / 运维",
       "action": "配置读取",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management configuration",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C11",
       "requirement": "主备服务器与接管 / 运维",
       "action": "启动",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management start",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C12",
       "requirement": "主备服务器与接管 / 运维",
       "action": "停止",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management stop",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C13",
       "requirement": "主备服务器与接管 / 运维",
       "action": "自检",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management checks",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C14",
       "requirement": "主备服务器与接管 / 运维",
       "action": "配置写入",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management configure",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C15",
       "requirement": "主备服务器与接管 / 运维",
       "action": "管理日志",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management logs",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C16",
       "requirement": "主备服务器与接管 / 运维",
       "action": "运行日志",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management runtime-logs",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C17",
       "requirement": "主备服务器与接管 / 运维",
       "action": "备份",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management backup",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C18",
       "requirement": "主备服务器与接管 / 运维",
       "action": "隔离恢复",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management restore",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C19",
       "requirement": "主备服务器与接管 / 运维",
       "action": "操作进度",
       "role": "F",
-      "gui": null,
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management operation",
-      "sharedApi": "独立管理宿主现有端点",
+      "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
       "gapOwner": "F",
-      "gap": "考务 GUI 接线由 F/C 对接；受保护部署及现场运维未执行"
+      "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "E01-C20",
       "requirement": "主备服务器与接管",
       "action": "同步状态",
       "role": "F",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
-      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "cli": "management ha-status",
+      "sharedApi": "LocalManagementClient / DurableFailoverCoordinator",
+      "successTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "status": "GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认",
       "gapOwner": "F",
-      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+      "gap": "正式接管需最新双侧确认、资源、身份和隔离证据；入口实现不代替T02双机验收。"
     },
     {
       "id": "E01-C21",
       "requirement": "主备服务器与接管",
       "action": "应急确认",
       "role": "F",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
-      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "cli": "management emergency",
+      "sharedApi": "LocalManagementClient / DurableFailoverCoordinator",
+      "successTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "status": "GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认",
       "gapOwner": "F",
-      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+      "gap": "正式接管需最新双侧确认、资源、身份和隔离证据；入口实现不代替T02双机验收。"
     },
     {
       "id": "E01-C22",
       "requirement": "主备服务器与接管",
       "action": "接管",
       "role": "F",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
-      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "cli": "management takeover",
+      "sharedApi": "LocalManagementClient / DurableFailoverCoordinator",
+      "successTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "status": "GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认",
       "gapOwner": "F",
-      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+      "gap": "正式接管需最新双侧确认、资源、身份和隔离证据；入口实现不代替T02双机验收。"
     },
     {
       "id": "E01-C23",
       "requirement": "主备服务器与接管",
       "action": "主节点重建",
       "role": "F",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有 F 模块能力；本卡未新增业务 CLI",
-      "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "cli": "management rebuild / management reprotect",
+      "sharedApi": "LocalManagementClient / DurableFailoverCoordinator",
+      "successTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/PostgresPhysicalRecoveryTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/HighAvailability/ManagementFailoverApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层与恢复模块存在；专用 GUI/CLI 需 F/C 核对",
+      "status": "GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认",
       "gapOwner": "F",
-      "gap": "不得用 api METHOD PATH 替代业务 CLI 完成判据"
+      "gap": "正式接管需最新双侧确认、资源、身份和隔离证据；入口实现不代替T02双机验收。"
     },
     {
       "id": "E01-C24",
@@ -469,19 +469,19 @@
       "action": "激活批准",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": "POST /api/v1/activation/approve",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "cli": "activation pending / activation approve 申请标识 [试场名称]",
+      "sharedApi": "GET /api/v1/activation/pending；POST /api/v1/activation/approve",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "首次审批按待审批申请标识执行，批准后才分配编号；真实CLI/API/数据库接线已补齐",
       "gapOwner": "C",
-      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C25",
@@ -489,19 +489,19 @@
       "action": "激活撤销",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
+      "cli": "activation revoke 学生端编号 --input FILE",
       "sharedApi": "POST /api/v1/activation/revoke",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "按公开编号撤销；原请求重试保持同一设备，服务器重新鉴权",
       "gapOwner": "C",
-      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C26",
@@ -509,19 +509,19 @@
       "action": "设备编号查询",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": "GET /api/v1/activation/devices/{deviceId}",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "cli": "devices list / devices show / devices history",
+      "sharedApi": "GET /api/v1/devices；GET /api/v1/devices/{clientNumber}/room-history",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "权威设备目录、编号精确查询与转组历史已接GUI/CLI",
       "gapOwner": "C",
-      "gap": "专用 CLI 由 C 对接；通用 api 仅传输入口"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C27",
@@ -529,19 +529,19 @@
       "action": "创建分组",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": null,
-      "successTest": "tests/Unit/Exam.AdminUnitTests",
-      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "cli": "rooms create",
+      "sharedApi": "POST /api/v1/rooms",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "status": "试场创建已由服务器持久保存，GUI/CLI共用校验",
       "gapOwner": "C",
-      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C28",
@@ -549,19 +549,19 @@
       "action": "分组改名",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": null,
-      "successTest": "tests/Unit/Exam.AdminUnitTests",
-      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "cli": "rooms rename",
+      "sharedApi": "PUT /api/v1/rooms/{groupId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "status": "试场改名已持久化；同名冲突与期望版本由服务器核对",
       "gapOwner": "C",
-      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C29",
@@ -569,19 +569,19 @@
       "action": "设备转组",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": null,
-      "successTest": "tests/Unit/Exam.AdminUnitTests",
-      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "cli": "rooms move / devices history",
+      "sharedApi": "POST /api/v1/rooms/move-devices",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "status": "单个或批量转组已持久化；整批原子校验并记录历史，不改变编号",
       "gapOwner": "C",
-      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C30",
@@ -589,19 +589,19 @@
       "action": "删除空组",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs",
-      "cli": null,
-      "sharedApi": null,
-      "successTest": "tests/Unit/Exam.AdminUnitTests",
-      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "cli": "rooms delete",
+      "sharedApi": "DELETE /api/v1/rooms/{groupId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "GUI 本机状态入口；服务器持久化与专用 CLI 未实现",
+      "status": "仅允许删除权威目录中的空组；版本及并发冲突拒绝",
       "gapOwner": "C",
-      "gap": "当前界面明确提示仅本机保存；由 C 补齐接口持久化与 CLI"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C31",
@@ -709,139 +709,139 @@
       "action": "名单导入、重复及整批冲突",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/RosterViewModel.cs",
-      "cli": null,
-      "sharedApi": null,
-      "successTest": "tests/Unit/Exam.AdminUnitTests",
-      "failureTest": "tests/Unit/Exam.AdminUnitTests",
+      "cli": "roster list / import / update / delete",
+      "sharedApi": "GET /api/v1/exams/{examId}/roster；POST .../roster/import；PUT/DELETE .../roster/{candidateId}",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.AdminUnitTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "GUI 预览/本机暂存已实现；服务持久化与专用 CLI 未实现",
+      "status": "名册已由服务器持久化；保留前导零、逐行问题、重复跳过、整批冲突拒绝及版本检查",
       "gapOwner": "C",
-      "gap": "由 C 补齐服务导入及 CLI；界面仍提示本机保存"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C37",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "目录/ZIP 导入",
       "role": "D",
-      "gui": "src/Exam.Admin/ViewModels/ManifestPreflightViewModel.cs",
-      "cli": "import verify DIRECTORY (local)",
-      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import preview 目录或ZIP --exam 名称 --output 目录",
+      "sharedApi": "本地准备；发布时走加密上传接口",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
       "category": [
         "core",
         "latex"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "status": "GUI目录/ZIP选择与CLI已接同一准备流程；预览不等于发布",
       "gapOwner": "D",
-      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C38",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "依赖检查",
       "role": "D",
-      "gui": "src/Exam.Admin/ViewModels/ManifestPreflightViewModel.cs",
-      "cli": "import verify DIRECTORY (local)",
-      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import verify / import preview",
+      "sharedApi": "本地导入准备与依赖校验",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportPipelineSafetyTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportPipelineSafetyTests.cs",
       "category": [
         "core",
         "latex"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportPipelineSafetyTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "status": "GUI/CLI已接清单、路径和编译依赖检查；失败不发布",
       "gapOwner": "D",
-      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C39",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "编译",
       "role": "D",
-      "gui": null,
-      "cli": "import verify DIRECTORY (local)",
-      "sharedApi": "Local D01 validation / D02 compilation / D03 extraction; no server persistence",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import verify / import preview",
+      "sharedApi": "本地逐题编译及选项坐标提取",
       "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
       "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
       "category": [
         "core",
         "latex"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportVerifyCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "本地目录核对 CLI 已接线；完整 GUI、ZIP 导入及服务持久化待消费方接线",
+      "status": "GUI/CLI已接逐题编译和坐标提取；真实版式仍需预览确认",
       "gapOwner": "D",
-      "gap": "本地核对覆盖清单、编译与选项定位；由 D/C 补齐完整导入发布工作流"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C40",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "预览",
       "role": "D",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
-      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
-      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import preview",
+      "sharedApi": "本地私有预览；PreparedImportPublication",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "status": "GUI逐题预览与CLI预览目录已接线；保留同一预览供确认",
       "gapOwner": "D",
-      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C41",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "发布",
       "role": "D",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
-      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
-      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import publish 预览目录 --confirm",
+      "sharedApi": "POST /api/v1/exams/{examId}/publications/upload",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportPublicationPostgresTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportPublicationPostgresTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportPublicationPostgresTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "status": "GUI/CLI确认后加密上传并原子发布，校验版本与重试身份",
       "gapOwner": "D",
-      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C42",
       "requirement": "逐题导入、原版显示与加密 / 考试中修改时间与试题",
       "action": "在线试题修改",
       "role": "D",
-      "gui": null,
-      "cli": null,
-      "sharedApi": "现有导入/编译/版本服务能力；需 D/C 接线",
-      "successTest": "tests/Unit/Exam.UnitTests/Packaging",
-      "failureTest": "tests/Unit/Exam.UnitTests/Packaging",
+      "gui": "src/Exam.Admin/ViewModels/ExamImportViewModel.cs",
+      "cli": "import materials / import preview --reason / import publish",
+      "sharedApi": "GET /api/v1/exams/{examId}/paper-materials；POST .../publications/upload",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionClientTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionClientTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Unit/Exam.UnitTests/Packaging",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Importing/ImportRevisionClientTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "底层模块检查存在；专用 CLI 与完整 GUI 工作流未全部接线",
+      "status": "已接取回源材料、开考后逐题修订与同版原子发布；不覆盖旧版档案",
       "gapOwner": "D",
-      "gap": "由 D/C 对接实际长任务、预览文件、权限与错误语义；合成夹具不是编译验收"
+      "gap": "入口与模块实现已存在；真实最大题包、人工逐题版式和完整考试验收由T阶段执行，本文不把静态接线当成测试通过。"
     },
     {
       "id": "E01-C43",
@@ -849,19 +849,19 @@
       "action": "进度监测",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
-      "cli": null,
-      "sharedApi": "GET /api/v1/participation/exams/{examId}/actual",
-      "successTest": "tests/Integration/Exam.IntegrationTests",
-      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "cli": "monitor show / missing / stream",
+      "sharedApi": "GET /api/v1/exams/{examId}/monitoring；GET .../uncollected",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Administration/AdministrationPersistenceTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI与CLI读取权威快照；stream持续输出页面、进度、答案和回收变化",
       "gapOwner": "C",
-      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C44",
@@ -869,19 +869,19 @@
       "action": "设备冲突裁决",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
-      "cli": null,
+      "cli": "decisions keep 考试名称 学生端编号 --input FILE",
       "sharedApi": "POST /api/v1/participation/device-decisions",
-      "successTest": "tests/Integration/Exam.IntegrationTests",
-      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "按公开编号裁决；操作者来自当前登录；不确定回执重试保留原版本及设备",
       "gapOwner": "C",
-      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C45",
@@ -889,19 +889,19 @@
       "action": "指令重发",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
-      "cli": null,
+      "cli": "commands resend / commands reupload",
       "sharedApi": "POST /api/v1/commands/{eventId}/resend",
-      "successTest": "tests/Integration/Exam.IntegrationTests",
-      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "重发有效开始/结束指令及请求原答卷补传；重试固定原事件，已收卷不新建补传",
       "gapOwner": "C",
-      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C46",
@@ -909,19 +909,19 @@
       "action": "事件订阅",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
-      "cli": null,
-      "sharedApi": "SignalR / 现有可靠事件端点",
-      "successTest": "tests/Integration/Exam.IntegrationTests",
-      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "cli": "monitor events 名称 [起始名单版本] [间隔秒] [轮数]",
+      "sharedApi": "考务权限轮询 /exams/{examId}/monitoring 与 /submissions/collection/events",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/AdministrationCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Cli/AdministrationCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Cli/AdministrationCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "冲突及失败通知已接线；连续读取支持重试、去重、迟到快照拒绝与取消，不接设备专用Hub",
       "gapOwner": "C",
-      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+      "gap": "冲突/失败为当前快照通知，不伪称持久事件历史；跨进程重新建立状态，持续失败不计成功轮数；现场2秒/300会话另验收。"
     },
     {
       "id": "E01-C47",
@@ -929,26 +929,26 @@
       "action": "回收通知",
       "role": "C",
       "gui": "src/Exam.Admin/ViewModels/MonitoringViewModel.cs",
-      "cli": null,
-      "sharedApi": "GET /api/v1/submissions/collection/events",
-      "successTest": "tests/Integration/Exam.IntegrationTests",
-      "failureTest": "tests/Integration/Exam.IntegrationTests",
+      "cli": "monitor watch / follow / events",
+      "sharedApi": "GET /api/v1/submissions/collection/events?examId=...&afterRosterVersion=...",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Submissions/PostgresCollectionApiTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Submissions/PostgresCollectionApiTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Submissions/PostgresCollectionApiTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "持久收齐事件已接GUI/CLI；零参试不触发，按名单版本去重；watch/follow只处理收齐",
       "gapOwner": "C",
-      "gap": "专用 CLI 与指令业务端到端时限由 C 对接；运输探针不足以验收"
+      "gap": "跨进程避免重播须由调用方保存并传入已处理名单版本；收齐通知不能代替全部监测通知。"
     },
     {
       "id": "E01-C48",
       "requirement": "考试设置与计分",
       "action": "当前计分规则/完整答卷范围及就绪",
       "role": "D",
-      "gui": null,
+      "gui": "src/Exam.Admin/ViewModels/GradingRevisionViewModel.cs",
       "cli": "grading status",
       "sharedApi": "GET /api/v1/grading/{examId}/status",
       "successTest": "tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
@@ -957,31 +957,31 @@
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Reporting/GradingCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "入口已实现；模块验证由对应 profile 报告核对",
+      "status": "GUI/CLI已显示发布规则、未计分范围及结果就绪，发布成功不等于重算完成",
       "gapOwner": "D",
-      "gap": "GUI 就绪呈现由 D/C 对接；本卡合成运行核对真实状态 API"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C49",
       "requirement": "考试设置与计分",
       "action": "规则修改与重新计分",
       "role": "D",
-      "gui": null,
-      "cli": null,
+      "gui": "src/Exam.Admin/ViewModels/GradingRevisionViewModel.cs",
+      "cli": "grading revise / grading publish / grading status",
       "sharedApi": "POST /api/v1/versioning/exams/{examId}/grading-publications",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Scoring",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Scoring",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Grading/GradingReviseCliTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Grading/GradingReviseCliTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/Scoring",
+      "automatedEvidence": "docs/reviews/pr131-review-20261006.md / tests/Integration/Exam.IntegrationTests/Grading/GradingReviseCliTests.cs",
       "manualCheck": "真实设备与交互流程由对应 T 阶段执行",
-      "status": "规则/重算模块存在；专用业务 CLI 与 GUI 需 D/C 接线",
+      "status": "独立答案与规则预览、确认发布及后台重算已接线；不重新编译试卷",
       "gapOwner": "D",
-      "gap": "采用既有计分实现，不在 E01 重写计分算法"
+      "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由T01/T02执行，本表不认定其通过。"
     },
     {
       "id": "E01-C50",

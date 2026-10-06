@@ -122,10 +122,22 @@ devices show <学生端编号>
 devices history <学生端编号>
 monitor show <考试名称>
 monitor missing <考试名称>
+monitor stream <考试名称> [间隔秒] [轮数]
 monitor watch <考试名称> [起始名单版本]
 monitor follow <考试名称> [起始名单版本] [间隔秒] [轮数]
+monitor events <考试名称> [起始名单版本] [间隔秒] [轮数]
+activation pending
+activation approve <申请标识> [试场名称]
+activation revoke <学生端编号> --input <JSON文件或->
+decisions keep <考试名称> <学生端编号> --input <JSON文件或->
+commands resend <考试名称> <学生端编号> start|end
+commands reupload <考试名称> <学生端编号>
 publications publish <考试名称> --input <JSON文件或->
 ```
+
+`monitor stream` 默认每秒连续输出完整权威快照；`monitor events` 按指定间隔读取收齐、设备冲突及失败通知，失败包含下载/修订下载、本地保存和指令资源更新。一次读取失败返回非零，持续失败不计入成功轮数。二者拒绝迟到或版本回退的数据，并在逻辑服务器变化或服务代次回退时终止。
+
+首次激活未分配编号，`activation approve` 使用 `activation pending` 返回的申请标识。撤销、裁决、重发与补传按公开学生端编号解析目标；裁决操作者取当前登录身份。新写命令在发送前加密保存解析后的原请求，丢回执后使用同一 `--request-id` 和原输入重试，不重新选择版本、设备或指令。完整输入、输出及跨进程边界见 [考务CLI操作说明](c04-cli-business-commands.md)。
 
 `monitor watch` 读取一次收齐事件后退出（可给位置参数指定起始名单版本，默认 0）；`monitor follow` 持续等待并发出，
 位置参数依次是起始名单版本（默认 0，用于重启后不重播历史）、间隔秒数（默认 1，允许 1..3600）与轮数（默认不限，

@@ -3,6 +3,10 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Exam.Contracts.Administration;
+using Exam.Contracts.Activation;
+using Exam.Contracts.Operators;
+using Exam.Contracts.Participation;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Submissions;
@@ -20,7 +24,7 @@ internal static partial class ExamCli
         if(!TryResolveServer(options.Server??Environment.GetEnvironmentVariable(ServerEnvironment),out var address))
         {Console.Error.WriteLine("请提供有效的 HTTPS 服务地址。");return 2;}
         using var http=new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=address,Timeout=TimeSpan.FromMinutes(2)};
-        var json=JsonDefaults.Create();string? logicalServer=null;
+        var json=JsonDefaults.Create();string? logicalServer=null;long latestEpoch=0;
         async Task<T> Send<T>(HttpMethod method,string path,object? body=null)where T:class
         {
             using var message=new HttpRequestMessage(method,path);AddCredentials(message);
@@ -34,9 +38,10 @@ internal static partial class ExamCli
                 throw new InvalidOperationException("服务器返回了不完整的响应。");
             if(envelope.Error is not null)
                 throw new ExamCliException(response.StatusCode,envelope?.Error?.Message??"服务器未完成操作。");
-            if(string.IsNullOrWhiteSpace(envelope.ServerId)||envelope.ServerEpoch<1||logicalServer is not null&&logicalServer!=envelope.ServerId)
+            if(string.IsNullOrWhiteSpace(envelope.ServerId)||string.IsNullOrWhiteSpace(envelope.NodeId)||envelope.ServerEpoch<1||
+                envelope.ServerEpoch<latestEpoch||logicalServer is not null&&logicalServer!=envelope.ServerId)
                 throw new InvalidDataException("响应服务器身份发生变化，停止当前操作。");
-            logicalServer??=envelope.ServerId;return envelope.Result!;
+            logicalServer??=envelope.ServerId;latestEpoch=envelope.ServerEpoch;return envelope.Result!;
         }
         async Task<ExamSummary> FindExam(string name)=>
             (await Send<ExamSummary[]>(HttpMethod.Get,"/api/v1/exams"))
@@ -75,6 +80,39 @@ internal static partial class ExamCli
         // 读取一批收齐事件并按名单版本发出，读到没有新事件为止。
         // 文本模式下可读提醒直接实时写 stderr：长时运行的 follow 必须即时可见，
         // 且不能因最终退出码非零而被错误层的缓冲丢弃。
+        static string RequiredText(JsonElement root, string name) => root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString()! : throw new ArgumentException("缺少有效的 " + name + "。");
+        CliBusinessRequest Request(string path, object body) => new(path, JsonSerializer.SerializeToElement(body, json));
+        CliBusinessRequest ResendRequest(string id, MonitoringParticipant participant, MonitoringCommand command) =>
+            Request($"/api/v1/commands/{Uri.EscapeDataString(command.EventId)}/resend", new { requestId=id,
+                participationId=participant.ParticipationId,entryVersion=participant.EntryVersion,
+                deviceId=participant.AuthorizedDeviceId,authorizationVersion=participant.AuthorizationVersion });
+        static object CommandResult(CommandDelivery delivery) => new { delivery.EventId,delivery.ExamId,delivery.ParticipationId,
+            delivery.EntryVersion,delivery.EventType,delivery.StateVersion,delivery.TargetDeviceId,delivery.TargetAuthorizationVersion,
+            delivery.ResourceVersion,delivery.CreatedAt,delivery.DeliveryAttempt }; // Never print unlock references or unfiltered metadata.
+        async Task<T> Mutate<T>(JsonElement? input, Func<string,OperatorAccount,Task<CliBusinessRequest>> prepare) where T:class
+        {
+            // Reauthenticate every attempt. Neither an encrypted local record nor a cached result grants permission.
+            var me=await Send<OperatorAccount>(HttpMethod.Get,"/api/v1/operators/me");
+            var id=RequestId(input);
+            using var store=new CliBusinessRequestStore(logicalServer!,me.Username,id);
+            var intent=JsonSerializer.Serialize(new { category,positional,input },json);
+            var request=await store.GetOrCreateAsync(intent,()=>prepare(id,me),ct);
+            WriteLiveDiagnostic($"操作请求标识：{id}（重试须使用相同 --request-id 和输入）");
+            return await Send<T>(HttpMethod.Post,request.Path,request.Body);
+        }
+        // 读取一次监测快照并发出新的冲突/失败事件；与收齐事件同一订阅口径：每类每目标只通知一次。
+        async Task DrainMonitorEventsAsync(ExamSummary exam,MonitorEventWatch watch)
+        {
+            var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
+            foreach(var item in MonitorEventWatch.Order(watch.Accept(exam.ExamId,snapshot,snapshot.AsOf)))
+            {
+                Console.WriteLine(JsonSerializer.Serialize(item,json));
+                if(MonitorEventLines.Describe(item) is { } line)WriteLiveDiagnostic(line);
+            }
+            Console.Out.Flush();
+        }
         async Task DrainCollectionAsync(ExamSummary exam,CollectionWatch watch)
         {
             while(true)
@@ -108,8 +146,8 @@ internal static partial class ExamCli
         // 只写本地判定的原因：服务器正文绝不能进终端（错误层就是为此存在的）。
         static string DescribeWatchFailure(Exception error)=>error switch
         {
-            InvalidOperationException=>"服务器返回的收齐事件无效，本页未采用。",
-            JsonException=>"服务器返回的收齐事件格式无效，本页未采用。",
+            InvalidOperationException=>"服务器返回的监测或收齐数据无效，本次未采用。",
+            JsonException=>"服务器返回的监测或收齐数据格式无效，本次未采用。",
             TaskCanceledException=>"请求超时。",
             HttpRequestException=>"无法连接服务器。",
             ExamCliException{Status:var status}=>$"服务器暂时不可用（{(int)status}）。",
@@ -177,6 +215,33 @@ internal static partial class ExamCli
                     var exam=await FindExam(examName);var path=$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}";
                     result=action=="show"?await Send<MonitoringSnapshot>(HttpMethod.Get,path+"/monitoring"):(object)await Send<MonitoringParticipant[]>(HttpMethod.Get,path+"/uncollected");break;
                 }
+                case ("monitor",["stream",var streamExam,.. var streamArguments]):
+                {
+                    var seconds=1;int? rounds=null;
+                    if(streamArguments.Length>2||streamArguments.Length>0&&(!int.TryParse(streamArguments[0],out seconds)||seconds is <1 or >3600))
+                        return UnknownCommand(["monitor","stream",streamExam,..streamArguments]);
+                    if(streamArguments.Length>1)
+                    {
+                        if(!int.TryParse(streamArguments[1],out var count)||count<1)return UnknownCommand(["monitor","stream",streamExam,..streamArguments]);
+                        rounds=count;
+                    }
+                    var exam=await FindExam(streamExam);var snapshots=new MonitorEventWatch();var completed=0;
+                    while(true)
+                    {
+                        try
+                        {
+                            var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
+                            // The same whole-snapshot validation rejects stale data before any output.
+                            snapshots.Accept(exam.ExamId,snapshot,snapshot.AsOf);
+                            Console.WriteLine(JsonSerializer.Serialize(snapshot,json));Console.Out.Flush();
+                            completed++;
+                            if(rounds is { } limit&&completed>=limit)return 0;
+                        }
+                        catch(Exception error)when(IsRetryableWatchFailure(error))
+                        { WriteLiveDiagnostic($"监测快照读取失败：{DescribeWatchFailure(error)}"); }
+                        await Task.Delay(TimeSpan.FromSeconds(seconds),ct);
+                    }
+                }
                 case ("monitor",["watch",var watchExam,.. var watchArguments]):
                 {
                     // 单次读取并发出收齐事件后退出：可给位置参数指定起始名单版本（默认 0），
@@ -227,6 +292,125 @@ internal static partial class ExamCli
                         if(succeeded)completed++;
                         if(rounds is { } limit&&completed>=limit)return 0;
                         await Task.Delay(interval,ct);
+                    }
+                    while(true);
+                }
+                case ("activation",["pending"]):
+                    result=await Send<ActivationRequestResult[]>(HttpMethod.Get,"/api/v1/activation/pending");break;
+                case ("activation",["approve",var approvalKey,.. var approvalArguments]):
+                {
+                    if(approvalArguments.Length>1)return UnknownCommand(["activation","approve",approvalKey,..approvalArguments]);
+                    result=await Mutate<ActivationResult>(null,async(id,me)=>
+                    {
+                        // A first activation has no client number until approval. The pending list supplies the request identifier.
+                        var activationRequestId=approvalKey;
+                        if(approvalKey.Length==11&&approvalKey.All(char.IsAsciiDigit))
+                        {
+                            var pending=await Send<ActivationRequestResult[]>(HttpMethod.Get,"/api/v1/activation/pending");
+                            activationRequestId=pending.SingleOrDefault(x=>x.ClientNumber==approvalKey&&x.Status==ActivationStatus.Pending)?.ActivationRequestId
+                                ??throw new ArgumentException("该编号没有待审批申请；首次激活请使用申请标识。");
+                        }
+                        string? room=null;
+                        if(approvalArguments.Length==1&&approvalArguments[0]!="未分组")room=(await FindRoom(approvalArguments[0])).GroupId;
+                        return Request("/api/v1/activation/approve",new ApproveActivationRequest(id,activationRequestId,room));
+                    });break;
+                }
+                case ("activation",["revoke",var number]):
+                {
+                    using var input=await Input();var reason=RequiredText(input.RootElement,"reason");
+                    result=await Mutate<ActivationResult>(input.RootElement,async(id,me)=>
+                    {
+                        var device=(await AllDevices(query:number)).SingleOrDefault(x=>x.ClientNumber==number)
+                            ??throw new ArgumentException("设备目录中没有该学生端编号。");
+                        return Request("/api/v1/activation/revoke",new RevokeActivationRequest(id,device.DeviceId,reason));
+                    });break;
+                }
+                case ("decisions",["keep",var name,var number]):
+                {
+                    using var input=await Input();var keepNumber=RequiredText(input.RootElement,"device");var reason=RequiredText(input.RootElement,"reason");
+                    result=await Mutate<DeviceDecisionResult>(input.RootElement,async(id,me)=>
+                    {
+                        var exam=await FindExam(name);
+                        var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
+                        if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
+                            ??throw new ArgumentException("当前考试没有该学生端编号。");
+                        var selected=participant.ConflictDevices.SingleOrDefault(x=>x.ClientNumber==keepNumber)
+                            ??throw new ArgumentException("指定设备不在当前冲突列表中。");
+                        return Request("/api/v1/participation/device-decisions",new DeviceDecisionRequest(id,participant.ParticipationId,
+                            selected.DeviceId,participant.ParticipationVersion,me.Username,reason));
+                    });break;
+                }
+                case ("commands",["resend",var name,var number,var kind]):
+                {
+                    var type=kind switch { "start"=>CommandEventType.Start,"end"=>CommandEventType.End,_=>throw new ArgumentException("指令只能是 start 或 end。") };
+                    result=CommandResult(await Mutate<CommandDelivery>(null,async(id,me)=>
+                    {
+                        var exam=await FindExam(name);
+                        var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
+                        if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
+                            ??throw new ArgumentException("当前考试没有该学生端编号。");
+                        var command=participant.Commands.Where(x=>x.EventType==type&&x.CanResend).OrderByDescending(x=>x.StateVersion).FirstOrDefault()
+                            ??throw new ArgumentException("没有当前可重发的该类型指令。");
+                        return ResendRequest(id,participant,command);
+                    }));break;
+                }
+                case ("commands",["reupload",var name,var number]):
+                {
+                    result=CommandResult(await Mutate<CommandDelivery>(null,async(id,me)=>
+                    {
+                        var exam=await FindExam(name);
+                        var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
+                        if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
+                            ??throw new ArgumentException("当前考试没有该学生端编号。");
+                        if(participant.ReceiptId is not null)throw new ArgumentException("该考生的答卷已经回收。");
+                        var command=participant.Commands.Where(x=>x.EventType==CommandEventType.End&&x.CanResend).OrderByDescending(x=>x.StateVersion).FirstOrDefault()
+                            ??throw new ArgumentException("没有可补传的结束指令。");
+                        return ResendRequest(id,participant,command);
+                    }));break;
+                }
+                case ("monitor",["events",var eventsExam,.. var eventsArguments]):
+                {
+                    // 监测事件订阅：收齐、设备冲突与失败三类一起发。
+                    // 位置参数：起始名单版本（默认 0）、间隔秒数（给了就持续订阅）、轮数（默认不限）。
+                    if(eventsArguments.Length>3)return UnknownCommand(["monitor","events",eventsExam,..eventsArguments]);
+                    var eventsStart=0L;TimeSpan? eventsInterval=null;int? eventsRounds=null;
+                    if(eventsArguments.Length>0&&(!long.TryParse(eventsArguments[0],out eventsStart)||eventsStart<0))
+                        return UnknownCommand(["monitor","events",eventsExam,..eventsArguments]);
+                    if(eventsArguments.Length>1)
+                    {
+                        if(!int.TryParse(eventsArguments[1],out var eventsSeconds)||eventsSeconds is <1 or >3600)
+                            return UnknownCommand(["monitor","events",eventsExam,..eventsArguments]);
+                        eventsInterval=TimeSpan.FromSeconds(eventsSeconds);
+                    }
+                    if(eventsArguments.Length>2)
+                    {
+                        if(!int.TryParse(eventsArguments[2],out var eventsParsed)||eventsParsed<=0)
+                            return UnknownCommand(["monitor","events",eventsExam,..eventsArguments]);
+                        eventsRounds=eventsParsed;
+                    }
+                    var eventsTarget=await FindExam(eventsExam);var eventsWatch=new CollectionWatch(eventsStart);
+                    var monitorEvents=new MonitorEventWatch();var eventsCompleted=0;var eventsFailures=0;
+                    do
+                    {
+                        var eventsSucceeded=false;
+                        try
+                        {
+                            await DrainCollectionAsync(eventsTarget,eventsWatch);
+                            await DrainMonitorEventsAsync(eventsTarget,monitorEvents);
+                            eventsFailures=0;eventsSucceeded=true;
+                        }
+                        catch(Exception error)when(IsRetryableWatchFailure(error))
+                        {
+                            if(eventsInterval is null)throw;
+                            eventsFailures++;
+                            WriteLiveDiagnostic($"监测事件读取失败（连续第 {eventsFailures} 次）：{DescribeWatchFailure(error)}");
+                        }
+                        if(eventsSucceeded)eventsCompleted++;
+                        if(eventsInterval is null||eventsRounds is { } eventsLimit&&eventsCompleted>=eventsLimit)return 0;
+                        await Task.Delay(eventsInterval.Value,ct);
                     }
                     while(true);
                 }

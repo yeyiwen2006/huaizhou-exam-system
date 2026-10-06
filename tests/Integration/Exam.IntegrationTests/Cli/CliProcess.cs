@@ -25,6 +25,7 @@ internal static class CliProcess
         foreach (var key in start.Environment.Keys.Where(k => k.StartsWith("EXAM_", StringComparison.Ordinal)).ToArray()) start.Environment.Remove(key);
         start.Environment["EXAM_ALLOW_INSECURE_LOOPBACK"] = "true";
         start.Environment["EXAM_OPERATOR_TOKEN"] = token;
+        start.Environment["EXAM_CLI_SESSION_DIRECTORY"] = Path.Combine(Path.GetTempPath(), "synthetic-cli-sessions");
         foreach (var arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();

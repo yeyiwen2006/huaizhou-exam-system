@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Grading;
@@ -247,6 +248,39 @@ public sealed class CliBoundaryTests
         Assert.Equal(2, badStart.Exit);
         var missingName = await RunAsync("monitor", "watch", "--server", address);
         Assert.Equal(2, missingName.Exit);
+    }
+
+    /// <summary>新增业务命令的用法错误：退出码 2，且不向服务器发任何请求。</summary>
+    [Fact]
+    public async Task BusinessCommands_RejectMissingArgumentsWithoutCallingTheServer()
+    {
+        var calls = 0;
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.Use(async (context, next) => { Interlocked.Increment(ref calls); await next(); });
+        await app.StartAsync();
+        var address = app.Urls.Single();
+
+        var cases = new[]
+        {
+            new[] { "activation", "approve" },
+            new[] { "activation", "approve", "20261006001", "合成试场A", "多余参数" },
+            new[] { "activation", "revoke", "20261006001" },
+            new[] { "decisions", "keep", "合成考试" },
+            new[] { "decisions", "keep", "合成考试", "20261006001" },
+            new[] { "commands", "resend", "合成考试", "20261006001", "mid" },
+            new[] { "commands", "resend", "合成考试", "20261006001" },
+            new[] { "commands", "reupload", "合成考试" },
+            new[] { "monitor", "events", "合成考试", "0", "0" },
+            new[] { "monitor", "events", "合成考试", "-1" },
+        };
+        foreach (var arguments in cases)
+        {
+            var result = await RunAsync([.. arguments, "--server", address]);
+            Assert.Equal(2, result.Exit);
+        }
+        Assert.Equal(0, Volatile.Read(ref calls));
     }
 
     /// <summary>
