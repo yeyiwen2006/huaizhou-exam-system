@@ -1,6 +1,6 @@
 # PostgreSQL 18 standby fragment. pg_basebackup --write-recovery-conf creates standby.signal.
 hot_standby = on
-primary_conninfo = 'host={{PRIMARY_ADDRESS}} port=5432 user={{REPLICATION_USER}} application_name=exam_standby sslmode=verify-full sslrootcert={{CA_CERTIFICATE_PATH}}'
-primary_slot_name = 'exam_standby'
+primary_conninfo = 'host={{PRIMARY_ADDRESS}} port=5432 user={{REPLICATION_USER}} application_name={{STANDBY_APPLICATION_NAME}} sslmode=verify-full sslrootcert=''{{CA_CERTIFICATE_PATH}}'''
+primary_slot_name = '{{REPLICATION_SLOT}}'
 restore_command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{DEPLOY_ROOT}}/scripts/Restore-WalArchive.ps1" "%f" "%p" "{{ARCHIVE_ROOT}}"'
 recovery_target_timeline = 'latest'

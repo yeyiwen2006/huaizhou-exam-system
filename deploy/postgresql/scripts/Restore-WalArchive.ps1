@@ -5,7 +5,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ($WalFileName -in @('.', '..') -or [System.IO.Path]::GetFileName($WalFileName) -ne $WalFileName) {
+Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
+if ($WalFileName -notmatch '^(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$') {
     throw 'WAL file name must not contain a directory component.'
 }
 
@@ -15,7 +16,7 @@ if (-not [System.IO.Path]::IsPathRooted($ArchiveRoot) -or
     -not ($pathRoot.EndsWith('\') -or $pathRoot.EndsWith('/'))) {
     throw 'WAL archive root must be an absolute path.'
 }
-$root = [System.IO.Path]::GetFullPath($ArchiveRoot)
+$root = Assert-ControlledPath $ArchiveRoot -AllowMissing
 if (-not [System.IO.Directory]::Exists($root)) {
     exit 1
 }
@@ -35,7 +36,7 @@ if (([System.IO.File]::GetAttributes($source) -band [System.IO.FileAttributes]::
     throw 'WAL archive files must not be reparse points.'
 }
 
-$destination = [System.IO.Path]::GetFullPath($DestinationPath)
+$destination = Assert-ControlledPath ([System.IO.Path]::GetFullPath($DestinationPath)) -AllowMissing
 if ([string]::Equals($source, $destination, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'WAL restore destination must differ from the archive source.'
 }

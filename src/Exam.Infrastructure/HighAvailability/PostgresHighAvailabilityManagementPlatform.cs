@@ -19,7 +19,8 @@ public sealed record FailoverNodeDeployment(string NodeId, string ConnectionStri
 public sealed record HighAvailabilityManagementOptions(string ServerId, string LocalNodeId,
     IReadOnlyDictionary<string, FailoverNodeDeployment> Nodes, string SelectionPath, string RebuildRoot,
     string PostgresBinDirectory, string PostgresDataDirectory, string PostgresServiceName,
-    string BusinessServiceName, string PeerToken, string PostgresConfigurationPath = "");
+    string BusinessServiceName, string PeerToken, string PostgresConfigurationPath = "",
+    string WalArchiveDirectory = "", string WalArchiveScriptsDirectory = "");
 
 /// <summary>Actual PostgreSQL state, independent confirmation heads and configured local service controls.</summary>
 public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabilityManagementPlatform
@@ -62,7 +63,8 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         });
         _localMaterials = localMaterials ?? new CompositeStartupReadinessProbe([
             new NodeCertificateStartupReadinessProbe(Local.CertificateThumbprint),
-            new ConfiguredRecoveryReadinessProbe(Local.ConnectionString, Local.CertificateThumbprint)]);
+            new ConfiguredRecoveryReadinessProbe(Local.ConnectionString, Local.CertificateThumbprint),
+            new PostgresWalArchiveReadinessProbe(Local.ConnectionString, options)]);
     }
 
     private async Task<(ServerDeploymentState State, bool Recovery, string System, string Database, int Timeline)?> ReadAsync(
@@ -98,13 +100,13 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
     private ServiceConfiguration LocalConfiguration(long version = 1) => new(_options.ServerId, Local.NodeId,
         "127.0.0.1", 1, Local.ResourcesDirectory, true, version);
 
-    private async Task<(bool Keys, bool Certificate)> MaterialsAsync(FailoverNodeDeployment node, long epoch, CancellationToken token)
+    private async Task<(bool Keys, bool Certificate, IReadOnlyList<StartupCheckResult> Checks)> MaterialsAsync(FailoverNodeDeployment node, long epoch, CancellationToken token)
     {
         if (node.NodeId == Local.NodeId)
         {
             var checks = await _localMaterials.RunAsync(LocalConfiguration(), token);
             var certificate = checks.Any(c => c.Name == "node-certificate-private-key" && c.Passed);
-            return (checks.Count > 1 && checks.All(c => c.Passed || !c.BlocksWrites), certificate);
+            return (checks.Count > 1 && checks.All(c => c.Passed || !c.BlocksWrites), certificate, checks);
         }
         try
         {
@@ -112,19 +114,19 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(5));
             using var request = PeerRequest(HttpMethod.Get, endpoint, node.NodeId);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false);
+            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false, []);
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
             using var memory = new MemoryStream(); var bytes = new byte[4096]; int read;
             while ((read = await stream.ReadAsync(bytes, deadline.Token)) > 0)
-            { if (memory.Length + read > 16384) return (false, false); memory.Write(bytes, 0, read); }
+            { if (memory.Length + read > 16384) return (false, false, []); memory.Write(bytes, 0, read); }
             var proof = JsonSerializer.Deserialize<HighAvailabilityMaterialProof>(memory.ToArray(), JsonDefaults.Create());
             if (proof is null || proof.ServerId != _options.ServerId || proof.NodeId != node.NodeId || proof.Epoch != epoch ||
                 _time.GetUtcNow() - proof.ObservedAt > TimeSpan.FromSeconds(10) || proof.ObservedAt > _time.GetUtcNow().AddSeconds(5))
-                return (false, false);
-            return (proof.KeysReady, proof.CertificateReady);
+                return (false, false, []);
+            return (proof.KeysReady, proof.CertificateReady, []);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return (false, false); }
+        catch (Exception) { return (false, false, []); }
     }
 
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
@@ -145,9 +147,11 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString));
         var probe = new PostgresNodeHealthProbe(connections, _time);
         var nodes = new Dictionary<string, NodeState>();
+        var archiveChecks = new List<StartupCheckResult>();
         foreach (var node in _options.Nodes.Values)
         {
             var materials = await MaterialsAsync(node, state.ServerEpoch, token);
+            archiveChecks.AddRange(materials.Checks.Where(c => c.Name == "wal-archiving"));
             nodes[node.NodeId] = await probe.ObserveAsync(node.NodeId, state.Nodes[node.NodeId].Role,
                 materials.Keys, materials.Certificate, token);
         }
@@ -168,6 +172,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var checks = new List<StartupCheckResult> {
             new("failover-state", verified, verified ? "主备状态与实际数据库身份已读取。" : "最新原主确认不可核实，禁止据复制快照接管。", true),
             new("synchronous-protection", protection, protection ? "实际双侧持久确认、材料与同步复制已核实。" : "同步保护未核实；节点在线或延迟为零不能替代确认。", true) };
+        checks.AddRange(archiveChecks);
         return new(_options.ServerId, Local.NodeId, state with { Nodes = nodes }, verified ? _time.GetUtcNow() : null, protection, checks);
     }
 
@@ -450,12 +455,23 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var relative = Path.GetRelativePath(data, config);
         if (!relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !Path.IsPathFullyQualified(relative))
             throw new IOException("受控配置必须位于被替换数据库目录之外。");
-        var arguments = $"-c config_file=\"{config.Replace('\\', '/')}\" -c data_directory=\"{data.Replace('\\', '/')}\" " +
-            $"-c port={settings.Port} -c archive_mode=off -c shared_preload_libraries=\"\" " +
-            "-c session_preload_libraries=\"\" -c local_preload_libraries=\"\" -c restore_command=\"exit 1\" " +
-            "-c archive_cleanup_command=\"\" -c recovery_end_command=\"\"";
-        return $"\"{Path.Combine(Path.GetFullPath(options.PostgresBinDirectory), "pg_ctl.exe")}\" runservice -N \"{options.PostgresServiceName}\" " +
-            $"-D \"{data}\" -w -t 60 -o \"{arguments.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        var arguments = string.Join(' ', BuildPostgresRuntimeArguments(options).Select(PostgresWalArchiving.QuoteArgument));
+        return $"{PostgresWalArchiving.QuoteArgument(Path.Combine(Path.GetFullPath(options.PostgresBinDirectory), "pg_ctl.exe"))} runservice -N {PostgresWalArchiving.QuoteArgument(options.PostgresServiceName)} " +
+            $"-D {PostgresWalArchiving.QuoteArgument(data)} -w -t 60 -o {PostgresWalArchiving.QuoteArgument(arguments)}";
+    }
+
+    // Shared by the SCM command and native regression tests: no alternate test-only settings.
+    public static IReadOnlyList<string> BuildPostgresRuntimeArguments(HighAvailabilityManagementOptions options)
+    {
+        var archiveCommand = PostgresWalArchiving.BuildCommand(options);
+        var settings = new NpgsqlConnectionStringBuilder(options.Nodes[options.LocalNodeId].ConnectionString);
+        return ["-c", "config_file=" + Path.GetFullPath(options.PostgresConfigurationPath).Replace('\\', '/'),
+            "-c", "data_directory=" + Path.GetFullPath(options.PostgresDataDirectory).Replace('\\', '/'),
+            "-c", $"port={settings.Port}", "-c", "archive_mode=on", "-c", "archive_library=",
+            "-c", "archive_command=" + archiveCommand, "-c", "archive_timeout=60s",
+            "-c", "fsync=on", "-c", "full_page_writes=on",
+            "-c", "shared_preload_libraries=", "-c", "session_preload_libraries=", "-c", "local_preload_libraries=",
+            "-c", "restore_command=exit 1", "-c", "archive_cleanup_command=", "-c", "recovery_end_command="];
     }
 
     private string RebuildSlot(FailoverExecutionPlan plan) => PathBoundary.ResolveWithinRoot(_options.RebuildRoot,
