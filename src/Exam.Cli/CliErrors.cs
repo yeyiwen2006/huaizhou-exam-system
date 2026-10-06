@@ -64,6 +64,7 @@ internal static partial class ExamCli
             var server = serverIndex >= 0 ? args[serverIndex + 1] : Environment.GetEnvironmentVariable(ServerEnvironment);
             if (args.Count > 0 && args[0] is not ("import" or "management" or "version" or "artifact-info" or "help" or "--help" or "-h" or "error-codes") &&
                 server is not null && !TryResolveServer(server, out _)) throw new ArgumentException("服务地址无效。");
+            errors.JsonFormat = json;
             exit = await DispatchAsync(args.ToArray(), deadline.Token);
             if (deadline.IsCancellationRequested) exit = cancellationToken.IsCancellationRequested ? 130 : 5;
         }
@@ -128,8 +129,21 @@ internal static partial class ExamCli
         else Console.Error.WriteLine(message);
     }
 
+    // 只供命令自身生成的进度文案使用；不接受服务器正文或异常消息。
+    private static void WriteLiveDiagnostic(string message)
+    {
+        if (ActiveErrors.Value is { } errors) errors.RecordProgress(message);
+        else Console.Error.WriteLine(message);
+    }
+
     private sealed class ControlledErrors(TextWriter terminal) : TextWriter
     {
+        public bool JsonFormat { get; set; }
+        public void RecordProgress(string value)
+        {
+            if (JsonFormat) RecordSuccess(value);
+            else { terminal.WriteLine(value); terminal.Flush(); }
+        }
         public StringBuilder Lines { get; } = new();
         public StringBuilder SuccessLines { get; } = new();
         public void RecordSuccess(string value)
