@@ -134,6 +134,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Roster.Reset();
         Import.SetCurrentExam(null);
         GradingRevision.ExamId = string.Empty;
+        // 收齐提醒不依赖监测页是否打开：更换服务器时必须清掉考试上下文，
+        // 否则会拿上一台服务器的旧考试继续轮询并弹出无关的收齐提醒。
+        Monitoring.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
@@ -156,6 +159,18 @@ public sealed class MainViewModel : BindableBase, IDisposable
     /// <summary>只改答案与计分规则的入口（不重新编译、不组包）。</summary>
     public GradingRevisionViewModel GradingRevision { get; }
     public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
+
+    /// <summary>
+    /// 把内部考试标识换成考务可读的考试名称；宿主列表里查不到时返回 null，
+    /// 由调用方改用中性说法，绝不把内部标识显示给考务。
+    /// </summary>
+    public string? DescribeExam(string examId)
+    {
+        if (string.IsNullOrWhiteSpace(examId)) return null;
+        if (CurrentExam is { } current && StringComparer.Ordinal.Equals(current.ExamId, examId)) return current.Name;
+        return Home.Exams
+            .FirstOrDefault(card => StringComparer.Ordinal.Equals(card.Exam.ExamId, examId))?.Exam.Name;
+    }
 
     private void OnConnectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

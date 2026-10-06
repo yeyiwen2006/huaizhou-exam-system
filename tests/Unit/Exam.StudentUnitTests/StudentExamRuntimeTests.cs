@@ -232,6 +232,29 @@ public sealed class StudentExamRuntimeTests
         Assert.False(runtime.CanRetryLocalSave);
     }
 
+    [Fact]
+    public async Task RepeatedVerifiedEnd_RequestsOriginalSubmissionRetry_ButForeignEndCannot()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        await using var runtime = fixture.Runtime();
+        Assert.True(await runtime.Manager.PrepareAndDownloadAsync());
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await runtime.Manager.HandleCommandAsync(fixture.Api.Start()));
+        await runtime.SynchronizeLocalAnswersAsync();
+        var delivery = fixture.Api.End();
+        var retries = 0;
+        runtime.SubmissionRetryRequested += (_, _) => retries++;
+        await InvokeRuntimeCallback(runtime, "ApplyCommandAsync", delivery, CancellationToken.None);
+        var original = Assert.IsType<FixedSubmissionRecord>(runtime.FixedSubmission);
+        await InvokeRuntimeCallback(runtime, "ApplyCommandAsync", delivery, CancellationToken.None);
+        Assert.Equal(2, retries);
+        Assert.Equal(original.SubmissionId, runtime.FixedSubmission!.SubmissionId);
+        Assert.Equal(original.RequestId, runtime.FixedSubmission.RequestId);
+        await InvokeRuntimeCallback(runtime, "ApplyCommandAsync", delivery with { TargetDeviceId = "other-device" }, CancellationToken.None);
+        Assert.Equal(2, retries);
+        Assert.Equal(AnswerSessionStatus.Fixed, runtime.Answers!.Status);
+    }
+
     private static Task InvokeRuntimeCallback(StudentExamRuntime runtime, string methodName, params object[] arguments)
     {
         var method = typeof(StudentExamRuntime).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);

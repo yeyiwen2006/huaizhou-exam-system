@@ -86,9 +86,18 @@ public sealed class WpfBindingSmokeTests
                 allCorrect.Text = "3";
                 allCorrect.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
                 Assert.Equal("3", group.AllCorrect);
-                var instructions = Assert.Single(Descendants<TextBox>(window), box =>
-                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Exam.InstructionsText");
-                Assert.Equal(BindingMode.OneWay, BindingOperations.GetBinding(instructions, TextBox.TextProperty)!.Mode);
+                // 考生说明预览按字形分段渲染：正文黑体、数字 Times New Roman，并显示预览来源说明。
+                Assert.Single(Descendants<ItemsControl>(window), control =>
+                    BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "Exam.InstructionPreview");
+                Assert.Single(Descendants<TextBlock>(window), block =>
+                    BindingOperations.GetBinding(block, TextBlock.TextProperty)?.Path.Path == "Exam.InstructionSourceText");
+                var rendered = Descendants<TextBlock>(window)
+                    .Where(block => block.DataContext is InstructionLineViewModel).ToArray();
+                var runs = rendered.SelectMany(block => block.Inlines.OfType<System.Windows.Documents.Run>()).ToArray();
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.NumberFont));
+                Assert.Contains(runs, run => Equals(run.FontFamily.Source, InstructionText.BodyFont));
+                Assert.All(rendered, block => Assert.Equal(((InstructionLineViewModel)block.DataContext).Text,
+                    string.Concat(block.Inlines.OfType<System.Windows.Documents.Run>().Select(run => run.Text))));
 
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);
@@ -129,6 +138,18 @@ public sealed class WpfBindingSmokeTests
                     if ((string)tab.Header == "设备监控")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
+                        AdminUiFixture.Until(() => viewModel.Monitoring.Rows.Count != 0);
+                        viewModel.Monitoring.SelectedRow = viewModel.Monitoring.Rows.First(row => row.AvailableCommands.Any(command => command.CanResend));
+                        viewModel.Monitoring.DecisionReason = "合成界面保留输入检查";
+                        DrainDispatcher();
+                        var participant = viewModel.Monitoring.SelectedRow.ParticipationId;
+                        var commandId = viewModel.Monitoring.EventId;
+                        viewModel.Monitoring.LoadCommand.Execute(null);
+                        AdminUiFixture.Until(() => viewModel.Monitoring.Status.Contains("实际参试"));
+                        DrainDispatcher();
+                        Assert.Equal(participant, viewModel.Monitoring.SelectedRow?.ParticipationId);
+                        Assert.Equal(commandId, viewModel.Monitoring.EventId);
+                        Assert.Equal("合成界面保留输入检查", viewModel.Monitoring.DecisionReason);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐记录") && button.Command is not null);
                         var screenshotPath = Environment.GetEnvironmentVariable("EXAM_C04_SCREENSHOT_PATH");
                         if (!string.IsNullOrWhiteSpace(screenshotPath))
