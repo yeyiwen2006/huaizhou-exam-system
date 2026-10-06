@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
 $cli = Assert-ControlledPath $CliPath
 if (-not [IO.File]::Exists($cli)) { throw 'The published Exam.Cli executable is missing.' }

@@ -40,8 +40,8 @@ function Test-SameFileContent([string]$Left, [string]$Right) {
     $leftInfo = [System.IO.FileInfo]::new($Left)
     $rightInfo = [System.IO.FileInfo]::new($Right)
     if ($leftInfo.Length -ne $rightInfo.Length) { return $false }
-    $leftHash = (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash
-    $rightHash = (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
+    $leftHash = Get-SharedFileHash $Left
+    $rightHash = Get-SharedFileHash $Right
     return [string]::Equals($leftHash, $rightHash, [StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -59,7 +59,7 @@ $temporary = [System.IO.Path]::Combine(
     $root,
     ".$WalFileName.$PID.$([Guid]::NewGuid().ToString('N')).tmp")
 try {
-    $input = [System.IO.File]::Open($source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $input = [System.IO.File]::Open($source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
     try {
         $output = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {

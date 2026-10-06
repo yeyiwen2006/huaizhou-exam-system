@@ -3,12 +3,13 @@ param(
     [Parameter(Mandatory = $true)][string]$PrimaryConnectionUri,
     [Parameter(Mandatory = $true)][string]$StandbyConnectionUri,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9]{1,20}$')][string]$ExpectedSystemIdentifier,
-    [ValidatePattern('^[a-zA-Z_][a-zA-Z0-9_]*$')][string]$StandbyApplicationName = 'exam_standby',
+    [ValidatePattern('^[a-zA-Z_][a-zA-Z0-9_.-]*$')][string]$StandbyApplicationName = 'exam_standby',
     [ValidatePattern('^[a-z0-9_]+$')][string]$ReplicationSlot = 'exam_standby',
     [ValidateRange(1, 9223372036854775807)][long]$MaximumSlotWalBytes = 8589934592
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
 $psql = Assert-ControlledPath $PsqlPath
 foreach ($connection in @($PrimaryConnectionUri, $StandbyConnectionUri)) {
@@ -55,6 +56,8 @@ SELECT json_build_object(
   'receiver', (SELECT json_build_object('status', status, 'timeline', received_tli,
       'senderHost', sender_host, 'senderPort', sender_port, 'slot', slot_name) FROM pg_stat_wal_receiver),
   'inRecovery', pg_is_in_recovery(),
+  'fsync', current_setting('fsync'),
+  'fullPageWrites', current_setting('full_page_writes'),
   'receiveLsn', pg_last_wal_receive_lsn(),
   'replayLsn', pg_last_wal_replay_lsn(),
   'replayPaused', pg_is_wal_replay_paused());

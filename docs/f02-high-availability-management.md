@@ -54,13 +54,15 @@ CLI 沿用 `management` 命令组、共享客户端和部署会话，增加 `ha-
 | `Backup:PostgresBinDirectory` | 沿用 F01 的匹配版本工具绝对目录 |
 | `HighAvailability:PostgresDataDirectory` | 固定本机数据库绝对数据目录 |
 | `HighAvailability:PostgresConfigurationPath` | 位于数据目录外的独立受保护配置 |
+| `HighAvailability:WalArchiveDirectory` | 预建受保护的本机连续归档目录，与数据/资源/重建/工具目录互不包含 |
+| `HighAvailability:WalArchiveScriptsDirectory` | 预部署 WAL 脚本与模块目录，部署账户保护；不能来自备份或重建树 |
 | `HighAvailability:PostgresServiceName` | 固定本机服务，实际 SCM 启动命令须匹配受控命令 |
 | `Confirmation:PeerToken` | 既有节点间保护凭据，仅宿主使用，不交 GUI |
 | `Management:BusinessServiceName` | 既有固定本机业务服务 |
 
 键读取以 `Exam.Management/Program.cs` 为准。状态表与初始双节点由既有 F02 初始化；本次不新增迁移、不自动用内存替代缺表。
 
-`BuildPostgresServiceCommand` 生成受控 SCM 命令：固定工具、服务、数据、独立配置及本机端口，禁用外部恢复命令/预加载选项。重建前读取 SCM 实际命令严格核对。暂存、数据和资源互相独立；链接树、外部表空间、不符服务绑定阻止启用。F05 部署须满足此绑定，GUI 不编辑服务命令。
+`BuildPostgresServiceCommand` 生成受控 SCM 命令：固定工具、服务、数据、独立配置及本机端口，固定开启连续归档、使用已核对的归档工具与目录，并禁用外部恢复命令/预加载选项。缺少归档部署绑定时阻断，不能静默关闭归档。重建前读取 SCM 实际命令严格核对。暂存、数据和资源互相独立；链接树、外部表空间、不符服务绑定阻止启用。F05 部署须满足此绑定，GUI 不编辑服务命令。
 
 数据库监听地址由独立受保护的 PostgreSQL 配置决定，须允许对端主机按既定网络与认证规则连接；重建命令不强制改为仅回环监听。业务宿主启动和持续运行的管理宿主共用部署选择映射，连接、时间线查询、备用连接、证书、资源和确认目录随实际选择一致更新。每节点可配置 `TimelineConnectionString`；未配置时使用该节点数据库连接，不继承旧主的时间线连接。
 

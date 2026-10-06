@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9]{1,20}$')][string]$ExpectedSystemIdentifier,
     [ValidateRange(1, 65535)][int]$PrimaryPort = 5432,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-z_][a-z0-9_]*$')][string]$ReplicationUser,
-    [ValidatePattern('^[a-z0-9_]+$')][string]$ReplicationSlot = 'exam_standby'
+    [ValidatePattern('^[a-z0-9_]+$')][string]$ReplicationSlot = 'exam_standby',
+    [ValidatePattern('^[a-zA-Z_][a-zA-Z0-9_.-]*$')][string]$StandbyApplicationName = 'exam_standby'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +37,7 @@ if ([System.IO.Directory]::Exists($target) -and
 }
 
 function Get-PrimaryInitializationState {
-    $sql = "SELECT json_build_object('systemIdentifier', (SELECT system_identifier::text FROM pg_control_system()), 'inRecovery', pg_is_in_recovery(), 'versionNumber', current_setting('server_version_num')::int, 'slotState', COALESCE((SELECT CASE WHEN active THEN 'active' ELSE 'inactive' END FROM pg_replication_slots WHERE slot_name = '$ReplicationSlot'), 'missing'));"
+    $sql = "SELECT json_build_object('systemIdentifier', (SELECT system_identifier::text FROM pg_control_system()), 'inRecovery', pg_is_in_recovery(), 'versionNumber', current_setting('server_version_num')::int, 'externalTablespaces', (SELECT count(*) FROM pg_tablespace WHERE spcname NOT IN ('pg_default', 'pg_global')), 'slotState', COALESCE((SELECT CASE WHEN active THEN 'active' ELSE 'inactive' END FROM pg_replication_slots WHERE slot_name = '$ReplicationSlot'), 'missing'));"
     $value = & $psql --host $PrimaryHost --port $PrimaryPort --username $ReplicationUser `
         --dbname postgres --no-password --no-psqlrc --set ON_ERROR_STOP=1 `
         --tuples-only --no-align --command $sql
@@ -48,21 +49,30 @@ $primaryState = Get-PrimaryInitializationState
 $expectedServerVersion = 180000 + [int]$expectedVersion.Split('.')[1]
 if ($primaryState.systemIdentifier -ne $ExpectedSystemIdentifier -or $primaryState.inRecovery -ne $false -or
     $primaryState.versionNumber -ne $expectedServerVersion) { throw 'Primary cluster identity, role or PostgreSQL patch version does not match deployment.' }
+# Plain backups otherwise materialize external tablespaces at source absolute paths.
+# This initializer supports only a self-contained data directory, not arbitrary tablespace remapping.
+if ($null -eq $primaryState.externalTablespaces -or [long]$primaryState.externalTablespaces -ne 0) {
+    throw 'External tablespaces are unsupported by this controlled initializer; use a reviewed explicit mapping workflow.'
+}
 if ($primaryState.slotState -ne 'missing') {
     throw "Replication slot '$ReplicationSlot' already exists; it will not be reused or removed."
 }
 [System.IO.Directory]::CreateDirectory($target) | Out-Null
 
 $backupExitCode = 0
+$previousApplicationName = $env:PGAPPNAME
 try {
+    # pg_basebackup -R writes postgresql.auto.conf, which overrides a config fragment.
+    $env:PGAPPNAME = $StandbyApplicationName
     & $tool --host $PrimaryHost --port $PrimaryPort --username $ReplicationUser `
         --pgdata $target --write-recovery-conf --wal-method stream --checkpoint fast `
-        --slot $ReplicationSlot --create-slot --no-password
+        --slot $ReplicationSlot --create-slot --no-password --no-clean
     $backupExitCode = $LASTEXITCODE
 }
 catch {
     $backupExitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
 }
+finally { $env:PGAPPNAME = $previousApplicationName }
 
 if ($backupExitCode -ne 0) {
     # A missing-slot precheck does not prove ownership if another initializer races us.

@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Import-Module (Join-Path $PSScriptRoot 'Postgresql.Operations.psm1') -Force -DisableNameChecking
 $configurationFile = Assert-ControlledPath $ConfigurationPath
 if (-not [IO.File]::Exists($configurationFile) -or ([IO.FileInfo]::new($configurationFile)).Length -gt 65536) {
@@ -17,8 +18,15 @@ $shell = @('pwsh.exe', 'powershell.exe', 'pwsh') | ForEach-Object { Join-Path $P
 if (-not $shell) { throw 'Cannot locate the current PowerShell runtime.' }
 
 function Invoke-ReadCheck([string]$Script, [object[]]$Arguments) {
-    $raw = & $shell -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot $Script) @Arguments 2>$null | Out-String
-    $code = $LASTEXITCODE
+    $code = 1; $raw = ''; $previousErrorAction = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 wraps native stderr as NativeCommandError. A failed child
+        # must become a failed structured sample, not abort before any report is emitted.
+        $ErrorActionPreference = 'Continue'
+        $raw = & $shell -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot $Script) @Arguments 2>$null | Out-String
+        $code = $LASTEXITCODE
+    } catch { $code = 1; $raw = '' }
+    finally { $ErrorActionPreference = $previousErrorAction }
     try { $report = $raw | ConvertFrom-Json; if ($null -eq $report.ready) { throw 'No readiness value.' } }
     catch { $report = [ordered]@{ ready = $false; errors = @('Check could not produce a valid report. Inspect protected configuration and service-account permissions.') } }
     return [ordered]@{ exitCode = $code; report = $report }

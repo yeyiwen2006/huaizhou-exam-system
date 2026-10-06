@@ -66,7 +66,8 @@ public static class ManagementEntryPoint
             var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, Required("HighAvailability:SelectionPath"),
                 configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
                 configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
-                Required("Management:BusinessServiceName"), Required("Confirmation:PeerToken"), configuration["HighAvailability:PostgresConfigurationPath"] ?? "");
+                Required("Management:BusinessServiceName"), Required("Confirmation:PeerToken"), configuration["HighAvailability:PostgresConfigurationPath"] ?? "",
+                configuration["HighAvailability:WalArchiveDirectory"] ?? "", configuration["HighAvailability:WalArchiveScriptsDirectory"] ?? "");
             var journal = new FileManagementOperationStore(Required("Management:OperationDirectory"));
             return new(serverId, nodeId, new PostgresHighAvailabilityManagementPlatform(options,
                 provider.GetRequiredService<HttpClient>()), journal, new SystemClock());

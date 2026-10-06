@@ -7,6 +7,7 @@ function Assert-ControlledPath([string]$Path, [switch]$AllowMissing) {
         $Path.StartsWith('\\') -or $Path -match "['`"%\r\n]") {
         throw 'Use an absolute local path without shell/configuration delimiters.'
     }
+    if ($Path.Substring($root.Length).Contains(':')) { throw 'Alternate data stream paths are not permitted.' }
     $full = [IO.Path]::GetFullPath($Path)
     $cursor = $full
     while ($cursor) {
@@ -34,9 +35,12 @@ function Assert-ReadinessConnection([string]$Value) {
     if (-not $uri.IsAbsoluteUri -or $uri.Scheme -notin @('postgres', 'postgresql') -or
         [Uri]::UnescapeDataString($uri.UserInfo).Contains(':') -or $uri.Fragment -or
         [Uri]::UnescapeDataString($uri.Query) -match '(?i)(password|passfile|options)=' -or
-        $uri.Query -notmatch '(?:^\?|&)sslmode=verify-full(?:&|$)') {
+        $uri.Query -cne '?sslmode=verify-full') {
         throw 'Use a PostgreSQL URI without passwords or injected options and with sslmode=verify-full; use protected pgpass.'
     }
+    # libpq accepts repeated/overriding query parameters. Only the fixed TLS setting is
+    # permitted here; CA and password files come from the protected process environment.
+    # Otherwise host/hostaddr/port/service could invalidate the endpoint inspected below.
     $null = [Net.IPAddress]::Parse($uri.Host.Trim('[', ']'))
     return $uri
 }
@@ -44,7 +48,7 @@ function Assert-ReadinessConnection([string]$Value) {
 function Get-ReplicationErrors($Primary, $Standby, [string]$ApplicationName, [long]$MaximumSlotWalBytes) {
     $errors = [Collections.Generic.List[string]]::new()
     try {
-        if ($ApplicationName -notmatch '^[a-zA-Z_][a-zA-Z0-9_]*$') { throw 'Invalid standby application name.' }
+        if ($ApplicationName -notmatch '^[a-zA-Z_][a-zA-Z0-9_.-]*$') { throw 'Invalid standby application name.' }
         if ($MaximumSlotWalBytes -le 0) { throw 'Slot budget must be finite and positive.' }
         if ($Primary.inRecovery -ne $false -or $Standby.inRecovery -ne $true) { $errors.Add('Primary/standby recovery roles are incorrect.') }
         if ([string]::IsNullOrWhiteSpace($Primary.systemIdentifier) -or $Primary.systemIdentifier -ne $Standby.systemIdentifier -or
@@ -52,7 +56,8 @@ function Get-ReplicationErrors($Primary, $Standby, [string]$ApplicationName, [lo
             $Primary.database -ne $Standby.database) { $errors.Add('Cluster identifier or database differs.') }
         if ([int]$Primary.versionNumber -lt 180000 -or [int]$Primary.versionNumber -ge 190000 -or
             $Primary.versionNumber -ne $Standby.versionNumber) { $errors.Add('Both nodes must use the same PostgreSQL 18 patch version.') }
-        if ($Primary.synchronousCommit -ne 'remote_apply' -or $Primary.fsync -ne 'on' -or $Primary.fullPageWrites -ne 'on') {
+        if ($Primary.synchronousCommit -ne 'remote_apply' -or $Primary.fsync -ne 'on' -or $Primary.fullPageWrites -ne 'on' -or
+            $Standby.fsync -ne 'on' -or $Standby.fullPageWrites -ne 'on') {
             $errors.Add('Synchronous replay and local WAL durability settings are required.')
         }
         $escaped = [regex]::Escape($ApplicationName)
@@ -98,4 +103,13 @@ function Get-ReplicationErrors($Primary, $Standby, [string]$ApplicationName, [lo
     return ,$errors.ToArray()
 }
 
-Export-ModuleMember -Function Assert-ControlledPath, Assert-ReadinessConnection, ConvertFrom-PgLsn, Get-ReplicationErrors
+# PostgreSQL keeps completed WAL segments open with read/write handles on Windows.
+# Share those handles; archive only on its callback and still verify the copied bytes.
+function Get-SharedFileHash([string]$Path) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [Convert]::ToBase64String($sha.ComputeHash($stream)) }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
+
+Export-ModuleMember -Function Get-SharedFileHash, Assert-ControlledPath, Assert-ReadinessConnection, ConvertFrom-PgLsn, Get-ReplicationErrors

@@ -27,7 +27,7 @@ class PostgreSqlOperationsTests(unittest.TestCase):
 
     def harness(self, body, arguments=()):
         path = self.root / "harness.ps1"
-        path.write_text(body, encoding="utf-8")
+        path.write_text(body.replace("param($Scripts, $Root)", "param($Scripts, $Root)\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)"), encoding="utf-8")
         return self.ps(path, [SCRIPTS, self.root, *arguments])
 
     @staticmethod
@@ -40,7 +40,7 @@ class PostgreSqlOperationsTests(unittest.TestCase):
                        maxSlotWalKeepBytes=1024, slots=[dict(active=True, walStatus="reserved", retainedBytes=16, safeWalBytes=1008)],
                        archiveMode="on", archiveCount=1, lastArchiveFailure=None, lastArchiveSuccess="2026-10-05T00:00:00Z")
         standby = dict(inRecovery=True, systemIdentifier="123456789", database="exam", versionNumber=180001,
-                       receiveLsn="1/100", replayLsn="1/100", replayPaused=False,
+                       receiveLsn="1/100", replayLsn="1/100", replayPaused=False, fsync="on", fullPageWrites="on",
                        receiver=dict(status="streaming", timeline=1, senderHost="127.0.0.1", senderPort=5432, slot="exam_standby"))
         return primary, standby
 
@@ -117,9 +117,11 @@ ConvertFrom-PgLsn 'FFFFFFFF/FFFFFFFF'
         archive = self.root / "archive"; archive.mkdir()
         wal = "000000010000000000000001"
         args = ["-SourcePath", source, "-WalFileName", wal, "-ArchiveRoot", archive]
-        for _ in range(2):
-            result = self.ps(SCRIPTS / "Invoke-WalArchiveCommand.ps1", args)
-            self.assertEqual(0, result.returncode, result.stderr)
+        # A real Windows PostgreSQL process keeps WAL open for read/write during archive callbacks.
+        with source.open("r+b"):
+            for _ in range(2):
+                result = self.ps(SCRIPTS / "Invoke-WalArchiveCommand.ps1", args)
+                self.assertEqual(0, result.returncode, result.stderr)
         source.write_bytes(b"different-synthetic-WAL")
         self.assertNotEqual(0, self.ps(SCRIPTS / "Invoke-WalArchiveCommand.ps1", args).returncode)
         self.assertEqual(b"synthetic-WAL-only", (archive / wal).read_bytes())
@@ -145,13 +147,16 @@ $global:commands = @()
 function FakePsql {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { 'psql (PostgreSQL) 18.1'; return }
-    $global:commands += ($args -join ' '); '{"systemIdentifier":"123456789","inRecovery":false,"versionNumber":180001,"slotState":"missing"}'
+    $global:commands += ($args -join ' '); '{"systemIdentifier":"123456789","inRecovery":false,"versionNumber":180001,"slotState":"missing","externalTablespaces":0}'
 }
 function FakeBackup {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { 'pg_basebackup (PostgreSQL) 18.1'; return }
     $target = $args[[Array]::IndexOf($args, '--pgdata') + 1]
     Set-Content -LiteralPath (Join-Path $target 'partial') -Value 'preserve'
+    if ($env:PGAPPNAME -cne 'exam_standby') { throw 'Recovery application name was not pinned.' }
+    # Model pg_basebackup's default cleanup instead of making preservation pass unconditionally.
+    if ($args -notcontains '--no-clean') { Remove-Item -LiteralPath (Join-Path $target 'partial') }
     $global:LASTEXITCODE = 1
 }
 Set-Alias -Name $psql -Value FakePsql; Set-Alias -Name $backup -Value FakeBackup
@@ -247,11 +252,12 @@ $ErrorActionPreference = 'Stop'
 $rsa = [Security.Cryptography.RSA]::Create(2048)
 try {
     $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=Synthetic F05 CA', $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
     $cert = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
     try { [IO.File]::WriteAllBytes((Join-Path $Root 'ca.cer'), $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)) }
     finally { $cert.Dispose() }
 } finally { $rsa.Dispose() }
-$output = Join-Path $Root 'generated'
+$output = Join-Path $Root 'generated with spaces'
 & (Join-Path $Scripts 'New-PostgresqlDeployment.ps1') -OutputDirectory $output -PrimaryAddress 127.0.0.1 -StandbyAddress 127.0.0.2 -DeploymentRoot $Root -ArchiveRoot $Root -CaCertificatePath (Join-Path $Root 'ca.cer') -MaxSlotWalKeepSizeMB 1234
 $hash = (Get-FileHash -LiteralPath (Join-Path $output 'primary.conf.fragment')).Hash
 try {
@@ -262,10 +268,72 @@ if ($hash -ne (Get-FileHash -LiteralPath (Join-Path $output 'primary.conf.fragme
 ''')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(json.loads(result.stdout)["applied"])
-        text = (self.root / "generated/primary.conf.fragment").read_text(encoding="utf-8")
+        text = (self.root / "generated with spaces/primary.conf.fragment").read_text(encoding="mbcs" if os.name == "nt" else "utf-8")
         self.assertIn("max_slot_wal_keep_size = '1234MB'", text)
         self.assertNotIn("{{", text)
         self.assertNotIn("password=", text)
+        generated = self.root / "generated with spaces"
+        pem = (generated / "ca.crt").read_text(encoding="utf-8")
+        self.assertIn("-----BEGIN CERTIFICATE-----", pem)
+        self.assertNotIn("PRIVATE KEY", pem)
+        standby = (generated / "standby.conf.fragment").read_text(encoding="mbcs" if os.name == "nt" else "utf-8")
+        self.assertIn("sslrootcert=''" + str(generated / "ca.crt").replace("\\", "/") + "''", standby)
+
+    def test_readiness_rejects_duplicate_or_overriding_libpq_query_parameters(self):
+        result = self.harness("""param($Scripts, $Root)
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $Scripts 'Postgresql.Operations.psm1') -Force -DisableNameChecking
+$base = 'postgresql://operator@127.0.0.1:5432/exam?sslmode=verify-full'
+$null = Assert-ReadinessConnection $base
+foreach ($suffix in @('&sslmode=disable', '&sslmode=verify-full', '&host=127.0.0.9', '&hostaddr=127.0.0.9',
+    '&port=6000', '&dbname=other', '&service=other', '&options=-c%20default_transaction_read_only=off',
+    '&%73slmode=disable', '&password=synthetic', '&passfile=/tmp/other')) {
+    $rejected = $false
+    try { $null = Assert-ReadinessConnection ($base + $suffix) } catch { $rejected = $true }
+    if (-not $rejected) { throw ('Unsafe URI accepted: ' + $suffix) }
+}
+'validated'
+""")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("validated", result.stdout)
+
+    def test_standby_local_durability_is_required(self):
+        for field in ["fsync", "fullPageWrites"]:
+            with self.subTest(field=field):
+                primary, standby = self.reports()
+                standby[field] = "off"
+                self.assertTrue(self.errors(primary, standby))
+                del standby[field]
+                self.assertTrue(self.errors(primary, standby))
+
+    def test_external_tablespaces_are_rejected_before_creating_target_or_running_backup(self):
+        result = self.harness("""param($Scripts, $Root)
+$ErrorActionPreference = 'Stop'
+$bin = Join-Path $Root 'bin'; New-Item -ItemType Directory -Path $bin | Out-Null
+$psql = Join-Path $bin 'psql.exe'; $backup = Join-Path $bin 'pg_basebackup.exe'
+Set-Content -LiteralPath $psql -Value 'synthetic'; Set-Content -LiteralPath $backup -Value 'synthetic'
+$cert = Join-Path $Root 'ca.crt'; Set-Content -LiteralPath $cert -Value 'synthetic-public-only'
+$env:PGSSLMODE = 'verify-full'; $env:PGSSLROOTCERT = $cert
+$global:backupCalled = $false
+function FakePsql {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '--version') { 'psql (PostgreSQL) 18.1'; return }
+    '{"systemIdentifier":"123456789","inRecovery":false,"versionNumber":180001,"slotState":"missing","externalTablespaces":1}'
+}
+function FakeBackup {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '--version') { 'pg_basebackup (PostgreSQL) 18.1'; return }
+    $global:backupCalled = $true
+}
+Set-Alias -Name $psql -Value FakePsql; Set-Alias -Name $backup -Value FakeBackup
+$rejected = $false
+try {
+    & (Join-Path $Scripts 'Initialize-Standby.ps1') -PostgresBinDirectory $bin -StandbyDataDirectory (Join-Path $Root 'standby') -PrimaryHost '127.0.0.1' -ReplicationUser 'exam_replication' -ExpectedSystemIdentifier '123456789'
+} catch { if ($_.Exception.Message -match 'tablespaces') { $rejected = $true } else { throw } }
+if (-not $rejected -or $global:backupCalled -or (Test-Path -LiteralPath (Join-Path $Root 'standby'))) { throw 'Tablespace preflight did not fail safely.' }
+'validated'
+""")
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_monitor_reports_missing_dependency_and_never_emits_a_green_result(self):
         configuration = dict(psqlPath=str(self.root / "missing-psql.exe"),
@@ -278,6 +346,7 @@ if ($hash -ne (Get-FileHash -LiteralPath (Join-Path $output 'primary.conf.fragme
         path = self.root / "check.json"; path.write_text(json.dumps(configuration), encoding="utf-8")
         result = self.ps(SCRIPTS / "Test-ExamDeployment.ps1", ["-ConfigurationPath", path])
         self.assertNotEqual(0, result.returncode, result.stderr)
+        self.assertTrue(result.stdout.strip(), result.stderr)
         report = json.loads(result.stdout)
         self.assertFalse(report["ready"])
         self.assertFalse(report["replication"]["report"]["ready"])
