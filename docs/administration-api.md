@@ -124,8 +124,19 @@ monitor show <考试名称>
 monitor missing <考试名称>
 monitor watch <考试名称> [起始名单版本]
 monitor follow <考试名称> [起始名单版本] [间隔秒] [轮数]
+monitor events <考试名称> [起始名单版本] [间隔秒] [轮数]
+activation pending
+activation approve <学生端编号> [试场名称]
+activation revoke <学生端编号> --input <JSON文件或->
+decisions keep <考试名称> <学生端编号> --input <JSON文件或->
+commands resend <考试名称> <学生端编号> start|end
+commands reupload <考试名称> <学生端编号>
 publications publish <考试名称> --input <JSON文件或->
 ```
+
+`monitor events` 是监测事件订阅：一次订阅发出**收齐**、**设备冲突**与**失败**（试题包下载失败、修订未安装）三类通知，
+每类每目标只通知一次，明细只用公开编号与试场名称。`activation`/`decisions`/`commands` 三条命令按学生端编号与试场名称
+解析内部标识：批准与撤回激活、设备冲突裁决（操作者取登录身份）、重发指令与请求补传原答卷。
 
 `monitor watch` 读取一次收齐事件后退出（可给位置参数指定起始名单版本，默认 0）；`monitor follow` 持续等待并发出，
 位置参数依次是起始名单版本（默认 0，用于重启后不重播历史）、间隔秒数（默认 1，允许 1..3600）与轮数（默认不限，
