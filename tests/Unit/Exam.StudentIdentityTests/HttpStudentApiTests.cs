@@ -137,7 +137,8 @@ public sealed class HttpStudentApiTests
         using var inconsistent = new HttpStudentApi(new Handler(_ =>
             Response(new ServerTimeSnapshot(Start, new("other", "node", 1)))));
         inconsistent.ConfigureConnection(Device());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => clock.SynchronizeAsync(inconsistent));
+        await Assert.ThrowsAsync<HttpStudentApi.IdentityRejectedException>(() => clock.SynchronizeAsync(inconsistent));
+        Assert.False(clock.IsSynchronized);
     }
 
     private static DeviceRecord Device() => new("device", "credential", "20260922001", "127.0.0.1", 5443,
