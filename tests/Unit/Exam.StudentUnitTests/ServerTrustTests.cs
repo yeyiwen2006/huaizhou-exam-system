@@ -121,6 +121,141 @@ public sealed class ServerTrustTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TrustedPairUsesTheCertificateOfTheSpecificAddress(bool matchingCertificate)
+    {
+        using var primaryCertificate = CreateCertificate();
+        using var standbyCertificate = CreateCertificate();
+        var listener = new TcpListener(IPAddress.Parse("127.0.0.2"), 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var calls = 0;
+        var server = Task.Run(async () =>
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                for (var index = 0; index < 2; index++)
+                {
+                    using var tcp = await listener.AcceptTcpClientAsync(timeout.Token);
+                    using var ssl = new SslStream(tcp.GetStream(), false);
+                    await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                    { ServerCertificate = matchingCertificate ? standbyCertificate : primaryCertificate }, timeout.Token);
+                    var buffer = new byte[8192]; var headers = new StringBuilder();
+                    while (!headers.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                    { var count = await ssl.ReadAsync(buffer, timeout.Token); if (count == 0) return; headers.Append(Encoding.UTF8.GetString(buffer, 0, count)); }
+                    Interlocked.Increment(ref calls);
+                    var body = Encoding.UTF8.GetBytes("""
+                        {"serverId":"pair","nodeId":"standby","serverEpoch":2,"correlationId":"synthetic",
+                         "result":{"serverTime":"2026-10-05T12:00:00+08:00","server":{"serverId":"pair","nodeId":"standby","serverEpoch":2}},"error":null}
+                        """);
+                    await ssl.WriteAsync(Encoding.UTF8.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"), timeout.Token);
+                    await ssl.WriteAsync(body, timeout.Token); await ssl.FlushAsync(timeout.Token);
+                }
+            }
+            catch (Exception error) when (error is IOException or AuthenticationException or SocketException or OperationCanceledException) { }
+            finally { listener.Stop(); }
+        });
+        // Reserve then release a loopback port to simulate an unavailable primary.
+        var unavailable = new TcpListener(IPAddress.Loopback, 0); unavailable.Start();
+        var primaryPort = ((IPEndPoint)unavailable.LocalEndpoint).Port; unavailable.Stop();
+        var device = CreateDevice(primaryPort, "pair") with
+        {
+            ServerEpoch = 1, ActiveNodeId = "primary",
+            Topology = new("pair", [
+                new("127.0.0.1", primaryPort, "primary", primaryCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant()),
+                new("127.0.0.2", port, "standby", standbyCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant())])
+        };
+        try
+        {
+            using var api = new HttpStudentApi(); var saves = 0;
+            api.PersistTrustedConnection = _ => saves++;
+            api.ConfigureConnection(device);
+            if (matchingCertificate)
+            { Assert.True((await api.GetServerTimeAsync()).IsSuccess); Assert.Equal(1, saves); Assert.Equal(2, calls); }
+            else
+            { await Assert.ThrowsAnyAsync<HttpRequestException>(() => api.GetServerTimeAsync()); Assert.Equal(0, saves); Assert.Equal(0, calls); }
+        }
+        finally { listener.Stop(); await server; }
+    }
+
+    [Fact]
+    public async Task TrustedPairIdentityChangeCannotReuseTlsAuthenticatedUnderThePreviousPin()
+    {
+        using var oldCertificate = CreateCertificate();
+        using var newCertificate = CreateCertificate();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var leakedRequests = 0;
+        var server = Task.Run(async () =>
+        {
+            try
+            {
+                while (!lifetime.IsCancellationRequested)
+                {
+                    using var tcp = await listener.AcceptTcpClientAsync(lifetime.Token);
+                    using var ssl = new SslStream(tcp.GetStream(), false);
+                    try
+                    {
+                        await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                            { ServerCertificate = oldCertificate }, lifetime.Token);
+                        while (!lifetime.IsCancellationRequested)
+                        {
+                            var bytes = new byte[8192];
+                            var headers = new StringBuilder();
+                            while (!headers.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                            {
+                                var read = await ssl.ReadAsync(bytes, lifetime.Token);
+                                if (read == 0) break;
+                                headers.Append(Encoding.UTF8.GetString(bytes, 0, read));
+                            }
+                            if (headers.Length == 0) break;
+                            if (headers.ToString().Contains("second-credential", StringComparison.Ordinal))
+                                Interlocked.Increment(ref leakedRequests);
+                            var body = Encoding.UTF8.GetBytes("""
+                                {"serverId":"pair","nodeId":"primary","serverEpoch":1,"correlationId":"synthetic",
+                                 "result":{"serverTime":"2026-10-05T12:00:00+08:00","server":{"serverId":"pair","nodeId":"primary","serverEpoch":1}},"error":null}
+                                """);
+                            await ssl.WriteAsync(Encoding.UTF8.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: keep-alive\r\n\r\n"), lifetime.Token);
+                            await ssl.WriteAsync(body, lifetime.Token);
+                            await ssl.FlushAsync(lifetime.Token);
+                        }
+                    }
+                    catch (Exception error) when (error is IOException or AuthenticationException) { }
+                }
+            }
+            catch (Exception error) when (error is IOException or SocketException or OperationCanceledException) { }
+        });
+        var oldPin = oldCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant();
+        var newPin = newCertificate.GetCertHashString(HashAlgorithmName.SHA256).ToLowerInvariant();
+        var first = CreateDevice(port, "pair") with
+        {
+            ServerEpoch = 1, ActiveNodeId = "primary",
+            Topology = new("pair", [new("127.0.0.1", port, "primary", oldPin), new("127.0.0.2", port, "standby", oldPin)])
+        };
+        try
+        {
+            using var api = new HttpStudentApi();
+            api.ConfigureConnection(first);
+            Assert.True((await api.GetServerTimeAsync(lifetime.Token)).IsSuccess);
+            api.ConfigureConnection(first with
+            {
+                DeviceId = "second-device", Credential = "second-credential",
+                Topology = new("pair", [new("127.0.0.1", port, "primary", newPin), new("127.0.0.2", port, "standby", newPin)])
+            });
+            await Assert.ThrowsAsync<HttpStudentApi.UntrustedServerException>(() => api.GetTrustedTopologyAsync(lifetime.Token));
+            Assert.Equal(0, Volatile.Read(ref leakedRequests));
+        }
+        finally
+        {
+            lifetime.Cancel(); listener.Stop(); await server;
+        }
+    }
+
     private static DeviceRecord CreateDevice(int port, string serverId = "b07-srv") => new(
         "device-b07", "credential", "A-001", "127.0.0.1", port, DateTimeOffset.UtcNow, serverId,
         ActivationStatus.Active);

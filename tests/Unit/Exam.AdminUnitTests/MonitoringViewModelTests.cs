@@ -293,7 +293,8 @@ public sealed class MonitoringViewModelTests
             [
                 MonitoringFixture.Conflict("device-part-1", authorized: true),
                 MonitoringFixture.Conflict("20261005009-room", authorized: false,
-                    connectionState: DeviceConnectionState.Offline, answerVersion: 9, page: "交卷确认"),
+                    connectionState: DeviceConnectionState.Offline, answerVersion: 9, page: "交卷确认")
+                    with { LastSyncedAt = MonitoringFixture.At.AddMinutes(-2), SavedAnswerCount = 3 },
             ]));
         using var handler = new SyntheticHandler(_ => Success(snapshot));
         using var api = new AdminApiClient(handler);
@@ -320,7 +321,10 @@ public sealed class MonitoringViewModelTests
         Assert.Equal("20261005009-room", viewModel.SelectedDeviceId);
         Assert.Equal("等待裁决", viewModel.SelectedConflictDevice!.AuthorizationText);
         Assert.Equal("离线", viewModel.SelectedConflictDevice.ConnectionState);
-        Assert.Equal("第 9 版答案｜交卷确认", viewModel.SelectedConflictDevice.ProgressText);
+        Assert.Equal("已保存 3 题｜交卷确认", viewModel.SelectedConflictDevice.ProgressText);
+        Assert.Equal("2026-10-05 09:28:00", viewModel.SelectedConflictDevice.LastSyncedText);
+        Assert.Equal("2026-10-05 09:30:00", viewModel.SelectedConflictDevice.LastCommunicationText);
+        Assert.Equal("答案存储版本：9", viewModel.SelectedConflictDevice.DiagnosticText);
     }
 
     [Fact]

@@ -22,7 +22,11 @@ public sealed record DeviceRecord(
     string? PendingOperationRequestId = null,
     string? PendingOperation = null,
     long CredentialVersion = 0,
-    long ServerEpoch = 0);
+    long ServerEpoch = 0)
+{
+    public TrustedServerTopology? Topology { get; init; }
+    public string? ActiveNodeId { get; init; }
+}
 
 public sealed class DeviceStoreException(string message, Exception? innerException = null)
     : IOException(message, innerException);
@@ -49,7 +53,8 @@ public sealed class DeviceStore
     public DeviceRecord? Load(string host, int port)
     {
         var endpoint = EndpointKey(host, port);
-        return Access(document => document.Records.SingleOrDefault(record => EndpointKey(record.Host, record.Port) == endpoint));
+        return Access(document => document.Records.SingleOrDefault(record => EndpointKey(record.Host, record.Port) == endpoint ||
+            record.Topology?.Nodes.Any(node => EndpointKey(node.Host, node.Port) == endpoint) == true));
     }
 
     public void Save(DeviceRecord record)
@@ -68,7 +73,8 @@ public sealed class DeviceStore
                  (existing.ActivationRequestId is not null && existing.ActivationRequestId != record.ActivationRequestId) ||
                  (existing.PendingOperationRequestId is not null && record.PendingOperationRequestId is not null &&
                      (existing.PendingOperationRequestId != record.PendingOperationRequestId || existing.PendingOperation != record.PendingOperation)) ||
-                 existing.ServerEpoch > record.ServerEpoch || existing.CredentialVersion > record.CredentialVersion))
+                 existing.ServerEpoch > record.ServerEpoch || existing.CredentialVersion > record.CredentialVersion ||
+                 existing.Topology is { } topology && (record.Topology is null || !topology.Equivalent(record.Topology))))
             {
                 throw new DeviceStoreException("设备身份或服务器身份与已有登记不一致，原记录已保留。请联系考务人员恢复。");
             }
@@ -213,6 +219,15 @@ public sealed class DeviceStore
         }
 
         _ = EndpointKey(record.Host, record.Port);
+        if (record.Topology is { } topology)
+        {
+            try { topology.Validate(); }
+            catch (FormatException error) { throw new DeviceStoreException("受保护的主备信任信息损坏，原文件已保留。", error); }
+            if (record.ServerId != topology.ServerId ||
+                !topology.Nodes.Any(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri) ||
+                record.ActiveNodeId is not null && !topology.Nodes.Any(node => node.NodeId == record.ActiveNodeId))
+                throw new DeviceStoreException("受保护的主备信任信息与设备登记不一致。");
+        }
     }
 
     private sealed record DeviceDocument(int FormatVersion, string? LastEndpoint, IReadOnlyList<DeviceRecord> Records);

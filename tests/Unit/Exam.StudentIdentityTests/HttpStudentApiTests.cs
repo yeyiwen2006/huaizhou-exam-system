@@ -31,7 +31,7 @@ public sealed class HttpStudentApiTests
         api.ConfigureConnection(Device());
         var exams = await api.GetExamOverviewsAsync("session/1");
         Assert.Equal("合成考试", exams.Single().Name);
-        Assert.Equal("类别甲", exams.Single().CategoryName);
+        Assert.Null(exams.Single().CategoryName);
     }
 
     [Theory]
@@ -42,7 +42,7 @@ public sealed class HttpStudentApiTests
     {
         using var api = new HttpStudentApi(new Handler(_ => TimeResponse(serverId, epoch)));
         api.ConfigureConnection(Device() with { ServerEpoch = 2 });
-        await Assert.ThrowsAsync<HttpRequestException>(() => api.GetServerTimeAsync());
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() => api.GetServerTimeAsync());
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public sealed class HttpStudentApiTests
         api.ConfigureConnection(pending);
         await api.GetServerTimeAsync();
         api.ConfigureConnection(pending);
-        await Assert.ThrowsAsync<HttpRequestException>(() => api.GetServerTimeAsync());
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() => api.GetServerTimeAsync());
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public sealed class HttpStudentApiTests
         var pending = api.GetServerTimeAsync();
         api.ConfigureConnection(Device() with { Host = "127.0.0.2", ServerId = "server-2" });
         response.SetResult(TimeResponse());
-        await Assert.ThrowsAsync<HttpRequestException>(() => pending);
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() => pending);
     }
 
     [Fact]
@@ -77,14 +77,14 @@ public sealed class HttpStudentApiTests
             Headers = { Location = new Uri("https://untrusted.invalid") }
         }));
         redirect.ConfigureConnection(Device());
-        await Assert.ThrowsAsync<HttpRequestException>(() => redirect.GetServerTimeAsync());
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() => redirect.GetServerTimeAsync());
 
         using var malformed = new HttpStudentApi(new Handler(_ => new(HttpStatusCode.OK)
         {
             Content = new StringContent("not json", Encoding.UTF8, "application/json")
         }));
         malformed.ConfigureConnection(Device());
-        await Assert.ThrowsAsync<HttpRequestException>(() => malformed.GetServerTimeAsync());
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() => malformed.GetServerTimeAsync());
     }
 
     [Fact]
@@ -137,7 +137,8 @@ public sealed class HttpStudentApiTests
         using var inconsistent = new HttpStudentApi(new Handler(_ =>
             Response(new ServerTimeSnapshot(Start, new("other", "node", 1)))));
         inconsistent.ConfigureConnection(Device());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => clock.SynchronizeAsync(inconsistent));
+        await Assert.ThrowsAsync<HttpStudentApi.IdentityRejectedException>(() => clock.SynchronizeAsync(inconsistent));
+        Assert.False(clock.IsSynchronized);
     }
 
     private static DeviceRecord Device() => new("device", "credential", "20260922001", "127.0.0.1", 5443,

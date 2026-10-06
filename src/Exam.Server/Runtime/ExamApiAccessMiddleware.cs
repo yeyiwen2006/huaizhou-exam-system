@@ -114,7 +114,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             return true;
         }
 
-        if (HttpMethods.IsGet(method) && (route is "/student/exams" or "/student/instructions"))
+        if (HttpMethods.IsGet(method) && (route is "/student/exams" or "/student/instructions" or "/student/server-topology"))
         {
             return true;
         }

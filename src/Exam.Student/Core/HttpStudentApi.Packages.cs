@@ -12,6 +12,7 @@ namespace Exam.Student.Core;
 
 public sealed partial class HttpStudentApi : IExamPackageApi
 {
+    public sealed class DownloadEndpointChangedException() : HttpRequestException("可信服务器已切换，重新下载同一版本题包。");
     public Task<ApiEnvelope<InstructionsDocument>> GetInstructionsAsync(
         string preparationId, string sessionId, CancellationToken ct = default) =>
         SendAsync<InstructionsDocument>(HttpMethod.Get,
@@ -44,9 +45,12 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         {
             throw new InvalidOperationException("试题包长度或版本无效。");
         }
+        if (_device?.Topology is not null)
+            RequireResult(await GetServerTimeAsync(ct));
 
         HttpRequestMessage message;
         long generation;
+        long identityGeneration;
         lock (_connectionGate)
         {
             var resource = ResolveSameServer(descriptor.EncryptedPackageUri);
@@ -59,11 +63,20 @@ public sealed partial class HttpStudentApi : IExamPackageApi
             var path = resource.AbsoluteUri + $"?preparationId={Uri.EscapeDataString(preparationId)}&sessionId={Uri.EscapeDataString(sessionId)}";
             message = CreateRequest(HttpMethod.Get, path, true);
             generation = _connectionGeneration;
+            identityGeneration = _identityGeneration;
         }
         using var request = message;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromMinutes(5));
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        HttpResponseMessage received;
+        try { received = await SendTrustedAsync(request, deadline.Token, HttpCompletionOption.ResponseHeadersRead); }
+        catch (Exception error) when (error is HttpRequestException and not UntrustedServerException and not IdentityRejectedException ||
+            error is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
+            throw;
+        }
+        using var response = received;
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType != "application/vnd.huaizhou.exam-package" ||
             (response.Content.Headers.ContentLength is { } advertised && advertised != descriptor.PackageLength))
         {
@@ -78,7 +91,8 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         }
         lock (_connectionGate)
         {
-            if (generation != _connectionGeneration) { throw new HttpRequestException("连接已切换，停止旧连接下载。"); }
+            EnsureDownloadContext(identityGeneration, generation);
+            ValidateIdentity(serverId, Header(response, "X-Exam-Node-Id"), epoch);
             ValidateServer(serverId, epoch);
         }
         await using var content = await response.Content.ReadAsStreamAsync(deadline.Token);
@@ -88,17 +102,36 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         {
             using var idle = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
             idle.CancelAfter(TimeSpan.FromSeconds(30));
-            var count = await content.ReadAsync(buffer, idle.Token);
+            int count;
+            try { count = await content.ReadAsync(buffer, idle.Token); }
+            catch (Exception error) when (error is IOException or HttpRequestException ||
+                error is OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
+                throw;
+            }
             if (count == 0) { break; }
             total += count;
             if (total > descriptor.PackageLength) { throw new IOException("试题包长度超出准备记录。"); }
             lock (_connectionGate)
             {
-                if (generation != _connectionGeneration) { throw new HttpRequestException("连接已切换，停止旧连接下载。"); }
+                EnsureDownloadContext(identityGeneration, generation);
             }
             yield return buffer[..count];
         }
-        if (total != descriptor.PackageLength) { throw new IOException("试题包未下载完整。"); }
+        lock (_connectionGate) { EnsureDownloadContext(identityGeneration, generation); }
+        if (total != descriptor.PackageLength)
+        {
+            if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
+            throw new IOException("试题包未下载完整。");
+        }
+    }
+
+    private void EnsureDownloadContext(long identityGeneration, long generation)
+    {
+        if (identityGeneration != _identityGeneration)
+            throw new IdentityRejectedException("设备身份已切换，停止原题包请求；原文件已保留。");
+        if (generation != _connectionGeneration) throw new DownloadEndpointChangedException();
     }
 
     private static string Header(HttpResponseMessage response, string name) =>

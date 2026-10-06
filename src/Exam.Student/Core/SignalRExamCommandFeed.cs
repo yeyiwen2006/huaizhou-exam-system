@@ -20,7 +20,9 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
     private readonly HttpMessageInvoker _socketHttp = new(new SocketsHttpHandler
     {
         AllowAutoRedirect = false,
-        SslOptions = { RemoteCertificateValidationCallback = ServerTrust.ValidateCertificate }
+        SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
+            device.Topology is { } topology ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
+                : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
     });
     private readonly SemaphoreSlim _deliveryGate = new(1, 1);
     private const int MaxPendingCommands = 16;

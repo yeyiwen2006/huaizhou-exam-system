@@ -41,18 +41,40 @@ internal static class MonitoringDisplay
     };
 
     /// <summary>当前题号及其已保存答案；没有上报题号时不冒充有进度。</summary>
-    public static string CurrentAnswer(string? questionId, IReadOnlyDictionary<string, AnswerValue> answers, int? questionNo)
+    public static string CurrentAnswer(string? questionId, IReadOnlyDictionary<string, AnswerValue> answers, int? questionNo,
+        IReadOnlyList<string>? optionIds = null)
     {
         if (string.IsNullOrWhiteSpace(questionId)) return "—";
         var label = questionNo is > 0 ? $"第 {questionNo} 题" : "当前题（题号未提供）";
         if (!answers.TryGetValue(questionId, out var value)) return $"{label}：未保存";
         var selected = value.Kind switch
         {
-            AnswerKind.Selected => value.OptionIds.Count == 0 ? "—" : string.Concat(value.OptionIds),
+            AnswerKind.Selected => SelectedOptions(value.OptionIds, optionIds),
             AnswerKind.Abstain => "不作答",
             _ => "未作答"
         };
         return $"{label}：{selected}";
+    }
+
+    private static string SelectedOptions(IReadOnlyList<string> selected, IReadOnlyList<string>? options)
+    {
+        if (selected.Count == 0) return "—";
+        // Stored selection order is not necessarily the published option order.
+        var ordered = options is null ? selected.Order(StringComparer.Ordinal) :
+            options.Where(id => selected.Contains(id, StringComparer.Ordinal))
+                .Concat(selected.Where(id => !options.Contains(id, StringComparer.Ordinal)));
+        var labels = ordered.Select(id => OptionLabel(id, options)).ToArray();
+        return labels.All(label => label.Length == 1) ? string.Concat(labels) : string.Join("、", labels);
+    }
+
+    private static string OptionLabel(string id, IReadOnlyList<string>? options)
+    {
+        if (options is not null && !options.Contains(id, StringComparer.Ordinal)) return "选项待核对";
+        if (id.Length == 1 && id[0] is >= 'A' and <= 'Z') return id;
+        if (options is not null)
+            for (var index = 0; index < options.Count; index++)
+                if (options[index] == id) return $"第 {index + 1} 个选项";
+        return "选项待核对";
     }
 
     /// <summary>试卷版本与更新结果：实际版本与目标版本不一致时同时显示，便于辨认更新失败。</summary>

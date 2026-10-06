@@ -24,6 +24,7 @@ public sealed partial class ExamPackageManager : IDisposable
 {
     private const long MaximumPackageBytes = 512L * 1024 * 1024;
     private readonly IExamPackageApi _api;
+    internal HttpStudentApi? Transport => _api as HttpStudentApi;
     private readonly DeviceRecord _device;
     private readonly StudentSessionResult _session;
     private readonly string _candidateId;
@@ -200,6 +201,33 @@ public sealed partial class ExamPackageManager : IDisposable
         LockedAsync(() => WithdrawCoreAsync(ct), ct);
     public Task<bool> UnlockAsync(CancellationToken ct = default) => LockedAsync(() => UnlockCoreAsync(ct), ct);
 
+    private async Task DownloadSameVersionIntoAsync(FileStream file, ExamResourceDescriptor descriptor,
+        string preparationId, string sessionId, IProgress<PackageDownloadProgress>? progress, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
+                {
+                    if (chunk.Length > descriptor.PackageLength - file.Length)
+                        throw new InvalidDataException("试题下载数据超出声明的长度。");
+                    await file.WriteAsync(chunk, ct);
+                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
+                }
+                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
+                file.Flush(flushToDisk: true);
+                return;
+            }
+            catch (HttpStudentApi.DownloadEndpointChangedException) when (attempt == 0)
+            {
+                // Restart the same protected version; never concatenate bytes from two nodes.
+                file.SetLength(0); file.Position = 0;
+                progress?.Report(new PackageDownloadProgress(0, descriptor.PackageLength));
+            }
+        }
+    }
+
     private async Task<bool> DownloadUpdatePackageAsync(ExamResourceDescriptor descriptor, string preparationId,
         string sessionId, IProgress<PackageDownloadProgress>? progress, CancellationToken ct)
     {
@@ -211,15 +239,7 @@ public sealed partial class ExamPackageManager : IDisposable
             await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                              64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
-                {
-                    if (chunk.Length > descriptor.PackageLength - file.Length)
-                        throw new InvalidDataException("试题下载数据超出声明的长度。");
-                    await file.WriteAsync(chunk, ct);
-                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
-                }
-                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
-                file.Flush(flushToDisk: true);
+                await DownloadSameVersionIntoAsync(file, descriptor, preparationId, sessionId, progress, ct);
             }
             if (File.Exists(final)) File.Replace(temporary, final, final + ".bak");
             else File.Move(temporary, final);
@@ -538,15 +558,7 @@ public sealed partial class ExamPackageManager : IDisposable
             await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                              64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                await foreach (var chunk in _api.DownloadPackageChunksAsync(descriptor, preparationId, sessionId, ct))
-                {
-                    if (chunk.Length > descriptor.PackageLength - file.Length)
-                        throw new InvalidDataException("试题下载数据超出声明的长度。");
-                    await file.WriteAsync(chunk, ct);
-                    progress?.Report(new PackageDownloadProgress(file.Length, descriptor.PackageLength));
-                }
-                if (file.Length != descriptor.PackageLength) throw new InvalidDataException("试题下载不完整。");
-                file.Flush(flushToDisk: true);
+                await DownloadSameVersionIntoAsync(file, descriptor, preparationId, sessionId, progress, ct);
             }
             if (File.Exists(final)) File.Replace(temporary, final, final + ".bak");
             else File.Move(temporary, final);

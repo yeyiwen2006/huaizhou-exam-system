@@ -53,9 +53,11 @@ internal sealed class AdminUiFixture : IDisposable
             conflicts:
             [
                 MonitoringFixture.Conflict("device-synthetic-participation-01", authorized: true,
-                    connectionState: DeviceConnectionState.Online, answerVersion: 4, page: "正在答题"),
+                    connectionState: DeviceConnectionState.Online, answerVersion: 4, page: "正在答题")
+                    with { LastSyncedAt = MonitoringFixture.At.AddSeconds(-3), SavedAnswerCount = 1 },
                 MonitoringFixture.Conflict("synthetic-device-17", authorized: false,
-                    connectionState: DeviceConnectionState.Offline, answerVersion: 2, page: "交卷确认"),
+                    connectionState: DeviceConnectionState.Offline, answerVersion: 2, page: "交卷确认")
+                    with { ClientNumber = "20261005017" },
             ]),
         MonitoringFixture.Participant(
             participationId: "synthetic-participation-02", candidateId: "synthetic-candidate-02",

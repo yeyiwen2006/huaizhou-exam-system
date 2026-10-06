@@ -165,8 +165,24 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
         var row=Assert.Single(snapshot.Participants);Assert.Equal(person.Name,row.Name);Assert.Equal("001",row.ClassText);Assert.Equal(device.Number,row.ClientNumber);
         Assert.Equal(7,row.AnswerVersion);Assert.Equal("q1",row.CurrentQuestionId);Assert.Equal("回收中",row.CollectionState);Assert.Equal("B",Assert.Single(row.Answers["q1"].OptionIds));
         Assert.Equal(7,row.CurrentQuestionNo);
+        Assert.Equal(new[] { "A", "B" },row.CurrentOptionIds);
+        var pendingDevice=await SeedDevice();
+        await Sql("INSERT INTO exam.participation_device_conflicts(participation_id,original_device_id,pending_device_id,detected_at) VALUES($1,$2,$3,$4);",
+            part,device.Id,pendingDevice.Id,clock.GetUtcNow());
+        var savedAt=clock.GetUtcNow();
+        clock.Advance(TimeSpan.FromSeconds(1));
         await presence.UpdateAsync(device.Id,new(lease.ConnectionId,lease.Generation,2,session,exam,"正在答题（已切出）","q1",1,"已下载",false));
         Assert.Equal("正在答题（已切出）",Assert.Single((await monitor.GetAsync(exam)).Participants).Page);
+        var conflictRow=Assert.Single((await monitor.GetAsync(exam)).Participants);
+        var original=Assert.Single(conflictRow.ConflictDevices,item=>item.DeviceId==device.Id);
+        var pending=Assert.Single(conflictRow.ConflictDevices,item=>item.DeviceId==pendingDevice.Id);
+        Assert.Equal(savedAt,original.LastSyncedAt);Assert.Equal(1,original.SavedAnswerCount);
+        Assert.Equal(clock.GetUtcNow(),original.LastCommunicationAt);
+        Assert.Null(pending.LastSyncedAt);Assert.Equal(0,pending.SavedAnswerCount);
+        // A previous entry's progress is not current evidence for either device.
+        await Sql("UPDATE exam.participation_progress SET entry_version=2 WHERE participation_id=$1;",part);
+        Assert.All(Assert.Single((await monitor.GetAsync(exam)).Participants).ConflictDevices,item=>Assert.Null(item.LastSyncedAt));
+        await Sql("UPDATE exam.participation_progress SET entry_version=1 WHERE participation_id=$1;",part);
         clock.Advance(TimeSpan.FromSeconds(135));row=Assert.Single((await monitor.GetAsync(exam)).Participants);Assert.Equal(DeviceConnectionState.Offline,row.ConnectionState);Assert.Equal(ParticipationBusinessState.Waiting,row.BusinessState);
         await Sql("""
             INSERT INTO exam.final_submissions(submission_id,exam_id,candidate_id,participation_id,device_id,authorization_version,paper_version,frozen_answers,received_at,receipt_id,grading_version)
@@ -176,6 +192,58 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
         Assert.Single((await monitor.GetAsync(exam,query:"000001")).Participants);
         var empty=await monitor.GetAsync(exam,query:"不匹配姓名");Assert.Empty(empty.Participants);Assert.Equal(1,empty.ActualCount);
     }
+    [Fact]
+    public async Task Monitoring_PhysicalConnectionDoesNotDependOnTheCurrentCandidateSession()
+    {
+        var exam=CreateExam();
+        var roster=await Roster.ImportAsync(exam,new(Id(),0,
+            [new(1,"合成原考生","001","000001"),new(2,"合成换人考生","001","000002")]),Actor);
+        var person=roster.Snapshot.Entries.Single(x=>x.AdmissionNo=="000001");
+        var other=roster.Snapshot.Entries.Single(x=>x.AdmissionNo=="000002");
+        var original=await SeedDevice();var pending=await SeedDevice();
+        var part=await SeedParticipation(exam,person,original);
+        var clock=new MutableClock();var savedAt=clock.GetUtcNow();
+        var answers=JsonSerializer.Serialize(new Dictionary<string,AnswerValue>
+            { ["q1"]=AnswerValue.Selected("B"),["q2"]=AnswerValue.Abstain(),["q3"]=AnswerValue.Empty() },JsonDefaults.Create());
+        await Sql("""
+            INSERT INTO exam.participation_progress(participation_id,exam_id,candidate_id,entry_version,device_id,authorization_version,answer_version,paper_version,answers,current_question_id,last_synced_at)
+            VALUES($1,$2,$3,1,$4,1,7,1,$5::jsonb,'q1',$6);
+            """,part,exam,person.CandidateId,original.Id,answers,savedAt);
+        await Sql("INSERT INTO exam.participation_device_conflicts(participation_id,original_device_id,pending_device_id,detected_at) VALUES($1,$2,$3,$4);",
+            part,original.Id,pending.Id,savedAt);
+        var presence=new PostgresDevicePresenceService(fixture.DataSource,clock);
+        var originalLease=await presence.OpenAsync(original.Id,new(Id(),Id()));
+        var pendingLease=await presence.OpenAsync(pending.Id,new(Id(),Id()));
+        var otherSession=await SeedSession(exam,other,original);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await presence.UpdateAsync(original.Id,new(originalLease.ConnectionId,originalLease.Generation,1,
+            otherSession,exam,"正在答题","other-question",9,"已下载",false));
+        await presence.UpdateAsync(pending.Id,new(pendingLease.ConnectionId,pendingLease.Generation,1,
+            null,null,"登录",null,0,"未下载",false));
+        var monitor=new PostgresMonitoringService(fixture.DataSource,clock);
+        var row=Assert.Single((await monitor.GetAsync(exam)).Participants);
+        Assert.Equal(DeviceConnectionState.Online,row.ConnectionState);
+        Assert.Equal(clock.GetUtcNow(),row.LastCommunicationAt);
+        Assert.Equal("已切换考生或考试",row.Page);
+        Assert.Equal("q1",row.CurrentQuestionId);Assert.Equal(1,row.InstalledPaperVersion);
+        var originalRow=Assert.Single(row.ConflictDevices,x=>x.DeviceId==original.Id);
+        var pendingRow=Assert.Single(row.ConflictDevices,x=>x.DeviceId==pending.Id);
+        Assert.Equal(DeviceConnectionState.Online,originalRow.ConnectionState);
+        Assert.Equal(clock.GetUtcNow(),originalRow.LastCommunicationAt);
+        Assert.Equal("已切换考生或考试",originalRow.Page);
+        Assert.Equal(savedAt,originalRow.LastSyncedAt);Assert.Equal(2,originalRow.SavedAnswerCount);
+        Assert.Equal(DeviceConnectionState.Online,pendingRow.ConnectionState);
+        Assert.Equal("未登录",pendingRow.Page);
+        Assert.Null(pendingRow.LastSyncedAt);Assert.Equal(0,pendingRow.SavedAnswerCount);
+        // An explicit disconnect changes connectivity without removing participation or saved answers.
+        await presence.UpdateAsync(pending.Id,new(pendingLease.ConnectionId,pendingLease.Generation,2,
+            null,null,"已退出",null,0,"未下载",false) { Disconnect=true });
+        row=Assert.Single((await monitor.GetAsync(exam)).Participants);
+        Assert.Equal(ParticipationBusinessState.Waiting,row.BusinessState);
+        Assert.Equal(DeviceConnectionState.Offline,Assert.Single(row.ConflictDevices,x=>x.DeviceId==pending.Id).ConnectionState);
+        Assert.Equal(2,Assert.Single(row.ConflictDevices,x=>x.DeviceId==original.Id).SavedAnswerCount);
+    }
+
     [Fact]
     public async Task EmptyExamMonitoring_DoesNotInventParticipantsOrCompletion()
     {

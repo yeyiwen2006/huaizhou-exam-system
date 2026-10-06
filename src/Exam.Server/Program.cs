@@ -42,6 +42,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var identity = builder.Configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
     ?? new ServerIdentityOptions();
+var studentTopology = StudentFailoverConfiguration.Read(builder.Configuration);
+if (builder.Environment.IsProduction() &&
+    (builder.Configuration.GetSection("HighAvailability:RequiredNodeIds").Get<string[]>()?.Length ?? 0) == 2 && studentTopology is null)
+    throw new InvalidOperationException("双机部署缺少学生端主备信任配置，不能投入正式考试。");
 var databaseConfigured = !string.IsNullOrWhiteSpace(Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveConnection(
     key => builder.Configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch));
 if (databaseConfigured)

@@ -11,6 +11,16 @@ public static class StudentApiEndpointExtensions
 {
     public static RouteGroupBuilder MapStudentApi(this RouteGroupBuilder api)
     {
+        api.MapGet("/student/server-topology", (HttpContext context, IConfiguration configuration) =>
+        {
+            _ = ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context);
+            context.Response.Headers.CacheControl = "no-store";
+            var topology = StudentFailoverConfiguration.Read(configuration);
+            return topology is null ? ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                "TOPOLOGY_NOT_CONFIGURED", "可信主备信息尚未配置，请联系考务人员。", StatusCodes.Status503ServiceUnavailable, true)
+                : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, topology);
+        }).WithTags("Student Connection");
+
         api.MapPost("/activation/cancel-own", async (
             CancelOwnActivationRequest request,
             ActivationService service,

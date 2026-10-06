@@ -5,7 +5,7 @@ using Exam.Contracts.Versioning;
 namespace Exam.Contracts.Exams;
 
 /// <summary>
-/// 考务端管理的考试目录。考试名称即考试类别，是考务人员区分考试的唯一凭据；
+/// 考务端管理的考试目录。考试名称是考务人员区分考试的唯一业务依据；
 /// examId 由服务器生成，只用于内部关联，界面不显示。
 /// </summary>
 public sealed record ExamSettings(
