@@ -17,10 +17,16 @@ internal static class ApiEndpointResults
         IConfiguration configuration,
         string correlationId,
         T value,
-        int statusCode = StatusCodes.Status200OK) =>
-        Results.Json(
+        int statusCode = StatusCodes.Status200OK)
+    {
+        if (value is ActivationRequestResult { Status: ActivationStatus.Active } activated)
+            value = (T)(object)(activated with { Topology = StudentFailoverConfiguration.Read(configuration) });
+        else if (value is ActivationResult device)
+            value = (T)(object)(device with { Topology = StudentFailoverConfiguration.Read(configuration) });
+        return Results.Json(
             Envelope(context, configuration, correlationId, value, null),
             statusCode: statusCode);
+    }
 
     public static IResult Error(
         HttpContext context,

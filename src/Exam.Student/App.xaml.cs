@@ -49,6 +49,12 @@ public partial class App : Application
             MessageBox.Show(error.Message, "本机激活信息异常", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+        catch (Exception error) when (error is HttpRequestException or StudentIdentityException)
+        {
+            MessageBox.Show("无法核对可信主备信息，请恢复原服务器连接后重试。原激活登记和答题记录已保留。",
+                "服务器连接尚未就绪", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender,
@@ -108,6 +114,34 @@ public sealed class AppServices
         Activation = new ActivationWorkflow(DeviceStore, Api);
         _presenceTimer.Tick += (_, _) => RefreshPresence();
         Session.PropertyChanged += (_, _) => RefreshPresence();
+        if (Api is HttpStudentApi transport)
+        {
+            transport.PersistTrustedConnection = record =>
+            {
+                // Merge transport state into the latest protected identity, never replace
+                // newer activation, credential or pending-operation state with an old copy.
+                var current = DeviceStore.Load(record.Host, record.Port)
+                    ?? throw new DeviceStoreException("原设备登记缺失，不能切换主备连接。");
+                if (current.DeviceId != record.DeviceId || current.Credential != record.Credential ||
+                    current.ServerId != record.ServerId || current.Topology is null || record.Topology is null ||
+                    !current.Topology.Equivalent(record.Topology) || record.ServerEpoch < current.ServerEpoch)
+                    throw new DeviceStoreException("主备连接与受保护登记不一致，原记录已保留。");
+                var updated = current with { ServerEpoch = record.ServerEpoch, ActiveNodeId = record.ActiveNodeId };
+                DeviceStore.Save(updated);
+                if (Device?.DeviceId == updated.DeviceId) Device = updated;
+            };
+            transport.TrustedEndpointChanged += (_, _) =>
+            {
+                if (_clockCancellation is { } source) _ = SynchronizeAfterTakeoverAsync(Clock, source.Token);
+            };
+        }
+    }
+
+    private async Task SynchronizeAfterTakeoverAsync(ServerClock clock, CancellationToken ct)
+    {
+        try { await clock.SynchronizeAsync(Api, ct); }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException)
+        { /* Keep the last trusted monotonic clock until the next successful synchronization. */ }
     }
 
     public void ConfigureDevice(DeviceRecord device)
@@ -204,6 +238,22 @@ public sealed class AppServices
             catch (OperationCanceledException) { }
         }
         _presenceCancellation?.Cancel();
+    }
+
+    public async Task<DeviceRecord> EnsureTrustedTopologyAsync(DeviceRecord record, CancellationToken ct = default)
+    {
+        if (record.Status != Exam.Contracts.Activation.ActivationStatus.Active || record.Topology is not null) return record;
+        if (Api is not HttpStudentApi transport) throw new StudentIdentityException("可信主备连接尚未配置。");
+        var response = await transport.GetTrustedTopologyAsync(ct);
+        var topology = response.IsSuccess && response.Result is not null ? response.Result
+            : throw new StudentIdentityException("服务器尚未提供可核对的主备信任信息，原设备登记已保留。");
+        record = record with
+        {
+            Topology = TrustedServerTopology.FromActivation(topology, record, response.ServerId),
+            ServerEpoch = response.ServerEpoch, ActiveNodeId = response.NodeId
+        };
+        await Task.Run(() => DeviceStore.Save(record), ct);
+        return record;
     }
 
     public void StartClock()

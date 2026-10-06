@@ -24,7 +24,10 @@ public sealed record ActivationRequestResult(
     ActivationStatus Status,
     string? ClientNumber,
     long CredentialVersion,
-    DateTimeOffset RequestedAt);
+    DateTimeOffset RequestedAt)
+{
+    public ActivatedServerTopology? Topology { get; init; }
+}
 
 public sealed record ApproveActivationRequest(
     string RequestId,
@@ -53,7 +56,13 @@ public sealed record ActivationResult(
     ActivationStatus Status,
     string? RoomGroupId,
     long CredentialVersion,
-    long Version);
+    long Version)
+{
+    public ActivatedServerTopology? Topology { get; init; }
+}
+
+public sealed record ActivatedServerNode(string Host, int Port, string NodeId, string CertificateSha256);
+public sealed record ActivatedServerTopology(string ServerId, IReadOnlyList<ActivatedServerNode> Nodes);
 
 public static class ActivationErrorCodes
 {

@@ -104,7 +104,7 @@ public sealed class ExamApiEndpointTests
     [Fact]
     public async Task Activation_status_is_a_read_query_that_observes_approval_after_submit_replay()
     {
-        await using var application = await CreateApplicationAsync();
+        await using var application = await CreateApplicationAsync(withTopology: true);
         using var client = application.GetTestClient();
         var json = JsonDefaults.Create();
         var submit = new SubmitActivationRequest("activation-submit", "device-api", "credential-api");
@@ -131,6 +131,9 @@ public sealed class ExamApiEndpointTests
 
         Assert.Equal(ActivationStatus.Pending, replayedSubmit?.Result?.Status);
         Assert.Equal(ActivationStatus.Active, status?.Result?.Status);
+        Assert.Equal("server-test", status!.Result!.Topology!.ServerId);
+        Assert.Equal(2, status.Result.Topology.Nodes.Count);
+        Assert.Contains(status.Result.Topology.Nodes, node => node.NodeId == "node-test" && node.Host == "127.0.0.1");
         Assert.NotNull(status?.Result?.ClientNumber);
     }
 
@@ -192,7 +195,7 @@ public sealed class ExamApiEndpointTests
             .Succeeded);
     }
 
-    private static async Task<WebApplication> CreateApplicationAsync()
+    private static async Task<WebApplication> CreateApplicationAsync(bool withTopology = false)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -212,6 +215,14 @@ public sealed class ExamApiEndpointTests
                 options.SerializerOptions.Converters.Add(converter);
             }
         });
+        if (withTopology)
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["StudentFailover:Nodes:0:Host"] = "127.0.0.1", ["StudentFailover:Nodes:0:Port"] = "5101",
+                ["StudentFailover:Nodes:0:NodeId"] = "node-test", ["StudentFailover:Nodes:0:CertificateSha256"] = new string('1', 64),
+                ["StudentFailover:Nodes:1:Host"] = "127.0.0.2", ["StudentFailover:Nodes:1:Port"] = "5102",
+                ["StudentFailover:Nodes:1:NodeId"] = "standby-test", ["StudentFailover:Nodes:1:CertificateSha256"] = new string('2', 64)
+            });
         builder.Services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
 
         var activationPersistence = new InMemoryActivationPersistence();

@@ -12,6 +12,14 @@ namespace Exam.Student.Core;
 public static class ServerTrust
 {
     private static string? _pinnedThumbprint;
+    public static bool ValidateNodeCertificate(TrustedServerTopology topology, object? sender, X509Certificate? certificate)
+    {
+        if (sender is not SslStream stream || certificate is null ||
+            !System.Net.IPAddress.TryParse(stream.TargetHostName.Trim('[', ']'), out var address)) return false;
+        var node = topology.Nodes.SingleOrDefault(node => node.Host == address.ToString());
+        return node is not null && string.Equals(node.CertificateSha256,
+            certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>当前 pin 的证书 SHA-256 指纹（小写 64 位十六进制），未配置为 null。</summary>
     public static string? PinnedCertificateThumbprint => _pinnedThumbprint;
