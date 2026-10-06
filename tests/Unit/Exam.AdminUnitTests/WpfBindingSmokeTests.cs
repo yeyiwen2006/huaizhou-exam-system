@@ -76,6 +76,34 @@ public sealed class WpfBindingSmokeTests
                 typeSelector.SelectedValue = "multiple";
                 DrainDispatcher();
                 Assert.Equal("multiple", group.Type);
+                Assert.Equal("多项选择题", group.TypeLabel);
+                var oneCorrect = Assert.Single(Descendants<TextBox>(window), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Correct");
+                var allCorrect = Assert.Single(Descendants<TextBox>(window), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "AllCorrect");
+                Assert.False(oneCorrect.IsVisible);
+                Assert.True(allCorrect.IsVisible);
+                allCorrect.Text = "3";
+                allCorrect.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                Assert.Equal("3", group.AllCorrect);
+                var countInput = Assert.Single(Descendants<TextBox>(window), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path is "QuestionCount" or "QuestionCountText");
+                var originalCount = group.QuestionCount;
+                countInput.Text = "invalid-count";
+                countInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                Assert.Equal(0, group.QuestionCount);
+                Assert.Contains(viewModel.Exam.Validate(), error => error.Contains("题量", StringComparison.Ordinal));
+                countInput.Text = originalCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                countInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                Assert.Equal(originalCount, group.QuestionCount);
+                typeSelector.SelectedValue = "single";
+                DrainDispatcher();
+                Assert.True(oneCorrect.IsVisible); Assert.False(allCorrect.IsVisible);
+                Assert.Equal("3", group.AllCorrect);
+                typeSelector.SelectedValue = "indeterminate";
+                DrainDispatcher();
+                Assert.True(oneCorrect.IsVisible); Assert.True(allCorrect.IsVisible);
+                Assert.Equal("3", group.AllCorrect);
                 // 考生说明预览按字形分段渲染：正文黑体、数字 Times New Roman，并显示预览来源说明。
                 Assert.Single(Descendants<ItemsControl>(window), control =>
                     BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "Exam.InstructionPreview");

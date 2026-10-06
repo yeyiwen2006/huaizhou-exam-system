@@ -102,6 +102,13 @@ public sealed class UiScreenshotTests
                     var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pagePaths[0])));
                     Assert.True(pageHashes.Add(hash), $"页面 {header} 与其他页面像素完全相同，可能没有真正切换页面。");
                     written.AddRange(pagePaths);
+                    if (header == "考试设置")
+                    {
+                        var scroller = Assert.IsType<ScrollViewer>(tab.Content);
+                        scroller.ScrollToBottom(); Settle(window);
+                        SaveScreenshots(window, directory, name + "-details").ToArray();
+                        scroller.ScrollToTop(); Settle(window);
+                    }
                     // 同一页在窗口最小尺寸下再截一张，检查顶部连接条与表单不挤压。
                     window.Width = window.MinWidth;
                     window.Height = window.MinHeight;

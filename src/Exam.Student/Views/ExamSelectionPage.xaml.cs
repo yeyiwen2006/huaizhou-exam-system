@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
@@ -131,7 +131,6 @@ public partial class ExamSelectionPage : UserControl
             Overview = exam;
             ExamId = exam.ExamId;
             Name = exam.Name;
-            CategoryText = string.IsNullOrWhiteSpace(exam.CategoryName) || exam.CategoryName == exam.Name ? string.Empty : $"类别：{exam.CategoryName}";
             TimeText = $"{exam.ScheduledStart:yyyy-MM-dd HH:mm} — {exam.ScheduledEnd:HH:mm}";
             SubjectsText = exam.Subjects.Count == 0
                 ? string.Empty
@@ -158,8 +157,6 @@ public partial class ExamSelectionPage : UserControl
 
         public string SubjectsText { get; }
 
-        public string CategoryText { get; }
-        public bool HasCategory => CategoryText.Length > 0;
     }
 
     private async void OnRefresh(object sender, RoutedEventArgs e) => await LoadExamsAsync();
