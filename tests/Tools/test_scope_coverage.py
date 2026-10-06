@@ -19,6 +19,27 @@ class ScopeChecks(unittest.TestCase):
             if row['gui']:self.assertTrue((ROOT/row['gui']).is_file())
             self.assertIn(row['gapOwner'],list('ABCDEFG'))
 
+    def test_markdown_matrix_matches_machine_rows_and_current_c_entrypoints(self):
+        rows=json.loads((ROOT/'docs/e01-coverage.json').read_text(encoding='utf-8'))['rows']
+        markdown=(ROOT/'docs/gui-cli-coverage.md').read_text(encoding='utf-8')
+        table={parts[0]:parts for line in markdown.splitlines() if line.startswith('| E01-')
+               for parts in [[cell.strip() for cell in line.strip('|').split('|')]]}
+        self.assertEqual({r['id'] for r in rows},set(table))
+        for row in rows:
+            self.assertEqual([row['id'],row['action'],row['gui'] or '未接线/需消费方核对',
+                              row['cli'] or '专用命令未接线',row['status']+'；'+row['gapOwner']],table[row['id']])
+            self.assertTrue((ROOT/row['failureTest']).exists())
+        expected={24:'activation approve',25:'activation revoke',26:'devices show',27:'rooms create',
+                  28:'rooms rename',29:'rooms move',30:'rooms delete',36:'roster list',43:'stream',
+                  44:'decisions keep',45:'commands resend',46:'monitor events',47:'monitor watch'}
+        index={int(r['id'].split('C')[1]):r for r in rows}
+        for number,command in expected.items():
+            self.assertIn(command,index[number]['cli'])
+            self.assertNotIn('未实现',index[number]['status'])
+            self.assertNotIn('未接线',index[number]['status'])
+        self.assertIn('只处理收齐',index[47]['status'])
+        self.assertIn('申请标识',index[24]['cli'])
+
     def test_reduced_duration_sessions_missing_progress_and_failed_load_are_rejected(self):
         valid={'sessions':300,'durationSeconds':120,'questionCount':120,'interrupted':False,'localScenarioChecksPassed':True,
                'operations':{'progress':{'count':300,'failed':0,'latencyTargetMet':True}}}

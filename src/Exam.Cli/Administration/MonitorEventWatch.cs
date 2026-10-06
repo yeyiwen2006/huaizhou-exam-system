@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Submissions;
 
@@ -23,6 +24,10 @@ public sealed record MonitorEventNotification(
 /// </summary>
 public sealed class MonitorEventWatch
 {
+    private string? _exam;
+    private DateTimeOffset _lastSnapshot;
+    private Exam.Contracts.Versioning.VersionVector? _versions;
+    private long _rosterVersion;
     private readonly HashSet<string> _notifiedConflicts = new(StringComparer.Ordinal);
     private readonly HashSet<string> _notifiedFailures = new(StringComparer.Ordinal);
 
@@ -31,6 +36,18 @@ public sealed class MonitorEventWatch
         DateTimeOffset observedAt)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if(string.IsNullOrWhiteSpace(examId)||snapshot.ExamId!=examId)
+            throw new InvalidDataException("监测快照属于另一场考试。");
+        if(snapshot.AsOf==default||snapshot.Versions is null||snapshot.ActualRosterVersion<0||
+            snapshot.Versions.ScheduleVersion<0||snapshot.Versions.PaperVersion<0||snapshot.Versions.GradingVersion<0||
+            snapshot.ActualCount<0||snapshot.CollectedCount<0||snapshot.CollectedCount>snapshot.ActualCount||
+            snapshot.Participants is null||snapshot.Uncollected is null||snapshot.Participants.Count>snapshot.ActualCount||
+            snapshot.Participants.Any(p=>p is null||string.IsNullOrWhiteSpace(p.ParticipationId)||string.IsNullOrWhiteSpace(p.ClientNumber)||
+                p.EntryVersion<1||p.AuthorizationVersion<1||p.Answers is null||p.ConflictDevices is null||p.Commands is null||
+                p.ConflictDevices.Any(d=>d is null||string.IsNullOrWhiteSpace(d.DeviceId)||string.IsNullOrWhiteSpace(d.ClientNumber))||
+                p.Commands.Any(c=>c is null||string.IsNullOrWhiteSpace(c.EventId)))||
+            snapshot.Participants.Select(p=>p.ParticipationId).Distinct(StringComparer.Ordinal).Count()!=snapshot.Participants.Count)
+            throw new InvalidOperationException("监测快照不完整或记录重复，整页未采用。");
         var events = new List<MonitorEventNotification>();
         foreach (var participant in snapshot.Participants)
         {
@@ -55,14 +72,20 @@ public sealed class MonitorEventWatch
         DateTimeOffset observedAt)
     {
         var current = Describe(examId, snapshot, observedAt);
-        var currentKeys = new HashSet<string>(current.Select(KeyOf), StringComparer.Ordinal);
+        if(_exam is not null&&_exam!=examId)throw new InvalidDataException("不能将另一考试的快照混入当前订阅。");
+        if(snapshot.AsOf<_lastSnapshot||snapshot.ActualRosterVersion<_rosterVersion||_versions is not null&&
+            (snapshot.Versions.ScheduleVersion<_versions.ScheduleVersion||snapshot.Versions.PaperVersion<_versions.PaperVersion||
+             snapshot.Versions.GradingVersion<_versions.GradingVersion))
+            throw new InvalidOperationException("迟到或版本回退的监测快照未采用。");
+        _exam=examId;_lastSnapshot=snapshot.AsOf;_versions=snapshot.Versions;_rosterVersion=snapshot.ActualRosterVersion;
+        var currentKeys = new HashSet<string>(current.Select(item => KeyOf(item, snapshot)), StringComparer.Ordinal);
         _notifiedConflicts.RemoveWhere(key => key.StartsWith("conflict|", StringComparison.Ordinal) && !currentKeys.Contains(key));
         _notifiedFailures.RemoveWhere(key => key.StartsWith("failure|", StringComparison.Ordinal) && !currentKeys.Contains(key));
 
         var fresh = new List<MonitorEventNotification>();
         foreach (var item in current)
         {
-            var key = KeyOf(item);
+            var key = KeyOf(item, snapshot);
             var set = item.Kind == MonitorEventNotification.Conflict ? _notifiedConflicts : _notifiedFailures;
             if (set.Add(key)) fresh.Add(item);
         }
@@ -76,12 +99,17 @@ public sealed class MonitorEventWatch
               .ThenBy(item => item.Detail, StringComparer.Ordinal)
               .ToArray();
 
-    private static string KeyOf(MonitorEventNotification item) => item.Kind switch
+    private static string KeyOf(MonitorEventNotification item, MonitoringSnapshot snapshot)
     {
-        MonitorEventNotification.Conflict => $"conflict|{item.ParticipantId}|{item.Detail}",
-        MonitorEventNotification.Failure => $"failure|{item.ParticipantId}|{item.Detail}",
-        _ => $"{item.Kind}|{item.ParticipantId}|{item.Detail}",
-    };
+        var participant = snapshot.Participants.Single(p => p.ParticipationId == item.ParticipantId);
+        var state = item.Kind == MonitorEventNotification.Conflict
+            ? JsonSerializer.Serialize(participant.ConflictDevices.Select(d => d.DeviceId).Order(StringComparer.Ordinal))
+            : JsonSerializer.Serialize(new { participant.TargetPaperVersion,
+                failure = FailureDetail(participant),
+                commands = participant.Commands.Where(c=>c.Confirmation=="资源更新失败").OrderBy(c=>c.EventId,StringComparer.Ordinal)
+                    .Select(c=>new {c.EventId,c.StateVersion}) });
+        return item.Kind + "|" + JsonSerializer.Serialize(new { item.ExamId,item.ParticipantId,participant.EntryVersion,state });
+    }
 
     private static MonitorEventNotification Conflict(string examId, MonitoringParticipant participant,
         DateTimeOffset observedAt) => new(
@@ -105,6 +133,8 @@ public sealed class MonitorEventWatch
         {
             reasons.Add("修订未安装");
         }
+        if(participant.Page=="本地保存失败")reasons.Add("本地答案保存失败");
+        if(participant.Commands.Any(c=>c.Confirmation=="资源更新失败"))reasons.Add("指令资源更新失败");
         return reasons.Count == 0 ? null : string.Join("；", reasons);
     }
 

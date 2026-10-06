@@ -84,6 +84,43 @@ public sealed class MonitorEventWatchTests
         Assert.Contains("修订未安装", failure.Detail, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RejectedLateSnapshotCannotClearNotificationDeduplication()
+    {
+        var watch=new MonitorEventWatch();
+        var conflict=Snapshot(Participant(conflicts:[Conflict("设备甲","第一试场",true)]));
+        Assert.Single(watch.Accept("exam-1",conflict,ObservedAt));
+        Assert.Throws<InvalidOperationException>(()=>watch.Accept("exam-1",
+            Snapshot(Participant()) with{AsOf=ObservedAt.AddSeconds(-1)},ObservedAt));
+        Assert.Empty(watch.Accept("exam-1",conflict,ObservedAt));
+        Assert.Throws<InvalidDataException>(()=>watch.Accept("exam-2",conflict with{ExamId="exam-2"},ObservedAt));
+    }
+
+    [Fact]
+    public void InvalidRowsRejectWholePageBeforeDeduplicationChanges()
+    {
+        var watch=new MonitorEventWatch();var p=Participant(conflicts:[Conflict("设备甲","第一试场",true)]);
+        Assert.Throws<InvalidOperationException>(()=>watch.Accept("exam-1",Snapshot(p,p),ObservedAt));
+        Assert.Throws<InvalidOperationException>(()=>watch.Accept("exam-1",Snapshot(p,null!),ObservedAt));
+        Assert.Single(watch.Accept("exam-1",Snapshot(p),ObservedAt));
+        Assert.Throws<InvalidOperationException>(()=>watch.Accept("exam-1",Snapshot(p) with{Versions=new(0,0,0)},ObservedAt));
+        Assert.Empty(watch.Accept("exam-1",Snapshot(p),ObservedAt));
+    }
+
+    [Fact]
+    public void ANewEntryAndNewFailedCommandAreNewNotifications()
+    {
+        var watch=new MonitorEventWatch();var p=Participant() with{Page="本地保存失败"};
+        Assert.Contains("本地答案保存失败",Assert.Single(watch.Accept("exam-1",Snapshot(p),ObservedAt)).Detail);
+        Assert.Empty(watch.Accept("exam-1",Snapshot(p),ObservedAt));
+        Assert.Single(watch.Accept("exam-1",Snapshot(p with{EntryVersion=2}),ObservedAt));
+        var command=new MonitoringCommand("command-1",Exam.Contracts.Common.CommandEventType.PaperUpdated,1,"资源更新失败",ObservedAt,null,false);
+        var failed=p with{Page="正在答题",Commands=[command]};
+        Assert.Contains("指令资源更新失败",Assert.Single(watch.Accept("exam-1",Snapshot(failed),ObservedAt)).Detail);
+        Assert.Empty(watch.Accept("exam-1",Snapshot(failed),ObservedAt));
+        Assert.Single(watch.Accept("exam-1",Snapshot(failed with{Commands=[command with{EventId="command-2",StateVersion=2}]}),ObservedAt));
+    }
+
     private static MonitoringSnapshot Snapshot(params MonitoringParticipant[] participants) =>
         new("exam-1", ObservedAt, new VersionVector(1, 1, 1), ExamLifecycle.Running, 1, participants.Length, 0,
             participants, []);

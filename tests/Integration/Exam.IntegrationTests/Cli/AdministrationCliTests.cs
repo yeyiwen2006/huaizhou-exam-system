@@ -256,9 +256,9 @@ public sealed class AdministrationCliTests
     }
 
     [Fact]
-    public async Task Activation_PendingApproveAndRevokeResolveNumbersInsteadOfInternalIds()
+    public async Task Activation_ApprovalUsesPendingRequestAndRevokeUsesClientNumber()
     {
-        var pending = new ActivationRequestResult("request-1", "device-1", ActivationStatus.Pending, "20261006001", 1, Start);
+        var pending = new ActivationRequestResult("request-1", "device-1", ActivationStatus.Pending, null, 1, Start);
         var bodies = new ConcurrentQueue<string>();
         await using var host = await CliHost.StartAsync((self, app) =>
         {
@@ -285,10 +285,10 @@ public sealed class AdministrationCliTests
 
         var list = await CliProcess.RunAsync("activation", "pending", "--server", host.Address);
         Assert.Equal(0, list.Exit);
-        Assert.Equal("20261006001", Assert.Single(JsonSerializer.Deserialize<ActivationRequestResult[]>(list.Out, Json)!).ClientNumber);
+        Assert.Null(Assert.Single(JsonSerializer.Deserialize<ActivationRequestResult[]>(list.Out, Json)!).ClientNumber);
 
-        // 批准：按学生端编号解析申请标识，并把试场名称解析成试场标识。
-        var approve = await CliProcess.RunAsync("activation", "approve", "20261006001", "合成试场A", "--server", host.Address);
+        // 首次批准使用待审批列表中的申请标识；此时尚未分配学生端编号。
+        var approve = await CliProcess.RunAsync("activation", "approve", "request-1", "合成试场A", "--server", host.Address);
         Assert.Equal(0, approve.Exit);
         Assert.Equal("Active", JsonSerializer.Deserialize<ActivationResult>(approve.Out, Json)!.Status.ToString());
         var approveJson = ReadBody(Assert.Single(bodies));
@@ -319,8 +319,6 @@ public sealed class AdministrationCliTests
         await using var host = await CliHost.StartAsync((self, app) =>
         {
             app.MapGet("/api/v1/exams", () => self.Envelope(new[] { Summary() }));
-            app.MapGet("/api/v1/operators/me", () => self.Envelope(
-                new OperatorAccount("synthetic-operator", "合成考务", OperatorStatus.Active, true, Start, null)));
             app.MapGet("/api/v1/exams/exam-1/monitoring", () => self.Envelope(
                 MonitoringSnapshot(participant)));
             app.MapPost("/api/v1/participation/device-decisions", async (HttpContext context) =>
@@ -363,14 +361,16 @@ public sealed class AdministrationCliTests
             {
                 paths.Enqueue(eventId);
                 bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
-                return self.Envelope(new CommandEventView("end-1", "exam-1", "part-1", 1, CommandEventType.End, 3,
-                    "device-a", 1, null, Start, false, 2));
+                return self.Envelope(new CommandDelivery(new("synthetic-server","synthetic-node",1),"end-1", "exam-1", "part-1", 1, CommandEventType.End, 3,
+                    "device-a", 1, null, "synthetic-never-print-unlock", new Dictionary<string,string>(), Start, 2));
             });
         });
 
         var resend = await CliProcess.RunAsync("commands", "resend", "合成考试", "20261006001", "end", "--server", host.Address);
         Assert.Equal(0, resend.Exit);
         Assert.Equal("end-1", Assert.Single(paths));
+        Assert.DoesNotContain("synthetic-never-print-unlock",resend.Out);
+        Assert.Equal(2,ReadBody(resend.Out).GetProperty("deliveryAttempt").GetInt32());
         var resendBody = ReadBody(bodies.Last());
         Assert.Equal("part-1", resendBody.GetProperty("participationId").GetString());
         Assert.Equal(1, resendBody.GetProperty("authorizationVersion").GetInt64());
@@ -417,6 +417,83 @@ public sealed class AdministrationCliTests
         Assert.Contains(events, item => item.Kind == "failure");
         Assert.Contains("设备冲突待裁决", watch.Error, StringComparison.Ordinal);
         Assert.Contains("试题包下载失败", watch.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(503,6)]
+    [InlineData(401,3)]
+    public async Task MonitorEventsSingleFailureCannotExitSuccessfully(int status,int exit)
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/submissions/collection/events",()=>self.Envelope(Array.Empty<CollectionCompletedNotification>()));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.StatusCode(status));
+        });
+        var result=await CliProcess.RunAsync("monitor","events","合成考试","--server",host.Address);
+        Assert.Equal(exit,result.Exit);Assert.Empty(result.Out);
+    }
+
+    [Fact]
+    public async Task MonitorEventsRetriesFailuresAndDoesNotRepeatUnchangedConflict()
+    {
+        var reads=0;
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/submissions/collection/events",()=>self.Envelope(Array.Empty<CollectionCompletedNotification>()));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>++reads==1?Results.StatusCode(503):
+                self.Envelope(MonitoringSnapshot(Pres14_Participant(conflicts:[new("device-b","20261006009","合成试场",DeviceConnectionState.Online,Start,false,0,"登录")]))));
+        });
+        var result=await CliProcess.RunAsync("monitor","events","合成考试","0","1","2","--server",host.Address);
+        Assert.Equal(0,result.Exit);Assert.Equal(3,reads);
+        Assert.Single(result.Out.Split('\n',StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("监测事件读取失败",result.Error);
+    }
+
+    [Fact]
+    public async Task MonitorStreamReturnsChangedAuthoritativeSnapshotsWithoutCollectionEndpoint()
+    {
+        var reads=0;
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>
+                self.Envelope(MonitoringSnapshot(Pres14_Participant() with{AnswerVersion=++reads}) with{AsOf=Start.AddSeconds(reads)}));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","2","--server",host.Address);
+        Assert.Equal(0,result.Exit);
+        var rows=result.Out.Split('\n',StringSplitOptions.RemoveEmptyEntries).Select(x=>JsonSerializer.Deserialize<MonitoringSnapshot>(x,Json)!).ToArray();
+        Assert.Equal(new long[]{1,2},rows.Select(x=>Assert.Single(x.Participants).AnswerVersion));
+        Assert.DoesNotContain(host.Calls,x=>x.Contains("collection",StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("other-server",2)]
+    [InlineData("synthetic-server",1)]
+    public async Task MonitorRejectsChangedServerOrRegressedEpoch(string server,long epoch)
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>Results.Json(new ApiEnvelope<ExamSummary[]>("synthetic-server","node-a",2,"test",[Summary()],null),Json));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.Json(new ApiEnvelope<MonitoringSnapshot>(server,"node-b",epoch,"test",MonitoringSnapshot(Pres14_Participant()),null),Json));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","1","--server",host.Address);
+        Assert.Equal(2,result.Exit);Assert.Empty(result.Out);
+    }
+
+    [Fact]
+    public async Task MonitorStreamPersistentFailureTimesOutWithOneJsonError()
+    {
+        await using var host=await CliHost.StartAsync((self,app)=>
+        {
+            app.MapGet("/api/v1/exams",()=>self.Envelope(new[]{Summary()}));
+            app.MapGet("/api/v1/exams/exam-1/monitoring",()=>Results.StatusCode(503));
+        });
+        var result=await CliProcess.RunAsync("monitor","stream","合成考试","1","1","--server",host.Address,"--timeout-seconds","2","--error-format","json");
+        Assert.Equal(5,result.Exit);Assert.Empty(result.Out);
+        Assert.Single(result.Error.Split('\n',StringSplitOptions.RemoveEmptyEntries));
+        using var error=JsonDocument.Parse(result.Error);Assert.Equal(JsonValueKind.Object,error.RootElement.ValueKind);
     }
 
     private static JsonElement ReadBody(string json) => JsonDocument.Parse(json).RootElement;
@@ -473,6 +550,8 @@ public sealed class AdministrationCliTests
                 await next();
             });
             var host = new CliHost(app, calls);
+            app.MapGet("/api/v1/operators/me", () => host.Envelope(
+                new OperatorAccount("synthetic-operator", "合成考务", OperatorStatus.Active, true, Start, null)));
             configure(host, app);
             await app.StartAsync();
             return host;
