@@ -932,7 +932,7 @@ public sealed record MonitoringRow(
         string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未分组" : participant.RoomGroupName,
         MonitoringDisplay.ConnectionState(participant.ConnectionState),
         string.IsNullOrWhiteSpace(participant.Page) ? "未报告" : participant.Page,
-        MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers, participant.CurrentQuestionNo),
+        MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers, participant.CurrentQuestionNo, participant.CurrentOptionIds),
         MonitoringDisplay.PaperState(participant.InstalledPaperVersion, participant.TargetPaperVersion, participant.DownloadState),
         MonitoringDisplay.CommandSummary(participant.Commands),
         MonitoringDisplay.LastCommunication(participant.LastCommunicationAt),
@@ -968,6 +968,8 @@ public sealed class ConflictDeviceRow(ConflictDevice device, Action<ConflictDevi
     public string ConnectionState => MonitoringDisplay.ConnectionState(Device.ConnectionState);
     public string AuthorizationText => Device.IsAuthorized ? "当前授权" : "等待裁决";
     public string LastCommunicationText => MonitoringDisplay.LastCommunication(Device.LastCommunicationAt);
-    public string ProgressText => $"第 {Device.AnswerVersion} 版答案｜{Device.Page}";
+    public string LastSyncedText => Device.LastSyncedAt is { } at ? MonitoringDisplay.LastCommunication(at) : "无保存记录";
+    public string ProgressText => Device.LastSyncedAt is null ? "无已同步答案｜" + Device.Page : $"已保存 {Device.SavedAnswerCount} 题｜{Device.Page}";
+    public string DiagnosticText => $"答案存储版本：{Device.AnswerVersion}";
     public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
 }

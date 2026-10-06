@@ -31,7 +31,7 @@ public sealed class HttpStudentApiTests
         api.ConfigureConnection(Device());
         var exams = await api.GetExamOverviewsAsync("session/1");
         Assert.Equal("合成考试", exams.Single().Name);
-        Assert.Equal("类别甲", exams.Single().CategoryName);
+        Assert.Null(exams.Single().CategoryName);
     }
 
     [Theory]

@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Exam.Contracts.Activation;
@@ -186,7 +186,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             HttpMethod.Get, $"/api/v1/student/exams?sessionId={Uri.EscapeDataString(sessionId)}", null, true, ct);
         return RequireResult(envelope).Select(exam => new ExamOverview(
             exam.ExamId, exam.Name, exam.ScheduledStart, exam.ScheduledEnd,
-            exam.Subjects, exam.Lifecycle, exam.CategoryName)).ToArray();
+            exam.Subjects, exam.Lifecycle)).ToArray();
     }
 
     internal Uri ResolveSameServer(string path)
