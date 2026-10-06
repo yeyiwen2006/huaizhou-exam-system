@@ -58,7 +58,7 @@
         </Border>
 
         <!-- 权威状态摘要：只显示服务器返回值，不在本机重算 -->
-        <UniformGrid x:Name="SummaryCards" Grid.Row="2" Columns="4" Margin="0,0,0,10">
+        <UniformGrid x:Name="SummaryCards" Grid.Row="2" Columns="3" Margin="0,0,0,10">
             <Border Style="{DynamicResource Report.Metric}" Margin="0,0,10,0">
                 <StackPanel>
                     <TextBlock Text="实际参试" Style="{DynamicResource Report.MetricLabel}" />
@@ -77,16 +77,15 @@
                     <TextBlock Text="{Binding GradedCountText}" Style="{DynamicResource Report.MetricValue}" />
                 </StackPanel>
             </Border>
-            <Border Style="{DynamicResource Report.Metric}">
-                <StackPanel>
-                    <TextBlock Text="计分规则版本" Style="{DynamicResource Report.MetricLabel}" />
-                    <TextBlock Text="{Binding GradingVersionText}" Style="{DynamicResource Report.MetricValue}" />
-                </StackPanel>
-            </Border>
         </UniformGrid>
 
         <Border Grid.Row="3" Style="{DynamicResource Hint}" Background="{DynamicResource Brush.Primary.Soft}" Padding="12,6" Margin="0,0,0,10">
-            <TextBlock Text="{Binding Status}" Style="{DynamicResource HintText}" AutomationProperties.LiveSetting="Polite" />
+            <StackPanel>
+                <TextBlock Text="{Binding Status}" Style="{DynamicResource HintText}" AutomationProperties.LiveSetting="Polite" />
+                <Expander Header="排查详情">
+                    <TextBlock Text="{Binding GradingVersionText, StringFormat=计分规则版本：{0}}" Style="{DynamicResource Report.MetricLabel}"/>
+                </Expander>
+            </StackPanel>
         </Border>
 
         <Border Grid.Row="4" Style="{DynamicResource Report.Panel}" Margin="0,0,0,10" Padding="14,10"
