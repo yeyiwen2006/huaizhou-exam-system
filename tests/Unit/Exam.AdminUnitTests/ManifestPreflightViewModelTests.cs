@@ -90,7 +90,7 @@ public sealed partial class ManifestPreflightViewModelTests
         viewModel.ValidateManifestJson(File.ReadAllText(SampleManifest("minimal")));
         Assert.True(viewModel.StaticPreflightPassed);
 
-        // Serialize the formal D03 student DTO, not a hand-written lookalike schema.
+        // Serialize the formal student package student DTO, not a hand-written lookalike schema.
         var studentManifest = new StudentPaperManifest(studentSchemaVersion, "synthetic-minimal", "合成考试", 1,
             [new StudentPaperSubject("subject", "合成科目")],
             [new StudentPaperGroup("group", "subject", "单项选择", 1)],

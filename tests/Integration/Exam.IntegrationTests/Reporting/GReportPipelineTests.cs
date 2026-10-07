@@ -28,7 +28,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Exam.IntegrationTests.Submissions;
 
-// Reuses the existing synthetic A05/D04 fixture to test the actual G wiring.
+// Reuses the existing synthetic submission/scoring fixture to test the actual G wiring.
 public sealed partial class PostgresSubmissionStoreTests
 {
     [Theory]

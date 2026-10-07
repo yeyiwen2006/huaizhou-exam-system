@@ -87,7 +87,7 @@
                     </StackPanel>
                 </Border>
 
-                <!-- B02 接入：试题下载状态、解密、自动进入考试 -->
+                <!-- 试题下载状态、解密、自动进入考试 -->
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
                         <DockPanel>

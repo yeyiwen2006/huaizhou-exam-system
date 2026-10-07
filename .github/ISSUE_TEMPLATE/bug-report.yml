@@ -1,27 +1,27 @@
 name: 缺陷报告
-description: 登记开发期或T01/T02缺陷、修复责任与复测证据
+description: 登记缺陷、版本、最小复现、修复与复测证据
 title: '[缺陷] '
 labels:
 - bug
 body:
 - type: markdown
   attributes:
-    value: 修复PR均由A审查合并；合并后先待复测，复测通过再关闭本Issue。T01/T02各自包含本轮修复回归。不得提交真实试题、个人数据、凭据、密钥或原始数据库。
+    value: 合并后按发现环境复测，通过后再关闭问题；单机及多机测试均包含相应修复回归。不得提交真实试题、个人数据、凭据、密钥或原始数据库。
 - type: dropdown
   id: phase
   attributes:
     label: 发现轮次
     options:
-    - 开发期模块测试
-    - T01 全项目单机测试
-    - T02 多机联调联试
+    - 自动回归检查
+    - 全项目单机测试
+    - 多机联调联试
   validations:
     required: true
 - type: input
   id: module
   attributes:
-    label: 模块任务与场景
-    description: 填写当前任务码、关联测试Issue及Sxx；同一问题复用已有bug单。
+    label: 功能与验收场景
+    description: 填写功能、需求条款及验收场景；同一问题复用已有缺陷单。
   validations:
     required: true
 - type: dropdown
@@ -39,14 +39,14 @@ body:
   id: repair_owner
   attributes:
     label: 修复主责
-    description: 明确一名开发负责人；代码审查和合并仍统一由A完成。
+    description: 明确修复负责人。
   validations:
     required: true
 - type: input
   id: retester
   attributes:
     label: 复测负责人
-    description: 指定非修复作者执行运行结果复测；这不是新增代码审查岗位。
+    description: 指定非修复作者核对实际运行结果。
   validations:
     required: true
 - type: textarea

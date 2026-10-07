@@ -126,7 +126,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                 (snapshot.Versions.PaperVersion > 0 && (snapshot.Paper is null || snapshot.Paper.Version != snapshot.Versions.PaperVersion)) ||
                 (snapshot.Versions.GradingVersion > 0 && (snapshot.Grading is null || snapshot.Grading.Version != snapshot.Versions.GradingVersion))) return false;
             var rebuilt = replay.GetExam(snapshot.ExamId);
-            // Participation is separately authoritative in A03/A05 and may be synchronized into
+            // Participation is separately authoritative in participation/submission and may be synchronized into
             // the projection between version events; it is not an exam-level replay invariant.
             if (!rebuilt.Succeeded || rebuilt.Value is null || !JsonNode.DeepEquals(
                 JsonSerializer.SerializeToNode(snapshot with { Participants = new Dictionary<string, ParticipantVersionStatus>() }, Json),

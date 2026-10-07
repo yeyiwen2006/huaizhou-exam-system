@@ -13,7 +13,7 @@ using Windows.Storage.Streams;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// B03 原版题目显示：Windows.Data.Pdf 渲染逐题 PDF（保留多页），保持传入 LaTeX 的
+/// 原版题目显示：Windows.Data.Pdf 渲染逐题 PDF（保留多页），保持传入 LaTeX 的
 /// 字体、公式、图片、表格与选项排列，以 PDF 原始尺寸为基准固定放大到 125%，允许滚动。
 /// 上下按内容裁边；左右固定、对称裁去 20 毫米空白，多页题采用一致规则。
 /// 选项字母处按 option-regions.json 的归一化矩形中心叠加圆形选择控件；

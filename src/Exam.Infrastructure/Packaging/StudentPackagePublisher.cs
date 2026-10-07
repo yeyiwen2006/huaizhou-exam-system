@@ -11,10 +11,10 @@ using Exam.Infrastructure.ServiceManagement;
 namespace Exam.Infrastructure.Packaging;
 
 /// <summary>
-/// 从本次 D02 成功编译产物抽取坐标，并使用 D03 允许清单生成完整加密 v2 学生包。
+/// 从本次 依赖与编译检查 成功编译产物抽取坐标，并使用 选项区域与题包 允许清单生成完整加密 v2 学生包。
 /// 发布必须指定密文路径与接收节点；服务器侧明文预览应显式调用 StudentPackageBuilder。
 /// 调用方须独占本次导入/编译工作目录，直到抽取和组包结束，不得并行改写这些输入。
-/// 本服务不负责版本入库、密钥下发或 C05/CLI 产品入口。
+/// 本服务不负责版本入库、密钥下发或 试题修订/CLI 产品入口。
 /// </summary>
 public sealed class StudentPackagePublisher(PackageEncryptionService encryption)
 {

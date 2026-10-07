@@ -63,8 +63,8 @@ internal sealed record PackageControlState
 }
 
 /// <summary>
-/// B02 control recovery only. Each logical server/candidate/exam has one locked,
-/// current-user DPAPI document; answer snapshots are owned by B04.
+/// Package control recovery only. Each logical server/candidate/exam has one locked,
+/// current-user DPAPI document; answer snapshots are owned by local persistence.
 /// </summary>
 internal sealed class PackageControlStore : IDisposable
 {

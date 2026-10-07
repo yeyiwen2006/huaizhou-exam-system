@@ -7,7 +7,7 @@ using Npgsql;
 namespace Exam.Infrastructure.Postgres.Activation;
 
 /// <summary>
-/// PostgreSQL implementation of the A02 transaction boundary. The current
+/// PostgreSQL implementation of the activation transaction boundary. The current
 /// application callback is synchronous, therefore transaction members use Npgsql's
 /// synchronous command APIs while connection open, begin, commit and rollback remain
 /// asynchronous. No task is synchronously waited. A future all-async persistence

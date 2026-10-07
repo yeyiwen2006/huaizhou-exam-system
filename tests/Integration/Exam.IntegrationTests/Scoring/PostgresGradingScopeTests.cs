@@ -7,7 +7,7 @@ using Npgsql;
 namespace Exam.IntegrationTests.Scoring;
 
 /// <summary>
-/// 重算范围的 PostgreSQL 用例：从 A05 的最终答卷与计分任务台账读出每份答卷的计分状态，
+/// 重算范围的 PostgreSQL 用例：从 收卷 的最终答卷与计分任务台账读出每份答卷的计分状态，
 /// 并让重算调度器跑在真实范围上。数据全部是合成的。
 /// </summary>
 [Collection(PostgresCollection.Name)]
@@ -148,7 +148,7 @@ public sealed partial class PostgresGradingScopeTests(PostgresDatabaseFixture fi
                     TIMESTAMPTZ '2026-09-25 02:33:05+00');
             """);
         await command.ExecuteNonQueryAsync();
-        // 完成标记不是成绩：范围判定必须有 D04 的真实持久化结果。
+        // 完成标记不是成绩：范围判定必须有 精确计分 的真实持久化结果。
         await SaveScopeGradeAsync("pg-scope-current", "pg-candidate-current", 2);
         await SaveScopeGradeAsync("pg-scope-superseded", "pg-candidate-superseded", 3);
     }

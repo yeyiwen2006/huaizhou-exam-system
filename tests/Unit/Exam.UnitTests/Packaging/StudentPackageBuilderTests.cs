@@ -239,7 +239,7 @@ public sealed class StudentPackageBuilderTests : IDisposable
     [Fact]
     public async Task Build_ManifestWithUndeclaredAnswerField_IsRejected()
     {
-        // D01 的严格读取会先挡下未定义字段；内容检查是第二层，两层都指向「不得夹带答案」。
+        // 清单校验 的严格读取会先挡下未定义字段；内容检查是第二层，两层都指向「不得夹带答案」。
         WriteFile(
             Path.Combine(_packageRoot, "manifest.json"),
             ManifestJson.Replace(

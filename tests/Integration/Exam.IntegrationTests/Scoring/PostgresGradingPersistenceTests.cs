@@ -8,7 +8,7 @@ namespace Exam.IntegrationTests.Scoring;
 
 /// <summary>
 /// 计分持久化的 PostgreSQL 集成用例：迁移建表、结果按答卷去重、任务租约与失败保留、
-/// 以及从 A05 答卷与 A06 发布事件读取计分输入。数据全部是合成的。
+/// 以及从 收卷 答卷与 版本服务 发布事件读取计分输入。数据全部是合成的。
 /// </summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
@@ -144,7 +144,7 @@ public sealed partial class PostgresGradingPersistenceTests(PostgresDatabaseFixt
     [Fact]
     public async Task Coordinator_ConsumesOutbox_GradesPersistsAndCompletesEndToEnd()
     {
-        // 端到端：A05 的 outbox → 协调器领取 → 读答卷与已发布规则 → 计分 → 落库 → 结项。
+        // 端到端：收卷 的 outbox → 协调器领取 → 读答卷与已发布规则 → 计分 → 落库 → 结项。
         await SeedAsync();
         var coordinator = new Exam.Application.Scoring.GradingCoordinator(
             new PostgresGradingTaskSource(fixture.DataSource),

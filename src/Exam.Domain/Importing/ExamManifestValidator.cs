@@ -7,7 +7,7 @@ namespace Exam.Domain.Importing;
 
 /// <summary>
 /// 逐题包清单与独立答案的静态校验。只做纯逻辑判断，不读文件、不联网、不编译；
-/// 源文件是否存在、字体宏包图片依赖与编译属 D02，选项定位区域属 D03。
+/// 源文件是否存在、字体宏包图片依赖与编译属 依赖与编译检查，选项定位区域属 选项区域与题包。
 /// 规则标识与 samples/synthetic/errors/expected-errors.json 逐一对应，
 /// 定位使用 RFC 6901 JSON Pointer。字段语义见 docs/import-package-spec.md。
 /// </summary>

@@ -16,7 +16,7 @@ public interface IHighAvailabilityManagementPlatform
     Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token);
 }
 
-/// <summary>Uses the same cross-process durable journal as F01. No production state lives in memory.</summary>
+/// <summary>Uses the same cross-process durable journal as local management. No production state lives in memory.</summary>
 public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
     IHighAvailabilityManagementPlatform platform, IManagementOperationStore journal, IClock clock)
 {

@@ -6,7 +6,7 @@ using Exam.Contracts.HighAvailability;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
-/// <summary>F01 handler supplied to E's CLI registration; shares the same transport with F04.</summary>
+/// <summary>local management handler supplied to E's CLI registration; shares the same transport with service management.</summary>
 public sealed class LocalManagementCliHandler(LocalManagementClient client)
 {
     public async Task<int> RunAsync(string command, string? inputJson, string? requestId,

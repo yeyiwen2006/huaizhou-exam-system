@@ -46,7 +46,7 @@ public sealed record RegradePlan(
 }
 
 /// <summary>
-/// 已发布规则对应的成绩快照就绪判定；不是 A06 首次发布规则的前置条件。对应 requirements.md「重算期间旧表格失效并暂停查看、导出，完成后统一更新…
+/// 已发布规则对应的成绩快照就绪判定；不是 版本服务 首次发布规则的前置条件。对应 requirements.md「重算期间旧表格失效并暂停查看、导出，完成后统一更新…
 /// 同表不得混用版本」：只要还有答卷没按目标版本计分，就不得发布，避免发布混合版本的成绩。
 /// </summary>
 public sealed record GradingReadiness(

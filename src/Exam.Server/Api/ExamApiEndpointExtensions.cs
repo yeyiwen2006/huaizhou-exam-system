@@ -36,7 +36,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapResourceApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/resources").WithTags("A06 Encrypted Resources");
+        var group = api.MapGroup("/resources").WithTags("Encrypted Resources");
         group.MapGet("/{resourceId}", async (
             string resourceId,
             [FromQuery] string? preparationId,
@@ -133,7 +133,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapActivationApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/activation").WithTags("A02 Activation");
+        var group = api.MapGroup("/activation").WithTags("Activation");
 
         group.MapPost("/requests", async (
             SubmitActivationRequest request,
@@ -231,7 +231,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapParticipationApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/participation").WithTags("A03 Participation");
+        var group = api.MapGroup("/participation").WithTags("Participation");
 
         group.MapPost("/login", async (
             LoginStudentRequest request,
@@ -302,16 +302,6 @@ public static class ExamApiEndpointExtensions
                 context, configuration, context.TraceIdentifier,
                 () => service.EnsureAuthorizedForWriteAsync(request, cancellationToken)));
 
-        group.MapPost("/exams/advance-to-answering", async (
-            AdvanceExamToAnsweringRequest request,
-            ParticipationService service,
-            HttpContext context,
-            IConfiguration configuration,
-            CancellationToken cancellationToken) =>
-            await ApiEndpointResults.ExecuteRuleAsync(
-                context, configuration, request.RequestId,
-                () => service.AdvanceExamToAnsweringAsync(request, cancellationToken)));
-
         group.MapGet("/{participationId}", async (
             string participationId,
             ParticipationService service,
@@ -346,7 +336,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapReliableCommandApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/commands").WithTags("A04 Reliable Commands");
+        var group = api.MapGroup("/commands").WithTags("Reliable Commands");
 
         group.MapGet("/time", (
             ReliableCommandService service,
@@ -357,18 +347,6 @@ public static class ExamApiEndpointExtensions
                 configuration,
                 context.TraceIdentifier,
                 service.GetServerTime()));
-
-        group.MapPost("/", async (
-            CreateCommandEventRequest request,
-            ReliableCommandService service,
-            HttpContext context,
-            IConfiguration configuration,
-            CancellationToken cancellationToken) =>
-            ApiEndpointResults.FromCommand(
-                context,
-                configuration,
-                request.RequestId,
-                await service.CreateAsync(request, cancellationToken)));
 
         group.MapGet("/due", async (
             string participationId,
@@ -436,7 +414,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapSubmissionApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/submissions").WithTags("A05 Submissions");
+        var group = api.MapGroup("/submissions").WithTags("Submissions");
 
         group.MapPut("/progress", async (
             SyncProgressRequest request,
@@ -542,31 +520,7 @@ public static class ExamApiEndpointExtensions
 
     public static RouteGroupBuilder MapVersioningApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/versioning").WithTags("A06 Versioning");
-
-        group.MapPost("/exams", (
-            CreateVersionedExamApiRequest request,
-            IExamVersioningService service,
-            TimeProvider timeProvider,
-            HttpContext context,
-            IConfiguration configuration) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                return ApiEndpointResults.InvalidRequestId(context, configuration);
-            }
-
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.CreateExam(new CreateVersionedExamRequest(
-                    request.ExamId,
-                    request.Schedule,
-                    timeProvider.GetUtcNow(),
-                    request.RequestId)),
-                StatusCodes.Status201Created);
-        });
+        var group = api.MapGroup("/versioning").WithTags("Versioning");
 
         group.MapGet("/exams/{examId}", (
             string examId,
@@ -592,6 +546,11 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
+            if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length > 1000)
+                return ApiEndpointResults.FromVersioning(context, configuration, request.RequestId,
+                    VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InvalidRequest,
+                        "请填写修改时间的原因，长度不超过1000字。"));
+            var actor = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
             return ApiEndpointResults.FromVersioning(
                 context,
                 configuration,
@@ -601,62 +560,7 @@ public static class ExamApiEndpointExtensions
                     request.ExpectedVersion,
                     request.Schedule,
                     timeProvider.GetUtcNow(),
-                    request.RequestId)));
-        });
-
-        group.MapPost("/exams/{examId}/schedule/triggers", (
-            string examId,
-            ExecuteScheduleTriggerApiRequest request,
-            IExamVersioningService service,
-            TimeProvider timeProvider,
-            HttpContext context,
-            IConfiguration configuration) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                return ApiEndpointResults.InvalidRequestId(context, configuration);
-            }
-
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.ExecuteScheduleTrigger(new ExecuteScheduleTriggerRequest(
-                    examId,
-                    request.ScheduleVersion,
-                    request.Trigger,
-                    timeProvider.GetUtcNow(),
-                    request.RequestId)));
-        });
-
-        group.MapPost("/exams/{examId}/paper-publications", (
-            string examId,
-            PublishPaperApiRequest request,
-            IExamVersioningService service,
-            TimeProvider timeProvider,
-            HttpContext context,
-            IConfiguration configuration) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                return ApiEndpointResults.InvalidRequestId(context, configuration);
-            }
-
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.PublishPaper(new PublishPaperRequest(
-                    examId,
-                    request.ExpectedVersion,
-                    request.ArtifactId,
-                    request.Structure,
-                    request.ChangedQuestionIds,
-                    request.Validation,
-                    request.Operator,
-                    request.Reason,
-                    timeProvider.GetUtcNow(),
-                    request.RequestId)));
+                    request.RequestId) { Operator = actor, Reason = request.Reason.Trim() }));
         });
 
         group.MapPost("/exams/{examId}/grading-publications", async (
@@ -699,53 +603,6 @@ public static class ExamApiEndpointExtensions
             return ApiEndpointResults.FromVersioning(context, configuration, request.RequestId, published);
         });
 
-        group.MapPost("/exams/{examId}/participants", (
-            string examId,
-            RegisterVersionedParticipantApiRequest request,
-            IExamVersioningService service,
-            HttpContext context,
-            IConfiguration configuration) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                return ApiEndpointResults.InvalidRequestId(context, configuration);
-            }
-
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.RegisterParticipant(new RegisterVersionedParticipantRequest(
-                    examId,
-                    request.ParticipantId,
-                    request.InitialState,
-                    request.RequestId)));
-        });
-
-        group.MapPut("/exams/{examId}/participants/{participantId}/state", (
-            string examId,
-            string participantId,
-            ChangeParticipantStateApiRequest request,
-            IExamVersioningService service,
-            HttpContext context,
-            IConfiguration configuration) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                return ApiEndpointResults.InvalidRequestId(context, configuration);
-            }
-
-            return ApiEndpointResults.FromVersioning(
-                context,
-                configuration,
-                request.RequestId,
-                service.ChangeParticipantState(new ChangeParticipantStateRequest(
-                    examId,
-                    participantId,
-                    request.State,
-                    request.RequestId)));
-        });
-
         group.MapPost("/exams/{examId}/participants/{participantId}/paper-transfer", (
             string examId,
             string participantId,
@@ -759,10 +616,11 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
-            return ApiEndpointResults.FromVersioning(
+            return ApiEndpointResults.FromParticipantVersioning(
                 context,
                 configuration,
                 request.RequestId,
+                participantId,
                 service.ReportPaperTransfer(new ReportPaperTransferRequest(
                     examId,
                     participantId,
@@ -789,10 +647,11 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
-            return ApiEndpointResults.FromVersioning(
+            return ApiEndpointResults.FromParticipantVersioning(
                 context,
                 configuration,
                 request.RequestId,
+                participantId,
                 service.ConfirmPaperReview(new ConfirmPaperReviewRequest(
                     examId,
                     participantId,

@@ -1,3 +1,4 @@
+using Exam.Contracts.Versioning;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -21,6 +22,7 @@ internal static partial class ExamCli
             ["create", .. var tail] => ("create", null, tail),
             ["show", var exam, .. var tail] => ("show", exam, tail),
             ["update", var exam, .. var tail] => ("update", exam, tail),
+            ["schedule", var exam, .. var tail] => ("schedule", exam, tail),
             ["visibility", var exam, var state, .. var tail] when state is "on" or "off" => ("visibility-" + state, exam, tail),
             _ => ((string?)null, (string?)null, Array.Empty<string>()),
         };
@@ -98,6 +100,19 @@ internal static partial class ExamCli
                             ExpectedVersion = update.ExpectedVersion > 0 ? update.ExpectedVersion : target.SettingsVersion,
                         });
                     break;
+                case "schedule":
+                    var scheduleInput = JsonSerializer.Deserialize<ScheduleChangeInput>(await ReadInput(), json)
+                        ?? throw new ArgumentException("输入不是有效的时间修改内容。");
+                    if (scheduleInput.ExpectedVersion < 1 || scheduleInput.Schedule is null ||
+                        scheduleInput.Schedule.EndsAt <= scheduleInput.Schedule.StartsAt ||
+                        string.IsNullOrWhiteSpace(scheduleInput.Reason) || scheduleInput.Reason.Length > 1000)
+                        throw new ArgumentException("请提供已读取的 expectedVersion、有效的 schedule 和不超过1000字的 reason。");
+                    var scheduledExam = await Find(name!);
+                    result = await Send<ExamVersionSnapshot>(HttpMethod.Put,
+                        $"/api/v1/versioning/exams/{Uri.EscapeDataString(scheduledExam.ExamId)}/schedule",
+                        scheduleInput with { RequestId = string.IsNullOrWhiteSpace(scheduleInput.RequestId)
+                            ? RequestId() : scheduleInput.RequestId, Reason = scheduleInput.Reason.Trim() });
+                    break;
                 default:
                     var exam = await Find(name!);
                     result = await Send<ExamSummary>(HttpMethod.Put, $"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/visibility",
@@ -130,6 +145,8 @@ internal static partial class ExamCli
         Console.WriteLine(JsonSerializer.Serialize(result, json));
         return 0;
     }
+
+    private sealed record ScheduleChangeInput(string? RequestId, long ExpectedVersion, ScheduleWindow? Schedule, string? Reason);
 
     private sealed class ExamCliException(HttpStatusCode status, string message) : Exception(message)
     {

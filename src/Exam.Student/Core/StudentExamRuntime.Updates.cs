@@ -9,7 +9,7 @@ namespace Exam.Student.Core;
 
 public sealed partial class StudentExamRuntime
 {
-    /// <summary>发件箱失焦载荷：EventId 在事件完成时生成，重试保持不变。</summary>
+    /// <summary>发件箱失焦载荷：EventId 在失焦开始时生成，重试保持不变。</summary>
     public sealed record PendingFocusEventPayload(
         string EventId, DateTimeOffset LostAt, DateTimeOffset RegainedAt, long DurationMilliseconds);
 
@@ -118,7 +118,7 @@ public sealed partial class StudentExamRuntime
             if (result.Succeeded)
             {
                 _confirmedReviewVersions.TryAdd(expectedVersion, 0);
-                // B06 服务端闭环：复核确认同时进入发件箱，由同步回合上报服务器；
+                // 服务端闭环：复核确认同时进入发件箱，由同步回合上报服务器；
                 // 入队失败不撤销本地确认，下一轮确认或重试时按版本幂等补报。
                 var upload = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
                     $"review:{expectedVersion}", "review",
@@ -140,7 +140,7 @@ public sealed partial class StudentExamRuntime
     }
 
     /// <summary>
-    /// B06 失焦留痕：每段失焦结束（复焦或页面关闭）先写入本地发件箱；由同步回合批量补报，
+    /// 失焦开始立即写入本地发件箱，复焦或页面关闭时用同一事件标识补齐时长；由同步回合补报，
     /// 服务器回执确认后删除。返回 false 只代表本地写入失败，不影响作答。
     /// </summary>
     public async Task<bool> RecordFocusLossAsync(FocusLossEvent focusEvent, CancellationToken ct = default)
@@ -148,16 +148,17 @@ public sealed partial class StudentExamRuntime
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(focusEvent);
         if (localState is null || _localKey is null) return false;
-        if (focusEvent.Duration < TimeSpan.Zero) return false;
+        if (focusEvent.Duration < TimeSpan.Zero || string.IsNullOrWhiteSpace(focusEvent.EventId)) return false;
         var payload = new PendingFocusEventPayload(
-            Guid.NewGuid().ToString("N"),
+            focusEvent.EventId,
             focusEvent.LostAt,
             focusEvent.LostAt + focusEvent.Duration,
             (long)Math.Round(focusEvent.Duration.TotalMilliseconds, System.MidpointRounding.AwayFromZero));
         try
         {
             var result = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
-                payload.EventId, "focus", JsonSerializer.Serialize(payload, UploadJson)), ct).ConfigureAwait(false);
+                $"{payload.EventId}:{payload.DurationMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                "focus", JsonSerializer.Serialize(payload, UploadJson)), ct).ConfigureAwait(false);
             if (!result.Succeeded) _localStateError = $"失焦记录保存失败：{result.Error}";
             return result.Succeeded;
         }

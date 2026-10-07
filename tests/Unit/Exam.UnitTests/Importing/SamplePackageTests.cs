@@ -122,7 +122,7 @@ public sealed class SamplePackageTests
     public void ThreeTypesSample_WithoutAnswerKey_OnlyFlagsScoreCheck()
     {
         // 含 {正确选项总数} 的题组无法在缺答案时核对满分，此时必须通过校验但置位标志，
-        // 由 D04/D05 在拿到答案后完成核对。
+        // 由 精确计分/评分处理 在拿到答案后完成核对。
         var (manifest, _) = ReadPackage(Path.Combine(SamplesRoot, "three-types"));
 
         var report = Validator.ValidateJson(manifest);

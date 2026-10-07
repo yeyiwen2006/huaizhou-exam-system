@@ -52,7 +52,7 @@ public interface IManagementConnection : IDisposable
     Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token);
 }
 
-/// <summary>The GUI reuses the F01 transport; only independent session exchange is added here.</summary>
+/// <summary>The GUI reuses the local management transport; only independent session exchange is added here.</summary>
 public sealed class ManagementConnection : IManagementConnection
 {
     private readonly HttpClient _session;

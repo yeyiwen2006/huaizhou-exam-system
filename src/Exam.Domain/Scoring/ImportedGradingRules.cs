@@ -6,7 +6,7 @@ using Exam.Domain.Importing;
 
 namespace Exam.Domain.Scoring;
 
-/// <summary>D01 清单和独立答案的统一组装入口，同时执行 D01 满分校验和 D04 全作答情形检查。</summary>
+/// <summary>清单和独立答案的统一组装入口，同时执行 清单校验 满分校验和 精确计分 全作答情形检查。</summary>
 public sealed class ImportedGradingRules
 {
     public string ExamId { get; }
@@ -46,7 +46,7 @@ public sealed class ImportedGradingRules
         return result;
     }
 
-    /// <summary>输入须先通过 D01 清单校验；不接触独立参考答案。</summary>
+    /// <summary>输入须先通过 清单校验；不接触独立参考答案。</summary>
     public static PaperStructure BuildStructure(ExamManifest manifest)
     {
         var groups = manifest.Groups.ToDictionary(g => g.GroupId, StringComparer.Ordinal);

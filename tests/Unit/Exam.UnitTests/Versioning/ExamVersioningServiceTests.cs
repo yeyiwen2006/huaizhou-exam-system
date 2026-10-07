@@ -351,7 +351,7 @@ public sealed class ExamVersioningServiceTests
             "exam-1", "p1", 1, 1, PaperTransferOutcome.Installed, null)).Succeeded);
         Assert.True(service.ConfirmPaperReview(new ConfirmPaperReviewRequest("exam-1", "p1", 1)).Succeeded);
 
-        // B06 服务端闭环：学生端回执丢失后用新请求标识重发同一版本的确认，按幂等重放成功。
+        // 失焦记录 服务端闭环：学生端回执丢失后用新请求标识重发同一版本的确认，按幂等重放成功。
         var replay = service.ConfirmPaperReview(new ConfirmPaperReviewRequest("exam-1", "p1", 1));
 
         Assert.True(replay.Succeeded);

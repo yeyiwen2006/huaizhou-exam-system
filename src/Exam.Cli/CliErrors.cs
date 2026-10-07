@@ -31,7 +31,7 @@ internal static partial class ExamCli
             {
                 var value = arguments[i];
                 if (value == "--help") { args.Add(value); continue; }
-                // C05 confirmation is a switch, not a key/value option. Keep it command-specific,
+                // paper import confirmation is a switch, not a key/value option. Keep it command-specific,
                 // so accepting it does not loosen unrelated command validation.
                 if (value == "--confirm" && args.Count >= 3 && args[0] is ("import" or "grading") && args[1] == "publish")
                 {

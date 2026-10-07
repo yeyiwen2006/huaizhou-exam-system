@@ -181,7 +181,7 @@ public sealed class StudentPaperPackageBoundaryTests
     [Fact]
     public void V2PackageWithValidOptionRegions_IsAccepted()
     {
-        // 两个独立定义的坐标文件名必须一致：组包/契约侧与 B03 读取侧。
+        // 两个独立定义的坐标文件名必须一致：组包/契约侧与 学生导航 读取侧。
         Assert.Equal(Exam.Student.Core.OptionRegionMap.EntryPath, OptionRegionArtifact.FileName);
 
         var files = Files(StudentPaperFixture.CreateStudentManifest() with { SchemaVersion = 2 });

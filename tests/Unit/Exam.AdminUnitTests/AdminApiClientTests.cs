@@ -150,7 +150,7 @@ public sealed class AdminApiClientTests
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
 
         var error = await Assert.ThrowsAsync<AdminApiException>(() => api.SaveScheduleAsync(
-            "synthetic-exam", new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)), expectedVersion: 7));
+            "synthetic-exam", new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)), expectedVersion: 7, reason: "合成并发测试"));
 
         Assert.Equal("VERSION_CONFLICT", error.Code);
         Assert.Equal(HttpStatusCode.Conflict, error.StatusCode);
@@ -165,7 +165,7 @@ public sealed class AdminApiClientTests
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
 
         var error = await Assert.ThrowsAsync<AdminApiException>(() => api.SaveScheduleAsync(
-            "synthetic-exam", new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1))));
+            "synthetic-exam", new ScheduleWindow(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)), expectedVersion: 1, reason: "合成并发测试"));
 
         Assert.Equal("HTTP_404", error.Code);
         Assert.Equal(1, handler.RequestCount);

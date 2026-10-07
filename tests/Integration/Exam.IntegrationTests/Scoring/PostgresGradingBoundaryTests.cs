@@ -139,6 +139,22 @@ public sealed partial class PostgresGradingPersistenceTests
     [Fact]
     public async Task MigrationRestartAndReapplicationPreserveFrozenAnswerAndReceipt()
     {
+        // Dropping and replaying a migration must not change the shared collection schema.
+        // Another test may have active entry records, which correctly block pending migrations.
+        var isolated = new Exam.IntegrationTests.Postgres.PostgresDatabaseFixture();
+        try
+        {
+            await isolated.InitializeAsync();
+            await new PostgresGradingPersistenceTests(isolated).VerifyMigrationRestartAndReapplicationAsync();
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
+    }
+
+    private async Task VerifyMigrationRestartAndReapplicationAsync()
+    {
         await SeedAsync();
         var inputs = new PostgresGradingInputs(fixture.DataSource);
         var before = (await inputs.LoadSubmissionAsync(SubmissionId))!;

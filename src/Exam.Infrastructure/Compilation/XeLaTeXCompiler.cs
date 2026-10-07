@@ -51,7 +51,7 @@ public sealed record XeLaTeXToolchain(string ExecutablePath, XeLaTeXPlatform Pla
 }
 
 /// <summary>
-/// 逐题编译一个包内 TeX 文件。执行指南第 164 行与 D02 任务卡的要求在这里落地：
+/// 逐题编译一个包内 TeX 文件。编译与文件隔离约定：
 /// 独立目录编译、以包根目录解析相对路径、禁外部命令、超时与路径校验、保留原版 PDF、错误可定位。
 ///
 /// 不写回材料目录：OutputDirectory 必须是包根之外的目录，工作目录仍是包根目录，

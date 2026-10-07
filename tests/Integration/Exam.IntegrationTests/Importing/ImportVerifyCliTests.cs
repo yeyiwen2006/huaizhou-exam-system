@@ -6,7 +6,7 @@ using Exam.Contracts.Importing;
 namespace Exam.IntegrationTests.Importing;
 
 /// <summary>
-/// D06 导入编译对照命令的用例：真实 CLI 进程 + 合成导入包。
+/// 材料准备 导入编译对照命令的用例：真实 CLI 进程 + 合成导入包。
 /// 覆盖清单校验不过、缺清单、以及真正编译并抽取（后者需要 TeX，单独标记）。
 /// </summary>
 public sealed class ImportVerifyCliTests : IDisposable
@@ -41,7 +41,7 @@ public sealed class ImportVerifyCliTests : IDisposable
     [Fact]
     public async Task Verify_WithManifestFailingValidation_ReportsRulesAndExits3()
     {
-        // 题目源文件名前缀与考试名称不一致：D01 校验必须拒绝，且不进入编译。
+        // 题目源文件名前缀与考试名称不一致：清单校验 校验必须拒绝，且不进入编译。
         WritePackage(sourceFileName: "另一场考试_1.tex");
 
         var result = await RunCliAsync(["import", "verify", _root]);

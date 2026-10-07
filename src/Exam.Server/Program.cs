@@ -1,6 +1,4 @@
-using Exam.Application.ServiceManagement;
 using Exam.Contracts.Common;
-using Exam.Contracts.ServiceManagement;
 using Exam.Server.Api;
 using Exam.Server.Realtime;
 using Exam.Server.Runtime;
@@ -22,29 +20,12 @@ if (serviceMode)
 HighAvailabilityDeployment.Apply(builder);
 var managedServiceConfiguration = await BusinessServiceConfiguration.LoadAndApplyAsync(builder);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
-builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSignalR().AddJsonProtocol(options =>
-{
-    // HTTP and SignalR carry the same contracts, including string-valued enums.
-    // HTTP JSON options do not apply to hub argument binding.
-    options.PayloadSerializerOptions = JsonDefaults.CreateServerTransport();
-});
-builder.Services.ConfigureHttpJsonOptions(options =>
-{
-    var defaults = JsonDefaults.CreateServerTransport();
-    options.SerializerOptions.PropertyNamingPolicy = defaults.PropertyNamingPolicy;
-    options.SerializerOptions.PropertyNameCaseInsensitive = defaults.PropertyNameCaseInsensitive;
-    foreach (var converter in defaults.Converters)
-    {
-        options.SerializerOptions.Converters.Add(converter);
-    }
-});
+builder.Services.AddExamServerTransport();
 
 var identity = builder.Configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
     ?? new ServerIdentityOptions();
 var studentTopology = StudentFailoverConfiguration.Read(builder.Configuration);
-if (builder.Environment.IsProduction() &&
-    (builder.Configuration.GetSection("HighAvailability:RequiredNodeIds").Get<string[]>()?.Length ?? 0) == 2 && studentTopology is null)
+if ((builder.Configuration.GetSection("HighAvailability:RequiredNodeIds").Get<string[]>()?.Length ?? 0) == 2 && studentTopology is null)
     throw new InvalidOperationException("双机部署缺少学生端主备信任配置，不能投入正式考试。");
 var databaseConfigured = !string.IsNullOrWhiteSpace(Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveConnection(
     key => builder.Configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch));
@@ -53,12 +34,12 @@ if (databaseConfigured)
     builder.Services.AddPostgresExamRuntime(
         builder.Configuration,
         identity,
-        allowUninitializedFailoverState: builder.Environment.IsDevelopment());
+        allowUninitializedFailoverState: false);
 }
-else if (builder.Environment.IsProduction())
+else
 {
     throw new InvalidOperationException(
-        "生产环境缺少 ConnectionStrings:Exam；为避免把考试数据写入临时内存，服务已拒绝启动。");
+        "缺少 PostgreSQL 连接配置，业务服务已拒绝启动。请在服务管理中核对部署配置。");
 }
 
 var app = builder.Build();
@@ -71,11 +52,8 @@ if (databaseConfigured && builder.Configuration.GetValue("Database:ApplyMigratio
 
 app.UseMiddleware<ApiExceptionMiddleware>();
 app.UseHttpsRedirection();
-if (databaseConfigured)
-{
-    app.UseMiddleware<ExamApiAccessMiddleware>();
-    app.UseMiddleware<BusinessConfirmationMiddleware>();
-}
+app.UseMiddleware<ExamApiAccessMiddleware>();
+app.UseMiddleware<BusinessConfirmationMiddleware>();
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (
@@ -88,13 +66,6 @@ app.MapGet("/health/ready", async (
     {
         return Results.Json(
             new { status = "recovering", reason = "服务身份配置不完整。" },
-            statusCode: 503);
-    }
-
-    if (!databaseConfigured)
-    {
-        return Results.Json(
-            new { status = "recovering", reason = "PostgreSQL 尚未配置，业务接口未启用。" },
             statusCode: 503);
     }
 
@@ -123,47 +94,10 @@ app.MapGet("/health/ready", async (
         })
         : Results.Json(new { status = "recovering", reason = readiness.Reason }, statusCode: 503);
 });
-app.MapGet("/api/system/time", (IConfiguration configuration, TimeProvider timeProvider, HttpContext context) =>
-{
-    var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()
-        ?? new ServerIdentityOptions();
-    var payload = new ServerTimeResponse(timeProvider.GetUtcNow());
-    return Results.Ok(new ApiEnvelope<ServerTimeResponse>(
-        identity.ServerId,
-        identity.NodeId,
-        identity.ServerEpoch,
-        context.TraceIdentifier,
-        payload,
-        null));
-});
-if (databaseConfigured)
-{
-    app.MapExamApi();
-    app.MapStandbyConfirmation();
-    app.MapExamDiagnostics();
-    app.MapHub<ExamEventHub>("/hubs/exam-events");
-    if (builder.Configuration.GetValue("Backup:Enabled", false))
-    {
-        app.MapPost("/api/v1/service-management/backups", async (
-            BackupRequest request,
-            IBackupCoordinator backups,
-            CancellationToken cancellationToken) =>
-            Results.Ok(await backups.CreateAsync(request, cancellationToken)));
-        app.MapPost("/api/v1/service-management/restores", async (
-            RestoreRequest request,
-            IBackupCoordinator backups,
-            CancellationToken cancellationToken) =>
-        {
-            await backups.RestoreAsync(request, cancellationToken);
-            return Results.Ok(new
-            {
-                request.BackupId,
-                status = "staged",
-                message = "备份已校验并恢复到隔离暂存目录，未覆盖当前数据库。"
-            });
-        });
-    }
-}
+app.MapExamApi();
+app.MapStandbyConfirmation();
+app.MapExamDiagnostics();
+app.MapHub<ExamEventHub>("/hubs/exam-events");
 
 app.Run();
 

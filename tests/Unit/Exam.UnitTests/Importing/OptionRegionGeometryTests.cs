@@ -4,7 +4,7 @@ using Exam.Domain.Importing;
 namespace Exam.UnitTests.Importing;
 
 /// <summary>
-/// 选项区域归一化的纯几何验证。旋转与裁剪各组合见 docs/d03-option-region-contract.md 第 4.3 节的换算表；
+/// 选项区域归一化的纯几何验证。旋转与裁剪各组合见 docs/option-region-contract.md 第 4.3 节的换算表；
 /// 用例中的期望值按该表手工推算，不复用被测代码的公式。
 /// </summary>
 public sealed class OptionRegionGeometryTests

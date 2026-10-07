@@ -6,7 +6,7 @@ using Exam.Domain.Submissions;
 namespace Exam.UnitTests.Submissions;
 
 /// <summary>
-/// B06 失焦留痕验收：请求校验、(ParticipationId, EventId) 幂等去重、授权元组核对与考务汇总查询。
+/// 失焦记录 失焦留痕验收：请求校验、(ParticipationId, EventId) 幂等去重、授权元组核对与考务汇总查询。
 /// </summary>
 public sealed class FocusEventServiceTests
 {
@@ -162,6 +162,23 @@ public sealed class FocusEventServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(SubmissionErrorCode.InvalidRequest, result.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartAndCompletionPersistOnceEvenWhenDeliveryIsReordered(bool completionFirst)
+    {
+        var (service, store) = await CreateAsync();
+        var completed = Request(eventId: "stable-focus");
+        var initial = completed with { Events = [completed.Events[0] with { RegainedAt = BaseTime, DurationMilliseconds = 0 }] };
+        Assert.True((await service.ReportAsync(completionFirst ? completed : initial)).IsSuccess);
+        Assert.True((await service.ReportAsync(completionFirst ? initial : completed)).IsSuccess);
+        Assert.True((await service.ReportAsync(initial)).IsSuccess);
+        Assert.True((await service.ReportAsync(completed)).IsSuccess);
+        var summary = Assert.Single(await store.ListSummariesAsync("exam-1"));
+        Assert.Equal(1, summary.EventCount);
+        Assert.Equal(5000, summary.TotalDurationMilliseconds);
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider

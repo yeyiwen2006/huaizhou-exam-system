@@ -10,29 +10,28 @@ from run_synthetic import load_evidence,validate_synthetic
 
 class ScopeChecks(unittest.TestCase):
     def test_coverage_paths_and_explicit_consumer_gaps_are_reviewable(self):
-        data=json.loads((ROOT/'docs/e01-coverage.json').read_text(encoding='utf-8'))
+        data=json.loads((ROOT/'docs/test-coverage.json').read_text(encoding='utf-8'))
         self.assertEqual(1,data['schemaVersion']);rows=data['rows']
         self.assertGreaterEqual(len(rows),50);self.assertEqual(len(rows),len({r['id'] for r in rows}))
-        required={'requirement','action','role','gui','cli','sharedApi','successTest','failureTest','category','automatedEvidence','manualCheck','status','gapOwner','gap'}
+        required={'requirement','action','gui','cli','sharedApi','successTest','failureTest','category','automatedEvidence','manualCheck','status','gap'}
         for row in rows:
             self.assertTrue(required<=row.keys());self.assertTrue((ROOT/row['successTest']).exists())
             if row['gui']:self.assertTrue((ROOT/row['gui']).is_file())
-            self.assertIn(row['gapOwner'],list('ABCDEFG'))
 
-    def test_markdown_matrix_matches_machine_rows_and_current_c_entrypoints(self):
-        rows=json.loads((ROOT/'docs/e01-coverage.json').read_text(encoding='utf-8'))['rows']
+    def test_markdown_matrix_matches_machine_rows_and_current_business_entrypoints(self):
+        rows=json.loads((ROOT/'docs/test-coverage.json').read_text(encoding='utf-8'))['rows']
         markdown=(ROOT/'docs/gui-cli-coverage.md').read_text(encoding='utf-8')
-        table={parts[0]:parts for line in markdown.splitlines() if line.startswith('| E01-')
+        table={parts[0]:parts for line in markdown.splitlines() if line.startswith('| COV-')
                for parts in [[cell.strip() for cell in line.strip('|').split('|')]]}
         self.assertEqual({r['id'] for r in rows},set(table))
         for row in rows:
             self.assertEqual([row['id'],row['action'],row['gui'] or '未接线/需消费方核对',
-                              row['cli'] or '专用命令未接线',row['status']+'；'+row['gapOwner']],table[row['id']])
+                              row['cli'] or '专用命令未接线',row['status']],table[row['id']])
             self.assertTrue((ROOT/row['failureTest']).exists())
         expected={24:'activation approve',25:'activation revoke',26:'devices show',27:'rooms create',
                   28:'rooms rename',29:'rooms move',30:'rooms delete',36:'roster list',43:'stream',
                   44:'decisions keep',45:'commands resend',46:'monitor events',47:'monitor watch'}
-        index={int(r['id'].split('C')[1]):r for r in rows}
+        index={int(r['id'].split('-')[1]):r for r in rows}
         for number,command in expected.items():
             self.assertIn(command,index[number]['cli'])
             self.assertNotIn('未实现',index[number]['status'])

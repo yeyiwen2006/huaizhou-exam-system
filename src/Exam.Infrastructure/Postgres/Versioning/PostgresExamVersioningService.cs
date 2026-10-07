@@ -11,7 +11,7 @@ using NpgsqlTypes;
 namespace Exam.Infrastructure.Postgres.Versioning;
 
 /// <summary>
-/// PostgreSQL-backed A06 reference service. The database stores an append-only command stream and
+/// PostgreSQL-backed versioning reference service. The database stores an append-only command stream and
 /// a query projection. Mutations replay the existing domain aggregate while holding the stream row
 /// lock, so the domain remains the single source of schedule, structure and terminal-state rules.
 /// </summary>
@@ -102,20 +102,42 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             return NotFound<ExamVersionSnapshot>(examId);
         }
 
-        using var connection = _dataSource.OpenConnection();
-        using var command = new NpgsqlCommand(
-            "SELECT snapshot::text FROM exam.version_state WHERE exam_id = @exam_id;",
+        ExamVersionSnapshot snapshot;
+        // Return the connection before the canonical roster query borrows from the same bounded pool.
+        using (var connection = _dataSource.OpenConnection())
+        {
+            using var command = new NpgsqlCommand(
+                "SELECT snapshot::text FROM exam.version_state WHERE exam_id = @exam_id;",
+                connection);
+            command.Parameters.AddWithValue("exam_id", examId);
+            var value = command.ExecuteScalar();
+            if (value is not string json)
+            {
+                return NotFound<ExamVersionSnapshot>(examId);
+            }
+            snapshot = JsonSerializer.Deserialize<ExamVersionSnapshot>(json, _json)
+                ?? throw new InvalidDataException($"The persisted version snapshot for exam '{examId}' is unreadable.");
+        }
+        return VersioningResult<ExamVersionSnapshot>.Success(OverlayCanonicalParticipants(snapshot));
+    }
+
+    /// <summary>Read the published question structure without loading the roster or borrowing nested connections.</summary>
+    public async ValueTask<PaperStructure?> GetPaperStructureAsync(
+        string examId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(examId)) return null;
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT (snapshot #> '{paper,structure}')::text FROM exam.version_state WHERE exam_id = @exam_id;",
             connection);
         command.Parameters.AddWithValue("exam_id", examId);
-        var value = command.ExecuteScalar();
-        if (value is not string json)
-        {
-            return NotFound<ExamVersionSnapshot>(examId);
-        }
-
-        var snapshot = JsonSerializer.Deserialize<ExamVersionSnapshot>(json, _json)
-            ?? throw new InvalidDataException($"The persisted version snapshot for exam '{examId}' is unreadable.");
-        return VersioningResult<ExamVersionSnapshot>.Success(OverlayCanonicalParticipants(snapshot));
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is not string json) return null;
+        var structure = JsonSerializer.Deserialize<PaperStructure>(json, _json);
+        if (structure is not null && structure.Questions is null)
+            throw new InvalidDataException("已发布试卷的题目结构无法读取。");
+        return structure;
     }
 
     private ExamVersionSnapshot OverlayCanonicalParticipants(ExamVersionSnapshot snapshot)
@@ -525,7 +547,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
 
         if (request is ChangeParticipantStateRequest change && change.State != target.State)
         {
-            return new(VersioningErrorCode.InvalidStateTransition, "A06 cannot override canonical A03/A05 participant state.");
+            return new(VersioningErrorCode.InvalidStateTransition, "版本服务不能覆盖参试与收卷事务确定的参试状态。");
         }
 
         if (request is ReportPaperTransferRequest transfer && !MatchesAuthorization(target, transfer))
@@ -802,7 +824,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             "resource_version",
             NpgsqlDbType.Bigint,
             resourceVersion ?? (object)DBNull.Value);
-        // B06 修订定位：PaperUpdated 指令携带本次发布的变更题目标识清单，
+        // 修订定位：PaperUpdated 指令携带本次发布的变更题目标识清单，
         // 学生端据此列出修订题号并支持一键跳转；其他指令保持原有元数据。
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -868,9 +890,11 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
         var matchingOperation = string.Equals(reader.GetString(0), operation, StringComparison.Ordinal);
         var storedHash = reader.GetString(1);
         var responseJson = reader.GetString(2);
+        reader.Close();
         if (!matchingOperation ||
             !string.Equals(storedHash, HashPayload(request), StringComparison.Ordinal) &&
-            !MatchesLegacyGradingPayload(request, storedHash, responseJson))
+            !MatchesLegacyGradingPayload(request, storedHash, responseJson) &&
+            !MatchesLegacySchedulePayload(connection, transaction, request, storedHash))
         {
             return VersioningResult<T>.Failure(
                 VersioningErrorCode.IdempotencyConflict,
@@ -909,9 +933,12 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
     private string HashPayload<TRequest>(TRequest request) where TRequest : notnull =>
         // The HTTP endpoint supplies Now on every arrival. It is audit time, not caller intent.
         // Keep every caller-controlled field in the identity, including the exact answer/rule bytes.
-        request is PublishGradingRulesRequest grading
-            ? HashExactPayload(grading with { Now = DateTimeOffset.UnixEpoch })
-            : HashExactPayload(request);
+        request switch
+        {
+            PublishGradingRulesRequest grading => HashExactPayload(grading with { Now = DateTimeOffset.UnixEpoch }),
+            UpdateScheduleRequest schedule => HashExactPayload(schedule with { Now = DateTimeOffset.UnixEpoch }),
+            _ => HashExactPayload(request)
+        };
 
     private string HashExactPayload<TRequest>(TRequest request) where TRequest : notnull =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, _json))));
@@ -926,6 +953,26 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             receipt.Value.ExamId == grading.ExamId &&
             string.Equals(storedHash, HashExactPayload(grading with { Now = receipt.Value.Grading.PublishedAt }),
                 StringComparison.Ordinal);
+    }
+
+    private bool MatchesLegacySchedulePayload<TRequest>(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, TRequest request, string storedHash)
+    {
+        if (request is not UpdateScheduleRequest schedule) return false;
+        // Legacy hashes included the server arrival time. Recover only that value from the
+        // immutable event; every caller-owned field and the original hash must still agree.
+        using var command = new NpgsqlCommand("""
+            SELECT payload::text FROM exam.version_events
+             WHERE exam_id=$1 AND operation_type=$2 AND payload->>'requestId'=$3;
+            """, connection, transaction);
+        command.Parameters.AddWithValue(schedule.ExamId);
+        command.Parameters.AddWithValue(UpdateScheduleOperation);
+        command.Parameters.AddWithValue(schedule.RequestId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return false;
+        var original = JsonSerializer.Deserialize<UpdateScheduleRequest>(reader.GetString(0), _json);
+        if (reader.Read() || original is null) return false;
+        return string.Equals(storedHash, HashExactPayload(schedule with { Now = original.Now }), StringComparison.Ordinal);
     }
 
     private static string RequestIdOf<TRequest>(TRequest request) =>

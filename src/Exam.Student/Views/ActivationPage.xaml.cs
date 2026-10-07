@@ -33,7 +33,7 @@ public partial class ActivationPage : UserControl
     }
 
     /// <summary>
-    /// B07 部署配置（server.json）：有效时预填服务器地址并提示来源；无效时给出错误提示；
+    /// 部署配置（server.json）：有效时预填服务器地址并提示来源；无效时给出错误提示；
     /// 未部署时提示联系监考人员。三种情况下手动输入均保留，作为部署遗漏时的应急通道。
     /// </summary>
     private void ApplyServerConfigState()

@@ -140,7 +140,14 @@ public sealed record UpdateScheduleRequest(
     long ExpectedVersion,
     ScheduleWindow Schedule,
     DateTimeOffset Now,
-    string RequestId = "");
+    string RequestId = "")
+{
+    // Optional only for reading historical command streams. New HTTP writes require both fields.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Operator { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; init; }
+}
 
 public sealed record ExecuteScheduleTriggerRequest(
     string ExamId,

@@ -16,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Exam.IntegrationTests.Submissions;
 
 /// <summary>
-/// D05 计分状态命令的端到端用例：真实 HTTP 宿主 + 真实 CLI 进程。
+/// 评分处理 计分状态命令的端到端用例：真实 HTTP 宿主 + 真实 CLI 进程。
 /// 覆盖鉴权失败、正常读取与参数错误，验证命令输出与退出码约定。
 /// </summary>
 public sealed partial class PostgresSubmissionStoreTests

@@ -26,7 +26,7 @@ public sealed class MergedPrIntegrationTests
     [Fact]
     public async Task D03V2Package_OptionRegions_RoundTripThroughStudentReader()
     {
-        // D03 组包器写入的坐标产物，必须能被学生端读取器原样接受并逐题逐选项核对通过。
+        // 选项区域与题包 组包器写入的坐标产物，必须能被学生端读取器原样接受并逐题逐选项核对通过。
         var artifact = new OptionRegionArtifact(
             OptionRegionArtifact.CurrentArtifactVersion,
             OptionRegionArtifact.AnchorSchemeName,
@@ -75,7 +75,7 @@ public sealed class MergedPrIntegrationTests
         Assert.Equal(2, frozen.FrozenAnswers.Count);
         Assert.Equal(AnswerKind.Empty, frozen.FrozenAnswers["q2"].Kind);
         Assert.Empty(frozen.FrozenAnswers["q2"].OptionIds);
-        // Exercise the A05 JSON boundary and application service without claiming a B05 UI/worker exists.
+        // Exercise the submission JSON boundary and application service without claiming a submission UI/worker exists.
         var store = new InMemorySubmissionStore();
         var queue = new InMemoryGradingTaskQueue();
         await store.SetAuthorizationStateAsync(new("exam", "candidate", "participation", 1, "device", 1,
@@ -174,7 +174,7 @@ public sealed class MergedPrIntegrationTests
     }
 }
 
-/// <summary>Synthetic D03 producer and B02 transport; SQLite, encryption and runtime are production implementations.</summary>
+/// <summary>Synthetic student package producer and instructions transport; SQLite, encryption and runtime are production implementations.</summary>
 internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"exam-pr-integration-{Guid.NewGuid():N}");

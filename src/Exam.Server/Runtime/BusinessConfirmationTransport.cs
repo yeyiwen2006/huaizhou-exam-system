@@ -75,12 +75,12 @@ public sealed class ConfirmationHubFilter(IBusinessConfirmation confirmation) : 
 public static class BusinessConfirmationRegistration
 {
     public static void AddBusinessConfirmation(this IServiceCollection services, IConfiguration configuration,
-        ServerIdentityOptions identity, bool development)
+        ServerIdentityOptions identity, bool isolatedTestRuntime)
     {
         services.AddSingleton(_ => new HttpClient(new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(30) });
-        services.AddSingleton<IBusinessConfirmation>(provider => development
-            ? new DevelopmentConfirmation()
+        services.AddSingleton<IBusinessConfirmation>(provider => isolatedTestRuntime
+            ? new IsolatedTestConfirmation()
             : new ConfiguredConfirmation(() => new PostgresBusinessConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
                 new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
                 Required("Confirmation:StandbyNodeId"), identity.ServerEpoch, Resources(),
@@ -153,7 +153,7 @@ public static class BusinessConfirmationRegistration
             catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认配置不可用。", retryable: true); }
         }
     }
-    // Explicit development-only registrations cannot be used by the production entry point.
-    private sealed class DevelopmentConfirmation : IBusinessConfirmation
+    // Only isolated test hosts explicitly select this registration. The business executable always uses full confirmation.
+    private sealed class IsolatedTestConfirmation : IBusinessConfirmation
     { public Task ConfirmAsync(CancellationToken token) => Task.CompletedTask; }
 }

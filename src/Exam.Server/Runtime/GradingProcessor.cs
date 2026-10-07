@@ -3,7 +3,7 @@ using Exam.Application.Scoring;
 namespace Exam.Server.Runtime;
 
 /// <summary>
-/// 一批生产后台计分：仅在本机是活动主节点时领取持久任务，交给 D04 协调器完成
+/// 一批生产后台计分：仅在本机是活动主节点时领取持久任务，交给 精确计分 协调器完成
 /// 「outbox → 冻结答卷与最新已发布规则 → 精确计分 → 结果落库 → 结项」。
 ///
 /// 与循环分离，便于确定性地验证主备写门、批次与失败处理；后台循环见 <see cref="GradingWorker"/>。

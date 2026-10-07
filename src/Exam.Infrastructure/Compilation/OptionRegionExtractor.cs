@@ -11,7 +11,7 @@ namespace Exam.Infrastructure.Compilation;
 
 /// <summary>
 /// 从逐题编译产物读取隐藏外观链接标记，产出归一化的选项定位区域。
-/// 数据语义与接入边界见 docs/d03-option-region-contract.md 第 4 节。
+/// 数据语义与接入边界见 docs/option-region-contract.md 第 4 节。
 ///
 /// 关键约定（不可自行放宽）：
 /// <list type="bullet">

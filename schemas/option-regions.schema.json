@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huaizhou.example/schemas/option-regions.schema.json",
   "title": "Per-question option regions",
-  "description": "D03 输出的学生包根目录 option-regions.json：每题每选项的页索引与归一化显示矩形。可读文字标签取隐藏链接内字母/数字的可见字形框，不含标点及链接留白；无可用字形时保留校验后的链接区域。坐标规范由 anchorScheme 固定，页索引为题内从 0 开始。跨字段约束（x + width <= 1、y + height <= 1、重复标识、重复 JSON 字段）无法用纯 JSON Schema 表达，由读取实现 OptionRegionArtifactJson.Deserialize 执行；实现是权威，本 schema 是对外契约。契约见 docs/d03-option-region-contract.md 第 4.3、4.4 节。",
+  "description": "D03 输出的学生包根目录 option-regions.json：每题每选项的页索引与归一化显示矩形。可读文字标签取隐藏链接内字母/数字的可见字形框，不含标点及链接留白；无可用字形时保留校验后的链接区域。坐标规范由 anchorScheme 固定，页索引为题内从 0 开始。跨字段约束（x + width <= 1、y + height <= 1、重复标识、重复 JSON 字段）无法用纯 JSON Schema 表达，由读取实现 OptionRegionArtifactJson.Deserialize 执行；实现是权威，本 schema 是对外契约。契约见 docs/option-region-contract.md 第 4.3、4.4 节。",
   "type": "object",
   "additionalProperties": false,
   "required": ["artifactVersion", "anchorScheme", "examId", "paperVersion", "questions"],

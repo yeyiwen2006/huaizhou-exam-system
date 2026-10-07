@@ -8,10 +8,10 @@ public sealed record RecalculationRun(string ExamId, long TargetVersion, int Sub
     RegradePlan Plan, GradingReadiness Readiness);
 
 /// <summary>
-/// A06 发布新规则后，用当前已发布版本规划全部最终答卷并交给重算专用队列。
-/// 实际计分由 D04 协调器执行。重复范围、过期目标不执行任何调度写入。
+/// 版本服务 发布新规则后，用当前已发布版本规划全部最终答卷并交给重算专用队列。
+/// 实际计分由 精确计分 协调器执行。重复范围、过期目标不执行任何调度写入。
 /// 生产调用方仍须经过主备写门；报表查看/导出必须重新核对当前版本和收卷集合，
-/// 不能把本快照当成 A06 规则发布前置门，否则首次发布/重算会形成循环依赖。
+/// 不能把本快照当成 版本服务 规则发布前置门，否则首次发布/重算会形成循环依赖。
 /// </summary>
 public sealed class RecalculationScheduler(IGradingScope scope, IRecalculationQueue queue)
 {

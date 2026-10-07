@@ -14,7 +14,7 @@ namespace Exam.Infrastructure.Postgres.Exams;
 
 /// <summary>
 /// 考务端考试目录：名称唯一、完整考试设置、学生端显示开关。
-/// 考试本体（起止时间、生命周期、版本）仍由 A06 版本服务负责；本服务在同一事务内
+/// 考试本体（起止时间、生命周期、版本）仍由 版本服务负责；本服务在同一事务内
 /// 同步写入学生端可见的名称、科目与由结构化规则生成的考试说明。
 /// </summary>
 public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersioningService versioning, TimeProvider time)
@@ -269,7 +269,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             instructionsVersion = reader.GetInt64(0);
             ready = reader.GetBoolean(1);
         }
-        // 初始的说明版本 1 尚不可用：第一次写入填充版本 1，之后每次递增（与 B02 元数据服务一致）。
+        // 初始的说明版本 1 尚不可用：第一次写入填充版本 1，之后每次递增（与 考试说明 元数据服务一致）。
         var next = ready ? checked(instructionsVersion + 1) : instructionsVersion;
         await using var save = new NpgsqlCommand("""
             INSERT INTO exam.student_exam_metadata

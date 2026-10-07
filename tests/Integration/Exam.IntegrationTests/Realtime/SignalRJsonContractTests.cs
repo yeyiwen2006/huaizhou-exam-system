@@ -1,3 +1,4 @@
+using Exam.Server.Runtime;
 using System.Buffers;
 using System.Text;
 using System.Text.Json;
@@ -19,14 +20,14 @@ public sealed class SignalRJsonContractTests
     [Fact]
     public async Task ProductionHttpAndHubOptionsWriteCurrentAndScheduleTimesAsUtc8()
     {
-        await using var factory = new WebApplicationFactory<Program>();
+        await using var services = CreateTransportServices();
         var instant = new DateTimeOffset(2026, 10, 1, 20, 30, 0, TimeSpan.Zero);
         var payload = new { serverTime = instant, schedule = new { startsAt = instant, endsAt = instant.AddHours(2) } };
-        var httpOptions = factory.Services.GetRequiredService<IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>>().Value.SerializerOptions;
+        var httpOptions = services.GetRequiredService<IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>>().Value.SerializerOptions;
         using var http = JsonDocument.Parse(JsonSerializer.Serialize(payload, httpOptions));
         VerifyTimes(http.RootElement);
 
-        var protocol = new JsonHubProtocol(factory.Services.GetRequiredService<IOptions<JsonHubProtocolOptions>>());
+        var protocol = new JsonHubProtocol(services.GetRequiredService<IOptions<JsonHubProtocolOptions>>());
         var frame = Encoding.UTF8.GetString(protocol.GetMessageBytes(new InvocationMessage("TimeUpdated", [payload])).Span);
         using var hub = JsonDocument.Parse(frame.TrimEnd('\u001e'));
         VerifyTimes(hub.RootElement.GetProperty("arguments")[0]);
@@ -46,14 +47,8 @@ public sealed class SignalRJsonContractTests
     [InlineData("applied", CommandProcessingResult.Applied)]
     public async Task ProductionHubProtocolBindsStringEnumsAndPersistsAcknowledgement(string wireValue, CommandProcessingResult expected)
     {
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Development");
-            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
-                new Dictionary<string, string?> { ["ConnectionStrings:Exam"] = "" }));
-        });
-        // Retrieve the actual Program.cs registration, not a test-only JSON configuration.
-        var protocol = new JsonHubProtocol(factory.Services.GetRequiredService<IOptions<JsonHubProtocolOptions>>());
+        await using var services = CreateTransportServices();
+        var protocol = new JsonHubProtocol(services.GetRequiredService<IOptions<JsonHubProtocolOptions>>());
         var frame = "{\"type\":1,\"invocationId\":\"1\",\"target\":\"Acknowledge\",\"arguments\":[" +
             "{\"requestId\":\"ack-1\",\"eventId\":\"event-1\",\"participationId\":\"participation-1\",\"entryVersion\":1," +
             "\"deviceId\":\"device-1\",\"authorizationVersion\":1,\"processingResult\":\"" + wireValue +
@@ -77,6 +72,14 @@ public sealed class SignalRJsonContractTests
         Assert.Equal(expected, ack.Value!.ProcessingResult);
         var stored = await store.FindAcknowledgementByRequestAsync("ack-1", "event-1");
         Assert.Equal(ack.Value, stored);
+    }
+
+    private static ServiceProvider CreateTransportServices()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddExamServerTransport();
+        return services.BuildServiceProvider();
     }
 
     private sealed class AckBinder : IInvocationBinder

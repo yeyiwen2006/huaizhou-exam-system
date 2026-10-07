@@ -8,7 +8,7 @@ public sealed record PublishedGradingVersion(string ExamId, long GradingVersion)
 /// 重算范围必须由实际成绩版本与当前已发布版本共同决定，不能只看旧 outbox 状态。
 ///
 /// 只读，不返回规则内容、答卷或答案；规则源数据仍由 <see cref="IGradingInputs"/> 按考试读取，
-/// 因此对账本身不会改动任何答卷，也不会代替 A06 的当前版本校验。
+/// 因此对账本身不会改动任何答卷，也不会代替 版本服务 的当前版本校验。
 /// </summary>
 public interface IPublishedGradingDirectory
 {

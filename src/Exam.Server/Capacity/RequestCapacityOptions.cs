@@ -40,7 +40,7 @@ public static class RequestWorkloadClassifier
 {
     public static RequestWorkload Classify(HttpRequest request)
     {
-        var path = request.Path;
+        var path = new PathString(request.Path.Value?.TrimEnd('/'));
         if (path.StartsWithSegments("/hubs/exam-events"))
             return path.Value?.EndsWith("/negotiate", StringComparison.OrdinalIgnoreCase) == true
                 ? RequestWorkload.Api : RequestWorkload.Unrestricted;

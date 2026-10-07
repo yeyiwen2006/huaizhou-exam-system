@@ -16,7 +16,7 @@ public sealed record GroupNavSection(
     IReadOnlyList<QuestionNavBox> Boxes, bool ShowSubjectHeading = true);
 
 /// <summary>
-/// B03 左侧导航：按科目、题组显示题号方框，点击跳题。
+/// 左侧导航：按科目、题组显示题号方框，点击跳题。
 /// 全卷题号唯一、跨科不重置；科目按清单顺序，题组按 Order，题目按题号数值升序。
 /// </summary>
 public sealed partial class PaperNavigator

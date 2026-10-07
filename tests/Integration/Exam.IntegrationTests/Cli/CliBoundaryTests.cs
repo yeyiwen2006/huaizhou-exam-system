@@ -166,7 +166,8 @@ public sealed class CliBoundaryTests
         var calls=0;
         var builder=WebApplication.CreateBuilder(); builder.Logging.ClearProviders(); builder.WebHost.UseUrls("http://127.0.0.1:0");
         await using var app=builder.Build();
-        app.MapMethods("/slow",["GET","POST"],async context => { Interlocked.Increment(ref calls); await Task.Delay(3000,context.RequestAborted); });
+        app.MapGet("/slow", async context => await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted));
+        app.MapPost("/invalid-input", () => { Interlocked.Increment(ref calls); return Microsoft.AspNetCore.Http.Results.Ok(); });
         await app.StartAsync();
         var result=await RunAsync("api","GET","/slow","--server",app.Urls.Single(),"--timeout-seconds","1","--error-format","json");
         Assert.Equal(5,result.Exit); Assert.Contains("NETWORK_UNAVAILABLE",result.Error);
@@ -174,8 +175,8 @@ public sealed class CliBoundaryTests
         try
         {
             await File.WriteAllTextAsync(path,"{synthetic-sensitive-sentinel");
-            result=await RunAsync("api","POST","/slow","--server",app.Urls.Single(),"--input",path,"--error-format","json");
-            Assert.Equal(2,result.Exit); Assert.Equal(1,calls); Assert.DoesNotContain("synthetic-sensitive-sentinel",result.Error);
+            result=await RunAsync("api","POST","/invalid-input","--server",app.Urls.Single(),"--input",path,"--error-format","json");
+            Assert.Equal(2,result.Exit); Assert.Equal(0,Volatile.Read(ref calls)); Assert.DoesNotContain("synthetic-sensitive-sentinel",result.Error);
         }
         finally { File.Delete(path); }
     }

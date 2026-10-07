@@ -151,7 +151,8 @@ public sealed class ExamConfigurationViewModelTests
         using var handler = new ConflictHandler();
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
-        var viewModel = new ExamConfigurationViewModel(api);
+        var viewModel = CreateFixedScheduleDraft(api);
+        await viewModel.LoadScheduleAsync();
         var failure = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         viewModel.PropertyChanged += (_, args) =>
         {
@@ -175,6 +176,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
+        await viewModel.LoadScheduleAsync();
         var completed = WaitForStatus(viewModel, "此前填写的考试时间已保存");
 
         viewModel.SaveScheduleCommand.Execute(null);
@@ -187,7 +189,7 @@ public sealed class ExamConfigurationViewModelTests
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("尚未保存", status, StringComparison.Ordinal);
         Assert.Equal("2026-10-01 13:00 +08:00", viewModel.ScheduledEndText);
-        Assert.Equal(1, viewModel.LoadedScheduleVersion);
+        Assert.Equal(2, viewModel.LoadedScheduleVersion);
     }
 
     [Fact]
@@ -197,6 +199,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
+        await viewModel.LoadScheduleAsync();
         var completed = WaitForStatus(viewModel, "考试时间已保存");
 
         viewModel.SaveScheduleCommand.Execute(null);
@@ -206,7 +209,7 @@ public sealed class ExamConfigurationViewModelTests
             new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))));
 
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(1, viewModel.LoadedScheduleVersion);
+        Assert.Equal(2, viewModel.LoadedScheduleVersion);
     }
 
     [Fact]
@@ -216,6 +219,7 @@ public sealed class ExamConfigurationViewModelTests
         using var api = new AdminApiClient(handler);
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         var viewModel = CreateFixedScheduleDraft(api);
+        await viewModel.LoadScheduleAsync();
         var completed = WaitForStatus(viewModel, "保存失败");
 
         viewModel.SaveScheduleCommand.Execute(null);
@@ -227,18 +231,19 @@ public sealed class ExamConfigurationViewModelTests
         var status = await completed.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("无法确认保存结果", status, StringComparison.Ordinal);
         Assert.DoesNotContain("考试时间已保存", status, StringComparison.Ordinal);
-        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Equal(1, viewModel.LoadedScheduleVersion);
     }
 
     private static ExamConfigurationViewModel CreateFixedScheduleDraft(AdminApiClient api) => new(api)
     {
         ExamId = "synthetic-exam",
         ScheduledStartText = "2026-10-01 10:00 +08:00",
-        ScheduledEndText = "2026-10-01 12:00 +08:00"
+        ScheduledEndText = "2026-10-01 12:00 +08:00",
+        ScheduleChangeReason = "合成回执校验"
     };
 
     private static ExamVersionSnapshot Snapshot(ScheduleWindow schedule) => new(
-        "synthetic-exam", new VersionVector(1, 0, 0), schedule,
+        "synthetic-exam", new VersionVector(2, 0, 0), schedule,
         ExamLifecycle.Scheduled, null, null, null, null,
         new Dictionary<string, ParticipantVersionStatus>());
 
@@ -252,6 +257,14 @@ public sealed class ExamConfigurationViewModelTests
         };
         return completion.Task;
     }
+
+    private static HttpResponseMessage LoadedSchedule() => new(HttpStatusCode.OK)
+    {
+        Content = JsonContent.Create(new ApiEnvelope<ExamVersionSnapshot>("synthetic-server", "synthetic-node", 1, "test",
+            Snapshot(new(new(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8)),
+                         new(2026, 10, 1, 12, 0, 0, TimeSpan.FromHours(8)))) with { Versions = new(1, 0, 0) }, null),
+            options: JsonDefaults.Create())
+    };
 
     private sealed class DeferredSaveHandler : HttpMessageHandler
     {
@@ -272,6 +285,7 @@ public sealed class ExamConfigurationViewModelTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.Method == HttpMethod.Get) return Task.FromResult(LoadedSchedule());
             _started.TrySetResult();
             return _reply.Task;
         }
@@ -282,6 +296,7 @@ public sealed class ExamConfigurationViewModelTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.Method == HttpMethod.Get) return Task.FromResult(LoadedSchedule());
             var status = request.Method == HttpMethod.Get ? HttpStatusCode.NotFound : HttpStatusCode.Conflict;
             var code = request.Method == HttpMethod.Get ? "EXAM_NOT_FOUND" : "VERSION_CONFLICT";
             var response = new HttpResponseMessage(status)

@@ -56,7 +56,7 @@ public sealed class RegradePlannerTests
     [Fact]
     public void Plan_GradedVersionNewerThanTarget_IsBlockedWithoutDowngrade()
     {
-        // A06 版本只递增；旧内容也必须发布为新版本，已有更高版本成绩时禁止降版。
+        // 版本服务 版本只递增；旧内容也必须发布为新版本，已有更高版本成绩时禁止降版。
         var plan = RegradePlanner.Plan(
             targetVersion: 2,
             [new SubmissionGradingState("submission-newer", 4)]);

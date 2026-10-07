@@ -48,23 +48,20 @@ public sealed partial class ReviewRegressionTests
             return Error(HttpStatusCode.Conflict, "VERSION_CONFLICT");
         });
         using var api = Configured(handler);
-        var error = await Assert.ThrowsAsync<AdminApiException>(() => api.SaveScheduleAsync("exam-1", Schedule, 7));
+        var error = await Assert.ThrowsAsync<AdminApiException>(() => api.SaveScheduleAsync("exam-1", Schedule, 7, reason: "合成并发测试"));
         Assert.Equal("VERSION_CONFLICT", error.Code);
         Assert.Equal(1, calls);
     }
 
     [Fact]
-    public async Task NewSchedule_IsCreateOnlyAndNeverOverwritesExistingExam()
+    public async Task ScheduleWithoutLoadedVersionCannotCreateOrOverwriteAnExam()
     {
-        using var handler = new Handler(request =>
-        {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/api/v1/versioning/exams", request.RequestUri!.AbsolutePath);
-            return Error(HttpStatusCode.Conflict, "EXAM_ALREADY_EXISTS");
-        });
+        var calls = 0;
+        using var handler = new Handler(_ => { calls++; return Error(HttpStatusCode.Conflict, "EXAM_ALREADY_EXISTS"); });
         using var api = Configured(handler);
-        var error = await Assert.ThrowsAsync<AdminApiException>(() => api.SaveScheduleAsync("exam-1", Schedule));
-        Assert.Equal("EXAM_ALREADY_EXISTS", error.Code);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => api.SaveScheduleAsync("exam-1", Schedule));
+        Assert.Contains("先新建考试", error.Message);
+        Assert.Equal(0, calls);
     }
 
     [Fact]
@@ -80,7 +77,7 @@ public sealed partial class ReviewRegressionTests
             return Error(HttpStatusCode.Conflict, "VERSION_CONFLICT");
         });
         using var api = Configured(handler);
-        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1" };
+        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1", ScheduleChangeReason = "合成并发测试" };
         await viewModel.LoadScheduleAsync();
         viewModel.ScheduledEndText = "2026-10-01 12:00:00 +00:00";
         await Assert.ThrowsAsync<AdminApiException>(() => viewModel.SaveScheduleAsync());
@@ -103,7 +100,7 @@ public sealed partial class ReviewRegressionTests
             return Success(Snapshot(7 + expected.Count));
         });
         using var api = Configured(handler);
-        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1" };
+        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1", ScheduleChangeReason = "合成并发测试" };
         await viewModel.LoadScheduleAsync();
         await viewModel.SaveScheduleAsync();
         await viewModel.SaveScheduleAsync();
@@ -118,7 +115,7 @@ public sealed partial class ReviewRegressionTests
         var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var handler = new AsyncHandler(_ => release.Task);
         using var api = Configured(handler);
-        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1" };
+        var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1", ScheduleChangeReason = "合成并发测试" };
         var pending = viewModel.LoadScheduleAsync();
         viewModel.ScheduledEndText = "2026-10-01 12:00:00 +00:00";
         release.SetResult(Success(Snapshot(7)));

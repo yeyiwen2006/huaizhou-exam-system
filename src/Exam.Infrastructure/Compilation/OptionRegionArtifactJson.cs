@@ -6,8 +6,8 @@ using Exam.Contracts.Importing;
 namespace Exam.Infrastructure.Compilation;
 
 /// <summary>
-/// <c>option-regions.json</c> 的规范读写。字段名、出现顺序与坐标精度在此固定，B03 按此解析。
-/// 契约见 docs/d03-option-region-contract.md 第 4.4 节。
+/// <c>option-regions.json</c> 的规范读写。字段名、出现顺序与坐标精度在此固定，按此解析。
+/// 契约见 docs/option-region-contract.md 第 4.4 节。
 ///
 /// 写出前校验原始区域，不能通过舍入隐藏越界。合法坐标按最短往返十进制表示向零舍入到
 /// <see cref="CoordinateDecimals"/> 位；小于精度的正数保留原值，避免宽高变为零。

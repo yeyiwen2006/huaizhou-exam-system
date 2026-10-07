@@ -58,7 +58,7 @@ public sealed record ScoreExpressionCheck(
 /// <summary>
 /// 专用计分表达式解析器。文法见 docs/import-package-spec.md：
 /// 有限十进制常量、两个中文变量、加减乘除与括号，左结合、乘除优先、一元负号只作用于最小项。
-/// 只做解析与常量部分的精确判定，**不执行通用代码**；含变量的求值由 D04 在具体作答情形下完成。
+/// 只做解析与常量部分的精确判定，**不执行通用代码**；含变量的求值由 精确计分 在具体作答情形下完成。
 /// </summary>
 public static class ScoreExpressionParser
 {
@@ -95,7 +95,7 @@ public static class ScoreExpressionParser
             return Invalid(parser.Position, $"表达式在位置 {parser.Position} 处有多余内容：{text[parser.Position]}。");
         }
 
-        // 常量分母为零：只对能静态确定的除法报错，分母含变量时留给 D04 判定。
+        // 常量分母为零：只对能静态确定的除法报错，分母含变量时留给 精确计分 判定。
         var divisor = FindConstantZeroDivisor(root);
         if (divisor is not null)
         {
@@ -161,7 +161,7 @@ public static class ScoreExpressionParser
         }
     }
 
-    /// <summary>把两个中文变量替换为给定取值后精确求值。供 D04 在具体作答情形下复用。</summary>
+    /// <summary>把两个中文变量替换为给定取值后精确求值。供 精确计分 在具体作答情形下复用。</summary>
     public static ExactRational Evaluate(ScoreNode node, BigInteger correctOptionCount, BigInteger selectedCorrectCount) =>
         node switch
         {

@@ -53,7 +53,7 @@ public sealed partial class PostgresSubmissionStoreTests
         builder.Services.AddSingleton<IAuthoritativeCollectionCompletionStore>(provider => provider.GetRequiredService<PostgresCollectionCompletionStore>());
         builder.Services.AddSingleton<SubmissionService>();
         builder.Services.AddSingleton<CollectionCompletionService>();
-        // B06 失焦端点属于同一分组：分组在首个请求时整体构建，服务必须在 DI 中可用。
+        // 失焦记录 失焦端点属于同一分组：分组在首个请求时整体构建，服务必须在 DI 中可用。
         builder.Services.AddSingleton<IFocusEventStore, InMemoryFocusEventStore>();
         builder.Services.AddSingleton<FocusEventService>();
         builder.Services.AddPostgresOperatorAccounts();

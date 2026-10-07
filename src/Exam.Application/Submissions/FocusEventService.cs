@@ -4,7 +4,7 @@ using Exam.Domain.Submissions;
 namespace Exam.Application.Submissions;
 
 /// <summary>
-/// B06 失焦事件上报边界：先验证请求与授权元组，再交由事务存储按 (ParticipationId, EventId) 幂等落库。
+/// 失焦事件上报边界：先验证请求与授权元组，再交由事务存储按 (ParticipationId, EventId) 幂等落库。
 /// 校验规则与进度同步共用同一授权语义；已交卷后的补报不拒绝。
 /// </summary>
 public sealed class FocusEventService(
@@ -48,7 +48,7 @@ public sealed class FocusEventService(
         {
             return SubmissionOperationResult<FocusEventsReceipt>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"失焦事件未能持久保存：{exception.Message}");
+                "失焦事件未能持久保存，请保留原记录并稍后重试。");
         }
     }
 
@@ -80,7 +80,7 @@ public sealed class FocusEventService(
         {
             return SubmissionOperationResult<IReadOnlyList<FocusLossEventSummary>>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"失焦监测查询失败：{exception.Message}");
+                "失焦监测查询失败，请保留原记录并稍后重试。");
         }
     }
 
@@ -174,10 +174,13 @@ public sealed class InMemoryFocusEventStore : IFocusEventStore
                     FocusEventPersistenceStatus.AuthorizationRevoked, null));
             }
 
-            // 幂等去重：已存在的事件不重写原记录；全部请求标识都计入受理回执。
+            // 起始记录可补齐一次时长；已完成事件与乱序起始重试不会覆盖最终时长。
             foreach (var item in request.Events)
             {
-                _events.TryAdd((request.ParticipationId, item.EventId), item);
+                var key = (request.ParticipationId, item.EventId);
+                if (!_events.TryGetValue(key, out var previous) ||
+                    (previous.DurationMilliseconds == 0 && previous.LostAt == item.LostAt && item.DurationMilliseconds > 0))
+                    _events[key] = item;
             }
 
             var receipt = new FocusEventsReceipt(

@@ -55,7 +55,6 @@ var connectionOptions = new NpgsqlConnectionStringBuilder(source)
 };
 await using var dataSource = new PostgresConnectionOptions(connectionOptions.ConnectionString).CreateDataSource();
 await new PostgresMigrationRunner(dataSource).MigrateAsync();
-var examId = $"synthetic-{Guid.NewGuid():N}";
 var serverId = "local-capacity-server-" + database[10..];
 var nodeId = "local-capacity-node-" + database[10..];
 // 合成考务账号：隔离夹具数据库中的第一个账号即管理员；口令随机生成且不写出，只保存登录会话令牌。
@@ -65,6 +64,17 @@ await operatorAccounts.RegisterAsync(new Exam.Contracts.Operators.RegisterOperat
     "capacity-test-operator", "合成容量测试考务", operatorPassword));
 var operatorToken = (await operatorAccounts.LoginAsync(new Exam.Contracts.Operators.LoginOperatorRequest(
     "capacity-test-operator", operatorPassword))).Token;
+var now = DateTimeOffset.UtcNow;
+var versioning = new PostgresExamVersioningService(dataSource);
+// A real catalog entry is required by the business CLI; a bare version stream is not an exam listing.
+var catalog = new Exam.Infrastructure.Postgres.Exams.PostgresExamCatalog(
+    dataSource, versioning, new FixtureTimeProvider(now.AddMinutes(-2)));
+var detail = await catalog.CreateAsync(new(Guid.NewGuid().ToString("N"), "合成负载考试",
+    new(now.AddMinutes(-1), now.AddHours(6)),
+    new([new("subject", "合成科目", "120",
+        [new("group", "合成题组", "single", 1, 120, "120", false, new("1", "0", "0"), null)])])),
+    "capacity-test-operator");
+var examId = detail.Summary.ExamId;
 var resourceId = $"synthetic-package-{Guid.NewGuid():N}";
 using var key = RSA.Create(2048);
 var certificateRequest = new CertificateRequest("CN=local-capacity-fixture", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -84,9 +94,6 @@ var protector = new Pbkdf2DeviceCredentialProtector();
 var store = new PostgresSubmissionStore(dataSource);
 var sessions = new List<object>();
 await using var connection = await dataSource.OpenConnectionAsync();
-var now = DateTimeOffset.UtcNow;
-var versioning = new PostgresExamVersioningService(dataSource);
-Require(versioning.CreateExam(new(examId, new(now.AddMinutes(-1), now.AddHours(6)), now.AddMinutes(-2), "synthetic-create")));
 Require(versioning.PublishPaper(new(examId, 0, resourceId, paper.Structure, [], new(true, true, true, true),
     "G", "预先构造的合成显示夹具，未执行真实编译与预览验收", now, "synthetic-paper")));
 Require(versioning.PublishGradingRules(new(examId, 0, "synthetic-rules", new(true, true, true), "G", "合成计分夹具",
@@ -170,4 +177,9 @@ catch
 static void Require<T>(VersioningResult<T> result)
 {
     if (!result.Succeeded) throw new InvalidOperationException("Synthetic fixture publication failed: " + result.ErrorCode + ": " + result.Error);
+}
+
+internal sealed class FixtureTimeProvider(DateTimeOffset now) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => now;
 }

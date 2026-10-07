@@ -312,6 +312,8 @@ public sealed class SubmissionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(SubmissionErrorCode.PersistenceFailed, result.ErrorCode);
         Assert.Null(result.Value);
+        Assert.DoesNotContain("disk full", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("synthetic-private-path", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -489,10 +491,10 @@ public sealed class SubmissionServiceTests
             ValueTask.CompletedTask;
 
         public ValueTask<ProgressPersistenceResult> SaveProgressAsync(SyncProgressRequest request, DateTimeOffset persistedAt, CancellationToken cancellationToken = default) =>
-            ValueTask.FromException<ProgressPersistenceResult>(new IOException("disk full"));
+            ValueTask.FromException<ProgressPersistenceResult>(new IOException("disk full: synthetic-private-path; synthetic-credential"));
 
         public ValueTask<SubmissionPersistenceResult> SaveSubmissionAsync(SubmitFinalAnswersRequest request, DateTimeOffset persistedAt, string receiptId, CancellationToken cancellationToken = default) =>
-            ValueTask.FromException<SubmissionPersistenceResult>(new IOException("disk full"));
+            ValueTask.FromException<SubmissionPersistenceResult>(new IOException("disk full: synthetic-private-path; synthetic-credential"));
 
         public ValueTask<PersistedProgress?> FindProgressAsync(string participationId, CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<PersistedProgress?>(null);

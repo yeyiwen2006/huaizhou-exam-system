@@ -34,7 +34,8 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             return;
         }
 
-        var route = remainder.Value ?? string.Empty;
+        // Match ASP.NET routing semantics without changing case-sensitive identifiers used by handlers.
+        var route = (remainder.Value ?? string.Empty).TrimEnd('/').ToLowerInvariant();
         var node = await activeNode.CheckAsync(context.RequestAborted);
         if (!node.Allowed)
         {

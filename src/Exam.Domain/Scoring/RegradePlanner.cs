@@ -4,7 +4,7 @@ namespace Exam.Domain.Scoring;
 
 /// <summary>
 /// 只读的重算规划：全部最终答卷必须对齐到同一个已发布目标版本，不读取或改写原始答案。
-/// A06 版本只递增；恢复旧规则内容必须发布新版本，不能把更高版本成绩降版覆盖。
+/// 版本服务 版本只递增；恢复旧规则内容必须发布新版本，不能把更高版本成绩降版覆盖。
 /// </summary>
 public static class RegradePlanner
 {

@@ -207,6 +207,10 @@
                                     <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" IsEnabled="{Binding Exam.CanEditTime}" Text="{Binding Exam.ScheduledEndText, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                             </Grid>
+                            <TextBlock Text="修改时间的原因（已有考试修改时间时必填）" Style="{StaticResource FormLabel}"/>
+                            <TextBox Style="{StaticResource FormTextBox}" MaxLength="1000"
+                                     IsEnabled="{Binding Exam.CanEditTime}"
+                                     Text="{Binding Exam.ScheduleChangeReason, UpdateSourceTrigger=PropertyChanged}"/>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,14" />
                             <WrapPanel>
                                 <StackPanel Margin="0,0,48,8">

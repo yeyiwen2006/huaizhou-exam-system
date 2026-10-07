@@ -13,7 +13,7 @@ public enum SubmissionSyncPhase
 public sealed record SubmissionSyncStatusChangedEventArgs(SubmissionSyncPhase Phase);
 
 /// <summary>
-/// 上传 B04 已落盘的完整快照，重试及进程恢复始终使用其原请求标识。
+/// 上传已在本地落盘的完整快照，重试及进程恢复始终使用其原请求标识。
 /// 网络写入串行；Confirmed/Blocked 为终态。只有匹配且已在本机保留的服务器回执才能确认成功。
 /// </summary>
 public sealed class SubmissionSyncService(
@@ -125,7 +125,7 @@ public sealed class SubmissionSyncService(
         try
         {
             ct.ThrowIfCancellationRequested();
-            // B06 补报：失焦事件与复核确认先于进度/交卷处理；已确认回执后仍继续清空发件箱。
+            // 补报：失焦事件与复核确认先于进度/交卷处理；已确认回执后仍继续清空发件箱。
             var uploadsPending = await FlushUploadsAsync(ct).ConfigureAwait(false);
             if (_phase is SubmissionSyncPhase.Confirmed or SubmissionSyncPhase.Blocked)
                 return uploadsPending ? RetryInterval : Timeout.InfiniteTimeSpan;
@@ -157,7 +157,7 @@ public sealed class SubmissionSyncService(
     }
 
     /// <summary>
-    /// B06 发件箱补报：失焦事件批量上报（按事件幂等），复核确认逐版本上报（按版本幂等）。
+    /// 发件箱补报：失焦事件批量上报（按事件幂等），复核确认逐版本上报（按版本幂等）。
     /// 明确的不可重试拒绝视为服务端终态：删除记录不再重发；临时失败保留待下轮。
     /// 返回是否仍有未确认记录。
     /// </summary>
@@ -180,7 +180,9 @@ public sealed class SubmissionSyncService(
             {
                 var payload = System.Text.Json.JsonSerializer.Deserialize<StudentExamRuntime.PendingFocusEventPayload>(
                     item.Payload, UploadJson);
-                if (payload is null || payload.EventId != item.ItemId || payload.DurationMilliseconds < 0 ||
+                if (payload is null || string.IsNullOrWhiteSpace(payload.EventId) ||
+                    (payload.EventId != item.ItemId && item.ItemId != $"{payload.EventId}:{payload.DurationMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}") ||
+                    payload.DurationMilliseconds < 0 ||
                     payload.RegainedAt < payload.LostAt)
                     throw new System.Text.Json.JsonException("载荷不完整。");
                 focusPayloads.Add(payload);
@@ -198,11 +200,19 @@ public sealed class SubmissionSyncService(
         {
             var request = new ReportFocusEventsRequest(RequestIds.New(), examId, candidateId,
                 current.ParticipationId, current.EntryVersion, device.DeviceId, current.AuthorizationVersion,
-                paperVersion, focusPayloads.Select(payload => new ReportedFocusLossEvent(
+                paperVersion, focusPayloads.GroupBy(payload => payload.EventId, StringComparer.Ordinal)
+                    .Select(group => group.MaxBy(payload => payload.DurationMilliseconds)!)
+                    .Select(payload => new ReportedFocusLossEvent(
                     payload.EventId, payload.LostAt, payload.RegainedAt, payload.DurationMilliseconds)).ToArray());
             var response = await api.ReportFocusEventsAsync(request, ct).ConfigureAwait(false);
-            if (response is { IsSuccess: true } ||
-                IsDefinitiveRejection(response?.Error))
+            var receipt = response?.Result;
+            var accepted = response is { IsSuccess: true } && receipt is not null &&
+                receipt.ExamId == examId && receipt.CandidateId == candidateId &&
+                receipt.ParticipationId == current.ParticipationId && receipt.PaperVersion == paperVersion &&
+                receipt.AcceptedEventIds is not null &&
+                new HashSet<string>(receipt.AcceptedEventIds, StringComparer.Ordinal)
+                    .SetEquals(request.Events.Select(item => item.EventId));
+            if (accepted || IsDefinitiveRejection(response?.Error))
             {
                 foreach (var id in focusIds)
                     await DeleteUploadQuietlyAsync(id, ct).ConfigureAwait(false);

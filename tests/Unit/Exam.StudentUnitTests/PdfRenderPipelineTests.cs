@@ -5,7 +5,7 @@ using Windows.Storage.Streams;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B03 显示管线底层：Windows.Data.Pdf 能在学生端运行时加载并渲染真实 PDF。
+/// 学生导航 显示管线底层：Windows.Data.Pdf 能在学生端运行时加载并渲染真实 PDF。
 /// 现有合成包 fixtures 只带 PDF 头不是有效文档，无法覆盖该链路；
 /// 此处动态构造带精确 xref 的最小多页 PDF 验证 WinRT 管线本身可用。
 /// 页面渲染坐标、缩放与点击复测按契约由 D/B 联合执行，不在本测试范围。

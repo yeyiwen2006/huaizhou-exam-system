@@ -108,7 +108,7 @@ public sealed record ReportedFocusLossEvent(
     DateTimeOffset RegainedAt,
     long DurationMilliseconds);
 
-/// <summary>B06 失焦补报：本地留痕事件的批量上报；按 (ParticipationId, EventId) 幂等去重，重试可用新 RequestId。</summary>
+/// <summary>失焦补报：本地留痕事件的批量上报；按 (ParticipationId, EventId) 幂等去重，重试可用新 RequestId。</summary>
 public sealed record ReportFocusEventsRequest(
     string RequestId,
     string ExamId,

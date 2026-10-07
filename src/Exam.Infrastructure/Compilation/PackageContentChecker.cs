@@ -10,7 +10,7 @@ namespace Exam.Infrastructure.Compilation;
 /// 宏包与字体是否可用仍以编译日志为准（见 <see cref="XeLaTeXCompiler"/>）。
 ///
 /// 所有路径都经 PathBoundary 校验：越出包根、或经过**符号链接/目录联接（重解析点）** 的路径一律拒绝 ——
-/// PR #44 的审查记录把重解析点边界明确交给 D02。
+/// 重解析点和依赖访问必须同时进行文件系统边界检查。
 /// 本类型只读，不修改包内容。
 /// </summary>
 public sealed class PackageContentChecker

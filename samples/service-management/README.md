@@ -1,8 +1,8 @@
-# F01/F04 本机管理合成响应与部署模板
+# 本机管理/服务管理 本机管理合成响应与部署模板
 
 这些 JSON 均人工构造，仅用于管理契约说明，不包含真实试题、账号、配置或恢复数据。
 
-F02 主备管理另见 [正式契约与部署](../../docs/f02-high-availability-management.md)。
+主备管理 主备管理另见 [正式契约与部署](../../docs/high-availability-management.md)。
 `appsettings.high-availability.example.json` 为管理和业务宿主共用的配置补充；所有 `REPLACE_WITH_...` 均须由部署填入受保护配置，不能直接投入使用。节点间 `Confirmation:PeerToken` 由受保护部署另行提供，样例不含凭据；两节点数据库端点必须不同，对端确认根必须提供其独立且最新的持久记录，不能复制一个旧快照冒充双方确认。实际 PostgreSQL 独立配置须保留对端所需的网络监听与认证规则。
 
 `management ha-status` 读取主备状态；`takeover`、`emergency`、`rebuild`、`reprotect` 均用 `--input FILE`。
@@ -99,7 +99,7 @@ F02 主备管理另见 [正式契约与部署](../../docs/f02-high-availability-
 
 只向停止的独立工作槽补充选定WAL，不改备份或归档原件；同名不同内容拒绝覆盖。复制前持久保存不可变 `wal-recovery-plan.json`，中断续行必须保持同一目标及文件摘要；完整后创建空 `recovery.signal` 及受保护 `wal-recovery.json`，记录原requestId/操作者/备份/工作槽、固定部署边界、备份清单摘要及各段摘要。边界改变、配置移除、信号/最终记录缺失或落盘中断均保留副本并拒绝猜测；不能手改记录解除保护。运行中的原请求只核对绑定，不重复制或启动。PostgreSQL完成恢复后会移除其实际数据目录中的信号；若实例已停止且阶段无法核实，本模块不自动重建信号重放，应保留副本并按恢复流程核对。
 
-归档模式下SCM BinaryPath须使用 `BuildServiceCommand(..., archiveRecoveryOptions)` 的完整返回值，原五参数形式仅用于基础备份模式。命令固定目标LSN/时间线，禁用继承的复制连接、恢复/清理命令；缺段时只执行固定 `exit 1` 失败命令，不能从其他位置下载或执行任意恢复脚本。已选段在 `pg_wal` 中完成重放，到指定位置结束归档恢复并产生新的PostgreSQL时间线；这不修改考试系统的活动节点、保护模式或代次，也不执行F02备库接管。配置及实际行为见 [PostgreSQL 恢复目标](https://www.postgresql.org/docs/18/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)。仍须实际目标/领域检查和原库完整比较，原库不可读或晚于该位置的新状态未恢复时不能开放业务；恢复至固定位置不等于故障前数据完整。
+归档模式下SCM BinaryPath须使用 `BuildServiceCommand(..., archiveRecoveryOptions)` 的完整返回值，原五参数形式仅用于基础备份模式。命令固定目标LSN/时间线，禁用继承的复制连接、恢复/清理命令；缺段时只执行固定 `exit 1` 失败命令，不能从其他位置下载或执行任意恢复脚本。已选段在 `pg_wal` 中完成重放，到指定位置结束归档恢复并产生新的PostgreSQL时间线；这不修改考试系统的活动节点、保护模式或代次，也不执行主备管理备库接管。配置及实际行为见 [PostgreSQL 恢复目标](https://www.postgresql.org/docs/18/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)。仍须实际目标/领域检查和原库完整比较，原库不可读或晚于该位置的新状态未恢复时不能开放业务；恢复至固定位置不等于故障前数据完整。
 
 归档模式的恢复核对还从实际隔离数据库读取 `pg_last_wal_replay_lsn()`、恢复目标与固定 `restore_command`，确认已结束恢复且重放位置达到绑定目标；操作记录中断后重新查询业务就绪时也重复这项核对。领域恢复自检与全库状态比对都在只读事务内设置 `row_security=off`：若行级策略会过滤诊断结果则拒绝开放，不能用看似为空的结果通过检查。
 

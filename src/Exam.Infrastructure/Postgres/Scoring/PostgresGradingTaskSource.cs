@@ -5,7 +5,7 @@ using NpgsqlTypes;
 
 namespace Exam.Infrastructure.Postgres.Scoring;
 
-/// <summary>A05 outbox 的租约消费者；领取代次用于拒绝已经过期并被重领的消费者回写。</summary>
+/// <summary>收卷 outbox 的租约消费者；领取代次用于拒绝已经过期并被重领的消费者回写。</summary>
 public sealed class PostgresGradingTaskSource(NpgsqlDataSource dataSource,
     PostgresActiveNodeWriteGuard? writeGuard = null) : IGradingTaskSource
 {

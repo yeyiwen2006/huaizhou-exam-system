@@ -11,7 +11,7 @@ namespace Exam.Contracts.Exams;
 public sealed record ExamSettings(
     IReadOnlyList<ExamSubjectSettings> Subjects);
 
-/// <summary>科目设置；分组规则字段与导入清单（D01 scoring-rules）一致。</summary>
+/// <summary>科目设置；分组规则字段与导入清单（清单校验 scoring-rules）一致。</summary>
 public sealed record ExamSubjectSettings(
     string SubjectId,
     string Name,
@@ -53,7 +53,7 @@ public sealed record CreateExamRequest(
     ScheduleWindow Schedule,
     ExamSettings Settings);
 
-/// <summary>修改名称与结构；只允许在考试开始前进行。起止时间仍经 A06 计划接口修改。</summary>
+/// <summary>修改名称与结构；只允许在考试开始前进行。起止时间仍经 时间修改接口修改。</summary>
 public sealed record UpdateExamSettingsRequest(
     string RequestId,
     long ExpectedVersion,

@@ -16,30 +16,11 @@ public sealed record EvaluateCollectionApiRequest(
     long RosterVersion,
     IReadOnlyCollection<string> ActualParticipationIds);
 
-public sealed record CreateVersionedExamApiRequest(
-    string RequestId,
-    string ExamId,
-    ScheduleWindow Schedule);
-
 public sealed record UpdateScheduleApiRequest(
     string RequestId,
     long ExpectedVersion,
-    ScheduleWindow Schedule);
-
-public sealed record ExecuteScheduleTriggerApiRequest(
-    string RequestId,
-    long ScheduleVersion,
-    ScheduleTriggerKind Trigger);
-
-public sealed record PublishPaperApiRequest(
-    string RequestId,
-    long ExpectedVersion,
-    string ArtifactId,
-    PaperStructure Structure,
-    IReadOnlyList<string> ChangedQuestionIds,
-    PaperPublicationValidation Validation,
-    string Operator,
-    string Reason);
+    ScheduleWindow Schedule,
+    string? Reason = null);
 
 public sealed record PublishGradingRulesApiRequest(
     string RequestId,
@@ -50,15 +31,6 @@ public sealed record PublishGradingRulesApiRequest(
     string Reason,
     string? ManifestJson = null,
     string? AnswerKeyJson = null);
-
-public sealed record RegisterVersionedParticipantApiRequest(
-    string RequestId,
-    string ParticipantId,
-    ParticipationBusinessState InitialState);
-
-public sealed record ChangeParticipantStateApiRequest(
-    string RequestId,
-    ParticipationBusinessState State);
 
 public sealed record ReportPaperTransferApiRequest(
     string RequestId,

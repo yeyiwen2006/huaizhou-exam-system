@@ -9,8 +9,8 @@ namespace Exam.Student;
 
 /// <summary>
 /// 学生端主壳：承载页面区域与导航。所有页面切换经由 Navigation，
-/// 保证编号姓名显示、账号数据隔离和后续全屏/重连（B06/B08）有统一挂载点。
-/// B06：激活态霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
+/// 统一处理编号姓名显示、账号数据隔离、全屏和断线重连。
+/// 激活态霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
 /// 取消激活后恢复常规窗口。Ctrl+Alt+Del 用户态不可拦截，属文档注明边界。
 /// </summary>
 public partial class MainWindow : Window
@@ -131,7 +131,7 @@ public partial class MainWindow : Window
                 window.WindowStyle = App.Services.Session.IsActivated ? WindowStyle.None : WindowStyle.SingleBorderWindow;
                 window.ResizeMode = App.Services.Session.IsActivated ? ResizeMode.NoResize : ResizeMode.CanResize;
                 window.WindowState = App.Services.Session.IsActivated ? WindowState.Maximized : WindowState.Normal;
-                // B06 霸屏随激活状态启停（含取消激活后的恢复）。
+                // 霸屏随激活状态启停（含取消激活后的恢复）。
                 if (window is MainWindow main)
                 {
                     main.ApplyKioskState();

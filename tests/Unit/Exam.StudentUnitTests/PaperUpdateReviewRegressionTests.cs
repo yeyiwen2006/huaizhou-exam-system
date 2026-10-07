@@ -208,7 +208,7 @@ public sealed partial class PaperUpdateTests
             using (var store = new SqliteLocalStateStore(database))
                 Assert.Empty(await store.LoadPaperUpdateReviewsAsync(Key));
             using var identity = JsonDocument.Parse(await File.ReadAllTextAsync(database + ".identity"));
-            // v2 结构的旧库打开时连升到当前 v3（含 B06 发件箱表），侧文件修复为当前版本。
+            // v2 结构的旧库打开时连升到当前 v3（含 失焦记录 发件箱表），侧文件修复为当前版本。
             Assert.Equal(3, identity.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.Equal(3L, ReadReviewScalar(database, "PRAGMA user_version;"));
             Assert.Equal(1L, ReadReviewScalar(database, "SELECT count(*) FROM sqlite_master WHERE name='upload_outbox';"));

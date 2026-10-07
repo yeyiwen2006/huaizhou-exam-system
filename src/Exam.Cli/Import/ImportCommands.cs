@@ -7,7 +7,7 @@ using Exam.Infrastructure.ServiceManagement;
 internal static partial class ExamCli
 {
     /// <summary>
-    /// 在导入包上跑一遍 D 组流水线并报告结果：D01 清单与答案校验 → D02 逐题编译 → D03 选项坐标抽取。
+    /// 在导入包上运行导入流水线：清单与答案校验、逐题编译、选项坐标抽取。
     ///
     /// 这是**本地**命令（不入库、不连服务器）：在材料所在机器上核对「这套包能不能导入、能不能编译、
     /// 每个选项能不能定位」。抽取依赖包内已带隐藏外观链接标记；未适配的材料会在这里报出抽取失败，
@@ -95,7 +95,7 @@ internal static partial class ExamCli
                 if (keepOutput) continue;
 
                 var extraction = extractor.Extract(new OptionRegionRequest(manifest.ExamId, 1,
-                    // D01 校验已保证清单的选项非空且唯一。
+                    // 校验已保证清单的选项非空且唯一。
                     [new OptionRegionSourceQuestion(question.QuestionId, result.OutputPdfPath!, question.Options!)]));
                 if (extraction.Succeeded) continue;
 

@@ -42,7 +42,7 @@ public sealed record ManifestGroup(
     ManifestGroupScoring? Scoring);
 
 /// <summary>
-/// 逐题显示元数据。PageCount 是作者期望值，D02 编译后核对并写回；D03 的选项定位区域不写入清单。
+/// 逐题显示元数据。PageCount 是作者期望值，依赖与编译检查 编译后核对并写回；选项区域与题包 的选项定位区域不写入清单。
 /// </summary>
 public sealed record ManifestDisplayMetadata(
     string? AnchorScheme,
@@ -72,7 +72,7 @@ public sealed record ExamManifest(
 /// <summary>独立答案的一条，对应 schemas/answer-key.schema.json。仅在服务器使用。</summary>
 public sealed record AnswerKeyEntry(string QuestionId, int QuestionNo, IReadOnlyList<string>? CorrectOptionIds);
 
-/// <summary>独立答案文件。规则版本字段由 D05 追加，见 docs/import-package-spec.md。</summary>
+/// <summary>独立答案文件。与规则发布信息分开保存，见 docs/import-package-spec.md。</summary>
 public sealed record AnswerKeyFile(int SchemaVersion, string ExamId, IReadOnlyList<AnswerKeyEntry> Answers);
 
 public enum ImportIssueSeverity
@@ -93,7 +93,7 @@ public sealed record ImportIssue(ImportIssueSeverity Severity, string Rule, stri
 
 /// <summary>
 /// 静态校验结果。RequiresAnswerKeyArithmetic 表示逐题满分核对尚未全部完成（如答案未齐或无效）。
-/// 调用方必须先检查 IsValid；该标志为 false 也不等于已通过 D04 的发布前全部作答情形校验。
+/// 调用方必须先检查 IsValid；该标志为 false 也不等于已通过 精确计分 的发布前全部作答情形校验。
 /// </summary>
 public sealed record ImportValidationReport(IReadOnlyList<ImportIssue> Issues)
 {

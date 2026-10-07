@@ -33,6 +33,7 @@ public sealed class PostgresMigrationRunner(
                 await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
                 try
                 {
+                    await EnsureMaintenanceWindowAsync(connection, transaction, cancellationToken);
                     await using (var migrationCommand = new NpgsqlCommand(sql, connection, transaction))
                     {
                         await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
@@ -85,6 +86,30 @@ public sealed class PostgresMigrationRunner(
             ?? throw new InvalidOperationException($"找不到数据库迁移资源：{resourceName}");
         using var reader = new StreamReader(stream);
         return await reader.ReadToEndAsync(cancellationToken);
+    }
+
+    private static async Task EnsureMaintenanceWindowAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        // Fixed identifiers only. Locks last through this migration, so the state check cannot
+        // race a new start, entry confirmation or answer-state write. A no-op restart does not lock.
+        var checks = new (string Table, string Predicate)[]
+        {
+            ("exam.version_state", "lifecycle = 'Running' OR (lifecycle = 'Scheduled' AND starts_at <= clock_timestamp() AND ends_at > clock_timestamp())"),
+            ("exam.exam_entry_access", "lifecycle = 'running' OR (lifecycle = 'scheduled' AND scheduled_start <= clock_timestamp() AND scheduled_end > clock_timestamp())"),
+            ("exam.participations", "business_state IN ('waiting', 'answering')")
+        };
+        foreach (var (table, predicate) in checks)
+        {
+            await using var exists = new NpgsqlCommand("SELECT to_regclass($1) IS NOT NULL;", connection, transaction);
+            exists.Parameters.AddWithValue(table);
+            if (await exists.ExecuteScalarAsync(cancellationToken) is not true) continue;
+            await using var tableLock = new NpgsqlCommand($"LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE;", connection, transaction);
+            await tableLock.ExecuteNonQueryAsync(cancellationToken);
+            await using var active = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {table} WHERE {predicate});", connection, transaction);
+            if (await active.ExecuteScalarAsync(cancellationToken) is true)
+                throw new InvalidOperationException("考试正在进行或仍有等待、作答中的参试记录，禁止迁移数据库。请在考试及收卷完成后的维护窗口升级。");
+        }
     }
 
     private static async Task EnsureMigrationTableAsync(

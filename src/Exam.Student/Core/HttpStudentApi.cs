@@ -30,7 +30,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     public event EventHandler? TrustedEndpointChanged;
 
     /// <summary>
-    /// B07 部署指纹校验失败（或证书链不受信任）时抛出；继承 HttpRequestException，
+    /// 部署指纹校验失败（或证书链不受信任）时抛出；继承 HttpRequestException，
     /// 沿用各页面既有的网络异常处理路径，激活页对其给出更明确的提示。
     /// </summary>
     public sealed class UntrustedServerException : HttpRequestException

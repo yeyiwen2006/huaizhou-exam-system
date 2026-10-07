@@ -25,7 +25,7 @@ public sealed record StudentPaperManifest(int SchemaVersion, string ExamId, stri
     public PaperStructure Structure => new(Array.AsReadOnly(Questions.Select(q => q.Structure).ToArray()));
 }
 
-/// <summary>在内存中读取 D03 的 ZIP；绝不将包内路径解压到文件系统。</summary>
+/// <summary>在内存中读取 选项区域与题包 的 ZIP；绝不将包内路径解压到文件系统。</summary>
 public static class StudentPaperPackage
 {
     public const int MaxPackageBytes = StudentPackageLayout.MaxContentBytes;

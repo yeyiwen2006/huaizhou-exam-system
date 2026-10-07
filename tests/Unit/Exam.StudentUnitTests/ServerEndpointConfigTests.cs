@@ -4,7 +4,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B07 部署配置（server.json）解析：文件缺失返回 (null, null) 由界面提示缺配置；
+/// 部署信任 部署配置（server.json）解析：文件缺失返回 (null, null) 由界面提示缺配置；
 /// 文件存在时字段级严格校验，错误信息面向监考人员可直接行动。
 /// </summary>
 public sealed class ServerEndpointConfigTests : IDisposable

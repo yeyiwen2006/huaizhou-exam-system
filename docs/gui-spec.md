@@ -1,6 +1,6 @@
-# 共享 GUI 主题与组件规范（B01）
+# 共享 GUI 主题与组件规范
 
-本文档供交叉评审（C）与全队接入使用。实现位于 `src/Exam.Desktop.Shared`，学生端与考务端全部页面（含考务端服务管理页）引用 `Themes/Theme.xaml` 一套资源，**禁止在业务页面硬编码颜色、字号与重复样式**；主题变更只在共享项目维护。
+本规范用于两端界面一致性检查与维护。实现位于 `src/Exam.Desktop.Shared`，学生端与考务端全部页面（含考务端服务管理页）引用 `Themes/Theme.xaml` 一套资源，**禁止在业务页面硬编码颜色、字号与重复样式**；主题变更只在共享项目维护。
 
 ## 1. 使用方式
 
@@ -73,13 +73,11 @@
 | `QuestionBox` | 题号方框：已答绿色填充 / 标记右上角红点 / 当前题主色描边，点击跳题 |
 | 布局样式（`Components.xaml`） | `PageTitle`/`PageSubtitle` 页头，`FieldLabel` 表单标签，`Card`/`Card.Flat` 卡片，`IconTile`/`IconTile.Glyph` 图标块，`Hint` 提示条，`TopBar` 顶部条，`BrandBand` 品牌带，`BoolToVis` 布尔可见性转换器 |
 | 图标（`Icons.xaml`） | `Icon.*` 24×24 线性几何，配合 `Icon.Stroke` 或 `IconTile.Glyph`；图标只作识别辅助，含义始终由相邻文字表达 |
-| `ComponentShowcasePage` | **组件样例页（M1 验收用）**，覆盖上述全部组件与语义色，两端一致性核对入口 |
 
 ## 7. 变更流程
 
-主题与组件变更走任务分支 + PR（`codex/b01-gui-…`），B 牵头修改共享项目、C 评审，两端页面同步验证 100% / 125% / 150% 缩放（对应验收用例 S17）。任何页面新增的通用控件先下沉到 `Exam.Desktop.Shared`，再由页面引用，不复制样式。
+主题与组件修改在学生端、考务端和本机服务管理页面同步验证100%、125%、150%缩放，对应验收场景S17。任何页面新增的通用控件先下沉到 `Exam.Desktop.Shared`，再由页面引用，不复制样式。
 
-实现状态与验证记录见 [B 组实施状态](b01-implementation-status.md)。
 
 ## 8. 界面截图与资源检查
 

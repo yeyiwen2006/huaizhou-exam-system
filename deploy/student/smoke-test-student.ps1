@@ -3,7 +3,7 @@ param(
     [int]$StartupTimeoutSeconds = 120
 )
 
-# B07 student client smoke test: launches the published Exam.Student.exe exactly the way
+# Student client smoke test: launches the published Exam.Student.exe exactly the way
 # it will run on a fresh exam machine (standard account, isolated per-user data directory,
 # no .NET SDK/runtime installed on PATH) and verifies the startup, DPI manifest and
 # deployment-config scenarios:

@@ -61,7 +61,7 @@ public sealed class ActiveNodeGuard(
         }
         catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
         {
-            return new(false, ErrorCodes.ServiceRecovering, $"PostgreSQL 不可用：{exception.Message}");
+            return new(false, ErrorCodes.ServiceRecovering, "服务器存储暂不可用，请稍后重试并联系考务人员。");
         }
     }
 }

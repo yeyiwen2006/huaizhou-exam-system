@@ -244,7 +244,7 @@ public sealed class ManagementRuntime(
             if (checks.Any(check => check.Name == "recovery-confirmed-state" && !check.Passed && check.BlocksWrites))
                 staged = staged with { Phase = ManagementOperationPhase.NeedsVerification,
                     Error = new(ErrorCodes.ServiceRecovering,
-                        "原库与恢复副本的最新已确认状态未能核实；须经 F02 已同步备节点的持久确认记录核对，不得开放业务。") };
+                        "原库与恢复副本的最新已确认状态未能核实；须经已同步备节点的持久确认记录核对，不得开放业务。") };
             await journal.SaveAsync(staged, token);
             return staged.Restore is { RecoveryVerified: true } && activateRecovery is not null
                 ? await activateRecovery(staged, token) : staged;

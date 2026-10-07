@@ -49,7 +49,7 @@ public sealed partial class StudentExamRuntime(
 
     public ExamPackageManager Manager { get; } = manager;
     public AnswerSession? Answers { get; private set; }
-    /// <summary>B06 在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
+    /// <summary>在线更新编排器；懒创建，与本运行时同生命周期，随 DisposeAsync 一并释放。</summary>
     public PaperUpdateCoordinator PaperUpdate
     {
         get
@@ -66,7 +66,7 @@ public sealed partial class StudentExamRuntime(
         _paper?.PaperVersion == Manager.Descriptor?.PaperVersion &&
         (Answers is null || Answers.PaperVersion == _paper?.PaperVersion) ? _paper : null;
 
-    /// <summary>B03 显示层读取 PDF 的入口。调用方负责释放显示副本；终止后禁止再次读取。</summary>
+    /// <summary>显示层读取 PDF 的入口。调用方负责释放显示副本；终止后禁止再次读取。</summary>
     public byte[] ReadQuestionPdf(string questionId)
     {
         var paper = Paper ?? throw new InvalidOperationException("试题尚未解锁或已经停止访问。");
@@ -155,7 +155,7 @@ public sealed partial class StudentExamRuntime(
             foreach (var review in await localState.LoadPaperUpdateReviewsAsync(_localKey, ct))
             {
                 _confirmedReviewVersions.TryAdd(review.PaperVersion, 0);
-                // B06 服务端闭环：重启后把已确认但尚未上报的版本补回发件箱（按版本幂等）。
+                // 服务端闭环：重启后把已确认但尚未上报的版本补回发件箱（按版本幂等）。
                 var enqueued = await localState.EnqueueUploadAsync(_localKey, new PendingUploadRecord(
                     $"review:{review.PaperVersion}", "review",
                     System.Text.Json.JsonSerializer.Serialize(
@@ -198,7 +198,7 @@ public sealed partial class StudentExamRuntime(
         }
     }
 
-    /// <summary>B02's live unlock is the only runtime entry to an editable B04 session.</summary>
+    /// <summary>Live package unlock is the only runtime entry to an editable answer session.</summary>
     public async Task SynchronizeLocalAnswersAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -265,7 +265,7 @@ public sealed partial class StudentExamRuntime(
                         context.PaperVersion > previous.PaperVersion &&
                         Answers.Status == AnswerSessionStatus.Active)
                     {
-                        // B06 试卷修订：同一参试/设备/授权下仅版本提升时，
+                        // 试卷修订：同一参试/设备/授权下仅版本提升时，
                         // 答案、标记与当前题结转为新版本继续作答，不清空不重建。
                         var switched = await Answers.SwitchPaperVersionAsync(
                             context.PaperVersion, _paper?.Structure, ct);
@@ -563,7 +563,7 @@ public sealed partial class StudentExamRuntime(
         await _notificationGate.WaitAsync();
         try
         {
-            // B06：先停更新编排器，避免其后台循环再触碰正在关闭的管理器与会话。
+            // 先停更新编排器，避免其后台循环再触碰正在关闭的管理器与会话。
             var updateCoordinator = _paperUpdate;
             if (updateCoordinator is not null)
             {

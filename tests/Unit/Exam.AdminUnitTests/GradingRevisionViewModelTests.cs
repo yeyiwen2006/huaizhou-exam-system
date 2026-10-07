@@ -410,7 +410,7 @@ public sealed class GradingRevisionViewModelTests
             options: Json)
     };
 
-    /// <summary>可用的合成材料包：清单的题目源文件名前缀与考试名称一致（D01 规则）。</summary>
+    /// <summary>可用的合成材料包：清单的题目源文件名前缀与考试名称一致（清单校验 规则）。</summary>
     private sealed class MaterialPackage : IDisposable
     {
         public MaterialPackage()

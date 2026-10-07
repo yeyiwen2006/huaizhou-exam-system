@@ -12,7 +12,7 @@ namespace Exam.IntegrationTests.Scoring;
 /// 规则发布后「及时安排一轮重算」的契约：按**当前已发布规则版本**规划并入队；
 /// 没有已发布规则时什么都不做；调度失败**不能**把已经成功的发布变成失败（交给后台循环补偿）。
 ///
-/// 这里用假件替换范围与队列（重算调度本身由 D05 已有用例覆盖），不需要数据库。
+/// 这里用假件替换范围与队列（重算调度本身由 评分处理 已有用例覆盖），不需要数据库。
 /// </summary>
 public sealed class GradingRecalculationTriggerTests
 {

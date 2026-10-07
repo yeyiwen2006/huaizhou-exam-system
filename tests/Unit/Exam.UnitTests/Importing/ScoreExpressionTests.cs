@@ -109,7 +109,7 @@ public sealed class ScoreExpressionTests
     [Fact]
     public void Check_DivideByVariable_IsAcceptedBecauseItNeedsAnswerKey()
     {
-        // 分母含变量时静态无法判定，留给 D04 在具体作答情形下判定。
+        // 分母含变量时静态无法判定，留给 精确计分 在具体作答情形下判定。
         var check = ScoreExpressionParser.Check("1/{正确选项总数}");
 
         Assert.True(check.IsValid, check.Message);

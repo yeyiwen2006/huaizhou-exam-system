@@ -39,11 +39,11 @@ public enum StudentPackageIssueCode
 /// <summary>一条组包问题。Path 为包内相对路径（能确定时给出）。</summary>
 public sealed record StudentPackageIssue(StudentPackageIssueCode Code, string Message, string? Path = null);
 
-/// <summary>被排除的文件及原因，供 C05 的导入预览逐条展示。</summary>
+/// <summary>被排除的文件及原因，供 试题修订 的导入预览逐条展示。</summary>
 public sealed record StudentPackageExclusion(string Path, string Reason);
 
 /// <summary>
-/// 组包计划：进包的文件与被挡下的文件。C05 的导入预览核对题量、题型、答案与选项绑定后，
+/// 组包计划：进包的文件与被挡下的文件。试题修订 的导入预览核对题量、题型、答案与选项绑定后，
 /// 与本计划一起交给使用者确认。
 /// </summary>
 public sealed record StudentPackagePlan(

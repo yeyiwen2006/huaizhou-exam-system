@@ -16,7 +16,7 @@ public sealed partial class ReportWorkbookWriterTests
         var root=new DirectoryInfo(AppContext.BaseDirectory);
         while(root is not null && !File.Exists(Path.Combine(root.FullName,"Huaizhou.ExamSystem.sln"))) root=root.Parent;
         Assert.NotNull(root);
-        var json=File.ReadAllText(Path.Combine(root.FullName,"docs","samples","g-reporting","published-report.synthetic.json"));
+        var json=File.ReadAllText(Path.Combine(root.FullName,"docs","samples","reporting","published-report.synthetic.json"));
         var published=System.Text.Json.JsonSerializer.Deserialize<PublishedReport>(json,JsonDefaults.Create())!;
         Assert.Equal(1,published.SchemaVersion); Assert.Equal(ReportState.Ready,published.Status.State);
         var report=ReportJson.Read(published);

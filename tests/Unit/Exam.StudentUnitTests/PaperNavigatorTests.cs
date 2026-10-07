@@ -5,7 +5,7 @@ using Exam.Student.Core;
 
 namespace Exam.StudentUnitTests;
 
-/// <summary>B03 左侧导航：科目按清单顺序、题组按 Order、题号方框按数值升序；状态映射。</summary>
+/// <summary>学生导航 左侧导航：科目按清单顺序、题组按 Order、题号方框按数值升序；状态映射。</summary>
 public sealed class PaperNavigatorTests
 {
     private static StudentPaperManifest CreateManifest() => new(

@@ -71,7 +71,7 @@ public static class QuestionContentDigest
 
     /// <summary>
     /// 比对两次摘要，返回**实际变更**的题号（新增、消失、或摘要不同），ordinal 排序。
-    /// 结构变化本身由 A06 在事务内拒绝，这里只回答「内容变了没有」。
+    /// 结构变化本身由 版本服务 在事务内拒绝，这里只回答「内容变了没有」。
     /// </summary>
     public static IReadOnlyList<string> Changed(
         IReadOnlyDictionary<string, string> previous,

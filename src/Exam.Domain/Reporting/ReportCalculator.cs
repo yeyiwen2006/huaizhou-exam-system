@@ -6,7 +6,7 @@ using Exam.Domain.Scoring;
 namespace Exam.Domain.Reporting;
 
 /// <summary>
-/// Pure G01 calculation over one complete, version-consistent set of confirmed
+/// Pure report calculation over one complete, version-consistent set of confirmed
 /// submissions. This class neither decides report availability nor publishes it.
 /// </summary>
 public static class ReportCalculator
@@ -153,7 +153,7 @@ public static class ReportCalculator
         ArgumentNullException.ThrowIfNull(input.Submissions);
         if (input.Subjects.Count == 0) throw new ArgumentException("报表缺少科目。");
         if (input.Participants.Count == 0)
-            throw new ArgumentException("零实际参试者的报表语义尚未确认，不可自然开放空报表。");
+            throw new ArgumentException("本场考试没有实际参试考生，暂不能生成成绩报表。");
 
         var subjectIds = new HashSet<string>(StringComparer.Ordinal);
         var subjectOrders = new HashSet<int>();

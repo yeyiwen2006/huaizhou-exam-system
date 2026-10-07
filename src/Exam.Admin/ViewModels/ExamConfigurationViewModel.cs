@@ -15,7 +15,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 {
     private readonly AdminApiClient _api;
     private string _examId = "exam-draft";
-    private string _name = "合成考试";
+    private string _name = "新考试";
     private string _scheduledStartText = DateTimeOffset.Now.AddHours(1).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private string _scheduledEndText = DateTimeOffset.Now.AddHours(3).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
     private SubjectDraftViewModel? _selectedSubject;
@@ -25,6 +25,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     private string _instructionSourceText = string.Empty;
     private readonly List<InstructionLineViewModel> _serverInstructionLines = [];
     private string _loadedSettingsFingerprint = string.Empty;
+    private string _scheduleChangeReason = string.Empty;
     private long? _expectedScheduleVersion;
     private long _contextVersion;
     private long _editVersion;
@@ -35,11 +36,12 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
 
     public string ScheduleVersionText => _expectedScheduleVersion is { } version
         ? $"已读取服务器上的考试时间。保存时如果其他人已修改过，会提示重新读取，不会覆盖。"
-        : "尚未读取服务器上的考试时间；保存时只会新建考试，不会覆盖已有考试。";
+        : "尚未读取服务器上的考试时间；请先创建考试或读取已有考试，再修改时间。";
 
     private void ResetScheduleContext()
     {
         _contextVersion++;
+        ScheduleChangeReason = string.Empty;
         _catalogReady = false;
         _requestedExamId = string.IsNullOrEmpty(_examId) ? null : _examId;
         _expectedScheduleVersion = null;
@@ -80,6 +82,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         set { if (SetProperty(ref _examId, value)) ResetScheduleContext(); }
     }
     public string Name { get => _name; set => SetProperty(ref _name, value); }
+    public string ScheduleChangeReason { get => _scheduleChangeReason; set { if (SetProperty(ref _scheduleChangeReason, value)) _editVersion++; } }
     public string ScheduledStartText { get => _scheduledStartText; set { if (SetProperty(ref _scheduledStartText, value)) _editVersion++; } }
     public string ScheduledEndText { get => _scheduledEndText; set { if (SetProperty(ref _scheduledEndText, value)) _editVersion++; } }
 
@@ -234,11 +237,11 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var edits = _editVersion;
         var operation = ++_scheduleOperation;
         var expectedVersion = _expectedScheduleVersion;
-        // A05 creates version 1 and increments exactly once for each conditional update.
+        // A conditional schedule update increments the loaded version exactly once.
         // Capture before awaiting: a positive but stale/unrelated version is not a save receipt.
         var savedVersion = expectedVersion is { } version ? checked(version + 1) : 1;
         var schedule = new ScheduleWindow(start, end);
-        var snapshot = await _api.SaveScheduleAsync(examId, schedule, expectedVersion);
+        var snapshot = await _api.SaveScheduleAsync(examId, schedule, expectedVersion, reason: ScheduleChangeReason);
         if (context != _contextVersion || operation != _scheduleOperation) return;
         if (!StringComparer.Ordinal.Equals(snapshot.ExamId, examId) ||
             snapshot.Schedule != schedule || snapshot.Versions is null ||

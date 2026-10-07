@@ -5,7 +5,7 @@ namespace Exam.UnitTests.Importing;
 
 /// <summary>
 /// 坐标产物 option-regions.json 的读写契约。字段名、顺序、精度与换行在此钉死，
-/// B03 按同一份格式解析；契约见 docs/d03-option-region-contract.md 第 4.4 节。
+/// 学生导航 按同一份格式解析；契约见 docs/option-region-contract.md 第 4.4 节。
 /// </summary>
 public sealed class OptionRegionArtifactJsonTests
 {

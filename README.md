@@ -1,56 +1,29 @@
 # 怀籀传承在线考试系统
 
-本仓库用于开发 Windows 局域网在线考试系统。首版技术栈为 .NET 10、WPF、ASP.NET Core、SignalR 与 PostgreSQL 18；学生端本地状态使用 SQLite。完整业务行为以 [需求文档](requirements.md) 为准，七人分工和测试顺序见 [开发总计划](development-plan.md)，接口约定、任务卡和验收场景见 [Agent 执行指南](agent-implementation-guide.md)。
+面向学生和考务人员的 Windows 考试系统，支持考试配置、名册与试场管理、逐题导入、原版试题显示、答卷保存和回收、精确计分、五类成绩表及主备恢复。
 
-## 当前状态
+## 使用入口
 
-仓库已经具备 A02 至 A06 的 PostgreSQL 18 持久化、正式 HTTP API、设备授权的 SignalR 持久指令补发、通用 HTTP CLI、版本化加密题包存储、基础备份/隔离恢复以及现归F02的主备控制基础设施。内存实现仅供单元测试；生产环境缺少 PostgreSQL 连接或考务令牌时会拒绝启用业务入口。逐项完成度、实测范围和仍需两台真实主机完成的限制见 [A 组实施状态](docs/a-implementation-status.md)。
+学生使用 `Exam.Student` 完成设备激活、身份确认、等待、作答和交卷。考务人员使用 `Exam.Admin` 管理考试与成绩；`Exam.Cli` 提供对应命令。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立本机管理，业务服务停止时仍可查询和启停。
 
-当前任务与Issue对应见[任务映射](docs/task-map.md)。七人账号为A（@yeyiwen2006）、B（@takeanothernap-maker）、C（@whaler-1）、D（@huangjiaqi-squirrel）、E（@WorldChangerczx）、F（@Nostalgia-cy）、G（@kgwdonkey）。
+[系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[本机服务管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
 
-| 成员 | 负责范围 |
-| --- | --- |
-| A | 公共架构与契约、考试核心服务、全部PR审查与合并、整体验收和最终交付 |
-| B | 共享GUI、学生端身份与等待、题目交互、本地保存恢复、正常同步交卷、异常更新及学生端发布 |
-| C | 考试配置、名册、试场、监测与人工裁决、试题导入及考试中修改 |
-| D | 逐题规范、依赖编译、选项定位与学生包、精确计分、规则版本与重算、材料准备及对应CLI |
-| E | 公共CLI框架、CI、测试基础设施、候选运行包准备及测试期间重建支持 |
-| F | 服务管理、备份恢复、主备同步与接管、学生端主备重连、考务服务管理入口及部署运维工具 |
-| G | 排名统计与报表结果、Excel导出、考务报表入口及对应业务CLI |
+## 测试与运行边界
 
-全部代码和真实接线完成后，全员依次执行T01单机测试及修复、T02多机联调联试及修复，T02通过后由A完成T03最终版本固定与交付。开发期间的模块测试和CI持续执行，不能后置。详见[测试安排](docs/testing-plan.md)。
+当前进入测试阶段。[测试安排](docs/testing-plan.md)和[验收标准](docs/acceptance-criteria.md)区分本机回归、真实双机和现场设备验收。测试通过范围以对应提交的实际报告为准，不把构建成功或合成负载当成正式考试已经验收。
 
-## 开发环境
+运行包使用受保护的部署配置。正式业务服务缺少数据库或确认保护时拒绝启动，不提供测试专用状态修改接口。学生端不需要安装 SDK 或 TeX；考试材料编译在考务侧使用 XeLaTeX。
 
-- Windows 10/11 x64
-- .NET SDK 10.0.401，版本由 `global.json` 锁定
-- PostgreSQL 18；主备部署必须使用同一补丁版本
-- Visual Studio、Rider 或 `dotnet` CLI
+## 构建与检查
+
+使用 `global.json` 固定的 .NET SDK：
 
 ```powershell
-dotnet restore Huaizhou.ExamSystem.sln
-dotnet build Huaizhou.ExamSystem.sln --no-restore
-dotnet test Huaizhou.ExamSystem.sln --no-build
+dotnet restore Huaizhou.ExamSystem.sln --locked-mode
+dotnet build Huaizhou.ExamSystem.sln --no-restore --configuration Release
+python eng/testing/run_checks.py --profile core --profile wpf --output artifacts/checks
 ```
 
-PostgreSQL 集成测试要求只在当前进程提供 `EXAM_TEST_POSTGRES`，测试会为每次运行创建并删除随机数据库，不会把连接信息写入仓库。生产运行至少通过受保护环境配置提供 `ConnectionStrings__Exam` 和 `ExamServer__*`；考务人员凭数据库中的考务账号登录，不再配置共享令牌（见[考务账号](docs/operator-accounts.md)）；示例和双机部署步骤见 [PostgreSQL 双机部署基线](deploy/postgresql/README.md)。
+数据库、真实编译、故障和发布检查见[测试工具](docs/test-infrastructure.md)。输出使用新的项目内忽略目录或系统临时目录，不覆盖已有报告。
 
-学生端和考务端项目仅在 Windows 上构建。真实试卷、答案、考生数据、数据库、证书、密钥、日志、备份和本地发布产物不得提交。
-
-## 项目边界
-
-- `src/Exam.Contracts`：跨端请求、响应、事件、错误码及版本字段。
-- `src/Exam.Domain`：不访问文件、网络和数据库的状态与规则。
-- `src/Exam.Application`：应用服务、权限和事务边界。
-- `src/Exam.Infrastructure`：数据库、文件、事件存储、加密和导出适配。
-- `src/Exam.Server`：API、SignalR、定时与后台入口。
-- `src/Exam.Desktop.Shared`：学生端和考务端共同的 WPF 主题与组件。
-- `src/Exam.Student`、`src/Exam.Admin`、`src/Exam.Cli`：三类用户入口。
-- `tests`：单元、集成与负载验证入口。
-- `samples`：只能存放独立合成材料。
-
-## 协作
-
-日常集成以 `main` 为准，但不直接向远端 `main` 提交。每项任务从最新 `main` 建立 `codex/任务编号-简短说明` 分支，开发期间持续模块测试，经A代码审查及PR检查后由A合并。详细流程见 [协作说明](CONTRIBUTING.md)。
-
-本系统面向真实考试，自动检查通过只代表当前代码检查通过，不代表真实设备、网络、主备接管、断电恢复或 300 人完整考试已经验收。
+[系统架构](docs/architecture.md)、[数据契约](docs/system-contracts.md)和[界面规范](docs/gui-spec.md)供维护与故障排查使用。真实试卷、答案、考生资料、连接配置及私钥不提交仓库。

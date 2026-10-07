@@ -188,6 +188,7 @@ public sealed partial class ExamConfigurationViewModel
     private void Apply(ExamDetail detail)
     {
         _catalogReady = true;
+        ScheduleChangeReason = string.Empty;
         _requestedExamId = detail.Summary.ExamId;
         IsNewExam = false;
         _examId = detail.Summary.ExamId;
@@ -256,6 +257,12 @@ public sealed partial class ExamConfigurationViewModel
         var settings = ToSettings();
         var schedule = new ScheduleWindow(start, end);
         var timeChanged = ScheduledStartText != _loadedStartText || ScheduledEndText != _loadedEndText;
+        var reason = ScheduleChangeReason.Trim();
+        if (!isNew && timeChanged && (reason.Length == 0 || reason.Length > 1000))
+        {
+            Status = "请填写修改时间的原因，长度不超过1000字。";
+            return;
+        }
         var structureSaved = false;
         var timeSaved = false;
         if (!isNew && timeChanged && scheduleVersion is null)
@@ -288,7 +295,7 @@ public sealed partial class ExamConfigurationViewModel
             }
             if (timeChanged)
             {
-                var saved = await _api.SaveScheduleAsync(examId, schedule, scheduleVersion);
+                var saved = await _api.SaveScheduleAsync(examId, schedule, scheduleVersion, reason: reason);
                 if (context != _contextVersion) return;
                 if (saved.ExamId != examId || saved.Schedule != schedule ||
                     saved.Versions.ScheduleVersion != checked(scheduleVersion!.Value + 1))

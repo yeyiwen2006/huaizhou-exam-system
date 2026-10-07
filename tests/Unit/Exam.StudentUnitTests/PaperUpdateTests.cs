@@ -20,7 +20,7 @@ using Microsoft.Data.Sqlite;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B06 现场异常与在线更新验收判据：
+/// 失焦记录 现场异常与在线更新验收判据：
 /// 1) 新题包原子切换——下载/确认/解锁失败时旧版明文与状态保持可用，成功后一次性切换并结转答案标记；
 /// 2) 更新结果按 Applied（实际版本）/ResourceUpdateFailed（原因）补报；
 /// 3) 被撤销设备不能写有效答案（DeviceDecided → 会话禁写）；
@@ -29,7 +29,7 @@ namespace Exam.StudentUnitTests;
 /// </summary>
 public sealed partial class PaperUpdateTests
 {
-    // ---------- B06-1 霸屏按键判定（纯函数） ----------
+    // ---------- 失焦记录-1 霸屏按键判定（纯函数） ----------
 
     [Fact]
     public void KioskBlocksExitShortcutsButAllowsNormalKeys()
@@ -49,7 +49,7 @@ public sealed partial class PaperUpdateTests
         Assert.Equal(KioskKeyDecision.Allow, KioskGuard.Decide(vkTab, 0, isSystemKey: false));
     }
 
-    // ---------- B06-2 失焦检测 ----------
+    // ---------- 失焦记录-2 失焦检测 ----------
 
     [Fact]
     public async Task FocusTrackerCountsLossesAndDurations()
@@ -91,7 +91,7 @@ public sealed partial class PaperUpdateTests
         public void Advance(TimeSpan span) { _now += span; _timestamp += span.Ticks; }
     }
 
-    // ---------- B06-3 答案会话版本切换 ----------
+    // ---------- 失焦记录-3 答案会话版本切换 ----------
 
     [Fact]
     public async Task SwitchPaperVersionCarriesAnswersMarksAndCurrentQuestion()
@@ -158,7 +158,7 @@ public sealed partial class PaperUpdateTests
         new PaperQuestionStructure("q2", 2, "s1", "g1", "single", ["A", "B"]),
     ]);
 
-    // ---------- B06-4 管理器原子切换与失败回退 ----------
+    // ---------- 失焦记录-4 管理器原子切换与失败回退 ----------
 
     [Fact]
     public async Task ManagerUpdateFailureKeepsOldPackageAndSucceedsAfterRetry()
@@ -229,7 +229,7 @@ public sealed partial class PaperUpdateTests
         Assert.Equal(ExamPackageManager.Phase.Unlocked, manager.CurrentPhase);
     }
 
-    // ---------- B06-5 协调器端到端：切换结转答案 + 复核记录 ----------
+    // ---------- 失焦记录-5 协调器端到端：切换结转答案 + 复核记录 ----------
 
     [Fact]
     public async Task CoordinatorAppliesUpdate_PreservesAnswersAndRecordsReview()
@@ -282,7 +282,7 @@ public sealed partial class PaperUpdateTests
         Assert.Equal(first.ConfirmedAt, retained.ConfirmedAt);
     }
 
-    // ---------- B06-6 撤销设备不能写有效答案（裁决路径） ----------
+    // ---------- 失焦记录-6 撤销设备不能写有效答案（裁决路径） ----------
 
     [Fact]
     public async Task DeviceDecisionRevocationStopsAnsweringAndKeepsLocalRecord()
@@ -313,7 +313,7 @@ public sealed partial class PaperUpdateTests
         AnswerAssert.Equal(AnswerValue.Selected("A"), saved!.Answers["q1"]);
     }
 
-    // ---------- B06-7 设备裁决等待状态 ----------
+    // ---------- 失焦记录-7 设备裁决等待状态 ----------
 
     [Fact]
     public async Task DeviceDecisionPendingIsVisibleUntilResolved()
@@ -330,7 +330,7 @@ public sealed partial class PaperUpdateTests
         Assert.False(manager.DeviceDecisionPending);
     }
 
-    // ---------- B06-8 本地库 v1→v2 迁移与复核记录持久化 ----------
+    // ---------- 失焦记录-8 本地库 v1→v2 迁移与复核记录持久化 ----------
 
     [Fact]
     public async Task LegacyV1DatabaseMigratesToV2AndKeepsReviewRecords()

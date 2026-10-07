@@ -136,23 +136,23 @@ public sealed partial class AdminApiClient : IDisposable
         }
     }
 
-    /// <summary>Null expectedVersion means create-only; updates use the version the operator loaded.
-    /// Never refresh the expected version during a save, which would overwrite concurrent edits.</summary>
+    /// <summary>Updates only the schedule version loaded by the operator. Exam creation uses the catalog.</summary>
     public async Task<ExamVersionSnapshot> SaveScheduleAsync(
         string examId,
         ScheduleWindow schedule,
         long? expectedVersion = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? reason = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
-        if (expectedVersion is < 0) throw new ArgumentOutOfRangeException(nameof(expectedVersion));
-        var requestId = Guid.NewGuid().ToString("N");
-        return expectedVersion is null
-            ? await SendAsync<ExamVersionSnapshot>(HttpMethod.Post, "api/v1/versioning/exams",
-                new { requestId, examId, schedule }, cancellationToken)
-            : await SendAsync<ExamVersionSnapshot>(HttpMethod.Put,
-                $"api/v1/versioning/exams/{Uri.EscapeDataString(examId)}/schedule",
-                new { requestId, expectedVersion, schedule }, cancellationToken);
+        if (expectedVersion is null)
+            throw new InvalidOperationException("请先新建考试并读取已保存的时间，再修改考试时间。");
+        if (expectedVersion < 1) throw new ArgumentOutOfRangeException(nameof(expectedVersion));
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000)
+            throw new InvalidOperationException("请填写修改时间的原因，长度不超过1000字。");
+        return await SendAsync<ExamVersionSnapshot>(HttpMethod.Put,
+            $"api/v1/versioning/exams/{Uri.EscapeDataString(examId)}/schedule",
+            new { requestId = Guid.NewGuid().ToString("N"), expectedVersion, schedule, reason = reason.Trim() }, cancellationToken);
     }
 
     public async Task<ExamVersionSnapshot> GetExamAsync(
@@ -210,7 +210,7 @@ public sealed partial class AdminApiClient : IDisposable
             null,
             cancellationToken);
 
-    /// <summary>B06 失焦监测：按考生汇总本场考试的失焦次数与累计时长。</summary>
+    /// <summary>失焦监测：按考生汇总本场考试的失焦次数与累计时长。</summary>
     public async Task<IReadOnlyList<Exam.Contracts.Submissions.FocusLossEventSummary>> ListFocusSummariesAsync(
         string examId,
         CancellationToken cancellationToken = default) =>

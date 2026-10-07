@@ -11,7 +11,7 @@ namespace Exam.IntegrationTests.Api;
 
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresExamApiAccessMiddlewareTests(PostgresDatabaseFixture fixture)
 {
     private const string Token = "0123456789abcdef0123456789abcdef";
     private readonly ServerNodeEnvelope server = new($"middleware-{Guid.NewGuid():N}", "node-a", 1);

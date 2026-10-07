@@ -9,7 +9,7 @@ namespace Exam.Student.Core;
 
 /// <summary>
 /// 单个选项的定位区域。坐标为左上角原点、[0,1] 归一化值，
-/// 契约 anchorScheme = pageTopLeftNormalizedV1（D03 选项定位契约 4.3）。
+/// 契约 anchorScheme = pageTopLeftNormalizedV1（选项区域与题包 选项定位契约 4.3）。
 /// </summary>
 public sealed record OptionRegion(int PageIndex, double X, double Y, double Width, double Height,
     OptionLabelOverlay? Overlay = null)
@@ -19,7 +19,7 @@ public sealed record OptionRegion(int PageIndex, double X, double Y, double Widt
 }
 
 /// <summary>
-/// D03 契约 4.4 的 option-regions.json 学生侧读取与严格校验。
+/// 选项区域与题包 契约 4.4 的 option-regions.json 学生侧读取与严格校验。
 /// 只有在题目、选项、页码与 PDF 映射全部核对一致后才允许启用坐标作答；
 /// 任何缺失、多余、越界或版本不符均使整份坐标无效（整包失败），不降级、不猜测。
 /// </summary>

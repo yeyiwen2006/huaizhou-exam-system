@@ -11,7 +11,7 @@ namespace Exam.Infrastructure.Postgres.Scoring;
 
 /// <summary>
 /// 计分结果的 PostgreSQL 存储。主键是 submission_id：换规则版本重算时**更新同一行**，
-/// 因此重复消费计分任务或重复重算都不会让成绩累计两次（D04 审查里「重复题目可重复累计」的同类防护）。
+/// 因此重复消费计分任务或重复重算都不会让成绩累计两次（精确计分 审查里「重复题目可重复累计」的同类防护）。
 /// 逐题与单科精确值按既有字符串形式存 jsonb，报表读取方不必反解分数格式。
 /// </summary>
 public sealed class PostgresGradingResultStore : IGradingResultStore

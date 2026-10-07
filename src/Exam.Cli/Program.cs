@@ -115,6 +115,7 @@ internal static partial class ExamCli
         Console.WriteLine("  exams list                            列出全部考试（名称、时间、状态、是否在学生端显示）");
         Console.WriteLine("  exams show 名称                       查看考试设置与考试说明");
         Console.WriteLine("  exams create --input FILE             新建考试（name、schedule、settings）");
+        Console.WriteLine("  exams schedule NAME --input FILE      修改时间（expectedVersion、schedule、reason）");
         Console.WriteLine("  exams update 名称 --input FILE        修改考试名称及科目题组设置（开考前）");
         Console.WriteLine("  exams visibility 名称 on|off          设置是否在学生端显示");
         Console.WriteLine("  roster list 名称                     查询已保存名册（保留班级与准考证号前导零）");

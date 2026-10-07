@@ -1,4 +1,4 @@
-name: E01 build, scoped tests and package evidence
+name: Build, scoped tests and package evidence
 
 on:
   pull_request:

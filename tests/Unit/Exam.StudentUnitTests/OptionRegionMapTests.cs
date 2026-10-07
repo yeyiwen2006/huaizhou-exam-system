@@ -7,7 +7,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B03 选项坐标（D03 契约 4.4 option-regions.json）学生侧读取与严格校验。
+/// 学生导航 选项坐标（选项区域与题包 契约 4.4 option-regions.json）学生侧读取与严格校验。
 /// 任何缺失、多余、越界或版本不符均整包失败；文件缺失（v1 包）返回 null 不猜测。
 /// </summary>
 public sealed partial class OptionRegionMapTests

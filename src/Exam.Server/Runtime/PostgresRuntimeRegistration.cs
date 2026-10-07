@@ -96,12 +96,12 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<ReliableCommandService>();
 
         services.AddSingleton<ISubmissionStore, PostgresSubmissionStore>();
-        // B06 失焦留痕：学生端补报 + 考务端汇总共用同一事务存储。
+        // 失焦留痕：学生端补报 + 考务端汇总共用同一事务存储。
         services.AddSingleton<IFocusEventStore, PostgresFocusEventStore>();
         services.AddSingleton<FocusEventService>();
         services.AddSingleton<IGradingTaskQueue, PostgresGradingTaskQueue>();
-        // D05 生产后台：持久计分任务的领取、结果与输入，重算范围、专用重算队列与已发布版本对账。
-        // 这些适配器已随 D04/D05 交付但此前未注册，Server 因而没有任何生产后台消费计分任务。
+        // 评分处理 生产后台：持久计分任务的领取、结果与输入，重算范围、专用重算队列与已发布版本对账。
+        // 计分适配器和后台任务共同处理已提交答卷，并在重启后继续未完成的计分。
         services.AddSingleton<IPublishedGradingDirectory, PostgresGradingPublicationDirectory>();
         services.AddSingleton(provider => new PostgresActiveNodeWriteGuard(
             provider.GetRequiredService<ServerNodeEnvelope>(), allowUninitializedFailoverState));
@@ -146,7 +146,7 @@ public static class PostgresRuntimeRegistration
             provider.GetRequiredService<ISubmissionStore>(), provider.GetRequiredService<IGradingTaskQueue>(),
             maxConcurrentWrites, provider.GetRequiredService<TimeProvider>(),
             accessReader: provider.GetRequiredService<IParticipationAccessReader>(),
-            paperReader: examId => provider.GetRequiredService<IExamVersioningService>().GetExam(examId).Value?.Paper?.Structure));
+            asyncPaperReader: provider.GetRequiredService<PostgresExamVersioningService>().GetPaperStructureAsync));
         services.AddSingleton<CollectionCompletionService>();
         services.AddSingleton<CollectionCompletionWorker>();
         services.AddHostedService<RecoveryGatedWorker<CollectionCompletionWorker>>();
@@ -157,7 +157,7 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<PostgresExamVersioningService>();
         services.AddSingleton<IExamVersioningService>(provider=>provider.GetRequiredService<PostgresExamVersioningService>());
         services.AddSingleton<Exam.Infrastructure.Postgres.Administration.PostgresBundlePublicationService>();
-        // C05 源材料归档：按 (考试, 试卷版本) 保存与取回；校验器在进入发布事务之前完成核对。
+        // 试题修订 源材料归档：按 (考试, 试卷版本) 保存与取回；校验器在进入发布事务之前完成核对。
         services.AddSingleton<Exam.Infrastructure.Postgres.Resources.PostgresPaperMaterialStore>();
         services.AddSingleton<Exam.Infrastructure.Packaging.PaperMaterialsVerifier>();
         services.AddSingleton<PostgresScheduleProcessor>();

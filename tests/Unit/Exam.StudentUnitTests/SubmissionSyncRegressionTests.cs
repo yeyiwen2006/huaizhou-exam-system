@@ -46,7 +46,7 @@ public sealed partial class SubmissionSyncServiceTests
             ExamLifecycle.Running, ParticipationBusinessState.Answering, 1, 1));
         builder.Services.AddSingleton(new SubmissionService(store, queue, accessReader: access));
         builder.Services.AddSingleton(new CollectionCompletionService(store, new InMemoryCollectionCompletionStore()));
-        // B06 失焦端点属于同一分组：分组在首个请求时整体构建，服务必须在 DI 中可用。
+        // 失焦记录 失焦端点属于同一分组：分组在首个请求时整体构建，服务必须在 DI 中可用。
         builder.Services.AddSingleton(new FocusEventService(new InMemoryFocusEventStore()));
         await using var app = builder.Build();
         app.MapGroup("/api/v1").MapSubmissionApi();

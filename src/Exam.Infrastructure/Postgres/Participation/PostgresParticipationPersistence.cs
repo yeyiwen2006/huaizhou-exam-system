@@ -9,7 +9,7 @@ using Npgsql;
 namespace Exam.Infrastructure.Postgres.Participation;
 
 /// <summary>
-/// PostgreSQL implementation of the A03 transaction boundary. Logical-key advisory
+/// PostgreSQL implementation of the participation transaction boundary. Logical-key advisory
 /// locks cover the absent-row case for (examId, candidateId) and requestId, while row
 /// locks serialize updates to existing participation and conflict records.
 /// </summary>

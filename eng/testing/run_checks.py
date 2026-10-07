@@ -26,8 +26,14 @@ def dependency(profile):
     if profile == 'latex': return None if shutil.which('xelatex') else 'XeLaTeX is unavailable'
     return None
 
+def execution_suites(profiles, plan):
+    expected = expected_suites(profiles, plan)
+    # Native recovery may restart the shared owned source under its test-process lifetime.
+    # Run it last: stopping that test process must not invalidate a later database/import suite.
+    return dict(sorted(expected.items(), key=lambda item: item[0].startswith('postgres-physical-')))
+
 def run(profiles: list[str], output: Path, timeout: int = 900) -> int:
-    plan = load_plan(); expected = expected_suites(profiles, plan)
+    plan = load_plan(); expected = execution_suites(profiles, plan)
     if output.exists(): raise ValueError('Output directory must be new')
     identity = source(); output.mkdir(parents=True)
     dotnet = dotnet_executable()
@@ -92,7 +98,7 @@ def run(profiles: list[str], output: Path, timeout: int = 900) -> int:
             report['status']='failed'
             report['suites'][0]['status']='failed'; report['suites'][0]['reason']='Source changed during execution'
         write_json(output/'run-report.json',report)
-        summary=['# E01 check report', '', f'Run: {run_id}', f'Status: {report["status"]}',
+        summary=['# Test check report', '', f'Run: {run_id}', f'Status: {report["status"]}',
                  '', *[f'- {s["id"]}: {s["status"]}; tests={s["counts"]["total"]}' for s in report['suites']],
                  '', *[f'- Not executed: {s["profile"]}; {s["reason"]}' for s in report['notExecuted']]]
         (output/'summary.md').write_text('\n'.join(summary)+'\n',encoding='utf-8')
@@ -115,7 +121,7 @@ if __name__=='__main__':
                 os.environ['EXAM_TEST_POSTGRES']=database.connection
                 if args.native_physical:
                     if os.name!='nt': raise ValueError('Native physical profile requires Windows')
-                    os.environ.update(EXAM_TEST_NATIVE_PHYSICAL='1',EXAM_TEST_NATIVE_SOURCE_DIRECTORY=str(database.data),EXAM_TEST_NATIVE_POSTGRES_BIN=str(database.bin))
+                    os.environ.update(EXAM_TEST_NATIVE_PHYSICAL='1',EXAM_TEST_NATIVE_WAL_ARCHIVE='1',EXAM_TEST_NATIVE_SOURCE_DIRECTORY=str(database.data),EXAM_TEST_NATIVE_POSTGRES_BIN=str(database.bin))
                 raise SystemExit(run(args.profile,args.output,args.suite_timeout))
         raise SystemExit(run(args.profile,args.output,args.suite_timeout))
     except (ValueError,OSError) as error: parser.exit(2,f'Check infrastructure rejected input: {type(error).__name__}\n')

@@ -9,7 +9,7 @@ namespace Exam.Contracts.Grading;
 ///
 /// 它是**范围快照，不是可跨请求缓存的授权**：规则发布或补收答卷都会使其过期；
 /// 报表查看与导出仍须在访问时自行核对当前版本与全部最终答卷集合的一致性，
-/// 也不得把 <see cref="Readiness"/> 当作 A06 首次发布规则的前置条件。
+/// 也不得把 <see cref="Readiness"/> 当作 版本服务 首次发布规则的前置条件。
 /// </summary>
 public sealed record GradingStatusReport(
     string ExamId,

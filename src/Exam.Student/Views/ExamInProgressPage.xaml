@@ -146,7 +146,7 @@
                 </DockPanel>
             </Border>
 
-            <!-- 右侧：原版题目显示（B03） -->
+            <!-- 右侧：原版题目显示 -->
             <Border Grid.Column="1"
                     Style="{StaticResource Card}"
                     Margin="12,0,0,0">
@@ -174,7 +174,7 @@
                                 Click="OnToggleMark" />
                     </Grid>
 
-                    <!-- 状态横幅：解锁/交卷状态、运行时错误、本地保存错误、在线更新（B06） -->
+                    <!-- 状态横幅：解锁/交卷状态、运行时错误、本地保存错误、在线更新 -->
                     <StackPanel Grid.Row="1" Margin="4,0,4,8">
                         <controls:Banner x:Name="PaperBanner" Level="Info" />
                         <controls:Banner x:Name="PaperUpdateBanner" Level="Warning" Margin="0,8,0,0" />
@@ -227,7 +227,7 @@
             </Border>
         </Grid>
 
-        <!-- B06 设备裁决/撤权撤销遮罩：本设备被撤销后停止作答，仅允许返回选择考试 -->
+        <!-- 设备裁决/撤权撤销遮罩：本设备被撤销后停止作答，仅允许返回选择考试 -->
         <Border x:Name="RevokedOverlay"
                 Grid.RowSpan="2"
                 Background="{DynamicResource Brush.Scrim}"

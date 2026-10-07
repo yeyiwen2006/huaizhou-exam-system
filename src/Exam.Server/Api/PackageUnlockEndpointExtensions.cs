@@ -57,7 +57,7 @@ public static class PackageUnlockEndpointExtensions
                     ErrorCodes.ServiceRecovering, "服务器题包解锁材料暂不可用，请稍后重试。",
                     StatusCodes.Status503ServiceUnavailable, retryable: true);
             }
-        }).WithTags("A/B Package unlock");
+        }).WithTags("Package unlock");
         return api;
     }
 

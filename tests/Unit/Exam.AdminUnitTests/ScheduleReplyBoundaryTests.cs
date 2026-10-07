@@ -38,7 +38,7 @@ public sealed class ScheduleReplyBoundaryTests
     [InlineData(0L)]
     [InlineData(2L)]
     [InlineData(long.MaxValue)]
-    public async Task CreateReply_MustStartAtVersionOne(long replyVersion)
+    public async Task ScheduleWithoutLoadedVersionNeverSendsAWrite(long replyVersion)
     {
         using var handler = new ScheduleHandler { SaveReply = Snapshot(replyVersion) };
         using var api = CreateApi(handler);
@@ -46,7 +46,7 @@ public sealed class ScheduleReplyBoundaryTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.SaveScheduleAsync());
 
-        Assert.Null(handler.ExpectedVersions.Single());
+        Assert.Empty(handler.ExpectedVersions);
         Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
     }
 
@@ -58,16 +58,17 @@ public sealed class ScheduleReplyBoundaryTests
         using var handler = new ScheduleHandler
         {
             SaveReply = missingVersions
-                ? Snapshot(1) with { Versions = null! }
-                : Snapshot(1) with { Schedule = null! }
+                ? Snapshot(6) with { Versions = null! }
+                : Snapshot(6) with { Schedule = null! }
         };
         using var api = CreateApi(handler);
         var viewModel = Draft(api);
+        await viewModel.LoadScheduleAsync();
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.SaveScheduleAsync());
 
         Assert.Contains("无法确认保存结果", error.Message, StringComparison.Ordinal);
-        Assert.Contains("尚未读取", viewModel.ScheduleVersionText, StringComparison.Ordinal);
+        Assert.Equal(5, viewModel.LoadedScheduleVersion);
     }
 
     [Fact]
@@ -99,13 +100,14 @@ public sealed class ScheduleReplyBoundaryTests
     {
         using var handler = new ScheduleHandler
         {
-            SaveReply = Snapshot(1) with
+            SaveReply = Snapshot(6) with
             {
                 Schedule = new ScheduleWindow(Window().StartsAt.ToUniversalTime(), Window().EndsAt.ToUniversalTime())
             }
         };
         using var api = CreateApi(handler);
         var viewModel = Draft(api);
+        await viewModel.LoadScheduleAsync();
 
         await viewModel.SaveScheduleAsync();
 
@@ -118,6 +120,7 @@ public sealed class ScheduleReplyBoundaryTests
         using var handler = new ScheduleHandler { DelaySave = true };
         using var api = CreateApi(handler);
         var viewModel = Draft(api);
+        await viewModel.LoadScheduleAsync();
         var saving = viewModel.SaveScheduleAsync();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         viewModel.ExamId = "other-synthetic-exam";
@@ -139,7 +142,8 @@ public sealed class ScheduleReplyBoundaryTests
     {
         ExamId = "synthetic-exam",
         ScheduledStartText = "2026-10-01 10:00 +08:00",
-        ScheduledEndText = "2026-10-01 12:00 +08:00"
+        ScheduledEndText = "2026-10-01 12:00 +08:00",
+        ScheduleChangeReason = "合成回执校验"
     };
 
     private static ScheduleWindow Window() => new(

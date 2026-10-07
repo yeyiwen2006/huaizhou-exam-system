@@ -5,7 +5,7 @@ param(
     [string]$Commit = ''
 )
 
-# B07 student client publish: builds a self-contained, ready-to-copy folder that runs
+# Student client publish: builds a self-contained, ready-to-copy folder that runs
 # on a fresh Windows 10 19041+ x64 machine with a standard (non-admin) account.
 # The target machine needs no .NET SDK/runtime, no TeX distribution and no pre-installed
 # certificate: the deployment config (server.json, copied from server.example.json by the
@@ -64,7 +64,7 @@ finally {
 }
 
 # ---------------------------------------------------------------------------
-# Layout checks: fail the publish if the package would not satisfy B07/S16.
+# Layout checks: fail the publish if the package would not meet the portable student-client requirements.
 # ---------------------------------------------------------------------------
 function Assert-True([bool]$condition, [string]$message) {
     if (-not $condition) { throw "publish layout check failed: $message" }

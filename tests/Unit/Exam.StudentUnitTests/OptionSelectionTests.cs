@@ -6,7 +6,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B03 选项点击语义：单选替换并可再点取消；多选/不定项逐项切换；
+/// 学生导航 选项点击语义：单选替换并可再点取消；多选/不定项逐项切换；
 /// “不作答”与普通选项互斥。所有产物必须通过答卷契约校验。
 /// </summary>
 public sealed class OptionSelectionTests

@@ -65,7 +65,7 @@ public sealed partial class PostgresGradingPersistenceTests
         Assert.Equal(2, pending.SubmissionCount);
         Assert.Equal("pg-late-submission", Assert.Single(pending.Plan.Pending).SubmissionId);
         Assert.False(pending.Readiness.RecalculationReady);
-        // A05 已在收卷事务内创建任务；调度器不能重复建任务或重置它的状态。
+        // 收卷 已在收卷事务内创建任务；调度器不能重复建任务或重置它的状态。
         Assert.Equal(0, pending.Enqueued);
         Assert.Equal(1, (await worker.RunOnceAsync()).Graded);
         var complete = await scheduler.RunOnceAsync(ExamId, 3);

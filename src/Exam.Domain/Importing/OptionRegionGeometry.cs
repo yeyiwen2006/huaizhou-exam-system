@@ -54,7 +54,7 @@ public sealed record OptionRegionNormalizationResult(
 /// <summary>
 /// 选项标签矩形从 PDF 原始坐标到 <c>pageTopLeftNormalizedV1</c> 的纯几何变换，
 /// 以及同名碎片的连通合并判定。与 PDF 读取分离，便于对旋转与裁剪的各组合穷举验证。
-/// 约定见 docs/d03-option-region-contract.md 第 4.3 节。
+/// 约定见 docs/option-region-contract.md 第 4.3 节。
 /// </summary>
 public static class OptionRegionGeometry
 {

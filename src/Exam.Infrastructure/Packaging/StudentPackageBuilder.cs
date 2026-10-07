@@ -26,7 +26,7 @@ public sealed record StudentPackageRequest(
     public IReadOnlyList<string> DisplayResourcePaths { get; init; } = [];
 
     /// <summary>
-    /// 按 questionId 传入本次 D02 成功编译结果，支持 compile-* 独立目录。
+    /// 按 questionId 传入本次 依赖与编译检查 成功编译结果，支持 compile-* 独立目录。
     /// 省略时读取调用方准备的平铺 PDF 目录；调用方须保证仅含本次已验收产物。
     /// </summary>
     public IReadOnlyDictionary<string, TeXCompileResult>? CompiledQuestions { get; init; }

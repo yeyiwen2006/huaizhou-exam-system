@@ -10,8 +10,8 @@ using NpgsqlTypes;
 namespace Exam.Infrastructure.Postgres.Scoring;
 
 /// <summary>
-/// 计分输入的 PostgreSQL 读取：A05 的最终答卷与 A06 的计分规则发布事件。
-/// 列与序列化设置与 A05/A06 的既有读取保持一致（JsonDefaults 的小驼峰），不另造存储格式。
+/// 计分输入的 PostgreSQL 读取：收卷 的最终答卷与 版本服务 的计分规则发布事件。
+/// 列与序列化设置与 收卷/版本服务 的既有读取保持一致（JsonDefaults 的小驼峰），不另造存储格式。
 /// </summary>
 public sealed class PostgresGradingInputs : IGradingInputs
 {

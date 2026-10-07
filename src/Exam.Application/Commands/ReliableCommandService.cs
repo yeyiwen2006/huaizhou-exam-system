@@ -93,7 +93,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<CommandEventView>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"查询原指令结果失败：{exception.Message}");
+                "查询原指令结果失败，请保留原记录并稍后重试。");
         }
 
         if (request.ParticipationId is not null)
@@ -149,7 +149,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<CommandEventView>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"指令未能持久保存：{exception.Message}");
+                "指令未能持久保存，请保留原记录并稍后重试。");
         }
     }
 
@@ -194,7 +194,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<IReadOnlyList<CommandDelivery>>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"读取待处理指令失败：{exception.Message}");
+                "读取待处理指令失败，请保留原记录并稍后重试。");
         }
 
         var deliveries = new List<CommandDelivery>();
@@ -290,7 +290,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<CommandAcknowledgement>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"查询指令失败：{exception.Message}");
+                "查询指令失败，请保留原记录并稍后重试。");
         }
 
         if (commandEvent is null)
@@ -329,7 +329,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<CommandAcknowledgement>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"查询原确认结果失败：{exception.Message}");
+                "查询原确认结果失败，请保留原记录并稍后重试。");
         }
 
         var authorization = await _accessReader.FindAsync(request.ParticipationId, cancellationToken);
@@ -387,7 +387,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<CommandAcknowledgement>.Failure(
                 CommandErrorCode.PersistenceFailed,
-                $"确认结果未能持久保存：{exception.Message}");
+                "确认结果未能持久保存，请保留原记录并稍后重试。");
         }
     }
 

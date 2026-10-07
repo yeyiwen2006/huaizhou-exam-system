@@ -11,7 +11,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B07 服务器信任策略：部署指纹 pin 精确匹配证书，未配置 pin 时保持标准链校验；
+/// 部署信任 服务器信任策略：部署指纹 pin 精确匹配证书，未配置 pin 时保持标准链校验；
 /// 并用本地 SslStream 回路验证生产 HttpStudentApi 的端到端行为
 /// （指纹不符 → UntrustedServerException；指纹相符 → 请求送达真实 TLS 服务器）。
 /// ServerTrust 为进程级静态状态：本类串行使用并在 Dispose 恢复，避免影响其他测试。

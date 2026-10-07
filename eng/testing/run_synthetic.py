@@ -124,7 +124,7 @@ def run_fixture(fixture:Path,output:Path,count:int,duration:int,mode:str,port:in
                 'executables':{p.stem:digest(p) for p in (setup_dll,server_dll,application_dll,load_dll,cli_dll)},'scenarios':[],'status':'failed',
                 'notExecuted':['T01/T02/T03','Real devices and network','Dual-host failover','Full examination duration and maximum real paper']}
         environment=private_environment(configuration)
-        environment.update(ASPNETCORE_ENVIRONMENT='Development',DOTNET_ENVIRONMENT='Development',Database__ApplyMigrations='true',Logging__LogLevel__Default='Warning',EXAM_SYNTHETIC_FIXTURE=str(fixture),EXAM_SYNTHETIC_CONTENT_ROOT=str(ROOT/'src/Exam.Server'))
+        environment.update(ASPNETCORE_ENVIRONMENT='Testing',DOTNET_ENVIRONMENT='Testing',Database__ApplyMigrations='true',Logging__LogLevel__Default='Warning',EXAM_SYNTHETIC_FIXTURE=str(fixture),EXAM_SYNTHETIC_CONTENT_ROOT=str(ROOT/'src/Exam.Server'))
         target=f'http://127.0.0.1:{port}'
         command=[dotnet,str(server_dll),'--port',str(port)]
         server=None

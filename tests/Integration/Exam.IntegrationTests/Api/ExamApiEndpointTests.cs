@@ -67,7 +67,7 @@ public sealed class ExamApiEndpointTests
         new(2026, 9, 22, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task Maps_A02_through_A06_application_entry_points()
+    public async Task Maps_business_application_entry_points()
     {
         await using var application = await CreateApplicationAsync();
         var routes = application.Services
@@ -83,7 +83,7 @@ public sealed class ExamApiEndpointTests
         Assert.Contains("/api/v1/commands/acknowledgements", routes);
         Assert.Contains("/api/v1/submissions/final", routes);
         Assert.DoesNotContain("/api/v1/participation/finalize", routes);
-        Assert.Contains("/api/v1/versioning/exams/{examId}/paper-publications", routes);
+        Assert.DoesNotContain("/api/v1/versioning/exams/{examId}/paper-publications", routes);
         Assert.Contains("/api/v1/versioning/exams/{examId}/grading-publications", routes);
     }
 
@@ -144,31 +144,22 @@ public sealed class ExamApiEndpointTests
         using var client = application.GetTestClient();
         var json = JsonDefaults.Create();
 
-        var createResponse = await client.PostAsJsonAsync(
-            "/api/v1/versioning/exams",
-            new CreateVersionedExamApiRequest(
-                "request-create",
-                "exam-api",
-                new ScheduleWindow(Now.AddHours(1), Now.AddHours(2))),
-            json);
-        var created = await createResponse.Content.ReadFromJsonAsync<ApiEnvelope<ExamVersionSnapshot>>(json);
+        var service = application.Services.GetRequiredService<IExamVersioningService>();
+        Assert.True(service.CreateExam(new("exam-api", new(Now.AddHours(1), Now.AddHours(2)), Now)).Succeeded);
 
         var conflictResponse = await client.PutAsJsonAsync(
             "/api/v1/versioning/exams/exam-api/schedule",
             new UpdateScheduleApiRequest(
                 "request-conflict",
                 0,
-                new ScheduleWindow(Now.AddHours(1), Now.AddHours(3))),
+                new ScheduleWindow(Now.AddHours(1), Now.AddHours(3)), "合成时间调整"),
             json);
         var conflict = await conflictResponse.Content.ReadFromJsonAsync<ApiEnvelope<object>>(json);
 
-        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
-        Assert.NotNull(created?.Result);
-        Assert.Equal("request-create", created.CorrelationId);
-        Assert.Equal("server-test", created.ServerId);
         Assert.Equal(HttpStatusCode.Conflict, conflictResponse.StatusCode);
         Assert.Equal("request-conflict", conflict?.CorrelationId);
         Assert.Equal("VERSION_CONFLICT", conflict?.Error?.Code);
+        Assert.Contains("已更新", conflict?.Error?.Message);
     }
 
     [Fact]
@@ -178,13 +169,9 @@ public sealed class ExamApiEndpointTests
         using var client = application.GetTestClient();
         var json = JsonDefaults.Create();
 
-        var response = await client.PostAsJsonAsync(
-            "/api/v1/versioning/exams",
-            new CreateVersionedExamApiRequest(
-                string.Empty,
-                "exam-no-request",
-                new ScheduleWindow(Now.AddHours(1), Now.AddHours(2))),
-            json);
+        var response = await client.PutAsJsonAsync(
+            "/api/v1/versioning/exams/exam-no-request/schedule",
+            new UpdateScheduleApiRequest(string.Empty, 1, new(Now.AddHours(1), Now.AddHours(2))), json);
         var error = await response.Content.ReadFromJsonAsync<ApiEnvelope<object>>(json);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -193,6 +180,98 @@ public sealed class ExamApiEndpointTests
             .GetRequiredService<IExamVersioningService>()
             .GetExam("exam-no-request")
             .Succeeded);
+    }
+
+    [Theory]
+    [InlineData("POST", "/api/v1/participation/exams/advance-to-answering")]
+    [InlineData("POST", "/api/v1/commands/")]
+    [InlineData("POST", "/api/v1/versioning/exams")]
+    [InlineData("POST", "/api/v1/versioning/exams/exam/schedule/triggers")]
+    [InlineData("POST", "/api/v1/versioning/exams/exam/paper-publications")]
+    [InlineData("POST", "/api/v1/versioning/exams/exam/participants")]
+    [InlineData("PUT", "/api/v1/versioning/exams/exam/participants/participant/state")]
+    [InlineData("POST", "/api/v1/testing/commands")]
+    [InlineData("PUT", "/api/v1/student/exams/exam/metadata")]
+    public async Task Production_routes_do_not_expose_internal_state_mutators(string method, string route)
+    {
+        await using var application = await CreateApplicationAsync();
+        using var client = application.GetTestClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), route)
+        { Content = JsonContent.Create(new { }, options: JsonDefaults.Create()) };
+        using var response = await client.SendAsync(request);
+        Assert.True(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed,
+            $"Internal mutation must not be available: {method} {route} ({response.StatusCode}).");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task TimeModificationRequiresAnAuditReason(string? reason)
+    {
+        await using var app = await CreateApplicationAsync();
+        var service = app.Services.GetRequiredService<IExamVersioningService>();
+        service.CreateExam(new("reason-required", new(Now.AddHours(1), Now.AddHours(2)), Now));
+        using var client = app.GetTestClient();
+        using var response = await client.PutAsJsonAsync("/api/v1/versioning/exams/reason-required/schedule",
+            new UpdateScheduleApiRequest("change-time", 1, new(Now.AddHours(2), Now.AddHours(3)), reason), JsonDefaults.Create());
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(1, service.GetExam("reason-required").Value!.Versions.ScheduleVersion);
+    }
+
+    [Theory]
+    [InlineData("paper-transfer")]
+    [InlineData("paper-review")]
+    public async Task StudentPaperReceiptsNeverContainOtherParticipants(string operation)
+    {
+        await using var app = await CreateApplicationAsync();
+        using var client = app.GetTestClient();
+        var service = app.Services.GetRequiredService<IExamVersioningService>();
+        Assert.True(service.CreateExam(new("private-status", new(Now.AddHours(1), Now.AddHours(2)), Now)).Succeeded);
+        var structure = new PaperStructure([new("q", 1, "s", "g", "single", ["A", "B"])]);
+        Assert.True(service.PublishPaper(new("private-status", 0, "artifact", structure, [],
+            new(true, true, true, true), "synthetic-operator", "合成测试", Now)).Succeeded);
+        foreach (var participant in new[] { "self", "other" })
+            Assert.True(service.RegisterParticipant(new("private-status", participant, ParticipationBusinessState.Waiting)).Succeeded);
+        Assert.True(service.ReportPaperTransfer(new("private-status", "other", 1, 0,
+            PaperTransferOutcome.DownloadFailed, "other-private-diagnostic")).Succeeded);
+        Assert.True(service.ReportPaperTransfer(new("private-status", "self", 1, 1,
+            PaperTransferOutcome.Installed, null)).Succeeded);
+        var body = new
+        {
+            requestId = "own-receipt", paperVersion = 1, installedPaperVersion = 1,
+            outcome = PaperTransferOutcome.Installed, deviceId = "own-device", entryVersion = 1,
+            authorizationVersion = 1
+        };
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var response = await client.PostAsJsonAsync(
+                $"/api/v1/versioning/exams/private-status/participants/self/{operation}", body, JsonDefaults.Create());
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var text = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("other-private-diagnostic", text);
+            var receipt = System.Text.Json.JsonSerializer.Deserialize<ApiEnvelope<ExamVersionSnapshot>>(text, JsonDefaults.Create());
+            Assert.NotNull(receipt?.Result);
+            Assert.Equal("self", Assert.Single(receipt.Result.Participants).Key);
+            Assert.Equal(1, receipt.Result.Versions.PaperVersion);
+        }
+        // Projection must not remove other candidates from the server's authoritative state.
+        var authoritative = service.GetExam("private-status").Value!;
+        Assert.Equal(2, authoritative.Participants.Count);
+        Assert.Equal("other-private-diagnostic", authoritative.Participants["other"].LastError);
+    }
+
+    [Fact]
+    public async Task VersioningErrorsUsePublicChineseMessagesWithoutEchoingInternalDetails()
+    {
+        await using var app = await CreateApplicationAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.GetAsync("/api/v1/versioning/exams/synthetic-private-identifier");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var envelope = await response.Content.ReadFromJsonAsync<ApiEnvelope<object>>(JsonDefaults.Create());
+        Assert.Equal("EXAM_NOT_FOUND", envelope?.Error?.Code);
+        Assert.Contains("找不到", envelope?.Error?.Message);
+        Assert.DoesNotContain("synthetic-private-identifier", envelope?.Error?.Message);
     }
 
     private static async Task<WebApplication> CreateApplicationAsync(bool withTopology = false)
@@ -258,6 +337,11 @@ public sealed class ExamApiEndpointTests
         builder.Services.AddSingleton<IExamVersioningService, InMemoryExamVersioningService>();
 
         var application = builder.Build();
+        application.Use(async (context, next) =>
+        {
+            context.Items["Exam.AuthenticatedOperatorId"] = "synthetic-operator";
+            await next(context);
+        });
         application.MapExamApi();
         await application.StartAsync();
         return application;

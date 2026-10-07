@@ -122,7 +122,7 @@ public sealed class PaperMaterialsVerifier(
                 "源材料归档的考试或试卷版本与本次发布不一致。");
         }
 
-        // 逐题摘要按**请求里的清单**计算：它与已发布结构一致（A06 会再核对一次）。
+        // 逐题摘要按**请求里的清单**计算：它与已发布结构一致（版本服务 会再核对一次）。
         IReadOnlyDictionary<string, string> digests;
         try
         {

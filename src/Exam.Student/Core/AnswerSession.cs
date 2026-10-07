@@ -239,7 +239,7 @@ public sealed class AnswerSession
     }
 
     /// <summary>
-    /// B06 试卷修订版本切换：同一参试/设备/授权不变，仅提升 PaperVersion。
+    /// 试卷修订版本切换：同一参试/设备/授权不变，仅提升 PaperVersion。
     /// 原答案、标记与当前题整体结转为新版本的下一次待保存修改（AnswerVersion+1），
     /// 事务落盘成功后按新版本继续作答；失败进入 WriteBlocked，原可靠状态保留。
     /// 试卷结构可同时替换（服务器拒绝结构性变更，正常情况下题目选项标识不变）。

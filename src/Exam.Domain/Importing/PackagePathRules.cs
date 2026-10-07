@@ -39,7 +39,7 @@ public static class PackagePathRules
 
     /// <summary>
     /// 按 Windows 规则检查每段目录或文件名；与只检查相对路径形状的 IsRelativeAndInside 分开。
-    /// 这不是文件系统边界证明；符号链接、联接点与实际依赖的解析仍须由 D02 在访问时检查。
+    /// 这不是文件系统边界证明；符号链接、联接点与实际依赖的解析仍须由 依赖与编译检查 在访问时检查。
     /// </summary>
     public static bool HasValidWindowsSegments(string path) =>
         path.Split(['/', '\\']).All(segment =>

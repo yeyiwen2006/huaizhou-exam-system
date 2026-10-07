@@ -1,7 +1,7 @@
 namespace Exam.Contracts.Importing;
 
 /// <summary>
-/// 编译与依赖问题的稳定类别。C05 的导入预览、C06 的页面与 E 的 CLI 据此分类展示；
+/// 编译与依赖问题的稳定类别。试题修订 的导入预览、回收提示的页面与 CLI 据此分类展示；
 /// 客户端不解析中文文案分支。
 /// </summary>
 public enum TeXIssueCode

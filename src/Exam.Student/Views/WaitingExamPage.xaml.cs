@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Windows;
@@ -326,7 +326,7 @@ public partial class WaitingExamPage : UserControl
         MaybeAutoRefreshForUpdate();
     }
 
-    /// <summary>B06：等待/已下载阶段收到试卷更新事件后自动重新获取新版资料。</summary>
+    /// <summary>等待/已下载阶段收到试卷更新事件后自动重新获取新版资料。</summary>
     private async void MaybeAutoRefreshForUpdate()
     {
         if (_lifetime.IsCancellationRequested || _busy || _navigated || _updateRefreshQueued ||
@@ -465,7 +465,7 @@ public partial class WaitingExamPage : UserControl
         TimeText.Text = $"开始时间：{start:yyyy-MM-dd HH:mm}    结束时间：{end:yyyy-MM-dd HH:mm}";
     }
 
-    /// <summary>B06 设备裁决：待裁决状态每 15 秒自动重试准备，裁决通过后自动继续。</summary>
+    /// <summary>设备裁决：待裁决状态每 15 秒自动重试准备，裁决通过后自动继续。</summary>
     private void MaybeRetryArbitration()
     {
         if (_lifetime.IsCancellationRequested || _navigated || _busy || _runtime?.Manager is not { DeviceDecisionPending: true })

@@ -70,6 +70,43 @@ public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture f
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ScheduleRetryIgnoresArrivalTimeButPreservesOriginalAuditAndLegacyHashes(bool legacyHash, bool withAudit)
+    {
+        var now = InitialNow.AddYears(100);
+        var exam = "audit-replay-" + Guid.NewGuid().ToString("N");
+        var service = new PostgresExamVersioningService(fixture.DataSource);
+        Assert.True(service.CreateExam(new(exam, new(now.AddHours(1), now.AddHours(2)), now, exam + "-create")).Succeeded);
+        var request = new UpdateScheduleRequest(exam, 1, new(now.AddHours(2), now.AddHours(3)), now, exam + "-update")
+        { Operator = withAudit ? "synthetic-operator" : null, Reason = withAudit ? "合成延时" : null };
+        Assert.True(service.UpdateSchedule(request).Succeeded);
+        if (legacyHash)
+        {
+            var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                JsonSerializer.Serialize(request, JsonDefaults.Create()))));
+            await using var legacy = fixture.DataSource.CreateCommand("UPDATE exam.version_idempotency SET payload_hash=$1 WHERE request_id=$2;");
+            legacy.Parameters.AddWithValue(hash); legacy.Parameters.AddWithValue(request.RequestId);
+            Assert.Equal(1, await legacy.ExecuteNonQueryAsync());
+        }
+        var reopened = new PostgresExamVersioningService(fixture.DataSource);
+        Assert.Equal(2, reopened.UpdateSchedule(request with { Now = now.AddMinutes(1) }).Value!.Versions.ScheduleVersion);
+        foreach (var changed in new[] { request with { Operator = "other-operator" },
+                     request with { Reason = "另一原因" }, request with { Schedule = request.Schedule with { EndsAt = now.AddHours(4) } } })
+            Assert.Equal(VersioningErrorCode.IdempotencyConflict, reopened.UpdateSchedule(changed).ErrorCode);
+        await using var query = fixture.DataSource.CreateCommand(
+            "SELECT payload::text FROM exam.version_events WHERE exam_id=$1 AND operation_type='schedule.update';");
+        query.Parameters.AddWithValue(exam);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var original = JsonSerializer.Deserialize<UpdateScheduleRequest>(reader.GetString(0), JsonDefaults.Create());
+        Assert.Equal(request, original);
+        Assert.False(await reader.ReadAsync());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ImportedRulesSurviveCommandReplay_WithoutLeakingAnswersIntoSnapshots(bool legacyReceipt)

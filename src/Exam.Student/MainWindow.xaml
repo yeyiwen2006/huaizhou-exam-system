@@ -1,4 +1,4 @@
-﻿<Window x:Class="Exam.Student.MainWindow"
+<Window x:Class="Exam.Student.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="怀籀传承在线考试系统 · 学生端"
@@ -9,7 +9,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Brush.Background}"
         FontFamily="{DynamicResource Font.Family}">
-    <!-- B06 将在此窗口实现普通账户全屏霸屏；B01 先保证页面流程完整 -->
+    <!-- 激活后以普通账户权限全屏显示，并拦截离开考试的快捷键 -->
     <DockPanel>
         <TextBlock x:Name="PresenceStatus" DockPanel.Dock="Bottom" Text="{Binding PresenceStatus}"
                    Foreground="#B45309" TextAlignment="Center" TextWrapping="Wrap">

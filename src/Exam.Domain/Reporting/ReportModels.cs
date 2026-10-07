@@ -3,7 +3,7 @@ using Exam.Domain.Scoring;
 
 namespace Exam.Domain.Reporting;
 
-// G01 calculation input. The production adapter must obtain and validate the
+// report calculation input. The production adapter must obtain and validate the
 // authoritative participation, collection, rule, and display versions first.
 public sealed record ReportQuestion(string QuestionId, int QuestionNo, ExactRational MaximumScore);
 

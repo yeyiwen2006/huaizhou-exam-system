@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Exam.IntegrationTests.Api;
 
 /// <summary>
-/// D05 计分状态端点：路由、返回形状与禁缓存。
+/// 评分处理 计分状态端点：路由、返回形状与禁缓存。
 /// 用最小测试宿主加内存计分输入，验证的正是生产端点读取同一服务的结果，
 /// 不代替报表门与重算后台各自的模块用例。
 /// </summary>

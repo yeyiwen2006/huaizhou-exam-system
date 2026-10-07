@@ -171,7 +171,7 @@ public sealed class PaperUpdateCoordinator : IAsyncDisposable
     }
 
     /// <summary>
-    /// B06 修订定位：PaperUpdated 指令元数据携带本次发布的变更题目标识清单；
+    /// 修订定位：PaperUpdated 指令元数据携带本次发布的变更题目标识清单；
     /// 元数据缺失或损坏（旧版服务器/指令）时返回空清单，横幅退化为普通修订提示。
     /// </summary>
     private IReadOnlyList<string> ChangedQuestionsFor(long version)

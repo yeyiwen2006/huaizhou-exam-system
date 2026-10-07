@@ -13,7 +13,7 @@ using Exam.Contracts.Versioning;
 namespace Exam.AdminUnitTests;
 
 /// <summary>
-/// C04 监测页用例：字段、状态、回收与裁决全部来自服务器权威快照（合成数据），
+/// 监测 监测页用例：字段、状态、回收与裁决全部来自服务器权威快照（合成数据），
 /// 界面不自行拼接来源，也不把非法快照显示成半份状态。
 /// </summary>
 public sealed class MonitoringViewModelTests

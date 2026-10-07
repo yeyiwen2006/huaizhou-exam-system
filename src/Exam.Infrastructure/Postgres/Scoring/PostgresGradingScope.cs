@@ -6,7 +6,7 @@ using NpgsqlTypes;
 namespace Exam.Infrastructure.Postgres.Scoring;
 
 /// <summary>
-/// 范围来自 A05 全部最终答卷，实际计分版本来自 D04 成绩表，而不是 outbox 入队目标。
+/// 范围来自 收卷 全部最终答卷，实际计分版本来自 精确计分 成绩表，而不是 outbox 入队目标。
 /// 旧任务可以按更新规则产出结果；反之，任务已完成但派生成绩缺失时仍需恢复重算。
 /// 不读取答案；当前有效成绩已覆盖的同版本/旧版本错误不会永久阻断出表。
 /// </summary>

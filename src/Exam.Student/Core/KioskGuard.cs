@@ -14,7 +14,7 @@ public enum KioskKeyDecision
 }
 
 /// <summary>
-/// B06 普通权限霸屏：低级键盘钩子（WH_KEYBOARD_LL）在标准用户会话内即可安装，
+/// 普通权限霸屏：低级键盘钩子（WH_KEYBOARD_LL）在标准用户会话内即可安装，
 /// 拦截 Win、Ctrl+Esc、Alt+Tab、Alt+Esc、Alt+F4 等离开考试界面的快捷键。
 /// Ctrl+Alt+Del 由 Windows 安全注意画面处理，用户态无法拦截，属文档注明的行为边界；
 /// 失焦由 FocusTracker 做会话内统计，不依赖钩子。钩子回调须保持极简，不做任何阻塞操作。

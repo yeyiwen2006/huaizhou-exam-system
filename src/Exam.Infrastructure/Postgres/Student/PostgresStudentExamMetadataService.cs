@@ -29,7 +29,7 @@ public sealed class PostgresStudentExamMetadataService(NpgsqlDataSource dataSour
             IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
 
         // Only this operation uses the metadata request lock; locking the exam next
-        // serializes metadata readiness with A06 publication and start/end transitions.
+        // serializes metadata readiness with versioning publication and start/end transitions.
         await using (var requestLock = new NpgsqlCommand(
                          "SELECT pg_advisory_xact_lock(hashtextextended(@key, 0));", connection, transaction))
         {
@@ -85,7 +85,7 @@ public sealed class PostgresStudentExamMetadataService(NpgsqlDataSource dataSour
             throw Rule(ParticipationErrorCodes.VersionConflict, "考试公开配置已变化，请读取最新版本后重试。");
         }
 
-        // A01-A06 start with an unavailable instruction version of 1. The first real
+        // shared contract-versioning start with an unavailable instruction version of 1. The first real
         // document fills that version; subsequent publications always advance it.
         var instructionsVersion = instructionsReady
             ? checked(currentInstructionsVersion + 1)

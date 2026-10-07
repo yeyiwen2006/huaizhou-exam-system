@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -24,6 +24,10 @@
     <ProjectReference Include="..\..\..\src\Exam.Management\Exam.Management.csproj" />
     <ProjectReference Include="..\..\..\src\Exam.Infrastructure\Exam.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\src\Exam.Cli\Exam.Cli.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="MigrationFixtures/SafetyProbe.sql" LogicalName="Exam.IntegrationTests.Migrations.209901010000_safety_probe.sql" />
   </ItemGroup>
 
 </Project>

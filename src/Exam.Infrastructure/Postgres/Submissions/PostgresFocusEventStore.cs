@@ -8,7 +8,7 @@ namespace Exam.Infrastructure.Postgres.Submissions;
 /// <summary>
 /// PostgreSQL focus-loss event store. Authorization is validated against the canonical
 /// exam.participations row inside the same transaction that inserts the events;
-/// (participation_id, event_id) conflicts are ignored so client retries are idempotent.
+/// An initial zero-duration event can be completed once; retries cannot overwrite a completed interval.
 /// </summary>
 public sealed class PostgresFocusEventStore(NpgsqlDataSource dataSource) : IFocusEventStore
 {
@@ -69,7 +69,13 @@ public sealed class PostgresFocusEventStore(NpgsqlDataSource dataSource) : IFocu
             VALUES
                 (@participation_id, @event_id, @exam_id, @candidate_id, @entry_version, @device_id,
                  @authorization_version, @paper_version, @lost_at, @regained_at, @duration_ms, @received_at)
-            ON CONFLICT (participation_id, event_id) DO NOTHING;
+            ON CONFLICT (participation_id, event_id) DO UPDATE
+               SET regained_at = EXCLUDED.regained_at, duration_ms = EXCLUDED.duration_ms
+             WHERE exam.focus_loss_events.duration_ms = 0 AND EXCLUDED.duration_ms > 0
+               AND exam.focus_loss_events.lost_at = EXCLUDED.lost_at
+               AND exam.focus_loss_events.entry_version = EXCLUDED.entry_version
+               AND exam.focus_loss_events.device_id = EXCLUDED.device_id
+               AND exam.focus_loss_events.authorization_version = EXCLUDED.authorization_version;
             """;
         foreach (var item in request.Events)
         {
@@ -106,7 +112,7 @@ public sealed class PostgresFocusEventStore(NpgsqlDataSource dataSource) : IFocu
     {
         const string sql = """
             SELECT participation_id, candidate_id,
-                   count(*)::int, sum(duration_ms), max(lost_at)
+                   count(*)::int, sum(duration_ms)::bigint, max(lost_at)
               FROM exam.focus_loss_events
              WHERE exam_id = @exam_id
              GROUP BY participation_id, candidate_id

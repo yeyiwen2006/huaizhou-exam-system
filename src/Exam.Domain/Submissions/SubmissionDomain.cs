@@ -97,7 +97,7 @@ public enum FocusEventPersistenceStatus
 }
 
 /// <summary>
-/// B06 失焦事件留痕：以 (ParticipationId, EventId) 幂等去重；授权元组必须与参试记录当前授权一致。
+/// 失焦事件留痕：以 (ParticipationId, EventId) 幂等去重；授权元组必须与参试记录当前授权一致。
 /// 已交卷后仍接受补报（事件产生于作答期间，属事后审计记录）。
 /// </summary>
 public interface IFocusEventStore

@@ -75,7 +75,7 @@ public sealed class OptionRegionExtractionTests : IDisposable
     }
 
     /// <summary>
-    /// 可选验收输出：导出这道合成题的 PDF 与坐标产物，供 B03 按同一格式接入并核对点击位置。
+    /// 可选验收输出：导出这道合成题的 PDF 与坐标产物，供 学生导航 按同一格式接入并核对点击位置。
     /// 与真实材料无关，全部为合成内容。
     /// </summary>
     private void ExportForB03(OptionRegionArtifact artifact)

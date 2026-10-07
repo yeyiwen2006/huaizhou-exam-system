@@ -62,7 +62,7 @@ internal sealed class SyntheticImportFixture : IDisposable
 
     private static byte[] MarkedPdf()
     {
-        // Deterministic PDF test double with the same hidden named-link contract as D03.
+        // Deterministic PDF test double with the same hidden named-link contract as student package.
         var objects = new[]
         {
             "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(opt:q1:A) [3 0 R /XYZ 60 675 null] (opt:q1:B) [3 0 R /XYZ 60 635 null]] >> >> >>",

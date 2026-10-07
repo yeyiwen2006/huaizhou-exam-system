@@ -13,7 +13,7 @@ public sealed class SubmissionService : IDisposable
     private readonly Func<string> _receiptIdFactory;
     private readonly SubmissionWriteAdmission _writeSlots;
     private readonly IParticipationAccessReader? _accessReader;
-    private readonly Func<string, PaperStructure?>? _paperReader;
+    private readonly Func<string, CancellationToken, ValueTask<PaperStructure?>>? _paperReader;
 
     public SubmissionService(
         ISubmissionStore store,
@@ -24,7 +24,8 @@ public sealed class SubmissionService : IDisposable
         IParticipationAccessReader? accessReader = null,
         int maxQueuedWritesPerClass = 300,
         TimeSpan? writeQueueTimeout = null,
-        Func<string, PaperStructure?>? paperReader = null)
+        Func<string, PaperStructure?>? paperReader = null,
+        Func<string, CancellationToken, ValueTask<PaperStructure?>>? asyncPaperReader = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(gradingQueue);
@@ -38,7 +39,8 @@ public sealed class SubmissionService : IDisposable
         _timeProvider = timeProvider ?? TimeProvider.System;
         _receiptIdFactory = receiptIdFactory ?? (() => Guid.NewGuid().ToString("N"));
         _accessReader = accessReader;
-        _paperReader = paperReader;
+        _paperReader = asyncPaperReader ?? (paperReader is null
+            ? null : (examId, _) => ValueTask.FromResult(paperReader(examId)));
         _writeSlots = new SubmissionWriteAdmission(maxConcurrentWrites, maxQueuedWritesPerClass,
             writeQueueTimeout ?? TimeSpan.FromSeconds(5));
     }
@@ -65,7 +67,7 @@ public sealed class SubmissionService : IDisposable
 
         try
         {
-            var sheetError = ValidateSheet(request.ExamId, request.Answers, request.CurrentQuestionId);
+            var sheetError = await ValidateSheetAsync(request.ExamId, request.Answers, request.CurrentQuestionId, cancellationToken);
             if (sheetError is not null)
                 return SubmissionOperationResult<PersistedProgress>.Failure(SubmissionErrorCode.InvalidRequest, sheetError);
             var result = await _store.SaveProgressAsync(
@@ -100,7 +102,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<PersistedProgress>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"进度未能持久保存：{exception.Message}");
+                "进度未能持久保存，请保留原记录并稍后重试。");
         }
         finally
         {
@@ -125,7 +127,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.ServiceRecovering,
-                "交卷写入已达并发上限，请沿用原 submissionId 重试。");
+                "交卷写入已达并发上限，请沿用原交卷记录重试。");
         }
 
         try
@@ -134,7 +136,7 @@ public sealed class SubmissionService : IDisposable
             var existing = await _store.FindSubmissionAsync(request.ExamId, request.CandidateId, cancellationToken);
             if (existing is null)
             {
-                var sheetError = ValidateSheet(request.ExamId, request.FrozenAnswers, null);
+                var sheetError = await ValidateSheetAsync(request.ExamId, request.FrozenAnswers, null, cancellationToken);
                 if (sheetError is not null)
                     return SubmissionOperationResult<SubmissionReceipt>.Failure(SubmissionErrorCode.InvalidRequest, sheetError);
             }
@@ -147,7 +149,7 @@ public sealed class SubmissionService : IDisposable
             {
                 return SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.SubmissionIdConflict,
-                    "submissionId 已被其他考生使用。");
+                    "此交卷记录已被其他考生使用。");
             }
 
             if (result.Status == SubmissionPersistenceStatus.AuthorizationRevoked)
@@ -197,7 +199,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"未确认交卷成功，请沿用原 submissionId 查询或重试：{exception.Message}");
+                "尚未确认交卷成功，请保留原交卷记录并稍后查询或重试。");
         }
         finally
         {
@@ -205,10 +207,12 @@ public sealed class SubmissionService : IDisposable
         }
     }
 
-    private string? ValidateSheet(string examId, IReadOnlyDictionary<string, AnswerValue> answers, string? current)
+    private async ValueTask<string?> ValidateSheetAsync(
+        string examId, IReadOnlyDictionary<string, AnswerValue> answers, string? current,
+        CancellationToken cancellationToken)
     {
-        if (_paperReader is null) return null; // 兼容独立的存储层测试；生产注册必须提供发布清单。
-        var paper = _paperReader(examId);
+        if (_paperReader is null) return null; // 独立存储测试可不配置；正式服务必须读取已发布试卷。
+        var paper = await _paperReader(examId, cancellationToken);
         if (paper is null) return "服务器尚无可核对的已发布试卷。";
         var problem = AnswerSheetContract.Validate(paper, answers);
         if (problem is not null) return problem;
@@ -244,7 +248,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"回执查询失败：{exception.Message}");
+                "回执查询失败，请保留原记录并稍后重试。");
         }
     }
 
@@ -289,7 +293,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.PersistenceFailed,
-                $"回执查询失败：{exception.Message}");
+                "回执查询失败，请保留原记录并稍后重试。");
         }
     }
 

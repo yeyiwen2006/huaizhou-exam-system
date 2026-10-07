@@ -5,7 +5,7 @@ using NpgsqlTypes;
 
 namespace Exam.Infrastructure.Postgres.Scoring;
 
-/// <summary>缺失/旧成绩的幂等重算入队；不触碰 A05 原答案、回执和普通提交去重逻辑。</summary>
+/// <summary>缺失/旧成绩的幂等重算入队；不触碰 收卷 原答案、回执和普通提交去重逻辑。</summary>
 public sealed class PostgresRecalculationQueue(NpgsqlDataSource dataSource, TimeProvider? timeProvider = null,
     PostgresActiveNodeWriteGuard? writeGuard = null) : IRecalculationQueue
 {

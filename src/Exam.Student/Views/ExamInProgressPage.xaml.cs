@@ -12,10 +12,10 @@ using Exam.Student.Core;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 答题页（B03 接入后为真实作答页）：左侧导航跳题，右侧原版题目 PDF 与圆形选项控件；
-/// 答案、当前题与私人标记经 B04 会话可靠落盘，交卷走 B05 同步服务——
+/// 答题页：左侧导航跳题，右侧原版题目 PDF 与圆形选项控件；
+/// 答案、当前题与私人标记通过本地会话可靠落盘，交卷由同步服务处理——
 /// 本地固定后由服务上传并换取服务器持久化回执，仅取得可信回执才跳转成功页。
-/// 选项坐标来自 D03 契约的 option-regions.json；未提供坐标（v1 包）仅原版显示，不猜测点击位置。
+/// 选项坐标来自 选项区域与题包 契约的 option-regions.json；未提供坐标（v1 包）仅原版显示，不猜测点击位置。
 /// </summary>
 public partial class ExamInProgressPage : UserControl
 {
@@ -93,7 +93,7 @@ public partial class ExamInProgressPage : UserControl
         _sync = new SubmissionSyncService(App.Services.Api, runtime, device, clock: App.Services.Clock, focus: _focus);
         _sync.StatusChanged += OnSyncStatusChanged;
 
-        // B06 在线更新：编排器状态与切换结果驱动提示横幅与复核记录。
+        // 在线更新：编排器状态与切换结果驱动提示横幅与复核记录。
         runtime.PaperUpdate.StatusChanged += OnPaperUpdateStatusChanged;
         runtime.PaperUpdate.UpdateInstalled += OnPaperUpdateInstalled;
 
@@ -118,7 +118,7 @@ public partial class ExamInProgressPage : UserControl
         Unloaded += async (_, _) =>
         {
             _clock?.Stop();
-            // B06 失焦留痕：页面卸载时闭合尚未恢复的失焦段，先落盘再触发一个补报回合。
+            // 失焦留痕：页面卸载时闭合尚未恢复的失焦段，先落盘再触发一个补报回合。
             var wasUnfocused = _focus.IsUnfocused;
             _focus.Close();
             if (wasUnfocused && _focus.Snapshot().LastOrDefault() is { } closingFocus)
@@ -160,7 +160,7 @@ public partial class ExamInProgressPage : UserControl
         }
     }
 
-    /// <summary>B06 失焦检测：窗口失焦/复焦经窗口事件驱动；复焦立即唤醒同步服务补报。</summary>
+    /// <summary>失焦检测：窗口失焦/复焦经窗口事件驱动；复焦立即唤醒同步服务补报。</summary>
     private void AttachFocusWindow()
     {
         if (_focusWindow is not null) return;
@@ -183,7 +183,7 @@ public partial class ExamInProgressPage : UserControl
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
         if (_lifetime.IsCancellationRequested) return;
-        if (_focus.OnFocusLost()) _ = KickSyncAfterRefocusAsync();
+        if (_focus.OnFocusLost()) _ = PersistAndReportFocusAsync(_focus.CurrentLoss);
         RefreshFocusStatus();
     }
 
@@ -192,14 +192,14 @@ public partial class ExamInProgressPage : UserControl
         if (_lifetime.IsCancellationRequested) return;
         if (_focus.OnFocusRegained())
         {
-            // B06 失焦留痕：该段失焦写入本地发件箱；复焦立即触发同步回合补报。
+            // 失焦留痕：该段失焦写入本地发件箱；复焦立即触发同步回合补报。
             _ = PersistAndReportFocusAsync(_focus.Snapshot().LastOrDefault());
             _ = KickSyncAfterRefocusAsync();
         }
         RefreshFocusStatus();
     }
 
-    /// <summary>把一段已完成的失焦先落盘再唤醒同步；本地失败不阻塞作答，由状态行提示。</summary>
+    /// <summary>把失焦开始或完成记录先落盘再唤醒同步；本地失败不阻塞作答，由状态行提示。</summary>
     private async Task PersistAndReportFocusAsync(FocusLossEvent? focusEvent)
     {
         if (focusEvent is null || _lifetime.IsCancellationRequested) return;
@@ -231,7 +231,7 @@ public partial class ExamInProgressPage : UserControl
     private string? StudentNotice()
     {
         if (_runtime.Answers?.HasPendingSubmission == true)
-            return "答卷已提交，但尚未保存到本机。请点击“重试保存”，或联系监考人员。";
+            return "已停止作答，但答卷尚未保存到本机。请点击“重试保存”，或联系监考人员。";
         if (_runtime.Answers?.Status == AnswerSessionStatus.WriteBlocked)
             return "作答内容暂时无法保存到本机，已暂停作答。请点击“重试保存”，或联系监考人员。";
         if (_runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
@@ -239,13 +239,13 @@ public partial class ExamInProgressPage : UserControl
         if (_syncStopped || _sync.Phase == SubmissionSyncPhase.Blocked)
             return "作答内容已保存在本机，但暂时无法同步到服务器。请联系监考人员。";
         if (_runtime.HasFixedSubmission && _sync.Phase != SubmissionSyncPhase.Confirmed)
-            return "答卷已提交，正在等待服务器确认，请勿关闭程序。";
+            return "正在提交答卷，尚未收到服务器确认，请勿关闭程序。";
         if (_sync.Phase == SubmissionSyncPhase.WaitingRetry)
             return "网络连接中断，作答内容已保存在本机，恢复后将自动同步。";
         return null;
     }
 
-    /// <summary>B06 在线更新：状态横幅按阶段着色。</summary>
+    /// <summary>在线更新：状态横幅按阶段着色。</summary>
     private void OnPaperUpdateStatusChanged(object? sender, PaperUpdateStatusChangedEventArgs e)
     {
         if (_lifetime.IsCancellationRequested) { return; }
@@ -318,7 +318,7 @@ public partial class ExamInProgressPage : UserControl
         }
     }
 
-    /// <summary>B06 设备裁决：本设备被撤销后返回选择考试（本机已有答案已保留）。</summary>
+    /// <summary>设备裁决：本设备被撤销后返回选择考试（本机已有答案已保留）。</summary>
     private async void OnRevokedBack(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is not { } window) { return; }
@@ -756,7 +756,7 @@ public partial class ExamInProgressPage : UserControl
             QuestionView.UpdateAnswer(currentAnswers.Answers.TryGetValue(question.QuestionId, out var saved)
                 ? saved : AnswerValue.Empty());
 
-        // B06 设备裁决：授权撤销后全页遮蔽，只保留返回入口。
+        // 设备裁决：授权撤销后全页遮蔽，只保留返回入口。
         var revoked = _runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked ||
                       _runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied;
         RevokedOverlay.Visibility = revoked ? Visibility.Visible : Visibility.Collapsed;
@@ -806,7 +806,7 @@ public partial class ExamInProgressPage : UserControl
         ReviewUpdateButton.Visibility = _reviewPending ? Visibility.Visible : Visibility.Collapsed;
         ReviewUpdateButton.IsEnabled = _reviewPending && !_reviewSaving && !_runtime.IsPaperUpdateInProgress;
         if (_reviewPending) ReviewUpdateButton.Content = "已查看更正后的试题";
-        // B06 修订定位：复核期间提供“跳到第一道修订题”；清单缺失或不在当前试卷时隐藏。
+        // 修订定位：复核期间提供“跳到第一道修订题”；清单缺失或不在当前试卷时隐藏。
         var changedQuestions = (_changedQuestionIds ?? [])
             .Select(id => _navigator?.Find(id)).OfType<PaperQuestionStructure>().ToArray();
         JumpToChangedButton.Visibility =

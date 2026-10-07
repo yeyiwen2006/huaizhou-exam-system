@@ -9,8 +9,8 @@ public sealed record GradingBatchReport(int Claimed, int Graded, int Failed, IRe
 }
 
 /// <summary>
-/// 有界批次协调器：A05 outbox → 冻结答卷和最新有效规则 → D04 精确计分 → 结果持久化 → 结项。
-/// 不注册生产后台线程；生产调度仍须接入主备写门、重算范围与报表版本门。
+/// 有界批次协调器：收卷 outbox → 冻结答卷和最新有效规则 → 精确计分 → 结果持久化 → 结项。
+/// 调度由业务宿主的后台工作器承担，并受主备写门、重算范围及报表版本校验保护。
 /// </summary>
 public sealed class GradingCoordinator
 {

@@ -69,7 +69,7 @@ public interface IGradingResultStore
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>待计分任务。来自 A05 的计分 outbox；同一（答卷，规则版本）只会有一行。</summary>
+/// <summary>待计分任务。来自 收卷 的计分 outbox；同一（答卷，规则版本）只会有一行。</summary>
 public sealed record PendingGradingTask(string SubmissionId, long GradingVersion, int AttemptCount)
 {
     public const int MaxErrorLength = 2000;

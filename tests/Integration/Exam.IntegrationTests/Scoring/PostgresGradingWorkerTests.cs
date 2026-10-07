@@ -9,7 +9,7 @@ using NpgsqlTypes;
 namespace Exam.IntegrationTests.Scoring;
 
 /// <summary>
-/// D05 生产后台消费接线的 PostgreSQL 集成用例：主节点写门、持久任务消费与重算对账。
+/// 评分处理 生产后台消费接线的 PostgreSQL 集成用例：主节点写门、持久任务消费与重算对账。
 ///
 /// 复用同类的夹具与种子（已发布计分版本 3、答卷初始计分版本 1、outbox 中一条目标版本 1 的任务），
 /// 因此这些用例验证的正是生产后台在真实数据库上的行为，而不是替身。

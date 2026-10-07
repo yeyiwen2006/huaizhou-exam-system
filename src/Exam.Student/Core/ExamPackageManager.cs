@@ -12,14 +12,14 @@ namespace Exam.Student.Core;
 
 public sealed record PackageDownloadProgress(long ReceivedBytes, long TotalBytes);
 
-/// <summary>B06 在线更新结果：成功时 InstalledPaperVersion 为切换后的版本；失败保留旧版可继续作答。</summary>
+/// <summary>在线更新结果：成功时 InstalledPaperVersion 为切换后的版本；失败保留旧版可继续作答。</summary>
 public sealed record PaperUpdateResult(bool Succeeded, long InstalledPaperVersion, string? Error)
 {
     public static PaperUpdateResult Ok(long version) => new(true, version, null);
     public static PaperUpdateResult Fail(string error) => new(false, 0, error);
 }
 
-/// <summary>B02 control operations are serialized and ambiguous requests survive in a DPAPI journal.</summary>
+/// <summary>Package control operations are serialized and ambiguous requests survive in a DPAPI journal.</summary>
 public sealed partial class ExamPackageManager : IDisposable
 {
     private const long MaximumPackageBytes = 512L * 1024 * 1024;
@@ -66,7 +66,7 @@ public sealed partial class ExamPackageManager : IDisposable
         }
         catch { _store.Dispose(); throw; }
         // An earlier run already started this participation. A missing answer database
-        // must not be mistaken for a first-time blank exam during B04 recovery.
+        // must not be mistaken for a first-time blank exam during local persistence recovery.
         RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null;
         CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
             _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
@@ -92,7 +92,7 @@ public sealed partial class ExamPackageManager : IDisposable
     public DateTimeOffset? OverriddenScheduledStart => _state.OverriddenScheduledStart;
     /// <summary>ScheduleChanged 事件携带的最新结束时间；null 表示未收到过时间更新。</summary>
     public DateTimeOffset? OverriddenScheduledEnd => _state.OverriddenScheduledEnd;
-    /// <summary>B06 设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
+    /// <summary>设备裁决：准备记录处于待裁决状态（同账号另一设备登录触发），等待考务决定。</summary>
     public bool DeviceDecisionPending =>
         !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
         _state.Preparation is { Status: EntryPreparationStatus.DeviceDecisionPending };

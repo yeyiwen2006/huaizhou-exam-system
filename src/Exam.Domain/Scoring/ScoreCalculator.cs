@@ -7,7 +7,7 @@ namespace Exam.Domain.Scoring;
 
 /// <summary>
 /// 一道题的计分输入。计分分支按**参考答案的选项数量**选择（1 个走 oneCorrect，多个走 multipleCorrect），
-/// 与 D01 校验器保持一致；题组题型同时限定参考答案数量和可达作答范围。
+/// 与 校验器保持一致；题组题型同时限定参考答案数量和可达作答范围。
 /// </summary>
 public sealed record QuestionRule(
     string QuestionId,

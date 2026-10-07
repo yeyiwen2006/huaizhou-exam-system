@@ -6,7 +6,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// B06 发件箱补报验收：失焦事件批量上报并在确认后清空、临时失败保留原事件标识重试、
+/// 失焦记录 发件箱补报验收：失焦事件批量上报并在确认后清空、临时失败保留原事件标识重试、
 /// 复核确认上报沿用入队时的请求标识、明确的不可重试拒绝按终态删除、重启后待报记录保留。
 /// </summary>
 public sealed partial class SubmissionSyncServiceTests

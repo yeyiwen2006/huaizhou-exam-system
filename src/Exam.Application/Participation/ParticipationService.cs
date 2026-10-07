@@ -455,7 +455,7 @@ public sealed class ParticipationService(
     /// <summary>
     /// State-machine reference operation for isolated participation tests only.
     /// Do not expose this method through an API or CLI: production submission must
-    /// persist the final answers, receipt and submitted state in the single A05
+    /// persist the final answers, receipt and submitted state in the single submission
     /// submission transaction reached through /api/v1/submissions/final.
     /// </summary>
     public async ValueTask<ParticipationResult> FinalizeAsync(
@@ -507,7 +507,7 @@ public sealed class ParticipationService(
     }
 
     /// <summary>
-    /// A04 calls this when the persisted START transition wins. Waiting-state
+    /// reliable command calls this when the persisted START transition wins. Waiting-state
     /// advancement and waiting-page withdrawal use the same participation transaction,
     /// so their race has one deterministic serialized winner.
     /// </summary>

@@ -15,7 +15,7 @@ using Exam.Student.Core;
 namespace Exam.StudentUnitTests;
 
 /// <summary>
-/// D03 发布流程的端到端用例：**真编译**带标记的合成题 → 发布（抽取坐标 + 组包 + 加密）→
+/// 选项区域与题包 发布流程的端到端用例：**真编译**带标记的合成题 → 发布（抽取坐标 + 组包 + 加密）→
 /// 按学生端路径解密 → 学生清单 → 学生端读取器读出坐标。
 ///
 /// 用真实 XeLaTeX 才能产生带隐藏外观链接的 PDF，因此标记 Category=Latex：

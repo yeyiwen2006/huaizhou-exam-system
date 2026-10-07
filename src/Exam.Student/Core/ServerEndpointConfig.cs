@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace Exam.Student.Core;
 
 /// <summary>
-/// B07 发布配置：部署时放在学生端可执行文件旁的 server.json，向全新设备提供
+/// 发布配置：部署时放在学生端可执行文件旁的 server.json，向全新设备提供
 /// 可信服务器地址（与可选的服务器证书 SHA-256 指纹）。文件由监考/部署方放置，
 /// 不随仓库内置真实地址或凭据；缺失或无效时界面给出明确提示，手动输入仍可用。
 /// </summary>

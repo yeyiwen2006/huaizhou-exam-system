@@ -101,7 +101,7 @@ public sealed partial class LoadRunner
                     await MeasureAsync("command-create", index, createDue, async cancellation =>
                     {
                         if (hub.State != HubConnectionState.Connected) throw new InvalidOperationException("hub-not-connected");
-                        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/commands/");
+                        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/testing/commands");
                         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _manifest.OperatorToken);
                         request.Content = JsonContent.Create(new CreateCommandEventRequest(eventIds[index][0], eventIds[index][0],
                             s.ExamId, s.ParticipationId, s.EntryVersion, CommandEventType.ScheduleChanged, 1,

@@ -54,7 +54,7 @@ public sealed record FixedSubmissionRecord(
     long AuthorizationVersion = 0,
     SubmissionReceipt? Receipt = null);
 
-/// <summary>兼容的资源准备记录；B02 受保护控制日志仍由 ExamPackageManager 管理。</summary>
+/// <summary>兼容的资源准备记录；受保护控制日志仍由 ExamPackageManager 管理。</summary>
 public sealed record PreparationRecord(
     long PaperVersion,
     long InstructionsVersion,
@@ -63,7 +63,7 @@ public sealed record PreparationRecord(
     string Phase,
     DateTimeOffset UpdatedAt);
 
-/// <summary>B06 试卷修题复核记录：考生确认已复核修订版试卷的时间凭证，首次确认后不可覆盖。</summary>
+/// <summary>试卷修题复核记录：考生确认已复核修订版试卷的时间凭证，首次确认后不可覆盖。</summary>
 public sealed record PaperUpdateReviewRecord(
     long PaperVersion,
     DateTimeOffset ReceivedAt,
@@ -71,7 +71,7 @@ public sealed record PaperUpdateReviewRecord(
     DateTimeOffset ConfirmedAt);
 
 /// <summary>
-/// B06 待上报发件箱：失焦事件与复核确认先落盘，再由同步回合补报；服务器确认后删除。
+/// 待上报发件箱：失焦事件与复核确认先落盘，再由同步回合补报；服务器确认后删除。
 /// ItemId 唯一（失焦=事件标识，复核=版本号），重试沿用首次写入的载荷与请求标识。
 /// </summary>
 public sealed record PendingUploadRecord(string ItemId, string Kind, string Payload);

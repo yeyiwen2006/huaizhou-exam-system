@@ -104,7 +104,7 @@ public sealed record OptionRegionArtifact(
 
     public static bool IsSupportedVersion(int version) => version is LegacyArtifactVersion or CurrentArtifactVersion;
 
-    /// <summary>坐标规范名称。D03 产出的区域与 B03 的控件绑定共用此名称，任何一方不得自造。</summary>
+    /// <summary>坐标规范名称。选项区域与题包 产出的区域与 的控件绑定共用此名称，任何一方不得自造。</summary>
     public const string AnchorSchemeName = "pageTopLeftNormalizedV1";
 
     /// <summary>学生包根目录下的固定文件名。</summary>

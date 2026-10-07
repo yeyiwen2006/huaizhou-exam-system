@@ -132,6 +132,47 @@ public sealed class PostgresBusinessCliTests : IAsyncLifetime
         Assert.Equal(2,(await host.Cli("commands","reupload",seed.Name,seed.Original.ClientNumber)).Exit);
     }
 
+    [WindowsBusinessCliFact]
+    public async Task TimeModificationBindsAuthenticatedActorAndPersistsAuditAcrossReplay()
+    {
+        await using var host = await Host.StartAsync(database);
+        var seed = await SeedAsync(host);
+        var requestId = Id();
+        var now = DateTimeOffset.UtcNow;
+        var body = new { requestId, expectedVersion = 1, schedule = new ScheduleWindow(now.AddHours(2), now.AddHours(3)),
+            reason = "合成考场延时" };
+        var input = CliProcess.WriteInput(JsonSerializer.Serialize(body, Json));
+        try
+        {
+            var args = new[] { "exams", "schedule", seed.Name, "--input", input };
+            var first = await host.Cli(args);
+            Assert.True(first.Exit == 0, first.Error);
+            var replay = await host.Cli(args);
+            Assert.True(replay.Exit == 0, replay.Error);
+            await using var command = database.DataSource.CreateCommand(
+                "SELECT payload::text FROM exam.version_events WHERE exam_id=$1 AND operation_type='schedule.update';");
+            command.Parameters.AddWithValue(seed.Exam);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            using var payload = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal(host.Actor, payload.RootElement.GetProperty("operator").GetString());
+            Assert.Equal(body.reason, payload.RootElement.GetProperty("reason").GetString());
+            Assert.Equal(requestId, payload.RootElement.GetProperty("requestId").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("now", out _));
+            Assert.False(await reader.ReadAsync());
+            var restored = new Exam.Infrastructure.Postgres.Versioning.PostgresExamVersioningService(database.DataSource);
+            Assert.Equal(2, restored.GetExam(seed.Exam).Value!.Versions.ScheduleVersion);
+            File.WriteAllText(input, JsonSerializer.Serialize(new { requestId = Id(), expectedVersion = 1,
+                body.schedule, reason = "并发旧版本" }, Json));
+            Assert.Equal(4, (await host.Cli(args)).Exit);
+            File.WriteAllText(input, JsonSerializer.Serialize(new { requestId = Id(), expectedVersion = 2,
+                body.schedule, reason = "" }, Json));
+            Assert.Equal(2, (await host.Cli(args)).Exit);
+            Assert.Equal(2, restored.GetExam(seed.Exam).Value!.Versions.ScheduleVersion);
+        }
+        finally { File.Delete(input); }
+    }
+
     private async Task<(string Exam,string Name,string Candidate,string Participant,ActivationResult Original,ActivationResult Other)> SeedAsync(Host host)
     {
         var now=DateTimeOffset.UtcNow;var catalog=host.Services.GetRequiredService<PostgresExamCatalog>();
@@ -181,7 +222,7 @@ public sealed class PostgresBusinessCliTests : IAsyncLifetime
                 context.Response.Clear();context.Response.StatusCode=503;await context.Response.WriteAsync("synthetic lost response after durable operation");
             });
             app.MapGroup("/api/v1").MapActivationApi();app.MapGroup("/api/v1").MapParticipationApi();app.MapGroup("/api/v1").MapReliableCommandApi();
-            app.MapGroup("/api/v1").MapOperatorAccountApi();app.MapGroup("/api/v1").MapExamCatalogApi();app.MapGroup("/api/v1").MapAdministrationApi();app.MapGroup("/api/v1").MapSubmissionApi();
+            app.MapGroup("/api/v1").MapVersioningApi();app.MapGroup("/api/v1").MapOperatorAccountApi();app.MapGroup("/api/v1").MapExamCatalogApi();app.MapGroup("/api/v1").MapAdministrationApi();app.MapGroup("/api/v1").MapSubmissionApi();
             try
             {
                 await app.StartAsync();

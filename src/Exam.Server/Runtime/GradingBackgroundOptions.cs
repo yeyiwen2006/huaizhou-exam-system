@@ -3,7 +3,7 @@ using Exam.Application.Scoring;
 namespace Exam.Server.Runtime;
 
 /// <summary>
-/// D05 生产后台计分的运行参数。取值范围在此校验，配置错误直接拒绝启动，
+/// 评分处理 生产后台计分的运行参数。取值范围在此校验，配置错误直接拒绝启动，
 /// 不静默退回默认值——否则「没在计分」会被误当成「没有待计分任务」。
 /// </summary>
 public sealed record GradingBackgroundOptions(

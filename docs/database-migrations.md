@@ -1,15 +1,18 @@
-# 数据库迁移约定
+# 数据库迁移与维护
 
-PostgreSQL 迁移在 `src/Exam.Infrastructure/Migrations` 中按提交顺序保存，文件名采用 `YYYYMMDDHHmm_Axx_short_description.sql`。同一分钟发生冲突时由 A 重新分配时间段；已经进入共享分支或 PR 的迁移不得改名或修改原内容，只能新增后续迁移。
+迁移在 `src/Exam.Infrastructure/Migrations` 按时间顺序保存，并作为程序集资源发布。后续迁移使用唯一时间戳和功能名称；已发布文件的名称与内容不可重写。历史名称中的旧编号属于兼容标识，保留原样。
 
-每项迁移同时提供：
+每项迁移明确前置版本、兼容恢复方式、约束索引和事务边界，并以合成数据验证升级、重启及恢复。删除列、改变语义或影响旧程序读取的变更分阶段发布；代码回退不等于数据已经恢复。
 
-- `up` 变更及明确的前置版本；
-- 与当前发布版本兼容的恢复方案；
-- 唯一约束、索引及事务边界说明；
-- 使用合成数据执行的升级、重启和恢复记录。
+## 维护窗口
 
-删除列、改变字段语义、重写历史数据或影响旧程序读取的操作必须拆成“先兼容、再切换、最后清理”的多个发布步骤。代码回退不能代替数据恢复。A 确认兼容与恢复方案后方可合并。
+默认不自动迁移。维护时停止业务入口、核对备份与目标版本，再显式启用 `Database__ApplyMigrations=true`，完成后恢复为 `false`。考试进行中或仍有等待、作答中的参试记录时，迁移器拒绝执行尚未应用的脚本。校验与脚本在同一事务内持有状态表锁，不能由并发开考绕过。
+
+已全部应用的迁移直接返回，不因考试正在进行而阻止原版本故障重启。新数据库可按顺序初始化；尚未开考且无人等待，或考试结束且答卷已收齐后，可在停业维护窗口升级。不得修改业务状态、删除参试记录或清空数据库来绕过限制。
+
+迁移器在 PostgreSQL advisory lock 下逐项执行，成功提交后在 `exam.schema_migrations` 记录名称。任何脚本或维护窗口检查失败都回滚当前迁移，不记录虚假成功。
+
+## 历史数据结构
 
 当前迁移按顺序覆盖：
 
@@ -30,14 +33,9 @@ PostgreSQL 迁移在 `src/Exam.Infrastructure/Migrations` 中按提交顺序保�
   恢复：数据在 PostgreSQL 中，随流复制到备机，接管后 `GET /exams/{examId}/paper-materials?version=N` 仍可取回；
   核对应由恢复就绪检查的 `paper-materials` 项覆盖。
 
-迁移作为程序集嵌入资源，由 `PostgresMigrationRunner` 在 PostgreSQL advisory lock 下逐项执行，并在 `exam.schema_migrations` 记录名称。生产默认不自动迁移；维护窗口显式设置 `Database__ApplyMigrations=true`，完成后恢复为 `false`。B01/B02 合并前已在 PostgreSQL 18.6 随机隔离数据库中应用全部迁移并通过 36 项实库测试；这是已有验证记录，本轮进度更新未重新运行迁移。环境和边界见 [B01/B02 复核记录](b01-b02-review-verification.md)。
 
-## 集成测试的数据库连接容量
+## 测试连接容量
 
-2026-09-22，B04 合并后主分支的 PostgreSQL 检查在 300 个并发激活审批时失败。数据库日志出现 `too many clients already`，随后客户端获取连接超时；Windows 构建和其余 35 项 PostgreSQL 测试通过。记录见 [失败运行](https://github.com/yeyiwen2006/huaizhou-exam-system/actions/runs/35710590447)。
+隔离 PostgreSQL 集成测试的共享池最多16条连接，额外请求排队，保留健康与运维连接余量。300个并发业务请求不等于300条物理连接。`PostgresConnectionPoolTests` 验证满池、等待取消、释放后恢复及额外运维连接。
 
-测试夹具现在将单个共享连接池限制为最多 16 条连接，超过容量的请求由连接池排队。300 个并发申请及 300 个并发审批的原测试保持不变，也未增加连接超时、语句超时或数据库连接上限。这样可为独立的健康检查和运维连接留出余量。驱动默认连接池上限为 100，不能直接把它视为整台数据库可全部提供给单个池的容量，参见 [Npgsql 连接池参数](https://www.npgsql.org/doc/connection-string-parameters.html#pooling) 和 [PostgreSQL 连接容量](https://www.postgresql.org/docs/18/runtime-config-connection.html#RUNTIME-CONFIG-CONNECTION-SETTINGS)。
-
-`PostgresConnectionPoolTests` 使用真实数据库填满这 16 个池内连接，并验证额外运维连接仍能建立、池内第 17 个请求等待、取消等待不泄漏连接、释放连接后后续请求恢复。它用于防止测试夹具意外退回默认连接配置，不代替 300 台终端的现场性能验收。
-
-该限制仅用于随机隔离数据库的集成测试，不修改生产连接配置、数据库架构或业务事务。生产部署仍须结合数据库总连接容量、其他进程和运维余量明确配置各进程的连接池大小，不能把本次 CI 通过作为生产容量验收。
+生产池大小应结合数据库总容量、其他进程和运维余量明确配置。本机测试的池配置和通过结果不能代替现场容量验收。

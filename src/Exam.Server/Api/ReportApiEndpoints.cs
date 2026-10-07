@@ -12,7 +12,7 @@ public static class ReportApiEndpoints
 {
     public static RouteGroupBuilder MapReportApi(this RouteGroupBuilder api)
     {
-        var group = api.MapGroup("/reports").WithTags("G reporting");
+        var group = api.MapGroup("/reports").WithTags("Reporting");
         group.MapGet("/{examId}/status", async (string examId, [FromServices] ReportPublicationService reports,
             HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
         {

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
@@ -9,7 +9,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- B03 原版题目显示使用 Windows.Data.Pdf（WinRT 投影），要求 Windows 10 19041+ -->
+    <!-- 原版题目显示使用 Windows.Data.Pdf（WinRT 投影），要求 Windows 10 19041+ -->
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

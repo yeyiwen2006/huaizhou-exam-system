@@ -62,22 +62,6 @@ public static class StudentApiEndpointExtensions
                     cancellationToken)))
             .WithTags("Student Exams");
 
-        api.MapPut("/student/exams/{examId}/metadata", async (
-            string examId,
-            UpdateStudentExamMetadataRequest request,
-            [FromServices] PostgresStudentExamMetadataService service,
-            HttpContext context,
-            IConfiguration configuration,
-            CancellationToken cancellationToken) =>
-            await ApiEndpointResults.ExecuteRuleAsync(
-                context, configuration, request.RequestId,
-                () => service.UpdateAsync(
-                    examId,
-                    request,
-                    ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context),
-                    cancellationToken)))
-            .WithTags("Student Exam Configuration");
-
         return api;
     }
 }

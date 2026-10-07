@@ -5,7 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 namespace Exam.Student.Core;
 
 /// <summary>
-/// B07 服务器信任策略：部署配置提供证书 SHA-256 指纹时，TLS 只信任与该指纹完全一致的
+/// 服务器信任策略：部署配置提供证书 SHA-256 指纹时，TLS 只信任与该指纹完全一致的
 /// 服务器证书（校内自签证书无需在学生机上安装、无需管理员权限）；未提供指纹时保持
 /// Windows 标准证书链校验。进程内单次配置，供 HTTP 与实时连接在 TLS 握手时读取。
 /// </summary>

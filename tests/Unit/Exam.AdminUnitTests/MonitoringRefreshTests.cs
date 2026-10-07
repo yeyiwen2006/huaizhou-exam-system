@@ -13,7 +13,7 @@ using Exam.Contracts.Submissions;
 namespace Exam.AdminUnitTests;
 
 /// <summary>
-/// C04 第 12 项中与传输机制无关的部分：监测页在前台时按周期自动读取权威状态，
+/// 监测 第 12 项中与传输机制无关的部分：监测页在前台时按周期自动读取权威状态，
 /// 失败保留上一次可信结果并标注陈旧，且不覆盖考务的操作反馈。
 /// 现场时延与多机并发仍由 T01/T02 核对。
 /// </summary>
