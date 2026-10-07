@@ -106,6 +106,7 @@ public sealed class ExamEditorContextTests
         var vm = new ExamConfigurationViewModel(api);
         await vm.OpenAsync("A");
         Assert.False(vm.IsSettingsEditable);
+        Assert.True(vm.IsNameEditable);
         Assert.False(vm.AddSubjectCommand.CanExecute(null));
         Assert.False(vm.RemoveSubjectCommand.CanExecute(null));
         Assert.False(vm.AddGroupCommand.CanExecute(null));

@@ -301,9 +301,9 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         InstructionSourceText = source;
     }
 
-    /// <summary>设置指纹：只覆盖影响考生说明的字段（名称与科目题组），只改考试时间不算未保存的设置更改。</summary>
+    /// <summary>设置指纹：只覆盖影响考生说明的科目题组；改名称或时间不重生成已发布说明。</summary>
     private string SettingsFingerprint() =>
-        JsonSerializer.Serialize(new { Name, Settings = ToSettings() });
+        JsonSerializer.Serialize(ToSettings());
 
     private string BuildInstructions()
     {

@@ -145,9 +145,9 @@ public sealed class ExamCardViewModel : BindableBase
         }
     }
     public bool IsVisibilitySaving => _visibilitySaving;
-    public bool CanChangeVisibility => _changeVisibility is not null && !_visibilitySaving && !(Exam.VisibleToStudents && Exam.VisibilityLocked);
-    public string VisibilityNote => Exam.VisibleToStudents && Exam.VisibilityLocked
-        ? "已有考生确认参加考试，全部答卷回收前不能取消显示。" : "勾选或取消后自动同步到服务器。";
+    public bool CanChangeVisibility => _changeVisibility is not null && !_visibilitySaving && !(Exam.VisibleToStudents && Exam.Lifecycle == ExamLifecycle.Running);
+    public string VisibilityNote => Exam.VisibleToStudents && Exam.Lifecycle == ExamLifecycle.Running
+        ? "考试进行中不能取消显示；考试结束后可以取消显示。" : "勾选或取消后自动同步到服务器。";
     internal void SetVisibilitySaving(bool saving, bool? requested = null)
     {
         _visibilitySaving = saving;

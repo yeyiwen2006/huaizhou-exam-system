@@ -228,7 +228,7 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
                                     <TextBlock Text="考试名称" Style="{StaticResource FormLabel}"/>
-                                    <TextBox Style="{StaticResource FormTextBox}" IsEnabled="{Binding Exam.IsSettingsEditable}"
+                                    <TextBox Style="{StaticResource FormTextBox}" IsEnabled="{Binding Exam.IsNameEditable}"
                                              Text="{Binding Exam.Name, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">

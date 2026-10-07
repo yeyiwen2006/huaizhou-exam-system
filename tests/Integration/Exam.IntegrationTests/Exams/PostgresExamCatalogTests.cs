@@ -12,7 +12,7 @@ using Exam.IntegrationTests.Postgres;
 
 namespace Exam.IntegrationTests.Exams;
 
-/// <summary>考务端考试目录：名称唯一、设置持久化、学生端显示开关与锁定。全部为合成数据。</summary>
+/// <summary>考务端考试目录：名称唯一、设置持久化、学生端显示开关与考试期间锁定。全部为合成数据。</summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
 public sealed class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
@@ -98,7 +98,7 @@ public sealed class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
     }
 
     [Fact]
-    public async Task Visibility_ControlsStudentList_AndCannotBeTurnedOffUntilAllConfirmedAreCollected()
+    public async Task Visibility_OnlyRunningExamBlocksHiding_EndedUncollectedExamCanBeHidden()
     {
         var catalog = Catalog();
         var name = Unique("显示开关");
@@ -119,40 +119,91 @@ public sealed class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
         Assert.Empty(await directory.ListExamsAsync(seed.SessionId, seed.DeviceId));
         await catalog.SetVisibilityAsync(examId, new(Guid.NewGuid().ToString("N"), true), "operator-1");
 
-        // 考生确认参试后锁定：不能取消显示。
+        // 开考前即使已有确认参加考试的学生，也允许取消显示。
         await ExecuteAsync("""
             INSERT INTO exam.participations
                 (participation_id, exam_id, candidate_id, entry_version, business_state,
                  authorized_device_id, authorization_version, version)
             VALUES (@participation, @exam, @candidate, 1, 'waiting', @device, 1, 1);
             """, examId, seed);
-        var detail = await catalog.GetAsync(examId);
-        Assert.True(detail.Summary.VisibilityLocked);
-        Assert.Equal(1, detail.Summary.ActualParticipants);
+        Assert.False((await catalog.GetAsync(examId)).Summary.VisibilityLocked);
+        await catalog.SetVisibilityAsync(examId, new(Guid.NewGuid().ToString("N"), false), "operator-1");
+        Assert.Empty(await directory.ListExamsAsync(seed.SessionId, seed.DeviceId));
+        await catalog.SetVisibilityAsync(examId, new(Guid.NewGuid().ToString("N"), true), "operator-1");
+        await ExecuteAsync("UPDATE exam.exam_entry_access SET lifecycle='running' WHERE exam_id=@exam", examId);
+        Assert.True((await catalog.GetAsync(examId)).Summary.VisibilityLocked);
         var refused = await Assert.ThrowsAsync<ParticipationRuleException>(() =>
             catalog.SetVisibilityAsync(examId, new(Guid.NewGuid().ToString("N"), false), "operator-1").AsTask());
         Assert.Equal(ExamCatalogErrorCodes.VisibilityLocked, refused.Code);
-
-        // 即使数据层出现“不显示”，只要仍有未回收的实际参试考生，学生端也继续列出。
-        await ExecuteAsync("UPDATE exam.exam_catalog SET visible_to_students = false WHERE exam_id = @exam;", examId);
-        Assert.Single(await directory.ListExamsAsync(seed.SessionId, seed.DeviceId));
-        await ExecuteAsync("UPDATE exam.exam_catalog SET visible_to_students = true WHERE exam_id = @exam;", examId);
-
-        // 全部实际参试考生的答卷回收后解除锁定。
-        await ExecuteAsync("""
-            UPDATE exam.participations SET business_state = 'submitted', version = 2 WHERE participation_id = @participation;
-            INSERT INTO exam.final_submissions
-                (submission_id, exam_id, candidate_id, participation_id, device_id, authorization_version,
-                 paper_version, frozen_answers, received_at, receipt_id, grading_version)
-            VALUES (@participation || '-submission', @exam, @candidate, @participation, @device, 1, 1,
-                    '{}'::jsonb, clock_timestamp(), @participation || '-receipt', 1);
-            """, examId, seed);
-        var unlocked = await catalog.GetAsync(examId);
-        Assert.False(unlocked.Summary.VisibilityLocked);
-        Assert.Equal(1, unlocked.Summary.CollectedSubmissions);
+        await ExecuteAsync("UPDATE exam.exam_entry_access SET lifecycle='ended' WHERE exam_id=@exam", examId);
+        var ended = await catalog.GetAsync(examId);
+        Assert.False(ended.Summary.VisibilityLocked);
+        Assert.Equal(1, ended.Summary.ActualParticipants);
+        Assert.Equal(0, ended.Summary.CollectedSubmissions);
         var hidden = await catalog.SetVisibilityAsync(examId, new(Guid.NewGuid().ToString("N"), false), "operator-1");
         Assert.False(hidden.VisibleToStudents);
         Assert.Empty(await directory.ListExamsAsync(seed.SessionId, seed.DeviceId));
+    }
+
+    [Theory]
+    [InlineData("scheduled")]
+    [InlineData("running")]
+    [InlineData("ended")]
+    public async Task RenamePreservesPublishedPaperIdentityBytesAndInstructions(string lifecycle)
+    {
+        var catalog = Catalog();
+        var created = await catalog.CreateAsync(new(Guid.NewGuid().ToString("N"), Unique("更名保留试卷"), Window(), Settings()), "operator");
+        var examId = created.Summary.ExamId;
+        var seed = await SeedStudentAsync(examId);
+        var resourceId = "paper-" + Guid.NewGuid().ToString("N");
+        byte[] publishedBytes = [1, 2, 3, 4];
+        await using (var resource = fixture.DataSource.CreateCommand("""
+            INSERT INTO exam.versioned_resources VALUES ($1,$2,'paper-package',1,$3,'{}'::jsonb,now(),'synthetic-operator');
+            """))
+        {
+            resource.Parameters.AddWithValue(resourceId);
+            resource.Parameters.AddWithValue(examId);
+            resource.Parameters.AddWithValue(publishedBytes);
+            await resource.ExecuteNonQueryAsync();
+        }
+        var versioning = new PostgresExamVersioningService(fixture.DataSource);
+        var paper = versioning.PublishPaper(new(examId, 0, resourceId,
+            new PaperStructure([new("q1",1,"math","math-1","single",["A","B"]),new("q2",2,"math","math-1","single",["A","B"])]),
+            [], new(true,true,true,true), "operator", "合成改名检查", DateTimeOffset.UtcNow, "publish-"+resourceId));
+        Assert.True(paper.Succeeded, paper.Error);
+        await using (var state = fixture.DataSource.CreateCommand("""
+            UPDATE exam.exam_entry_access SET lifecycle=@lifecycle WHERE exam_id=@exam;
+            UPDATE exam.student_exam_instructions SET lines='["正式发布的说明，改名后仍保留。"]'::jsonb WHERE exam_id=@exam;
+            """))
+        {
+            state.Parameters.AddWithValue("lifecycle",lifecycle);state.Parameters.AddWithValue("exam",examId);
+            await state.ExecuteNonQueryAsync();
+        }
+        var before = await catalog.GetAsync(examId);
+        var renamed = await catalog.UpdateSettingsAsync(examId,
+            new(Guid.NewGuid().ToString("N"), before.Summary.SettingsVersion, Unique("新显示名称"), before.Settings), "operator");
+        Assert.Equal(examId, renamed.Summary.ExamId);
+        Assert.Equal(1, renamed.Summary.PaperVersion);
+        Assert.Equal(before.ScheduleVersion, renamed.ScheduleVersion);
+        Assert.Equal(before.InstructionLines, renamed.InstructionLines);
+        Assert.Equal(JsonSerializer.Serialize(paper.Value), JsonSerializer.Serialize(versioning.GetExam(examId).Value));
+        await using (var resource = fixture.DataSource.CreateCommand("""
+            SELECT r.resource_id,r.encrypted_content,a.unlock_reference,a.instructions_version
+              FROM exam.versioned_resources r JOIN exam.exam_entry_access a USING(exam_id)
+             WHERE r.exam_id=$1;
+            """))
+        {
+            resource.Parameters.AddWithValue(examId);
+            await using var rows=await resource.ExecuteReaderAsync();
+            Assert.True(await rows.ReadAsync());
+            Assert.Equal(resourceId,rows.GetString(0));
+            Assert.Equal(publishedBytes,rows.GetFieldValue<byte[]>(1));
+            Assert.Equal("resource-envelope:"+resourceId,rows.GetString(2));
+            Assert.Equal(1L,rows.GetInt64(3));
+        }
+        await catalog.SetVisibilityAsync(examId,new(Guid.NewGuid().ToString("N"),true),"operator");
+        Assert.Equal(renamed.Summary.Name,Assert.Single(await new PostgresStudentDirectory(fixture.DataSource)
+            .ListExamsAsync(seed.SessionId,seed.DeviceId)).Name);
     }
 
     private PostgresExamCatalog Catalog() =>

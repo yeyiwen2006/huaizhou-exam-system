@@ -38,13 +38,8 @@ public sealed class PostgresStudentDirectory(NpgsqlDataSource dataSource)
                     LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
                     LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
                    WHERE r.exam_id = ANY(s.exam_ids)
-                     -- 考务端设置为不显示的考试不列出；但只要仍有已确认参试、尚无最终答卷的考生，就继续显示。
-                     AND (c.exam_id IS NULL OR c.visible_to_students OR EXISTS (
-                          SELECT 1 FROM exam.participations p
-                           WHERE p.exam_id = e.exam_id
-                             AND p.business_state IN ('waiting', 'answering', 'submitted')
-                             AND NOT EXISTS (SELECT 1 FROM exam.final_submissions f
-                                              WHERE f.participation_id = p.participation_id)))
+                     -- 显示开关只影响选择考试列表，已经进入的考试和待上传答卷仍按原标识恢复。
+                     AND (c.exam_id IS NULL OR c.visible_to_students)
                      AND r.candidate_id = s.candidate_ids_by_exam ->> r.exam_id
                      AND r.candidate_name = s.candidate_name
                      AND r.class_text = s.class_text

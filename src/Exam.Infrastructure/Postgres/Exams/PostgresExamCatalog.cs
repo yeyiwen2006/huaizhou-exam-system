@@ -2,6 +2,7 @@ using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Exam.Application.Participation;
 using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
@@ -142,7 +143,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
         }
         var current = await ReadCatalogVersionAsync(connection, transaction, examId, cancellationToken).ConfigureAwait(false);
-        await RequireScheduledAsync(connection, transaction, examId, cancellationToken).ConfigureAwait(false);
+        var settingsChanged = await RequireSettingsChangeAllowedAsync(connection, transaction, examId, request.Settings, cancellationToken).ConfigureAwait(false);
         if (current != request.ExpectedVersion)
             throw Rule(ParticipationErrorCodes.VersionConflict, "考试设置已被其他人修改，请重新读取后再保存。");
         await EnsureNameFreeAsync(connection, transaction, request.Name, examId, cancellationToken).ConfigureAwait(false);
@@ -165,15 +166,29 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         {
             throw NameTaken(request.Name);
         }
-        await WriteStudentMetadataAsync(connection, transaction, examId, request.Name, request.Settings, actor, cancellationToken).ConfigureAwait(false);
+        if (settingsChanged)
+            await WriteStudentMetadataAsync(connection, transaction, examId, request.Name, request.Settings, actor, cancellationToken).ConfigureAwait(false);
+        else
+        {
+            // A display-name change must preserve the published instructions and their version.
+            await using var rename = new NpgsqlCommand("""
+                UPDATE exam.student_exam_metadata
+                   SET display_name=@name, version=version+1, updated_at=clock_timestamp(), updated_by=@actor
+                 WHERE exam_id=@exam_id;
+                """, connection, transaction);
+            rename.Parameters.AddWithValue("name", request.Name.Trim());
+            rename.Parameters.AddWithValue("actor", actor);
+            rename.Parameters.AddWithValue("exam_id", examId);
+            await rename.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         await SaveReplayAsync(connection, transaction, request.RequestId, hash, examId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// 设置学生端显示。显示可随时打开；关闭时，若有已确认参试的考生尚无最终答卷则拒绝，
-    /// 直到全部实际参试考生的答卷都已回收。
+    /// 设置学生端显示。考试进行中不能取消显示；未开考和考试结束后可取消，
+    /// 不以答卷是否全部回收作为取消显示的条件。
     /// </summary>
     public async ValueTask<ExamSummary> SetVisibilityAsync(string examId, SetExamVisibilityRequest request, string actor,
         CancellationToken cancellationToken = default)
@@ -184,17 +199,13 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
         await ReadCatalogVersionAsync(connection, transaction, examId, cancellationToken).ConfigureAwait(false);
-        if (!request.VisibleToStudents)
+        await using (var lifecycle = new NpgsqlCommand(
+            "SELECT lifecycle FROM exam.exam_entry_access WHERE exam_id=@exam_id FOR UPDATE;", connection, transaction))
         {
-            await using var pending = new NpgsqlCommand("""
-                SELECT count(*) FROM exam.participations p
-                 WHERE p.exam_id = @exam_id AND p.business_state IN ('waiting', 'answering', 'submitted')
-                   AND NOT EXISTS (SELECT 1 FROM exam.final_submissions f WHERE f.participation_id = p.participation_id);
-                """, connection, transaction);
-            pending.Parameters.AddWithValue("exam_id", examId);
-            if ((long)(await pending.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) > 0)
-                throw Rule(ExamCatalogErrorCodes.VisibilityLocked,
-                    "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。");
+            lifecycle.Parameters.AddWithValue("exam_id", examId);
+            var currentLifecycle = await lifecycle.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            if (!request.VisibleToStudents && currentLifecycle == "running")
+                throw Rule(ExamCatalogErrorCodes.VisibilityLocked, "考试进行中，不能取消在学生端显示；考试结束后可以取消显示。");
         }
         await using (var update = new NpgsqlCommand("""
             UPDATE exam.exam_catalog
@@ -253,6 +264,23 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             ?? throw Rule(ParticipationErrorCodes.ExamNotFound, "找不到这场考试。");
         if (lifecycle != "scheduled")
             throw Rule(ExamCatalogErrorCodes.SettingsLocked, "考试已开始或已结束，不能再修改考试名称和科目题组设置。");
+    }
+
+    private static async Task<bool> RequireSettingsChangeAllowedAsync(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, string examId, ExamSettings settings, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT e.lifecycle, c.settings::text FROM exam.exam_entry_access e
+              JOIN exam.exam_catalog c USING (exam_id) WHERE e.exam_id=@exam_id FOR UPDATE OF e;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("exam_id", examId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw Rule(ParticipationErrorCodes.ExamNotFound, "找不到这场考试。");
+        var changed = !JsonNode.DeepEquals(JsonNode.Parse(reader.GetString(1)), JsonSerializer.SerializeToNode(settings, Json));
+        if (changed && reader.GetString(0) != "scheduled")
+            throw Rule(ExamCatalogErrorCodes.SettingsLocked, "考试已开始或已结束，科目题组设置不能修改；考试名称仍可修改。");
+        return changed;
     }
 
     /// <summary>学生端选择考试页与等待页使用的名称、科目和考试说明；与目录写入同一事务。</summary>
@@ -352,7 +380,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
                 "ended" => ExamLifecycle.Ended,
                 var value => throw new DataException($"Unknown exam lifecycle '{value}'."),
             },
-            reader.GetBoolean(5), actual > collected, actual, collected, reader.GetInt64(6))
+            reader.GetBoolean(5), reader.GetString(4) == "running", actual, collected, reader.GetInt64(6))
         {
             PaperVersion = reader.IsDBNull(reader.GetOrdinal("published_paper_version"))
                 ? null : reader.GetInt64(reader.GetOrdinal("published_paper_version"))

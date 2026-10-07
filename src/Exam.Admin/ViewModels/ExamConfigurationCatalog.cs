@@ -21,8 +21,8 @@ public sealed partial class ExamConfigurationViewModel
     private long _settingsVersion;
     private ExamLifecycle _lifecycle = ExamLifecycle.Scheduled;
     private bool _visibleToStudents;
-    private bool _visibilityLocked;
     private bool _visibilityBusy;
+    private string _loadedName = string.Empty;
     private string _loadedStartText = string.Empty;
     private string _loadedEndText = string.Empty;
     private AsyncRelayCommand? _saveCommand;
@@ -48,7 +48,7 @@ public sealed partial class ExamConfigurationViewModel
         Name = ScheduledStartText = ScheduledEndText = string.Empty;
         _expectedScheduleVersion = null;
         _settingsVersion = 0;
-        _visibleToStudents = _visibilityLocked = false;
+        _visibleToStudents = false;
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
@@ -71,9 +71,11 @@ public sealed partial class ExamConfigurationViewModel
     public string Heading => IsNewExam ? "新建考试" : "考试设置";
     public long SettingsVersion => _settingsVersion;
 
-    /// <summary>名称与科目题组只在开考前可改；起止时间按计划规则另行处理。</summary>
+    /// <summary>科目题组只在开考前可改；名称在所有阶段可改，起止时间按计划规则另行处理。</summary>
     public bool IsSettingsEditable => _lifecycle == ExamLifecycle.Scheduled && !_catalogBusy &&
         (_catalogReady || _requestedExamId is null);
+
+    public bool IsNameEditable => CanSave;
 
     public bool VisibleToStudents
     {
@@ -85,12 +87,12 @@ public sealed partial class ExamConfigurationViewModel
         }
     }
 
-    public bool CanChangeVisibility => CanSave && !IsNewExam && !_visibilityBusy && !(_visibleToStudents && _visibilityLocked);
+    public bool CanChangeVisibility => CanSave && !IsNewExam && !_visibilityBusy && !(_visibleToStudents && _lifecycle == ExamLifecycle.Running);
 
     public string VisibilityNote => IsNewExam
         ? "考试保存后才能设置是否在学生端显示。"
-        : _visibilityLocked
-            ? "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。"
+        : _lifecycle == ExamLifecycle.Running
+            ? "考试进行中不能取消显示；考试结束后可以取消显示。"
             : _visibleToStudents ? "学生登录后可以在选择考试页面看到本场考试。" : "学生端目前看不到本场考试。";
 
     /// <summary>开始新建：清空为一份可直接修改的默认设置，保存时在服务器创建考试。</summary>
@@ -110,7 +112,6 @@ public sealed partial class ExamConfigurationViewModel
         _settingsVersion = 0;
         _lifecycle = ExamLifecycle.Scheduled;
         _visibleToStudents = false;
-        _visibilityLocked = false;
         ScheduledStartText = DateTimeOffset.Now.Date.AddDays(1).AddHours(9).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         ScheduledEndText = DateTimeOffset.Now.Date.AddDays(1).AddHours(12).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         _loadedStartText = _loadedEndText = string.Empty;
@@ -136,7 +137,7 @@ public sealed partial class ExamConfigurationViewModel
         Name = ScheduledStartText = ScheduledEndText = string.Empty;
         _settingsVersion = 0;
         _expectedScheduleVersion = null;
-        _visibleToStudents = _visibilityLocked = false;
+        _visibleToStudents = false;
         Subjects.Clear();
         SelectedSubject = null;
         InstructionsText = ValidationSummary = string.Empty;
@@ -157,7 +158,7 @@ public sealed partial class ExamConfigurationViewModel
             Apply(detail);
             Status = _lifecycle == ExamLifecycle.Scheduled
                 ? "已读取考试设置。"
-                : "考试已开始或已结束，名称和科目题组只读；起止时间仍可按规则调整。";
+                : "考试名称仍可修改，科目题组只读；起止时间仍可按规则调整。";
         }
         catch when (context != _contextVersion) { }
         catch (Exception error)
@@ -193,11 +194,10 @@ public sealed partial class ExamConfigurationViewModel
         IsNewExam = false;
         _examId = detail.Summary.ExamId;
         OnPropertyChanged(nameof(ExamId));
-        Name = detail.Summary.Name;
+        Name = _loadedName = detail.Summary.Name;
         _settingsVersion = detail.Summary.SettingsVersion;
         _lifecycle = detail.Summary.Lifecycle;
         _visibleToStudents = detail.Summary.VisibleToStudents;
-        _visibilityLocked = detail.Summary.VisibilityLocked;
         ScheduledStartText = _loadedStartText = detail.Summary.StartsAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         ScheduledEndText = _loadedEndText = detail.Summary.EndsAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         _expectedScheduleVersion = detail.ScheduleVersion > 0 ? detail.ScheduleVersion : null;
@@ -254,6 +254,7 @@ public sealed partial class ExamConfigurationViewModel
         var settingsVersion = _settingsVersion;
         var scheduleVersion = _expectedScheduleVersion;
         var name = Name.Trim();
+        var nameChanged = name != _loadedName.Trim();
         var settings = ToSettings();
         var schedule = new ScheduleWindow(start, end);
         var timeChanged = ScheduledStartText != _loadedStartText || ScheduledEndText != _loadedEndText;
@@ -280,11 +281,11 @@ public sealed partial class ExamConfigurationViewModel
                 var created = await _api.CreateExamAsync(name, schedule, settings);
                 if (context != _contextVersion) return;
                 Apply(created);
-                Status = "考试已创建。默认不在学生端显示，可在本页“学生端显示”中打开。";
+                Status = "考试已创建。默认不在学生端显示，可在“全部考试”的考试卡片中勾选“在学生端显示”。";
                 ExamSaved?.Invoke(created);
                 return;
             }
-            if (editStructure)
+            if (editStructure || nameChanged)
             {
                 var saved = await _api.UpdateExamSettingsAsync(examId, settingsVersion, name, settings);
                 if (context != _contextVersion) return;
@@ -309,8 +310,10 @@ public sealed partial class ExamConfigurationViewModel
                 throw new InvalidDataException("读取回执不属于当前考试，未替换页面。");
             Apply(detail);
             Status = editStructure ? "考试设置已保存。"
-                : timeSaved ? "考试时间已保存；已开考的名称、科目和题组保持不变。"
-                : "考试已开始，名称、科目和题组只读；时间没有变化，未提交修改。";
+                : nameChanged && timeSaved ? "考试名称和时间已保存；已发布试卷与答卷保留。"
+                : nameChanged ? "考试名称已保存；已发布试卷与答卷保留。"
+                : timeSaved ? "考试时间已保存；科目和题组保持不变。"
+                : "考试名称和时间没有变化，未提交修改。";
             ExamSaved?.Invoke(detail);
         }
         catch when (context != _contextVersion) { }
@@ -341,7 +344,7 @@ public sealed partial class ExamConfigurationViewModel
             var summary = await _api.SetExamVisibilityAsync(ExamId, visible);
             if (context != _contextVersion) return;
             _visibleToStudents = summary.VisibleToStudents;
-            _visibilityLocked = summary.VisibilityLocked;
+            _lifecycle = summary.Lifecycle;
             Status = visible ? "已设置为在学生端显示。" : "已设置为不在学生端显示。";
         }
         catch (Exception error) when (error is AdminApiException or HttpRequestException or InvalidOperationException or TaskCanceledException)
@@ -357,7 +360,7 @@ public sealed partial class ExamConfigurationViewModel
     private void NotifyCatalog()
     {
         foreach (var name in new[] { nameof(VisibleToStudents), nameof(CanChangeVisibility), nameof(VisibilityNote),
-                     nameof(IsSettingsEditable), nameof(SettingsVersion), nameof(IsNewExam), nameof(Heading),
+                     nameof(IsSettingsEditable), nameof(IsNameEditable), nameof(SettingsVersion), nameof(IsNewExam), nameof(Heading),
                      nameof(CanSave), nameof(CanEditTime), nameof(IsLoading) })
             OnPropertyChanged(name);
         _saveCommand?.RaiseCanExecuteChanged();

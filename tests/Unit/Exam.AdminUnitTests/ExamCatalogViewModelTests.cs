@@ -69,6 +69,56 @@ public sealed class ExamCatalogViewModelTests
         Assert.Equal(expected, import.PublicationText);
     }
 
+    [Theory]
+    [InlineData(ExamLifecycle.Scheduled)]
+    [InlineData(ExamLifecycle.Running)]
+    [InlineData(ExamLifecycle.Ended)]
+    public Task ExamNameCanBeSavedInEveryLifecycleWithoutChangingTheStructure(ExamLifecycle lifecycle) => OnStaAsync(async () =>
+    {
+        var summary = Summary("exam", "原考试名称", visible: true) with { Lifecycle = lifecycle, PaperVersion = 1 };
+        var original = Detail(summary);
+        UpdateExamSettingsRequest? posted = null;
+        using var api = Configured(new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Put)
+            {
+                posted = request.Content!.ReadFromJsonAsync<UpdateExamSettingsRequest>(Json).Result;
+                summary = summary with { Name = posted!.Name, SettingsVersion = 2 };
+            }
+            return Success(Detail(summary));
+        }));
+        var vm = new ExamConfigurationViewModel(api);
+        await vm.OpenAsync("exam");
+        Assert.True(vm.IsNameEditable);
+        Assert.Equal(lifecycle == ExamLifecycle.Scheduled, vm.IsSettingsEditable);
+        vm.Name = "更名后的考试";
+        vm.RefreshInstructionsCommand.Execute(null);
+        Assert.Equal(original.InstructionLines, vm.InstructionPreview.Select(line => line.Text));
+        await vm.SaveAsync();
+        Assert.Equal("更名后的考试", posted!.Name);
+        Assert.Equal(JsonSerializer.Serialize(original.Settings, Json), JsonSerializer.Serialize(posted.Settings, Json));
+        Assert.Equal("exam", vm.ExamId);
+        Assert.Equal("更名后的考试", vm.Name);
+    });
+
+    [Theory]
+    [InlineData(ExamLifecycle.Scheduled, true)]
+    [InlineData(ExamLifecycle.Running, false)]
+    [InlineData(ExamLifecycle.Ended, true)]
+    public async Task HomeVisibilityUsesLifecycleEvenWhenUncollectedAnswersRemain(ExamLifecycle lifecycle, bool canHide)
+    {
+        var summary = Summary("exam", "显示规则检查", true, locked: true) with { Lifecycle = lifecycle };
+        using var api = Configured(new Handler(request => request.Method == HttpMethod.Get
+            ? Success(new[] { summary }) : Success(summary with { VisibleToStudents = false })));
+        var home = new ExamHomeViewModel(api);
+        await home.RefreshAsync();
+        var card = Assert.Single(home.Exams);
+        Assert.Equal(canHide, card.CanChangeVisibility);
+        card.VisibleToStudents = false;
+        await WaitAsync(() => !card.IsVisibilitySaving);
+        Assert.Equal(!canHide, card.VisibleToStudents);
+    }
+
     [Fact]
     public async Task HomeVisibilityToggleImmediatelySendsOnlyTheVisibilityRequest()
     {
@@ -260,7 +310,7 @@ public sealed class ExamCatalogViewModelTests
     }
 
     private static ExamSummary Summary(string id, string name, bool visible, bool locked = false) =>
-        new(id, name, Start, Start.AddHours(2), ExamLifecycle.Scheduled, visible, locked, locked ? 2 : 0, locked ? 1 : 0, 1);
+        new(id, name, Start, Start.AddHours(2), locked ? ExamLifecycle.Running : ExamLifecycle.Scheduled, visible, locked, locked ? 2 : 0, locked ? 1 : 0, 1);
 
     private static ExamDetail Detail(ExamSummary summary) => new(summary, new ExamSettings(
     [
@@ -283,7 +333,7 @@ public sealed class ExamCatalogViewModelTests
     private static HttpResponseMessage Error(HttpStatusCode status, string code) => new(status)
     {
         Content = JsonContent.Create(new ApiEnvelope<object>("server-1", "node-1", 1, "catalog-test", null,
-            new ApiError(code, "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。")), options: Json)
+            new ApiError(code, "考试进行中不能取消显示；考试结束后可以取消显示。")), options: Json)
     };
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
