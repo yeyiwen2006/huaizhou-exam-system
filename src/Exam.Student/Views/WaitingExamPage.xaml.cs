@@ -251,30 +251,28 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnGoBack(object sender, RoutedEventArgs e)
     {
-        if (_busy || _recovering && !HasReachedExamEnd() || _runtime?.HasFixedSubmission == true ||
-            (_runtime?.Manager.CanLeaveWaitingPage == false && !HasReachedExamEnd()) || Window.GetWindow(this) is not { } window)
+        if (_busy || _recovering || _runtime?.HasFixedSubmission == true ||
+            _runtime?.Manager.CanLeaveWaitingPage == false || Window.GetWindow(this) is not { } window)
         {
             return;
         }
 
-        var confirmed = await ConfirmDialog.ShowAsync(window, "退出考试", "确定要退出考试吗？", "确定退出", "取消", isDanger: true);
-        if (!confirmed)
-        {
-            return;
-        }
-
-        if (_runtime?.HasFixedSubmission == true || _runtime?.Manager.CanLeaveWaitingPage == false && !HasReachedExamEnd())
-        {
-            ErrorBanner.Show("考试状态已变化，请继续答题或完成交卷后退出考试。");
-            RefreshState();
-            return;
-        }
-
-        SetBusy(true, "正在退出考试…");
-        ErrorBanner.Hide();
+        // A modal confirmation still pumps dispatcher timers. Do not start recovery or
+        // navigate away while the operator is deciding whether to leave.
+        SetBusy(true, "请确认是否退出考试…");
         try
         {
-            if (!HasReachedExamEnd() && _runtime is not null && _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Withdrawn &&
+            var confirmed = await ConfirmDialog.ShowAsync(window, "退出考试", "确定要退出考试吗？", "确定退出", "取消", isDanger: true);
+            if (!confirmed) return;
+            if (_runtime?.HasFixedSubmission == true || _runtime?.Manager.CanLeaveWaitingPage == false)
+            {
+                ErrorBanner.Show("考试状态已变化，请继续答题或完成交卷后退出考试。");
+                return;
+            }
+
+            SetBusy(true, "正在退出考试…");
+            ErrorBanner.Hide();
+            if (_runtime is not null && !_runtime.Manager.ExamEnded && _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Withdrawn &&
                 (_runtime.Manager.Participation?.BusinessState == ParticipationBusinessState.Waiting || _runtime.Manager.HasPendingConfirmation))
             {
                 var response = await _runtime.Manager.WithdrawAsync(_lifetime.Token);
@@ -380,7 +378,7 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
-        if (!_busy && _runtime?.HasFixedSubmission == true)
+        if (!_busy && !_recovering && _runtime?.HasFixedSubmission == true)
         {
             _navigated = true;
             _navigation.GoToExamInProgress(_exam, _runtime);
@@ -404,8 +402,8 @@ public partial class WaitingExamPage : UserControl
         RetryConnectionButton.IsEnabled = !_busy && !_recovering;
         if (_exitButton is not null)
         {
-            _exitButton.IsEnabled = !_busy && (!_recovering || HasReachedExamEnd()) && _runtime?.HasFixedSubmission != true &&
-                ((manager?.CanLeaveWaitingPage ?? true) || HasReachedExamEnd());
+            _exitButton.IsEnabled = !_busy && !_recovering && _runtime?.HasFixedSubmission != true &&
+                (manager?.CanLeaveWaitingPage ?? true);
         }
 
         (StatePill.Text, StatePill.Level, ConfirmHint.Text) = manager?.CurrentPhase switch
@@ -444,12 +442,12 @@ public partial class WaitingExamPage : UserControl
         LocalStateText.Text = localNotice ?? string.Empty;
         LocalStateText.ToolTip = string.IsNullOrWhiteSpace(localError) ? null : localError;
         LocalStateErrorBanner.IsOpen = false;
-        RetryLocalSaveButton.IsEnabled = !_busy && _runtime?.CanRetryLocalSave == true;
+        RetryLocalSaveButton.IsEnabled = !_busy && !_recovering && _runtime?.CanRetryLocalSave == true;
         RetryLocalSaveButton.Visibility = _runtime?.CanRetryLocalSave == true ? Visibility.Visible : Visibility.Collapsed;
         RefreshRuntimeError();
         RefreshTimeText();
 
-        if (!_busy && manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true &&
+        if (!_busy && !_recovering && manager?.CurrentPhase == ExamPackageManager.Phase.Unlocked && _runtime?.NotificationsStarted == true &&
             !_runtime.HasFixedSubmission && _runtime.Answers?.Status == AnswerSessionStatus.Active)
         {
             _navigated = true;
@@ -479,16 +477,11 @@ public partial class WaitingExamPage : UserControl
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
         MaybeRetryArbitration();
         MaybeRecoverUnlock();
-        if (HasReachedExamEnd()) RefreshState();
     }
-
-    private bool HasReachedExamEnd() => _runtime?.Manager.ExamEnded == true ||
-        App.Services.Clock.IsSynchronized && App.Services.Clock.UtcNow >= (_runtime?.Manager.OverriddenScheduledEnd ?? _exam.ScheduledEnd);
 
     private void MaybeRecoverUnlock()
     {
         if (_lifetime.IsCancellationRequested || _navigated || _busy || _recovering ||
-            HasReachedExamEnd() ||
             _runtime is not { LocalRecoveryChecked: true, HasFixedSubmission: false } runtime ||
             runtime.Manager is not { ExamEnded: false } manager ||
             manager.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Revoked or ExamPackageManager.Phase.Withdrawn ||

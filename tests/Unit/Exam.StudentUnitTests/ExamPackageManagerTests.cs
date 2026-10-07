@@ -74,6 +74,31 @@ public sealed class ExamPackageManagerTests
     }
 
     [Fact]
+    public async Task ElapsedScheduleCannotReleaseAnsweringParticipationButVerifiedEndCan()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start()));
+        var past = DateTimeOffset.UtcNow.AddHours(-3);
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start() with
+        {
+            EventId = "past-schedule", EventType = CommandEventType.ScheduleChanged, StateVersion = 3,
+            ProtectedUnlockReference = null, NewScheduledStart = past, NewScheduledEnd = past.AddHours(1)
+        }));
+        Assert.False(manager.ExamEnded);
+        Assert.False(manager.CanLeaveWaitingPage);
+        Assert.True(await manager.HandleCommandAsync(fixture.Api.Start() with
+        {
+            EventId = "verified-end", EventType = CommandEventType.End, StateVersion = 4,
+            ProtectedUnlockReference = null
+        }));
+        Assert.True(manager.ExamEnded);
+        Assert.True(manager.CanLeaveWaitingPage);
+    }
+
+    [Fact]
     public async Task ScheduleUpdates_AreVersionedDurableAndRejectChangedReplay()
     {
         using var fixture = await Fixture.CreateAsync();

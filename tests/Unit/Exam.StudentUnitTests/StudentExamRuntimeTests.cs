@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
@@ -196,6 +198,94 @@ public sealed class StudentExamRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task LegacyStartedRecoveryWithoutInitializationMarkerNeverAcceptsAnEmptyReplacement(bool revoked)
+    {
+        using var fixture = await Fixture.CreateAsync();
+        await using (var first = fixture.Runtime())
+        {
+            Assert.True(await first.Manager.PrepareAndDownloadAsync());
+            Assert.True((await first.Manager.ConfirmParticipationAsync())?.IsSuccess);
+            Assert.True(await first.Manager.HandleCommandAsync(fixture.Api.Start()));
+            await first.SynchronizeLocalAnswersAsync();
+            Assert.True((await first.Answers!.SetAnswerAsync("q1", AnswerValue.Selected("A"))).Succeeded);
+            if (revoked) await first.RevokeSubmissionAuthorizationAsync();
+        }
+        fixture.RemoveInitializationMarker(); // Reproduce the journal written by the previous client version.
+        using var empty = fixture.EmptyReplacementStore();
+        await using var restarted = fixture.Runtime(empty);
+        Assert.True(restarted.Manager.RequiresLocalAnswerRecovery);
+        Assert.False(await restarted.InitializeLocalRecoveryAsync());
+        Assert.Null(restarted.Answers);
+        Assert.Null(await empty.LoadAnswerStateAsync(fixture.Key));
+        Assert.Equal(new[] { "A" }, (await fixture.Store.LoadAnswerStateAsync(fixture.Key))!.Answers["q1"].OptionIds);
+    }
+
+    [Fact]
+    public async Task RetriedInitialAnswerSaveStillRequiresOriginalAnswersAfterRevocationAndRestart()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var failedOnce = new FakeLocalStateStore { FailNextWrite = true };
+        await using (var first = fixture.Runtime(failedOnce))
+        {
+            Assert.True(await first.Manager.PrepareAndDownloadAsync());
+            Assert.True((await first.Manager.ConfirmParticipationAsync())?.IsSuccess);
+            Assert.True(await first.Manager.HandleCommandAsync(fixture.Api.Start()));
+            await first.SynchronizeLocalAnswersAsync();
+            Assert.Equal(AnswerSessionStatus.WriteBlocked, first.Answers?.Status);
+            Assert.True(first.CanRetryLocalSave);
+            await first.RetryLocalSaveAsync();
+            Assert.Equal(AnswerSessionStatus.Active, first.Answers?.Status);
+            Assert.True((await first.Answers!.SetAnswerAsync("q1", AnswerValue.Selected("A"))).Succeeded);
+            await first.RevokeSubmissionAuthorizationAsync();
+        }
+        using var empty = fixture.EmptyReplacementStore();
+        await using var restarted = fixture.Runtime(empty);
+        Assert.True(restarted.Manager.RequiresLocalAnswerRecovery);
+        Assert.False(await restarted.InitializeLocalRecoveryAsync());
+        Assert.Null(await empty.LoadAnswerStateAsync(fixture.Key));
+    }
+
+    [Fact]
+    public async Task InitializationJournalMustBeDurableBeforeAnyEditableStateIsPublished()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        await using var runtime = fixture.Runtime();
+        Assert.True(await runtime.Manager.PrepareAndDownloadAsync());
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await runtime.Manager.HandleCommandAsync(fixture.Api.Start()));
+        bool? recordedAtFirstEditableState = null;
+        runtime.StateChanged += (_, _) =>
+        {
+            if (recordedAtFirstEditableState is null && runtime.Answers?.Status == AnswerSessionStatus.Active)
+                recordedAtFirstEditableState = fixture.ReadControl()["answersInitialized"]!.GetValue<bool>();
+        };
+        await runtime.SynchronizeLocalAnswersAsync();
+        Assert.True(recordedAtFirstEditableState);
+    }
+
+    [Fact]
+    public async Task FailedInitializationJournalCanRetryWithoutLeavingAnUnrecoverableSuspendedSession()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        await using var runtime = fixture.Runtime();
+        Assert.True(await runtime.InitializeLocalRecoveryAsync());
+        Assert.True(await runtime.Manager.PrepareAndDownloadAsync());
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await runtime.Manager.HandleCommandAsync(fixture.Api.Start()));
+        using (new FileStream(fixture.ControlPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await runtime.SynchronizeLocalAnswersAsync();
+        Assert.Null(runtime.Answers);
+        Assert.Null(await fixture.Store.LoadAnswerStateAsync(fixture.Key));
+        Assert.True(runtime.CanRetryLocalSave);
+        await runtime.RetryLocalSaveAsync();
+        Assert.Equal(AnswerSessionStatus.Active, runtime.Answers?.Status);
+        Assert.True(fixture.ReadControl()["answersInitialized"]!.GetValue<bool>());
+        Assert.Null(runtime.LocalStateError);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task TerminalCallbackDuringSqliteRecoveryCannotReactivateOrFabricateSubmission(bool revoked)
     {
         using var fixture = await Fixture.CreateAsync();
@@ -230,6 +320,31 @@ public sealed class StudentExamRuntimeTests
         Assert.Equal(!revoked, runtime.HasFixedSubmission);
         Assert.Equal(!revoked, recovered.FixedSubmissionId is not null);
         Assert.False(runtime.CanRetryLocalSave);
+    }
+
+    [Fact]
+    public async Task VerifiedEndBetweenRecoveryCheckAndSessionCreationFreezesTheOriginalAnswers()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        await using (var first = fixture.Runtime())
+        {
+            Assert.True(await first.Manager.PrepareAndDownloadAsync());
+            Assert.True((await first.Manager.ConfirmParticipationAsync())?.IsSuccess);
+            Assert.True(await first.Manager.HandleCommandAsync(fixture.Api.Start()));
+            await first.SynchronizeLocalAnswersAsync();
+            Assert.True((await first.Answers!.SetAnswerAsync("q1", AnswerValue.Selected("A"))).Succeeded);
+        }
+        fixture.Api.Answering = true;
+        await using var restarted = fixture.Runtime();
+        Assert.True(await restarted.InitializeLocalRecoveryAsync());
+        Assert.True(await restarted.Manager.PrepareAndDownloadAsync());
+        Assert.True((await restarted.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.Null(restarted.Answers);
+        await InvokeRuntimeCallback(restarted, "ApplyCommandAsync", fixture.Api.End(), CancellationToken.None);
+        var submission = Assert.IsType<FixedSubmissionRecord>(restarted.FixedSubmission);
+        Assert.Equal(new[] { "A" }, submission.FrozenAnswers["q1"].OptionIds);
+        Assert.Equal(submission.SubmissionId, (await fixture.Store.LoadFixedSubmissionAsync(fixture.Key))!.SubmissionId);
+        Assert.Null(restarted.Answers); // No empty editable session is invented to complete collection.
     }
 
     [Fact]
@@ -284,6 +399,23 @@ public sealed class StudentExamRuntimeTests
             new ExamPackageManager(Api, Path.Combine(_root, "packages"), _device, _session, "exam"),
             _device, store ?? Store, Key.CandidateId);
         public SqliteLocalStateStore EmptyReplacementStore() => new(Path.Combine(_root, "replacement-state.db"));
+        public string ControlPath => Directory.GetFiles(_root, "control.protected", SearchOption.AllDirectories).Single();
+        private static byte[] ControlEntropy => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[]
+            { "HuaizhouExam.Student.PackageControl.v1", "server", "device", "exam-candidate", "exam" }));
+        public JsonObject ReadControl()
+        {
+            var plaintext = ProtectedData.Unprotect(File.ReadAllBytes(ControlPath), ControlEntropy, DataProtectionScope.CurrentUser);
+            try { return JsonNode.Parse(plaintext)!.AsObject(); }
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+        }
+        public void RemoveInitializationMarker()
+        {
+            var legacy = ReadControl();
+            Assert.True(legacy.Remove("answersInitialized"));
+            var plaintext = JsonSerializer.SerializeToUtf8Bytes(legacy);
+            try { File.WriteAllBytes(ControlPath, ProtectedData.Protect(plaintext, ControlEntropy, DataProtectionScope.CurrentUser)); }
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+        }
         public void Dispose()
         {
             Store.Dispose();

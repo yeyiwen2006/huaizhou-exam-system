@@ -194,6 +194,45 @@ public sealed class ExamCatalogViewModelTests
         Assert.True(opened!.VisibleToStudents);
     }
 
+    [Theory]
+    [InlineData(2L, false)]
+    [InlineData(2L, true)]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    public async Task DelayedVisibilityReceiptPreservesNewerPublicationState(long? publishedVersion, bool replaceCard)
+    {
+        var original = Summary("exam", "合成考试", visible: false) with { PaperVersion = 1 };
+        var pendingVisibility = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingList = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lists = 0;
+        using var api = Configured(new AsyncHandler(request => request.Method == HttpMethod.Get
+            ? ++lists == 1 ? Task.FromResult(Success(new[] { original })) : pendingList.Task
+            : pendingVisibility.Task));
+        var home = new ExamHomeViewModel(api);
+        await home.RefreshAsync();
+        var oldCard = Assert.Single(home.Exams);
+        oldCard.VisibleToStudents = true;
+        Assert.True(oldCard.IsVisibilitySaving);
+        var refresh = replaceCard ? home.RefreshAsync() : Task.CompletedTask;
+        home.UpdatePaperVersion("exam", publishedVersion);
+        if (replaceCard)
+        {
+            pendingList.SetResult(Success(new[] { original }));
+            await refresh;
+        }
+        pendingVisibility.SetResult(Success(original with { VisibleToStudents = true, SettingsVersion = 2 }));
+        await WaitAsync(() => !oldCard.IsVisibilitySaving);
+        var current = Assert.Single(home.Exams);
+        Assert.Equal(publishedVersion, current.Exam.PaperVersion);
+        Assert.Equal(publishedVersion, oldCard.Exam.PaperVersion);
+        Assert.True(current.VisibleToStudents);
+        Assert.Equal(2, current.Exam.SettingsVersion);
+        ExamSummary? opened = null;
+        home.ExamOpened += summary => opened = summary;
+        current.OpenCommand.Execute(null);
+        Assert.Equal(publishedVersion, opened!.PaperVersion);
+    }
+
     [Fact]
     [Trait("Category", "Wpf")]
     public Task NewExam_PostsNameScheduleAndStructuredSettings_ThenBecomesCurrentExam() => OnStaAsync(async () =>

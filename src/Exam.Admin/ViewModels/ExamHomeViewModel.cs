@@ -85,6 +85,7 @@ public sealed class ExamHomeViewModel : BindableBase
         var examId = card.Exam.ExamId;
         if (!_api.IsConfigured || _pendingVisibility.ContainsKey(examId)) return;
         var generation = _api.Generation;
+        var publicationRevision = _publicationRevision;
         _pendingVisibility[examId] = visible;
         card.SetVisibilitySaving(true);
         Status = $"正在同步“{card.Name}”的学生端显示设置…";
@@ -93,6 +94,10 @@ public sealed class ExamHomeViewModel : BindableBase
             var summary = await _api.SetExamVisibilityAsync(examId, visible);
             if (generation != _api.Generation) return;
             if (summary.ExamId != examId) throw new InvalidDataException("显示设置回执不属于当前考试。");
+            // A visibility response may have been read before a newer publication event.
+            // Preserve that event (including an unknown result) rather than rolling it back.
+            if (_publicationUpdates.TryGetValue(examId, out var update) && update.Revision > publicationRevision)
+                summary = summary with { PaperVersion = update.Version };
             _visibilityUpdates[examId] = (++_visibilityRevision, summary);
             card.ApplySummary(summary);
             foreach (var current in Exams.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))

@@ -107,6 +107,8 @@ public sealed partial class StudentExamRuntime(
     public string? LocalStateError => _localStateError ?? Answers?.LastError;
     public bool CanRetryLocalSave => localState is not null && Answers?.Status != AnswerSessionStatus.PermissionDenied &&
         (!_localRecoveryChecked || Answers is { HasUnsavedChanges: true } ||
+         Answers is null && _localStateError is not null && !Manager.ExamEnded &&
+            Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked ||
          Answers?.Status is AnswerSessionStatus.WriteBlocked or AnswerSessionStatus.FixPending);
     public string LocalStateSummary => Answers?.HasPendingSubmission == true
         ? "答卷已经冻结，但固定内容尚未确认落盘；原答案和提交标识在内存中保留，请重试本地保存。"
@@ -216,6 +218,13 @@ public sealed partial class StudentExamRuntime(
             {
                 _paper = null;
                 if (Answers is { } ended) { await FreezeEndedAnswersAsync(ended, ct); }
+                else if (!HasFixedSubmission)
+                {
+                    // Recovery may have been checked before End arrived, without creating
+                    // an AnswerSession yet. Freeze the original durable snapshot in that case.
+                    _localRecoveryChecked = false;
+                    await InitializeLocalRecoveryCoreAsync(ct);
+                }
                 return;
             }
             if (HasFixedSubmission) { return; }
@@ -288,6 +297,19 @@ public sealed partial class StudentExamRuntime(
                 return;
             }
 
+            // Persist the initialization intent before exposing a session that can save
+            // answers. Retry/cancellation and later key revocation must retain this evidence.
+            await Manager.MarkLocalAnswersInitializedAsync(ct);
+            if (_disposed || Manager.CurrentPhase == ExamPackageManager.Phase.Revoked) return;
+            if (Manager.ExamEnded)
+            {
+                // End may arrive while the control journal is being written. Recover and
+                // freeze an existing snapshot even though no AnswerSession was exposed yet.
+                _localRecoveryChecked = false;
+                await InitializeLocalRecoveryCoreAsync(ct);
+                return;
+            }
+            if (Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked) return;
             var answers = new AnswerSession(localState!, paper: _paper.Structure);
             Answers = answers;
             _answerContext = context;
@@ -295,7 +317,6 @@ public sealed partial class StudentExamRuntime(
             answers.StateSaved += OnAnswerStateSaved;
             answers.SubmissionFixed += OnSubmissionFixed;
             var restored = await answers.StartAsync(_localKey, context, ct);
-            if (restored.IsUsable) await Manager.MarkLocalAnswersInitializedAsync(ct);
             _recoveredSubmission ??= answers.FixedSubmission;
             _localStateError = restored.IsUsable ? null : restored.Message;
             // END/revocation can arrive while SQLite recovery awaits its worker. Never let
@@ -323,7 +344,11 @@ public sealed partial class StudentExamRuntime(
             await InitializeLocalRecoveryAsync(ct);
             return;
         }
-        if (Answers is not { } answers) { return; }
+        if (Answers is not { } answers)
+        {
+            await SynchronizeLocalAnswersAsync(ct);
+            return;
+        }
         if (answers.HasPendingPaperUpdate && !answers.HasPendingSubmission)
         {
             PaperUpdate.Retry();

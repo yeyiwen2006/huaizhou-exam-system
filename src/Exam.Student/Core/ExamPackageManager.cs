@@ -68,9 +68,10 @@ public sealed partial class ExamPackageManager : IDisposable
         catch { _store.Dispose(); throw; }
         // An earlier run already started this participation. A missing answer database
         // must not be mistaken for a first-time blank exam during local persistence recovery.
+        // Legacy journals omit AnswersInitialized; revocation may already have erased
+        // their unlock material, so absence of the new field cannot prove no answers exist.
         RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null &&
-            (_state.AnswersInitialized == true || _state.ProtectedUnlockMaterial is not null ||
-                _state.AnswersInitialized is null && _state.Ended);
+            (_state.AnswersInitialized != false || _state.ProtectedUnlockMaterial is not null);
         CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
             _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
             _state.Participation is not null ? Phase.ConfirmedWaiting : Phase.Idle;
@@ -103,7 +104,9 @@ public sealed partial class ExamPackageManager : IDisposable
     public bool ExamStarted => _state.Started;
     public bool ExamEnded => _state.Ended || _terminalInMemory;
     public bool HasPendingConfirmation => _state.PendingConfirm is not null;
-    public bool CanLeaveWaitingPage => Participation is null ||
+    // Only an authenticated terminal state allows an answering participation to leave.
+    // Passing a cached schedule deadline is not an End acknowledgement.
+    public bool CanLeaveWaitingPage => ExamEnded || Participation is null ||
         Participation.BusinessState is ParticipationBusinessState.Waiting or ParticipationBusinessState.NotParticipating;
     public Task<bool> MarkLocalAnswersInitializedAsync(CancellationToken ct = default) => LockedAsync(() =>
     {

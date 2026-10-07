@@ -2,6 +2,9 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -44,7 +47,7 @@ public sealed class UiScreenshotTests
         var directory = Environment.GetEnvironmentVariable(DirectoryVariable);
         if (string.IsNullOrWhiteSpace(directory)) return;
         Directory.CreateDirectory(directory);
-        using var fixture = await StudentPaperFixture.CreateAsync();
+        using var fixture = await StudentPaperFixture.CreateAsync(device: record => record with { Host = "192.0.2.10", Port = 9 });
         await OnStaAsync(async () =>
         {
             var application = System.Windows.Application.Current ?? new System.Windows.Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -107,11 +110,18 @@ public sealed class UiScreenshotTests
         App.Services.Session.OnLoggedIn(fixture.Session);
         var region = new ContentControl();
         var navigation = new MainWindow.Navigation(region);
-        var exam = new ExamOverview("exam", "合成退出流程检查", DateTimeOffset.Now.AddHours(1),
-            DateTimeOffset.Now.AddHours(2), ["合成科目"], ExamLifecycle.Scheduled);
+        // The cached deadline is past, but the server still reports Waiting (for example,
+        // a schedule extension was missed). Leaving must still obtain a withdrawal receipt.
+        App.Services.Clock.Reset();
+        var exam = new ExamOverview("exam", "合成退出流程检查", DateTimeOffset.Now.AddHours(-2),
+            DateTimeOffset.Now.AddHours(-1), ["合成科目"], ExamLifecycle.Scheduled);
+        static void DeferAutomaticRecovery(WaitingExamPage target) => typeof(WaitingExamPage)
+            .GetField("_unlockRetryCountdown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(target, int.MaxValue);
         var runtime = await fixture.StartRuntimeAsync(confirmParticipation: false);
         App.Services.Session.RegisterExam(runtime);
         var page = new WaitingExamPage(navigation, exam);
+        DeferAutomaticRecovery(page);
         await ShowAsync(window, host, page);
         await WaitUntilAsync(() => !((BusyOverlay)page.FindName("BusyLayer")).IsBusy, TimeSpan.FromSeconds(5));
         Button Exit() => Assert.Single(Descendants<Button>(page), button => Equals(button.Content, "退出考试"));
@@ -119,8 +129,14 @@ public sealed class UiScreenshotTests
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(page, null);
         Assert.True(Exit().IsEnabled); // 尚未确认参加考试也可以返回。
         Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        using (var timeApi = new HttpStudentApi(new SyntheticClockHandler()))
+        {
+            timeApi.ConfigureConnection(fixture.Device);
+            await App.Services.Clock.SynchronizeAsync(timeApi);
+        }
+        Assert.True(App.Services.Clock.UtcNow > exam.ScheduledEnd);
         Refresh();
-        Assert.True(Exit().IsEnabled); // 确认后的等待状态可正常退出登记。
+        Assert.True(Exit().IsEnabled); // 到达旧结束时间后，仍须正常退出登记。
         await CaptureAsync(window, directory, "waiting-exit-enabled");
         async Task ClickExitAsync()
         {
@@ -131,6 +147,8 @@ public sealed class UiScreenshotTests
                 {
                     var dialog = Assert.Single(window.OwnedWindows.OfType<ConfirmDialog>());
                     Assert.Equal("退出考试", ((TextBlock)dialog.FindName("TitleText")).Text);
+                    Assert.True((bool)typeof(WaitingExamPage).GetField("_busy",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(page)!);
                     ((Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                     clicked.TrySetResult();
                 }
@@ -152,17 +170,38 @@ public sealed class UiScreenshotTests
         App.Services.Session.RegisterExam(runtime);
         Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
         page = new WaitingExamPage(navigation, exam);
+        DeferAutomaticRecovery(page);
         await ShowAsync(window, host, page);
         await WaitUntilAsync(() => !((BusyOverlay)page.FindName("BusyLayer")).IsBusy, TimeSpan.FromSeconds(5));
         Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
         Assert.True(await runtime.Manager.HandleCommandAsync(new CommandDelivery(new("server", "node", 1),
             "ui-end", "exam", "participation", 1, CommandEventType.End, 1, "device", 1, null, null,
             new Dictionary<string, string>(), DateTimeOffset.UtcNow, 1)));
+        var recovering = typeof(WaitingExamPage).GetField("_recovering",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        recovering.SetValue(page, true);
+        Refresh();
+        Assert.False(Exit().IsEnabled); // 结束事件不能中断尚未完成的本地恢复。
+        recovering.SetValue(page, false);
         Refresh();
         Assert.True(Exit().IsEnabled);
         await CaptureAsync(window, directory, "ended-waiting-exit-enabled");
         await ClickExitAsync();
         Assert.Equal(1, fixture.WithdrawCalls); // 考试结束后不再请求撤销等待登记。
+    }
+
+    private sealed class SyntheticClockHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal("/api/v1/commands/time", request.RequestUri!.AbsolutePath);
+            var snapshot = new ServerTimeSnapshot(DateTimeOffset.UtcNow, new("server", "node", 1));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ApiEnvelope<ServerTimeSnapshot>("server", "node", 1,
+                    "synthetic-clock", snapshot, null), options: JsonDefaults.Create())
+            });
+        }
     }
 
     private static async Task CheckAlignmentAsync(ValidatedInput control, string text)
