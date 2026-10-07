@@ -546,10 +546,10 @@ public static class ExamApiEndpointExtensions
                 return ApiEndpointResults.InvalidRequestId(context, configuration);
             }
 
-            if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length > 1000)
+            if (request.Reason is { Length: > 1000 })
                 return ApiEndpointResults.FromVersioning(context, configuration, request.RequestId,
                     VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InvalidRequest,
-                        "请填写修改时间的原因，长度不超过1000字。"));
+                        "修改时间的原因不能超过1000字。"));
             var actor = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
             return ApiEndpointResults.FromVersioning(
                 context,
@@ -560,7 +560,7 @@ public static class ExamApiEndpointExtensions
                     request.ExpectedVersion,
                     request.Schedule,
                     timeProvider.GetUtcNow(),
-                    request.RequestId) { Operator = actor, Reason = request.Reason.Trim() }));
+                    request.RequestId) { Operator = actor, Reason = request.Reason?.Trim() ?? string.Empty }));
         });
 
         group.MapPost("/exams/{examId}/grading-publications", async (

@@ -148,11 +148,11 @@ public sealed partial class AdminApiClient : IDisposable
         if (expectedVersion is null)
             throw new InvalidOperationException("请先新建考试并读取已保存的时间，再修改考试时间。");
         if (expectedVersion < 1) throw new ArgumentOutOfRangeException(nameof(expectedVersion));
-        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000)
-            throw new InvalidOperationException("请填写修改时间的原因，长度不超过1000字。");
+        if (reason is { Length: > 1000 })
+            throw new InvalidOperationException("修改时间的原因不能超过1000字。");
         return await SendAsync<ExamVersionSnapshot>(HttpMethod.Put,
             $"api/v1/versioning/exams/{Uri.EscapeDataString(examId)}/schedule",
-            new { requestId = Guid.NewGuid().ToString("N"), expectedVersion, schedule, reason = reason.Trim() }, cancellationToken);
+            new { requestId = Guid.NewGuid().ToString("N"), expectedVersion, schedule, reason = reason?.Trim() ?? string.Empty }, cancellationToken);
     }
 
     public async Task<ExamVersionSnapshot> GetExamAsync(

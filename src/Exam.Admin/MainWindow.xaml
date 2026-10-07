@@ -12,6 +12,20 @@
         Closed="MainWindow_OnClosed">
     <Window.Resources>
         <Style x:Key="FormLabel" TargetType="TextBlock" BasedOn="{StaticResource FieldLabel}" />
+        <Style x:Key="ExamSettingsGrid" TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
+            <Setter Property="CanUserSortColumns" Value="False" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="RowBackground" Value="{DynamicResource Brush.Surface}" />
+            <Setter Property="AlternatingRowBackground" Value="{DynamicResource Brush.Surface}" />
+            <Setter Property="RowStyle">
+                <Setter.Value><Style TargetType="DataGridRow" /></Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ImportPreviewCell" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,6" />
+            <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+        </Style>
         <Style x:Key="FormTextBox" TargetType="TextBox" BasedOn="{StaticResource Tbx.Base}">
             <Setter Property="Margin" Value="0,0,12,12" />
         </Style>
@@ -220,7 +234,7 @@
                                     <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" IsEnabled="{Binding Exam.CanEditTime}" Text="{Binding Exam.ScheduledEndText, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                             </Grid>
-                            <TextBlock Text="修改时间的原因（已有考试修改时间时必填）" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="修改时间的原因" Style="{StaticResource FormLabel}"/>
                             <TextBox Style="{StaticResource FormTextBox}" MaxLength="1000"
                                      IsEnabled="{Binding Exam.CanEditTime}"
                                      Text="{Binding Exam.ScheduleChangeReason, UpdateSourceTrigger=PropertyChanged}"/>
@@ -257,7 +271,7 @@
                         <StackPanel>
                             <TextBlock Text="科目与题组" Style="{StaticResource CardHeading}" />
                             <TextBlock Text="先在上表选中一个科目，再在下表编辑它的题组和计分规则。" Style="{StaticResource CardNote}" />
-                            <DataGrid ItemsSource="{Binding Exam.Subjects}" SelectedItem="{Binding Exam.SelectedSubject}" IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="False" Height="145" Margin="0,0,0,6">
+                            <DataGrid Style="{StaticResource ExamSettingsGrid}" ItemsSource="{Binding Exam.Subjects}" SelectedItem="{Binding Exam.SelectedSubject}" IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="False" MinHeight="150" MaxHeight="260" Margin="0,0,0,6">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Visibility="Collapsed" IsReadOnly="True" Header="科目编号" Binding="{Binding SubjectId, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
                                     <DataGridTextColumn Header="科目名称" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
@@ -268,24 +282,20 @@
                                 <Button Content="新增科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.AddSubjectCommand}"/>
                                 <Button Content="删除科目" Style="{StaticResource ActionButton}" Command="{Binding Exam.RemoveSubjectCommand}"/>
                             </WrapPanel>
-                            <DataGrid ItemsSource="{Binding Exam.SelectedSubject.Groups}" SelectedItem="{Binding Exam.SelectedSubject.SelectedGroup}"
-                                      IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="True" Height="180">
+                            <DataGrid Style="{StaticResource ExamSettingsGrid}" ItemsSource="{Binding Exam.SelectedSubject.Groups}" SelectedItem="{Binding Exam.SelectedSubject.SelectedGroup}"
+                                      IsEnabled="{Binding Exam.IsSettingsEditable}" IsReadOnly="False" Height="180">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="题组名" Binding="{Binding Name}" Width="*"/>
-                                    <DataGridTextColumn Header="题型" Binding="{Binding TypeLabel}" Width="150"/>
-                                    <DataGridTextColumn Header="顺序" Binding="{Binding Order}" Width="80"/>
-                                    <DataGridTextColumn Header="题量" Binding="{Binding QuestionCount}" Width="80"/>
-                                    <DataGridTextColumn Header="满分" Binding="{Binding MaxScore}" Width="100"/>
+                                    <DataGridTextColumn Header="题组名" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                    <DataGridTextColumn IsReadOnly="True" Header="题型" Binding="{Binding TypeLabel}" Width="150"/>
+                                    <DataGridTextColumn IsReadOnly="True" Header="顺序" Binding="{Binding Order}" Width="80"/>
+                                    <DataGridTextColumn IsReadOnly="True" Header="题量" Binding="{Binding QuestionCount}" Width="80"/>
+                                    <DataGridTextColumn IsReadOnly="True" Header="满分" Binding="{Binding MaxScore}" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>
-                            <TextBlock Text="选中题组后在下方编辑；计分分支随题型显示。" Style="{StaticResource CardNote}" Margin="0,10,0,10"/>
+                            <TextBlock Text="题组名可直接在表格中编辑；选中题组后，在下方设置题型、顺序、题量、满分和计分规则。" Style="{StaticResource CardNote}" Margin="0,10,0,10"/>
                             <StackPanel IsEnabled="{Binding Exam.IsSettingsEditable}">
                                 <StackPanel DataContext="{Binding Exam.SelectedSubject.SelectedGroup}">
                                     <WrapPanel>
-                                        <StackPanel Width="280" Margin="0,0,16,0">
-                                            <TextBlock Text="题组名称" Style="{StaticResource FormLabel}"/>
-                                            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
-                                        </StackPanel>
                                         <StackPanel Width="210" Margin="0,0,16,0">
                                             <TextBlock Text="题型" Style="{StaticResource FormLabel}"/>
                                             <ComboBox SelectedValue="{Binding Type, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Value" DisplayMemberPath="Label"
@@ -465,17 +475,18 @@
                         <StackPanel>
                             <TextBlock Text="本次只读预览：逐题检查 PDF 版式与选项" Style="{StaticResource CardHeading}"/>
                             <DataGrid ItemsSource="{Binding Import.Questions}" SelectedItem="{Binding Import.SelectedQuestion}" IsReadOnly="True"
-                                      AutoGenerateColumns="False" Height="270" Margin="0,10,0,10">
+                                      AutoGenerateColumns="False" Height="270" Margin="0,10,0,10" RowHeight="NaN" MinRowHeight="36"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="60"/>
-                                    <DataGridTextColumn Header="科目" Binding="{Binding Subject}" Width="*"/>
-                                    <DataGridTextColumn Header="题组" Binding="{Binding Group}" Width="*"/>
-                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="95"/>
-                                    <DataGridTextColumn Header="逐题满分" Binding="{Binding Score}" Width="80"/>
-                                    <DataGridTextColumn Header="选项" Binding="{Binding Options}" Width="140"/>
-                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="90"/>
-                                    <DataGridTextColumn Header="PDF 页数" Binding="{Binding PageCount}" Width="80"/>
-                                    <DataGridTextColumn Header="选项绑定页" Binding="{Binding RegionPages}" Width="180"/>
+                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="Auto" MinWidth="54"/>
+                                    <DataGridTextColumn Header="科目" Binding="{Binding Subject}" Width="Auto" MinWidth="72" MaxWidth="140" ElementStyle="{StaticResource ImportPreviewCell}"/>
+                                    <DataGridTextColumn Header="题组" Binding="{Binding Group}" Width="Auto" MinWidth="160" MaxWidth="260" ElementStyle="{StaticResource ImportPreviewCell}"/>
+                                    <DataGridTextColumn Header="题型" Binding="{Binding Type}" Width="Auto" MinWidth="108" MaxWidth="144" ElementStyle="{StaticResource ImportPreviewCell}"/>
+                                    <DataGridTextColumn Header="逐题满分" Binding="{Binding Score}" Width="Auto" MinWidth="80"/>
+                                    <DataGridTextColumn Header="选项" Binding="{Binding Options}" Width="Auto" MinWidth="110" MaxWidth="170" ElementStyle="{StaticResource ImportPreviewCell}"/>
+                                    <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="Auto" MinWidth="86" MaxWidth="150" ElementStyle="{StaticResource ImportPreviewCell}"/>
+                                    <DataGridTextColumn Header="PDF 页数" Binding="{Binding PageCount}" Width="Auto" MinWidth="82"/>
+                                    <DataGridTextColumn Header="选项绑定页" Binding="{Binding RegionPages}" Width="*" MinWidth="210" ElementStyle="{StaticResource ImportPreviewCell}"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                             <WrapPanel>

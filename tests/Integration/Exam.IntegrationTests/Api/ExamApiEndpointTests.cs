@@ -207,16 +207,18 @@ public sealed class ExamApiEndpointTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task TimeModificationRequiresAnAuditReason(string? reason)
+    public async Task TimeModificationAllowsAnEmptyReason(string? reason)
     {
         await using var app = await CreateApplicationAsync();
         var service = app.Services.GetRequiredService<IExamVersioningService>();
-        service.CreateExam(new("reason-required", new(Now.AddHours(1), Now.AddHours(2)), Now));
+        service.CreateExam(new("reason-optional", new(Now.AddHours(1), Now.AddHours(2)), Now));
         using var client = app.GetTestClient();
-        using var response = await client.PutAsJsonAsync("/api/v1/versioning/exams/reason-required/schedule",
+        using var response = await client.PutAsJsonAsync("/api/v1/versioning/exams/reason-optional/schedule",
             new UpdateScheduleApiRequest("change-time", 1, new(Now.AddHours(2), Now.AddHours(3)), reason), JsonDefaults.Create());
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(1, service.GetExam("reason-required").Value!.Versions.ScheduleVersion);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = service.GetExam("reason-optional").Value!;
+        Assert.Equal(2, saved.Versions.ScheduleVersion);
+        Assert.Equal(new ScheduleWindow(Now.AddHours(2), Now.AddHours(3)), saved.Schedule);
     }
 
     [Theory]

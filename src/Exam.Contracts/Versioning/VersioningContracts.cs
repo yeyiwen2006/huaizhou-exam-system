@@ -142,9 +142,10 @@ public sealed record UpdateScheduleRequest(
     DateTimeOffset Now,
     string RequestId = "")
 {
-    // Optional only for reading historical command streams. New HTTP writes require both fields.
+    // Operator is supplied by the authenticated HTTP session; historical streams may omit it.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Operator { get; init; }
+    // The operator may leave the time-change reason blank.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Reason { get; init; }
 }

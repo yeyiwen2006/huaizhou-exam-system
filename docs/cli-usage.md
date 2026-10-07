@@ -51,6 +51,6 @@ commands reupload 合成考试 20261006001 --request-id synthetic-reupload-001
 
 ## 修改考试时间
 
-先用 `exams show "考试名称"` 读取当前 `scheduleVersion`。`exams schedule "考试名称" --input time-change.json` 接受 `requestId`、`expectedVersion`、`schedule`（`startsAt` 和 `endsAt`）及必填的 `reason`。原因不超过1000字；操作者由服务器从当前登录会话取得，不能由输入文件冒充。
+先用 `exams show "考试名称"` 读取当前 `scheduleVersion`。`exams schedule "考试名称" --input time-change.json` 接受 `requestId`、`expectedVersion`、`schedule`（`startsAt` 和 `endsAt`）及选填的 `reason`。原因可以留空，填写时不超过1000字；操作者由服务器从当前登录会话取得，不能由输入文件冒充。
 
 重试使用同一文件、原请求标识和原预期版本。其他人已修改时返回冲突，不自动读取新版本覆盖其修改。新建考试仍用 `exams create`；时间修改入口不创建考试。服务器把操作者、原因、修改时间、预期版本和新时间窗写入同一持久事件，历史事件不被重写。

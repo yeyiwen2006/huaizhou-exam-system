@@ -167,8 +167,8 @@ public sealed class PostgresBusinessCliTests : IAsyncLifetime
             Assert.Equal(4, (await host.Cli(args)).Exit);
             File.WriteAllText(input, JsonSerializer.Serialize(new { requestId = Id(), expectedVersion = 2,
                 body.schedule, reason = "" }, Json));
-            Assert.Equal(2, (await host.Cli(args)).Exit);
-            Assert.Equal(2, restored.GetExam(seed.Exam).Value!.Versions.ScheduleVersion);
+            Assert.Equal(0, (await host.Cli(args)).Exit);
+            Assert.Equal(3, restored.GetExam(seed.Exam).Value!.Versions.ScheduleVersion);
         }
         finally { File.Delete(input); }
     }

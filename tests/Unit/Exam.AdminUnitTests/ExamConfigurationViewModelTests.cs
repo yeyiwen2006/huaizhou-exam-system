@@ -11,20 +11,34 @@ namespace Exam.AdminUnitTests;
 public sealed class ExamConfigurationViewModelTests
 {
     [Fact]
-    public void DefaultDraft_MatchesD01ShapeAndPassesLocalValidation()
+    public void DefaultDraft_StartsWithZeroCountsAndScores_AndNeedsAQuestionCount()
     {
         using var api = new AdminApiClient();
         var viewModel = new ExamConfigurationViewModel(api);
 
         var errors = viewModel.Validate();
 
-        Assert.Empty(errors);
-        var group = Assert.Single(Assert.Single(viewModel.Subjects).Groups);
+        Assert.Contains(errors, error => error.Contains("题量", StringComparison.Ordinal));
+        var subject = Assert.Single(viewModel.Subjects);
+        var group = Assert.Single(subject.Groups);
+        Assert.Equal("0", subject.MaxScore);
+        Assert.Equal(0, group.QuestionCount);
+        Assert.Equal("0", group.QuestionCountText);
+        Assert.Equal("0", group.MaxScore);
         Assert.Equal("single", group.Type);
         Assert.Equal("一、单项选择题", group.Name);
         Assert.Equal("1", group.Correct);
         Assert.Equal("0", group.OneBlank);
         Assert.Equal("0", group.OneWrong);
+        group.QuestionCount = 10;
+        group.MaxScore = subject.MaxScore = "10";
+        Assert.Empty(viewModel.Validate());
+
+        viewModel.ResetForNew();
+        Assert.EndsWith(" 12:00", viewModel.ScheduledEndText);
+        Assert.Equal(0, viewModel.Subjects[0].Groups[0].QuestionCount);
+        Assert.Equal("0", viewModel.Subjects[0].MaxScore);
+        Assert.Equal("0", viewModel.Subjects[0].Groups[0].MaxScore);
     }
 
     [Fact]
@@ -122,6 +136,7 @@ public sealed class ExamConfigurationViewModelTests
 
         Assert.Equal(3, subject.Groups.Select(group => group.GroupId).Distinct().Count());
         Assert.Equal(3, subject.Groups.Select(group => group.Order).Distinct().Count());
+        foreach (var draft in viewModel.Subjects.SelectMany(item => item.Groups)) draft.QuestionCount = 10;
         Assert.Empty(viewModel.Validate());
     }
 
@@ -142,6 +157,7 @@ public sealed class ExamConfigurationViewModelTests
         var indeterminate = subject.Groups[2];
         indeterminate.Type = "indeterminate";
         indeterminate.Name = "不定项组";
+        foreach (var group in subject.Groups) group.QuestionCount = 10;
 
         viewModel.RefreshInstructionsCommand.Execute(null);
 
@@ -254,13 +270,18 @@ public sealed class ExamConfigurationViewModelTests
         Assert.Equal(1, viewModel.LoadedScheduleVersion);
     }
 
-    private static ExamConfigurationViewModel CreateFixedScheduleDraft(AdminApiClient api) => new(api)
+    private static ExamConfigurationViewModel CreateFixedScheduleDraft(AdminApiClient api)
     {
-        ExamId = "synthetic-exam",
-        ScheduledStartText = "2026-10-01 10:00 +08:00",
-        ScheduledEndText = "2026-10-01 12:00 +08:00",
-        ScheduleChangeReason = "合成回执校验"
-    };
+        var draft = new ExamConfigurationViewModel(api)
+        {
+            ExamId = "synthetic-exam",
+            ScheduledStartText = "2026-10-01 10:00 +08:00",
+            ScheduledEndText = "2026-10-01 12:00 +08:00",
+            ScheduleChangeReason = "合成回执校验"
+        };
+        draft.Subjects[0].Groups[0].QuestionCount = 10;
+        return draft;
+    }
 
     private static ExamVersionSnapshot Snapshot(ScheduleWindow schedule) => new(
         "synthetic-exam", new VersionVector(2, 0, 0), schedule,

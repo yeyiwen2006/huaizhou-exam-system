@@ -105,13 +105,13 @@ internal static partial class ExamCli
                         ?? throw new ArgumentException("输入不是有效的时间修改内容。");
                     if (scheduleInput.ExpectedVersion < 1 || scheduleInput.Schedule is null ||
                         scheduleInput.Schedule.EndsAt <= scheduleInput.Schedule.StartsAt ||
-                        string.IsNullOrWhiteSpace(scheduleInput.Reason) || scheduleInput.Reason.Length > 1000)
-                        throw new ArgumentException("请提供已读取的 expectedVersion、有效的 schedule 和不超过1000字的 reason。");
+                        scheduleInput.Reason is { Length: > 1000 })
+                        throw new ArgumentException("请提供已读取的 expectedVersion 和有效的 schedule；reason 可选，不能超过1000字。");
                     var scheduledExam = await Find(name!);
                     result = await Send<ExamVersionSnapshot>(HttpMethod.Put,
                         $"/api/v1/versioning/exams/{Uri.EscapeDataString(scheduledExam.ExamId)}/schedule",
                         scheduleInput with { RequestId = string.IsNullOrWhiteSpace(scheduleInput.RequestId)
-                            ? RequestId() : scheduleInput.RequestId, Reason = scheduleInput.Reason.Trim() });
+                            ? RequestId() : scheduleInput.RequestId, Reason = scheduleInput.Reason?.Trim() ?? string.Empty });
                     break;
                 default:
                     var exam = await Find(name!);

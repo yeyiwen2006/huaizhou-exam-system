@@ -138,13 +138,17 @@ public sealed class ScheduleReplyBoundaryTests
         return api;
     }
 
-    private static ExamConfigurationViewModel Draft(AdminApiClient api) => new(api)
+    private static ExamConfigurationViewModel Draft(AdminApiClient api)
     {
-        ExamId = "synthetic-exam",
-        ScheduledStartText = "2026-10-01 10:00 +08:00",
-        ScheduledEndText = "2026-10-01 12:00 +08:00",
-        ScheduleChangeReason = "合成回执校验"
-    };
+        var draft = new ExamConfigurationViewModel(api)
+        {
+            ExamId = "synthetic-exam",
+            ScheduledStartText = "2026-10-01 10:00 +08:00",
+            ScheduledEndText = "2026-10-01 12:00 +08:00"
+        };
+        draft.Subjects[0].Groups[0].QuestionCount = 10;
+        return draft;
+    }
 
     private static ScheduleWindow Window() => new(
         new DateTimeOffset(2026, 10, 1, 10, 0, 0, TimeSpan.FromHours(8)),

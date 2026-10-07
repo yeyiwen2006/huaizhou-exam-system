@@ -163,7 +163,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         {
             number++;
         }
-        var subject = new SubjectDraftViewModel($"subject-{number}", $"科目{number}", "10");
+        var subject = new SubjectDraftViewModel($"subject-{number}", $"科目{number}", "0");
         Subjects.Add(subject);
         SelectedSubject = subject;
         AddGroup();
@@ -199,8 +199,8 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
             GroupId = $"{SelectedSubject.SubjectId}-group-{number}",
             Type = "single",
             Order = number,
-            QuestionCount = 10,
-            MaxScore = "10"
+            QuestionCount = 0,
+            MaxScore = "0"
         };
         SelectedSubject.Groups.Add(group);
         SelectedSubject.SelectedGroup = group;
@@ -381,10 +381,10 @@ public sealed class GroupDraftViewModel : BindableBase
     private bool _useDefaultName = true;
     private string _type = "single";
     private int _order = 1;
-    private int _questionCount = 1;
+    private int _questionCount;
     private string _orderText = "1";
-    private string _questionCountText = "1";
-    private string _maxScore = "1";
+    private string _questionCountText = "0";
+    private string _maxScore = "0";
     private bool _allowAbstain;
     private string _correct = "1";
     private string _oneBlank = "0";

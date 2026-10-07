@@ -112,7 +112,7 @@ public sealed partial class ExamConfigurationViewModel
         _visibleToStudents = false;
         _visibilityLocked = false;
         ScheduledStartText = DateTimeOffset.Now.Date.AddDays(1).AddHours(9).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
-        ScheduledEndText = DateTimeOffset.Now.Date.AddDays(1).AddHours(11).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
+        ScheduledEndText = DateTimeOffset.Now.Date.AddDays(1).AddHours(12).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         _loadedStartText = _loadedEndText = string.Empty;
         Subjects.Clear();
         AddSubject();
@@ -258,9 +258,9 @@ public sealed partial class ExamConfigurationViewModel
         var schedule = new ScheduleWindow(start, end);
         var timeChanged = ScheduledStartText != _loadedStartText || ScheduledEndText != _loadedEndText;
         var reason = ScheduleChangeReason.Trim();
-        if (!isNew && timeChanged && (reason.Length == 0 || reason.Length > 1000))
+        if (!isNew && timeChanged && reason.Length > 1000)
         {
-            Status = "请填写修改时间的原因，长度不超过1000字。";
+            Status = "修改时间的原因不能超过1000字。";
             return;
         }
         var structureSaved = false;

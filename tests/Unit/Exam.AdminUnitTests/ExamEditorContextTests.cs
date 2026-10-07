@@ -135,7 +135,7 @@ public sealed class ExamEditorContextTests
         });
         var vm = new ExamConfigurationViewModel(api);
         await vm.OpenAsync("A");
-        vm.ScheduleChangeReason = "合成时间调整";
+        Assert.Empty(vm.ScheduleChangeReason);
         vm.ScheduledEndText = Detail("A").Summary.EndsAt.AddHours(1).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         await Assert.ThrowsAsync<AdminApiException>(() => vm.SaveAsync());
         Assert.Equal(2, writes.Count);

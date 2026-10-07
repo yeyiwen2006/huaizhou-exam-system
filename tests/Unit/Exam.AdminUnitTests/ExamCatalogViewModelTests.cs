@@ -66,6 +66,14 @@ public sealed class ExamCatalogViewModelTests
         Assert.True(main.CanEditSettings);
         Assert.False(main.HasCurrentExam);
         main.Exam.Name = "新建合成考试";
+        Assert.EndsWith(" 12:00", main.Exam.ScheduledEndText);
+        var subject = Assert.Single(main.Exam.Subjects);
+        var group = Assert.Single(subject.Groups);
+        Assert.Equal("0", subject.MaxScore);
+        Assert.Equal(0, group.QuestionCount);
+        Assert.Equal("0", group.MaxScore);
+        subject.MaxScore = group.MaxScore = "10";
+        group.QuestionCount = 10;
         await main.Exam.SaveAsync();
 
         Assert.NotNull(posted);

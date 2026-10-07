@@ -58,7 +58,8 @@ public sealed class WpfBindingSmokeTests
                 Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
                 Assert.All(tabsAtStart.Items.Cast<TabItem>(), tab => Assert.True(tab.IsEnabled));
                 var subjectGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.Subjects));
-                Assert.Same(application.FindResource("Brush.Surface.Alt"), subjectGrid.AlternatingRowBackground);
+                Assert.Same(application.FindResource("Brush.Surface"), subjectGrid.AlternatingRowBackground);
+                VerifyExamSettingsEditing(window, viewModel, subjectGrid);
                 var horizontalBar = new ScrollBar { Style = (Style)application.FindResource(typeof(ScrollBar)), Orientation = Orientation.Horizontal, Minimum = 0, Maximum = 100, ViewportSize = 10 };
                 horizontalBar.Measure(new Size(200, 8));
                 horizontalBar.Arrange(new Rect(0, 0, 200, 8));
@@ -154,6 +155,7 @@ public sealed class WpfBindingSmokeTests
                         Assert.Contains(Descendants<Button>(window), button =>
                             Equals(button.Content, "确认并正式发布") && ReferenceEquals(button.Command, viewModel.Import.PublishCommand));
                         Assert.False(viewModel.Import.CanPublish);
+                        VerifyImportPreviewColumns(window, viewModel);
                     }
                     if ((string)tab.Header == "设备监控")
                     {
@@ -300,6 +302,121 @@ public sealed class WpfBindingSmokeTests
         viewModel.Exam.SelectedSubject!.SelectedGroup = group;
         group.Correct = originalCorrect; group.PartialCorrect = originalPartial;
         DrainDispatcher();
+    }
+
+    private static void VerifyImportPreviewColumns(MainWindow window, MainViewModel viewModel)
+    {
+        const string pages = "A:1页、B:1页、C:1页、D:1页";
+        for (var index = 1; index <= 7; index++)
+            viewModel.Import.Questions.Add(new($"preview-{index}", index, "数学", "一、不定项选择题", "不定项选择", "4",
+                "A、B、C、D", "synthetic.pdf", "A、B、D", 1, pages));
+        DrainDispatcher(); window.UpdateLayout();
+        var grid = Assert.Single(Descendants<DataGrid>(window), item => ReferenceEquals(item.ItemsSource, viewModel.Import.Questions));
+        grid.BringIntoView(); DrainDispatcher();
+        var first = viewModel.Import.Questions[0];
+        var subject = grid.Columns.Single(column => Equals(column.Header, "科目"));
+        var type = grid.Columns.Single(column => Equals(column.Header, "题型"));
+        var pageColumn = grid.Columns.Single(column => Equals(column.Header, "选项绑定页"));
+        Assert.True(subject.ActualWidth < pageColumn.ActualWidth);
+        var typeText = Assert.IsType<TextBlock>(type.GetCellContent(first));
+        Assert.Equal("不定项选择", typeText.Text);
+        Assert.True(typeText.ActualWidth >= 6 * typeText.FontSize);
+        var pageText = Assert.IsType<TextBlock>(pageColumn.GetCellContent(first));
+        Assert.Equal(pages, pageText.Text);
+        Assert.Equal(TextWrapping.Wrap, pageText.TextWrapping);
+        Assert.True(double.IsNaN(grid.RowHeight));
+        SaveEditorScreenshot(window, grid, "import-preview-columns");
+
+        var originalWidth = window.Width;
+        window.Width = window.MinWidth; DrainDispatcher(); window.UpdateLayout();
+        var scroll = Assert.Single(Descendants<ScrollViewer>(grid), viewer => viewer.Name == "DG_ScrollViewer");
+        Assert.True(scroll.ScrollableWidth > 0);
+        scroll.ScrollToRightEnd(); DrainDispatcher();
+        Assert.InRange(scroll.ScrollableWidth - scroll.HorizontalOffset, 0, 1);
+        SaveEditorScreenshot(window, grid, "import-preview-columns-narrow");
+        window.Width = originalWidth;
+        viewModel.Import.Questions.Clear();
+        DrainDispatcher(); window.UpdateLayout();
+    }
+
+    private static void VerifyExamSettingsEditing(MainWindow window, MainViewModel viewModel, DataGrid subjectGrid)
+    {
+        var originalSubject = viewModel.Exam.SelectedSubject!;
+        var originalName = originalSubject.Name;
+        var originalWidth = window.Width;
+        var originalHeight = window.Height;
+        var originalSubjects = viewModel.Exam.Subjects.ToArray();
+        window.Width = window.MinWidth;
+        window.Height = window.MinHeight;
+        while (viewModel.Exam.Subjects.Count < 3) viewModel.Exam.AddSubjectCommand.Execute(null);
+        DrainDispatcher(); window.UpdateLayout();
+        subjectGrid.BringIntoView(); DrainDispatcher();
+        var subjectScroll = Assert.Single(Descendants<ScrollViewer>(subjectGrid), viewer => viewer.Name == "DG_ScrollViewer");
+        Assert.Equal(0, subjectScroll.ScrollableHeight);
+        Assert.False(subjectGrid.CanUserSortColumns);
+        var subjects = viewModel.Exam.Subjects.ToArray();
+        var names = new[] { "数学", "物理", "化学" };
+        var nameColumn = subjectGrid.Columns.Single(column => Equals(column.Header, "科目名称"));
+        for (var index = 0; index < subjects.Length; index++)
+        {
+            EditCell(subjectGrid, subjects[index], nameColumn, names[index]);
+            Assert.Equal(subjects, subjectGrid.Items.Cast<SubjectDraftViewModel>());
+            Assert.Equal(0, subjectScroll.VerticalOffset);
+        }
+        Assert.Equal(names, subjectGrid.Items.Cast<SubjectDraftViewModel>().Select(subject => subject.Name));
+        Assert.Empty(subjectGrid.Items.SortDescriptions);
+        foreach (var subject in subjects.Take(2))
+        {
+            var row = Assert.IsType<DataGridRow>(subjectGrid.ItemContainerGenerator.ContainerFromItem(subject));
+            Assert.False(row.IsSelected);
+            Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(row.Background).Color);
+        }
+        SaveEditorScreenshot(window, subjectGrid, "exam-subjects-three");
+
+        var groups = viewModel.Exam.SelectedSubject!.Groups;
+        viewModel.Exam.AddGroupCommand.Execute(null);
+        DrainDispatcher(); window.UpdateLayout();
+        var groupGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, groups));
+        Assert.False(groupGrid.CanUserSortColumns);
+        Assert.Same(subjectGrid.AlternatingRowBackground, groupGrid.AlternatingRowBackground);
+        var groupNameColumn = groupGrid.Columns.Single(column => Equals(column.Header, "题组名"));
+        EditCell(groupGrid, groups[0], groupNameColumn, "一、化学选择题");
+        Assert.Equal("一、化学选择题", groups[0].Name);
+        Assert.Equal(groups, groupGrid.Items.Cast<GroupDraftViewModel>());
+        Assert.All(groupGrid.Columns.Where(column => column != groupNameColumn), column => Assert.True(column.IsReadOnly));
+        SaveEditorScreenshot(window, groupGrid, "exam-group-name-inline");
+
+        while (viewModel.Exam.Subjects.Count < 8) viewModel.Exam.AddSubjectCommand.Execute(null);
+        DrainDispatcher(); window.UpdateLayout();
+        Assert.True(subjectScroll.ScrollableHeight > 0);
+        subjectScroll.ScrollToEnd(); DrainDispatcher();
+        Assert.True(subjectScroll.VerticalOffset > 0);
+        subjectScroll.ScrollToTop(); DrainDispatcher();
+        Assert.Equal(0, subjectScroll.VerticalOffset);
+        foreach (var subject in viewModel.Exam.Subjects.Except(originalSubjects).ToArray()) viewModel.Exam.Subjects.Remove(subject);
+        originalSubject.Name = originalName;
+        viewModel.Exam.SelectedSubject = originalSubject;
+        window.Width = originalWidth;
+        window.Height = originalHeight;
+        DrainDispatcher(); window.UpdateLayout();
+    }
+
+    private static void EditCell(DataGrid grid, object item, DataGridColumn column, string text)
+    {
+        grid.ScrollIntoView(item, column);
+        grid.SelectedItem = item;
+        grid.CurrentCell = new DataGridCellInfo(item, column);
+        grid.Focus();
+        Assert.True(grid.BeginEdit());
+        DrainDispatcher();
+        var editor = Assert.IsType<TextBox>(column.GetCellContent(item));
+        var row = Assert.IsType<DataGridRow>(grid.ItemContainerGenerator.ContainerFromItem(item));
+        var originalTop = row.TranslatePoint(new Point(0, 0), grid).Y;
+        editor.Text = text;
+        editor.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+        Assert.True(grid.CommitEdit(DataGridEditingUnit.Row, true));
+        DrainDispatcher();
+        Assert.Equal(originalTop, row.TranslatePoint(new Point(0, 0), grid).Y);
     }
 
     private static void VerifyRoomInputAlignment(MainWindow window, MainViewModel viewModel)
