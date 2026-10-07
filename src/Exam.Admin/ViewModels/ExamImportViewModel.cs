@@ -5,6 +5,7 @@ using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Versioning;
+using Exam.Desktop.Shared.Controls;
 
 namespace Exam.Admin.ViewModels;
 
@@ -30,6 +31,9 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private string _changedQuestionsText = string.Empty;
     private string _changedQuestionsHint = string.Empty;
     private readonly List<PreparedExamImport> _retired = [];
+    private long? _paperVersion;
+    private long _publicationRead;
+    private bool _readingPublication;
 
     public ExamImportViewModel(AdminApiClient api, IExamImportSourceDialog? dialog = null,
         IExamImportService? service = null)
@@ -47,10 +51,26 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             () => !IsBusy && !string.IsNullOrWhiteSpace(ExamId), SetError);
         OpenQuestionCommand = new RelayCommand(OpenQuestion, () => !IsBusy && SelectedQuestion is not null && HasPreview);
         CancelCommand = new RelayCommand(() => _operationCancellation?.Cancel(), () => IsBusy);
+        RefreshPublicationCommand = new AsyncRelayCommand(RefreshPublicationAsync,
+            () => !_disposed && _api.IsConfigured && !string.IsNullOrEmpty(ExamId) && !IsBusy && !_readingPublication);
     }
 
     public Func<string, Task<bool>> ConfirmPublicationAsync { get; set; } = _ => Task.FromResult(false);
     public string ExamId => _examId;
+    public long? PaperVersion => _paperVersion;
+    public string PublicationText => _readingPublication ? "正在读取发布状态…" : _paperVersion switch
+    {
+        > 0 => "试卷已发布",
+        0 => "试卷未发布",
+        _ => "发布状态未确认",
+    };
+    public StatusLevel PublicationLevel => _paperVersion switch
+    {
+        > 0 => StatusLevel.Success,
+        0 => StatusLevel.Neutral,
+        _ => StatusLevel.Warning,
+    };
+    public event Action<string, long?>? PaperPublicationChanged;
     public string ExamName { get => _examName; private set => SetProperty(ref _examName, value); }
     public string SourcePath
     {
@@ -112,9 +132,51 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public AsyncRelayCommand PublishCommand { get; }
     public AsyncRelayCommand RetrieveMaterialsCommand { get; }
     public RelayCommand CancelCommand { get; }
+    public AsyncRelayCommand RefreshPublicationCommand { get; }
+
+    public async Task RefreshPublicationAsync()
+    {
+        if (_disposed || IsBusy || !_api.IsConfigured || string.IsNullOrEmpty(ExamId)) return;
+        var read = ++_publicationRead;
+        var examId = ExamId;
+        _readingPublication = true;
+        NotifyPublication();
+        try
+        {
+            var detail = await _api.GetExamDetailAsync(examId);
+            if (_disposed || read != _publicationRead || examId != ExamId) return;
+            ApplyPaperVersion(detail.Summary.PaperVersion);
+        }
+        catch
+        {
+            if (!_disposed && read == _publicationRead && examId == ExamId) ApplyPaperVersion(null);
+        }
+        finally
+        {
+            if (read == _publicationRead) { _readingPublication = false; NotifyPublication(); }
+        }
+    }
+
+    private void ApplyPaperVersion(long? version, bool notify = true)
+    {
+        ++_publicationRead;
+        _readingPublication = false;
+        _paperVersion = version is >= 0 ? version : null;
+        NotifyPublication();
+        if (notify && !string.IsNullOrEmpty(ExamId)) PaperPublicationChanged?.Invoke(ExamId, _paperVersion);
+    }
+
+    private void NotifyPublication()
+    {
+        OnPropertyChanged(nameof(PaperVersion));
+        OnPropertyChanged(nameof(PublicationText));
+        OnPropertyChanged(nameof(PublicationLevel));
+        RefreshPublicationCommand.RaiseCanExecuteChanged();
+    }
 
     public void SetCurrentExam(ExamSummary? exam)
     {
+        ApplyPaperVersion(exam?.PaperVersion, notify: false);
         if (StringComparer.Ordinal.Equals(_examId, exam?.ExamId) && StringComparer.Ordinal.Equals(_examName, exam?.Name) &&
             _settingsVersion == (exam?.SettingsVersion ?? -1)) return;
         ClearPreview("考试已切换；旧检查结果已清除。");
@@ -290,7 +352,10 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             if (error is HttpRequestException or OperationCanceledException ||
                 error is AdminApiException apiError && ((int)apiError.StatusCode >= 500 ||
                     apiError.Code is "EMPTY_RESPONSE" or "INVALID_RESPONSE"))
+            {
+                ApplyPaperVersion(null);
                 Status = "发布结果尚不能确认；没有显示成功。请保留此预览，连接原服务器后用同一预览重试。";
+            }
             else Status = "发布未确认生效：" + (error is InvalidDataException or ArgumentException or InvalidOperationException
                 ? error.Message : FriendlyErrors.Describe(error));
         }
@@ -307,8 +372,9 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     private void CompleteIfMatched(PreparedExamImport prepared, ExamVersionSnapshot actual)
     {
         if (!prepared.MatchesPublication(actual))
-        { Status = "服务器返回的试卷或规则版本与本次导入不符；请人工核对，不能认定发布成功。"; return; }
+        { ApplyPaperVersion(null); Status = "服务器返回的试卷或规则版本与本次导入不符；请人工核对，不能认定发布成功。"; return; }
         ClearPreview("已发布");
+        ApplyPaperVersion(actual.Versions.PaperVersion);
         Status = $"正式发布成功：考试 {ExamName}，试卷版本 {actual.Versions.PaperVersion}，规则版本 {actual.Versions.GradingVersion}。学生端更新状态需另行核对。";
     }
 
@@ -346,6 +412,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         CheckCommand.RaiseCanExecuteChanged();
         PublishCommand.RaiseCanExecuteChanged();
         RetrieveMaterialsCommand.RaiseCanExecuteChanged();
+        RefreshPublicationCommand.RaiseCanExecuteChanged();
         SelectDirectoryCommand.RaiseCanExecuteChanged();
         SelectZipCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(CanPublish));

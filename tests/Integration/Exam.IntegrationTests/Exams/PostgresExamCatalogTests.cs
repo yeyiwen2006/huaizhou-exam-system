@@ -29,11 +29,13 @@ public sealed class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
         Assert.False(created.Summary.VisibleToStudents);
         Assert.False(created.Summary.VisibilityLocked);
         Assert.Equal(1, created.Summary.SettingsVersion);
+        Assert.Equal(0, created.Summary.PaperVersion);
         Assert.Equal(ExamLifecycle.Scheduled, created.Summary.Lifecycle);
         Assert.Equal(Settings(), created.Settings, new JsonEquality<ExamSettings>());
         Assert.Equal(["合成数学（满分6分）", "一、单项选择题：本题共2小题，每小题3分，共计6分。选对得3分，不选得0分，选错得-0.75分。"],
             created.InstructionLines);
         Assert.Contains(await catalog.ListAsync(), item => item.ExamId == created.Summary.ExamId && item.Name == name);
+        Assert.Equal(0, (await catalog.ListAsync()).Single(item => item.ExamId == created.Summary.ExamId).PaperVersion);
 
         // 同一请求重试（例如回执丢失）得到同一场考试，不会新建第二场。
         var retried = await Catalog().CreateAsync(request, "operator-1");

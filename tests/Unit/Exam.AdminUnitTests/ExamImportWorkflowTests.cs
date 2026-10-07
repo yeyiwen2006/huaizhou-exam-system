@@ -93,6 +93,7 @@ public sealed class ExamImportWorkflowTests
         await vm.CheckAsync();
         Assert.True(vm.CanPublish);
         Assert.Single(vm.Questions);
+        Assert.Equal("试卷未发布", vm.PublicationText);
 
         service.FailNextCheck = true;
         await vm.CheckAsync();
@@ -130,6 +131,8 @@ public sealed class ExamImportWorkflowTests
         var service = new FakeImportService(fixture.Directory);
         using var vm = new ExamImportViewModel(api, service: service)
         { ConfirmPublicationAsync = _ => Task.FromResult(true) };
+        var publications = new List<(string ExamId, long? Version)>();
+        vm.PaperPublicationChanged += (examId, version) => publications.Add((examId, version));
         vm.SetCurrentExam(Summary("synthetic-exam-1"));
         vm.SourcePath = fixture.Directory;
         await vm.CheckAsync();
@@ -137,11 +140,14 @@ public sealed class ExamImportWorkflowTests
         await vm.PublishAsync();
         Assert.DoesNotContain("正式发布成功", vm.Status);
         Assert.True(vm.CanPublish);
+        Assert.Equal("试卷未发布", vm.PublicationText);
         service.FailPublish = false;
         await vm.PublishAsync();
         Assert.Contains("正式发布成功", vm.Status);
         Assert.False(vm.CanPublish);
         Assert.Equal(2, service.PublishCalls);
+        Assert.Equal("试卷已发布", vm.PublicationText);
+        Assert.Equal(("synthetic-exam-1", (long?)1), Assert.Single(publications));
     }
 
     [Fact]
@@ -240,6 +246,7 @@ public sealed class ExamImportWorkflowTests
         Assert.Equal(0, reads);
         Assert.DoesNotContain("正式发布成功", vm.Status);
         Assert.Contains("尚不能确认", vm.Status);
+        Assert.Equal("发布状态未确认", vm.PublicationText);
         Assert.True(vm.CanPublish);
     }
 
@@ -274,6 +281,7 @@ public sealed class ExamImportWorkflowTests
         gate.SetResult(); await publication;
         Assert.Equal(newStatus, vm.Status);
         Assert.Equal("synthetic-exam-2", vm.ExamId);
+        Assert.Equal("试卷未发布", vm.PublicationText);
         Assert.False(System.IO.Directory.Exists(oldRoot));
     }
 
@@ -297,8 +305,23 @@ public sealed class ExamImportWorkflowTests
         Assert.Equal(0, service.PublishCalls);
     }
 
+    [Fact]
+    public async Task FailedPublicationReadShowsUnknownAndPreservesTheSelectedExam()
+    {
+        using var handler = new PublicationHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        using var api = new AdminApiClient(handler);
+        api.Configure("https://localhost:5001", "synthetic-token", "synthetic-operator");
+        using var vm = new ExamImportViewModel(api);
+        vm.SetCurrentExam(Summary("synthetic-exam-1") with { PaperVersion = 2 });
+        Assert.Equal("试卷已发布", vm.PublicationText);
+        await vm.RefreshPublicationAsync();
+        Assert.Equal("发布状态未确认", vm.PublicationText);
+        Assert.Equal("synthetic-exam-1", vm.ExamId);
+        Assert.True(vm.RefreshPublicationCommand.CanExecute(null));
+    }
+
     private static ExamSummary Summary(string examId) => new(examId, "合成考试", DateTimeOffset.UtcNow,
-        DateTimeOffset.UtcNow.AddHours(1), ExamLifecycle.Scheduled, false, false, 0, 0, 1);
+        DateTimeOffset.UtcNow.AddHours(1), ExamLifecycle.Scheduled, false, false, 0, 0, 1) { PaperVersion = 0 };
 
     private static string FindSyntheticMinimal()
     {

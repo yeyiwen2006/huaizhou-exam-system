@@ -196,9 +196,12 @@
                                             <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,6,0,0"/>
                                             <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,2,0,0"/>
                                         </StackPanel>
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
-                                            <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
-                                            <controls:StatusPill Text="{Binding VisibilityText}" Level="{Binding VisibilityLevel}"/>
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="16,0,0,0">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
+                                                <controls:StatusPill Text="{Binding VisibilityText}" Level="{Binding VisibilityLevel}"/>
+                                            </StackPanel>
+                                            <controls:StatusPill Text="{Binding PublicationText}" Level="{Binding PublicationLevel}" HorizontalAlignment="Right" Margin="0,8,0,0"/>
                                         </StackPanel>
                                     </Grid>
                                 </Button>
@@ -441,6 +444,10 @@
                         <StackPanel>
                             <TextBlock Text="当前考试" Style="{StaticResource FormLabel}"/>
                             <TextBlock Text="{Binding Import.ExamName}" Style="{StaticResource CardHeading}"/>
+                            <WrapPanel Margin="0,8,0,14">
+                                <controls:StatusPill Text="{Binding Import.PublicationText}" Level="{Binding Import.PublicationLevel}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <Button Content="刷新发布状态" Style="{StaticResource ActionButton}" Margin="0" Command="{Binding Import.RefreshPublicationCommand}"/>
+                            </WrapPanel>
                             <TextBlock Text="试题包来源" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding Import.SourcePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
                             <Border Style="{StaticResource Hint}" Margin="0,0,0,14">

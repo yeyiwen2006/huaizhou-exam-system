@@ -39,7 +39,11 @@ public sealed record ExamSummary(
     bool VisibilityLocked,
     int ActualParticipants,
     int CollectedSubmissions,
-    long SettingsVersion);
+    long SettingsVersion)
+{
+    /// <summary>服务器当前试卷版本；0 表示未发布，null 表示未提供发布状态。</summary>
+    public long? PaperVersion { get; init; }
+}
 
 public sealed record ExamDetail(
     ExamSummary Summary,

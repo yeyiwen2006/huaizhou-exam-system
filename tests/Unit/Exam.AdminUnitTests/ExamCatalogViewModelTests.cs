@@ -20,7 +20,7 @@ public sealed class ExamCatalogViewModelTests
     [Trait("Category", "Wpf")]
     public Task Home_ListsExamsByNameAndOpeningAnExamScopesEveryPage() => OnStaAsync(async () =>
     {
-        var summary = Summary("exam-internal-1", "合成模拟考试", visible: true);
+        var summary = Summary("exam-internal-1", "合成模拟考试", visible: true) with { PaperVersion = 2 };
         var api = Configured(new Handler(request => request.RequestUri!.AbsolutePath switch
         {
             "/api/v1/exams" => Success(new[] { summary }),
@@ -33,6 +33,7 @@ public sealed class ExamCatalogViewModelTests
         Assert.Equal("合成模拟考试", card.Name);
         Assert.Equal("学生端可见", card.VisibilityText);
         Assert.Equal("未开始", card.StateText);
+        Assert.Equal("试卷已发布", card.PublicationText);
 
         card.OpenCommand.Execute(null);
         await main.Exam.OpenAsync(summary.ExamId);
@@ -43,7 +44,30 @@ public sealed class ExamCatalogViewModelTests
         Assert.Equal("合成模拟考试", main.Reports.ExamName);
         Assert.Equal("合成数学", Assert.Single(main.Exam.Subjects).Name);
         Assert.True(main.Exam.VisibleToStudents);
+        Assert.Equal("试卷已发布", main.Import.PublicationText);
+        summary = summary with { PaperVersion = 3 };
+        await main.Import.RefreshPublicationAsync();
+        Assert.Equal(3, main.Import.PaperVersion);
+        Assert.Equal(3, main.CurrentExam!.PaperVersion);
+        Assert.Equal(3, Assert.Single(main.Home.Exams).Exam.PaperVersion);
     });
+
+    [Theory]
+    [InlineData(0L, "试卷未发布")]
+    [InlineData(2L, "试卷已发布")]
+    [InlineData(null, "发布状态未确认")]
+    public void PublicationStateIsIndependentOfVisibility(long? version, string expected)
+    {
+        var summary = Summary("exam", "合成考试", visible: true) with { PaperVersion = version };
+        var card = new ExamCardViewModel(summary, () => { });
+        using var api = new AdminApiClient();
+        using var import = new ExamImportViewModel(api);
+        import.SetCurrentExam(summary);
+        Assert.Equal(expected, card.PublicationText);
+        Assert.Equal(expected, import.PublicationText);
+        import.SourcePath = "synthetic-new-preview";
+        Assert.Equal(expected, import.PublicationText);
+    }
 
     [Fact]
     [Trait("Category", "Wpf")]

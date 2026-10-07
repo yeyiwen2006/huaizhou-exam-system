@@ -35,10 +35,12 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         // 没有目录行、也没有学生端元数据的考试只可能是创建中途失败的残留，不列出。
         await using var command = dataSource.CreateCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
-                   e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql}
+                   e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
+                   v.paper_version AS published_paper_version
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
+              LEFT JOIN exam.version_state v ON v.exam_id = e.exam_id
              WHERE c.exam_id IS NOT NULL OR m.exam_id IS NOT NULL
              ORDER BY e.scheduled_start DESC, 2;
             """);
@@ -305,7 +307,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         await using (var command = new NpgsqlCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
                    e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
-                   c.settings::text, v.schedule_version
+                   c.settings::text, v.schedule_version, v.paper_version AS published_paper_version
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
@@ -350,7 +352,11 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
                 "ended" => ExamLifecycle.Ended,
                 var value => throw new DataException($"Unknown exam lifecycle '{value}'."),
             },
-            reader.GetBoolean(5), actual > collected, actual, collected, reader.GetInt64(6));
+            reader.GetBoolean(5), actual > collected, actual, collected, reader.GetInt64(6))
+        {
+            PaperVersion = reader.IsDBNull(reader.GetOrdinal("published_paper_version"))
+                ? null : reader.GetInt64(reader.GetOrdinal("published_paper_version"))
+        };
     }
 
     private static async Task<bool> FindReplayAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,

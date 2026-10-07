@@ -51,6 +51,10 @@ public sealed class WpfBindingSmokeTests
                 var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
                 Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
                 fixture.Login();
+                DrainDispatcher(); window.UpdateLayout();
+                Assert.Contains(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷未发布");
+                Assert.Contains(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷已发布");
+                SaveEditorScreenshot(window, (FrameworkElement)((TabItem)tabsAtStart.Items[MainViewModel.HomePage]).Content, "exam-publication-cards");
                 fixture.OpenExam();
                 window.UpdateLayout();
                 Assert.Equal(Visibility.Visible, tabsAtStart.Visibility);
@@ -147,6 +151,10 @@ public sealed class WpfBindingSmokeTests
                     }
                     if ((string)tab.Header == "试卷导入与发布")
                     {
+                        AdminUiFixture.Until(() => viewModel.Import.PublicationText != "正在读取发布状态…");
+                        Assert.Equal("试卷未发布", viewModel.Import.PublicationText);
+                        var publicationPill = Assert.Single(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷未发布");
+                        SaveEditorScreenshot(window, publicationPill, "import-publication-state");
                         Assert.Equal(viewModel.CurrentExam!.Name, viewModel.Import.ExamName);
                         Assert.Contains(Descendants<Button>(window), button =>
                             Equals(button.Content, "选择目录") && ReferenceEquals(button.Command, viewModel.Import.SelectDirectoryCommand));

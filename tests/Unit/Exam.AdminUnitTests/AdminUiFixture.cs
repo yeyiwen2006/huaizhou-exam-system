@@ -28,7 +28,7 @@ internal sealed class AdminUiFixture : IDisposable
     public MainWindow Window { get; }
     public static readonly DateTimeOffset Start = new(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
     public static readonly ExamSummary Summary = new(ExamId, "合成模拟考试", Start, Start.AddHours(2),
-        ExamLifecycle.Scheduled, true, false, 0, 0, 1);
+        ExamLifecycle.Scheduled, true, false, 0, 0, 1) { PaperVersion = 0 };
     private static readonly OperatorAccount Account = new("synthetic-admin", "合成管理员", OperatorStatus.Active, true, Start.AddDays(-1), null);
 
     /// <summary>
@@ -160,7 +160,7 @@ internal sealed class AdminUiFixture : IDisposable
             if (path == "/api/v1/operators") return Reply(new[] { Account,
                 new OperatorAccount("synthetic-pending", "合成待审批人员", OperatorStatus.Pending, false, Start.AddHours(-1), null) });
             if (path == "/api/v1/exams") return Reply(new[] { Summary,
-                Summary with { ExamId = "synthetic-second", Name = "合成第二场考试", StartsAt = Start.AddDays(1), EndsAt = Start.AddDays(1).AddHours(2) } });
+                Summary with { ExamId = "synthetic-second", Name = "合成第二场考试", StartsAt = Start.AddDays(1), EndsAt = Start.AddDays(1).AddHours(2), PaperVersion = 2 } });
             if (path == "/api/v1/exams/" + ExamId) return Reply(Detail());
             if (path.EndsWith("/roster", StringComparison.Ordinal)) return Reply(new CandidateRosterSnapshot(ExamId, 1,
                 [new("synthetic-person-1", "合成考生甲", "001", "000001"), new("synthetic-person-2", "合成考生乙", "002", "000002")]));

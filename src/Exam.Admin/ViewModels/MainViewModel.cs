@@ -47,6 +47,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Home.ExamOpened += OpenExam;
         Home.NewExamRequested += NewExam;
         Exam.ExamSaved += OnExamSaved;
+        Import.PaperPublicationChanged += OnPaperPublicationChanged;
         _api.ConfigurationChanged += OnConfigurationChanged;
         BackToHomeCommand = new RelayCommand(() => SelectedPage = HomePage);
     }
@@ -58,7 +59,13 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public int SelectedPage
     {
         get => _selectedPage;
-        set { if (SetProperty(ref _selectedPage, value)) OnPropertyChanged(nameof(ShowCurrentExamBar)); }
+        set
+        {
+            if (!SetProperty(ref _selectedPage, value)) return;
+            OnPropertyChanged(nameof(ShowCurrentExamBar));
+            if (value == ImportPage && Import.RefreshPublicationCommand.CanExecute(null))
+                Import.RefreshPublicationCommand.Execute(null);
+        }
     }
 
     /// <summary>进入某场考试（或新建考试）后，在除主页外的页面顶部显示当前考试。</summary>
@@ -141,6 +148,13 @@ public sealed class MainViewModel : BindableBase, IDisposable
         SelectedPage = HomePage;
     }
 
+    private void OnPaperPublicationChanged(string examId, long? paperVersion)
+    {
+        if (CurrentExam?.ExamId != examId) return;
+        CurrentExam = CurrentExam with { PaperVersion = paperVersion };
+        Home.UpdatePaperVersion(examId, paperVersion);
+    }
+
     private void SetCreating(bool value)
     {
         _isCreatingExam = value;
@@ -188,6 +202,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _api.ConfigurationChanged -= OnConfigurationChanged;
+        Import.PaperPublicationChanged -= OnPaperPublicationChanged;
         Monitoring.Dispose();
         Import.Dispose();
         GradingRevision.Dispose();

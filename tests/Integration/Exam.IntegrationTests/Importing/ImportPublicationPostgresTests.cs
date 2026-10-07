@@ -48,6 +48,7 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         var pipeline = new ImportPipeline(server.Api) { CompileOverride = SyntheticImportFixture.CompileFixtureAsync };
         using var preview = await pipeline.PrepareAsync(source.Source, server.ExamId);
         Assert.Equal(0, server.Versions.GetExam(server.ExamId).Value!.Versions.PaperVersion);
+        Assert.Equal(0, (await server.Catalog.GetAsync(server.ExamId)).Summary.PaperVersion);
         Assert.Equal(0L, await server.ResourceCount());
         Assert.Equal("source-exam", JsonSerializer.Deserialize<ExamManifest>(File.ReadAllText(source.ManifestPath), ImportJson.Create())!.ExamId);
         server.Boundary.DropReceiptOnce = true;
@@ -57,6 +58,8 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         Assert.True(preview.MatchesPublication(replay));
         Assert.Equal(2, server.Uploads);
         await server.AssertPublishedAndPrivate(replay);
+        Assert.Equal(1, (await server.Catalog.GetAsync(server.ExamId)).Summary.PaperVersion);
+        Assert.Equal(1, (await server.Catalog.ListAsync()).Single(exam => exam.ExamId == server.ExamId).PaperVersion);
     }
 
     [Theory]
