@@ -36,7 +36,7 @@ public partial class MainWindow : Window
     /// <summary>激活态霸屏：拦截标题栏与系统关闭；取消激活后恢复常规关闭。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (!App.IsLocalDebug && !_applicationExitRequested && App.Services.Session.IsActivated)
+        if (!_applicationExitRequested && App.Services.Session.IsActivated)
         {
             e.Cancel = true;
             if (WindowState != WindowState.Maximized)
@@ -96,7 +96,7 @@ public partial class MainWindow : Window
     /// <summary>根据激活状态切换霸屏与常规窗口；每次页面切换都会核对。</summary>
     private void ApplyKioskState()
     {
-        var activated = !App.IsLocalDebug && App.Services.Session.IsActivated;
+        var activated = App.Services.Session.IsActivated;
         if (activated && _kiosk is null)
         {
             _kiosk = KioskGuard.Enable(this);

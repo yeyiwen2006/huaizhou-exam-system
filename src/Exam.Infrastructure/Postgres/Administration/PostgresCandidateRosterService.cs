@@ -78,7 +78,7 @@ public sealed class PostgresCandidateRosterService(NpgsqlDataSource source,TimeP
             SELECT EXISTS(SELECT 1 FROM exam.participations WHERE exam_id=$1 AND candidate_id=$2)
                 OR EXISTS(SELECT 1 FROM exam.entry_preparations WHERE exam_id=$1 AND candidate_id=$2);
             """,examId,candidateId);
-        if((bool)(await query.ExecuteScalarAsync(ct))!)throw AdministrationSql.Conflict("该考生已有入场或参试记录，不能修改身份或删除；原答卷和历史记录已保留。");
+        if((bool)(await query.ExecuteScalarAsync(ct))!)throw AdministrationSql.Conflict("该考生已有入场或参加考试记录，不能修改身份或删除；原答卷和历史记录已保留。");
     }
     private static async Task InsertAsync(NpgsqlConnection c,NpgsqlTransaction t,string examId,RosterImportRow row,CancellationToken ct)
     {

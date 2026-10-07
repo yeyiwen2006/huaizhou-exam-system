@@ -227,7 +227,7 @@ public sealed class ParticipationService(
             var participation = transaction.FindParticipation(request.ExamId, candidateId);
             if (participation is { BusinessState: ParticipationBusinessState.Submitted })
             {
-                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次参试。");
+                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该考生已经交卷，不能再次参加考试。");
             }
 
             if (participation is not null &&
@@ -295,7 +295,7 @@ public sealed class ParticipationService(
             // Idempotency prevents repeating the business mutation, not observing new
             // lifecycle/authorization facts. Never replay a stale unlock after the end.
             var current = transaction.FindParticipation(result.ParticipationId)
-                ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试登记已不存在。");
+                ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参加考试登记已不存在。");
             var lifecycle = CurrentLifecycle(exam, _timeProvider.GetUtcNow());
             return ToResult(current,
                 lifecycle == ExamLifecycle.Running && current.BusinessState == ParticipationBusinessState.Answering
@@ -334,7 +334,7 @@ public sealed class ParticipationService(
             return RunIdempotent(transaction, request.RequestId, "participation.withdraw", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
-                    ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参试记录。");
+                    ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参加考试记录。");
                 EnsureSessionOwnsParticipation(session, participation);
                 if (participation.BusinessState == ParticipationBusinessState.NotParticipating)
                 {
@@ -344,7 +344,7 @@ public sealed class ParticipationService(
                 EnsureVersion(participation, request.ExpectedVersion);
                 if (participation.BusinessState != ParticipationBusinessState.Waiting)
                 {
-                    throw Error(ParticipationErrorCodes.InvalidBusinessState, "只有等待考试状态可以退出参试。");
+                    throw Error(ParticipationErrorCodes.InvalidBusinessState, "只有等待考试状态可以退出考试。");
                 }
 
                 var withdrawn = participation.Withdraw();
@@ -377,7 +377,7 @@ public sealed class ParticipationService(
             return RunIdempotent(transaction, request.RequestId, "participation.device-decision", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
-                    ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参试记录。");
+                    ?? throw Error(ParticipationErrorCodes.InvalidBusinessState, "找不到参加考试记录。");
                 if (participation.BusinessState == ParticipationBusinessState.Submitted)
                 {
                     throw Error(ParticipationErrorCodes.AlreadySubmitted, "已交卷记录不能更换授权设备。");
@@ -436,16 +436,16 @@ public sealed class ParticipationService(
         {
             EnsureActiveDevice(transaction, request.DeviceId);
             var participation = transaction.FindParticipation(request.ParticipationId)
-                ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试授权不存在。");
+                ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参加考试授权不存在。");
             EnsureAuthorization(participation, request.DeviceId, request.EntryVersion, request.AuthorizationVersion);
             if (participation.BusinessState == ParticipationBusinessState.Submitted)
             {
-                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该参试记录已经交卷。");
+                throw Error(ParticipationErrorCodes.AlreadySubmitted, "该参加考试记录已经交卷。");
             }
 
             if (participation.BusinessState is ParticipationBusinessState.NotParticipating)
             {
-                throw Error(ParticipationErrorCodes.AuthorizationRevoked, "当前登记已退出参试。");
+                throw Error(ParticipationErrorCodes.AuthorizationRevoked, "当前登记已退出考试。");
             }
 
             return ToResult(participation, null);
@@ -477,7 +477,7 @@ public sealed class ParticipationService(
             return RunIdempotent(transaction, request.RequestId, "participation.finalize", request, () =>
             {
                 var participation = transaction.FindParticipation(request.ParticipationId)
-                    ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参试授权不存在。");
+                    ?? throw Error(ParticipationErrorCodes.AuthorizationRevoked, "参加考试授权不存在。");
                 EnsureAuthorization(
                     participation,
                     request.DeviceId,
@@ -495,7 +495,7 @@ public sealed class ParticipationService(
 
                 if (participation.BusinessState != ParticipationBusinessState.Answering)
                 {
-                    throw Error(ParticipationErrorCodes.InvalidBusinessState, "只有正在答题的参试记录可以交卷。");
+                    throw Error(ParticipationErrorCodes.InvalidBusinessState, "只有正在答题的参加考试记录可以交卷。");
                 }
 
                 var submitted = participation.MarkSubmitted();
@@ -743,7 +743,7 @@ public sealed class ParticipationService(
         if (!StringComparer.Ordinal.Equals(CandidateIdForExam(session, participation.ExamId), participation.CandidateId) ||
             !StringComparer.Ordinal.Equals(session.DeviceId, participation.AuthorizedDeviceId))
         {
-            throw Error(ParticipationErrorCodes.AuthorizationRevoked, "当前会话无权操作该参试记录。");
+            throw Error(ParticipationErrorCodes.AuthorizationRevoked, "当前会话无权操作该参加考试记录。");
         }
     }
 
@@ -762,7 +762,7 @@ public sealed class ParticipationService(
     {
         if (participation.Version != expectedVersion)
         {
-            throw Error(ParticipationErrorCodes.VersionConflict, "参试记录版本冲突。");
+            throw Error(ParticipationErrorCodes.VersionConflict, "参加考试记录版本冲突。");
         }
     }
 

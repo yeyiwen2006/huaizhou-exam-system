@@ -161,6 +161,11 @@ internal sealed class AdminUiFixture : IDisposable
                 new OperatorAccount("synthetic-pending", "合成待审批人员", OperatorStatus.Pending, false, Start.AddHours(-1), null) });
             if (path == "/api/v1/exams") return Reply(new[] { Summary,
                 Summary with { ExamId = "synthetic-second", Name = "合成第二场考试", StartsAt = Start.AddDays(1), EndsAt = Start.AddDays(1).AddHours(2), PaperVersion = 2 } });
+            if (path == "/api/v1/exams/" + ExamId + "/visibility" && request.Method == HttpMethod.Put)
+            {
+                var input = request.Content!.ReadFromJsonAsync<SetExamVisibilityRequest>(JsonDefaults.Create()).Result!;
+                return Reply(Summary with { VisibleToStudents = input.VisibleToStudents, SettingsVersion = 2 });
+            }
             if (path == "/api/v1/exams/" + ExamId) return Reply(Detail());
             if (path.EndsWith("/roster", StringComparison.Ordinal)) return Reply(new CandidateRosterSnapshot(ExamId, 1,
                 [new("synthetic-person-1", "合成考生甲", "001", "000001"), new("synthetic-person-2", "合成考生乙", "002", "000002")]));

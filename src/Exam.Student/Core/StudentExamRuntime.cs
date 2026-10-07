@@ -167,7 +167,7 @@ public sealed partial class StudentExamRuntime(
             if (_recoveredSubmission is null && Manager.RequiresLocalAnswerRecovery &&
                 await localState.LoadAnswerStateAsync(_localKey, ct) is null)
             {
-                _localStateError = "本机保留了上次已经开考的参试记录，但原本地答案缺失。不能重建空答卷或重新开始，请联系考务人员恢复原记录。";
+                _localStateError = "本机保留了上次已经开考的参加考试记录，但原本地答案缺失。不能重建空答卷或重新开始，请联系考务人员恢复原记录。";
                 return false;
             }
             if (_recoveredSubmission is null && Manager.ExamEnded &&
@@ -282,7 +282,7 @@ public sealed partial class StudentExamRuntime(
                     else
                     {
                         await Answers.InvalidateAuthorizationAsync(ct);
-                        _localStateError = "参试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
+                        _localStateError = "参加考试、授权或试卷版本已变化，原答案未被覆盖；请重新核对恢复记录。";
                     }
                 }
                 return;
@@ -295,6 +295,7 @@ public sealed partial class StudentExamRuntime(
             answers.StateSaved += OnAnswerStateSaved;
             answers.SubmissionFixed += OnSubmissionFixed;
             var restored = await answers.StartAsync(_localKey, context, ct);
+            if (restored.IsUsable) await Manager.MarkLocalAnswersInitializedAsync(ct);
             _recoveredSubmission ??= answers.FixedSubmission;
             _localStateError = restored.IsUsable ? null : restored.Message;
             // END/revocation can arrive while SQLite recovery awaits its worker. Never let
@@ -447,7 +448,7 @@ public sealed partial class StudentExamRuntime(
         catch
         {
             await feed.DisposeAsync();
-            _handlingError = "指令连接尚未建立，请重试连接；原参试登记保持不变。";
+            _handlingError = "指令连接尚未建立，请重试连接；原参加考试登记保持不变。";
             throw;
         }
     }

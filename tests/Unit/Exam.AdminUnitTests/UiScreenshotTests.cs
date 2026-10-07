@@ -204,7 +204,6 @@ public sealed class UiScreenshotTests
 
         // The activation page reads authoritative synthetic groups/devices when it becomes active.
         viewModel.Activation.QueryDeviceId = string.Empty;
-        viewModel.Activation.MoveReason = "合成示例：更换试场";
 
         var monitoring = viewModel.Monitoring;
         monitoring.ExamId = "synthetic-exam";

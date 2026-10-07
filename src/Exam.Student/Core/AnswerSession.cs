@@ -136,7 +136,7 @@ public sealed class AnswerSession
                 return new RestoreResult(Status, LastError);
             }
             if (saved is not null && !MatchesContext(saved))
-                return DenyRestore("本地记录的设备或参试授权与当前服务器不一致，已拒绝恢复。");
+                return DenyRestore("本地记录的设备或参加考试授权与当前服务器不一致，已拒绝恢复。");
             if (saved is not null && _paper is not null &&
                 (AnswerSheetContract.Validate(_paper, saved.Answers) is not null ||
                  saved.Marks.Any(id => !KnownQuestion(id)) ||

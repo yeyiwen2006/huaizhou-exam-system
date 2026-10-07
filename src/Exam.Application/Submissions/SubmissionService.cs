@@ -86,16 +86,16 @@ public sealed class SubmissionService : IDisposable
                     "答题版本不高于服务器已保存版本，旧进度未覆盖新进度。"),
                 ProgressPersistenceStatus.AuthorizationRevoked => SubmissionOperationResult<PersistedProgress>.Failure(
                     SubmissionErrorCode.AuthorizationRevoked,
-                    "设备授权或参试版本已失效。"),
+                    "设备授权或参加考试版本已失效。"),
                 ProgressPersistenceStatus.InvalidState => SubmissionOperationResult<PersistedProgress>.Failure(
                     SubmissionErrorCode.VersionConflict,
-                    "当前参试状态不允许写入答题进度。"),
+                    "当前参加考试状态不允许写入答题进度。"),
                 ProgressPersistenceStatus.AlreadySubmitted => SubmissionOperationResult<PersistedProgress>.Failure(
                     SubmissionErrorCode.AlreadySubmitted,
                     "最终答卷已经保存，不能再写入进度。"),
                 _ => SubmissionOperationResult<PersistedProgress>.Failure(
                     SubmissionErrorCode.NotFound,
-                    "未找到参试记录。")
+                    "未找到参加考试记录。")
             };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -156,7 +156,7 @@ public sealed class SubmissionService : IDisposable
             {
                 return SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.AuthorizationRevoked,
-                    "设备授权或参试版本已失效。");
+                    "设备授权或参加考试版本已失效。");
             }
 
             if (result.Status == SubmissionPersistenceStatus.VersionConflict)
@@ -170,14 +170,14 @@ public sealed class SubmissionService : IDisposable
             {
                 return SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.VersionConflict,
-                    "当前参试状态不允许交卷。");
+                    "当前参加考试状态不允许交卷。");
             }
 
             if (result.Status == SubmissionPersistenceStatus.ParticipationNotFound || result.Submission is null)
             {
                 return SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.NotFound,
-                    "未找到参试记录。");
+                    "未找到参加考试记录。");
             }
 
             // Replaying after a lost response also reaches this idempotent queue operation, which
@@ -264,7 +264,7 @@ public sealed class SubmissionService : IDisposable
         {
             return SubmissionOperationResult<SubmissionReceipt>.Failure(
                 SubmissionErrorCode.InvalidRequest,
-                "回执查询必须提供有效的参试和设备授权版本。");
+                "回执查询必须提供有效的参加考试和设备授权版本。");
         }
 
         try
@@ -276,7 +276,7 @@ public sealed class SubmissionService : IDisposable
             {
                 return SubmissionOperationResult<SubmissionReceipt>.Failure(
                     SubmissionErrorCode.AuthorizationRevoked,
-                    "当前设备无权查询该参试记录的交卷回执。");
+                    "当前设备无权查询该参加考试记录的交卷回执。");
             }
 
             var submission = await _store.FindSubmissionByParticipationAsync(participationId, cancellationToken);

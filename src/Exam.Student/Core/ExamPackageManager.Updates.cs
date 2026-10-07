@@ -148,7 +148,7 @@ public sealed partial class ExamPackageManager
                 participation.AuthorizationVersion != previousParticipation.AuthorizationVersion ||
                 participation.BusinessState != ParticipationBusinessState.Answering)
                 return UpdateFailure(new ApiError(ErrorCodes.AuthorizationRevoked,
-                    "服务器返回的当前参试授权已变化。"), "已停止旧授权作答。");
+                    "服务器返回的当前参加考试授权已变化。"), "已停止旧授权作答。");
             if (string.IsNullOrWhiteSpace(participation.UnlockReference))
                 return PaperUpdateResult.Fail("新版缺少解锁引用，未切换题包。");
             if (transfer.UnlockRequest is null || transfer.UnlockRequest.ServerEpoch != Server!.ServerEpoch)

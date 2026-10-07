@@ -71,7 +71,7 @@ public sealed class MonitoringViewModelTests
         Assert.Equal("暂无指令", waiting.CommandSummary);
         Assert.Equal("无通信记录", waiting.LastCommunicationText);
 
-        Assert.Equal("实际参试 2 人；已回收 0 份；未回收 2 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 2 人；已回收 0 份；未回收 2 份。", viewModel.CountsText);
         Assert.Contains("进行中", viewModel.AsOfText, StringComparison.Ordinal);
     }
 
@@ -93,7 +93,7 @@ public sealed class MonitoringViewModelTests
         Assert.Same(viewModel.Rows[0], Assert.Single(viewModel.UncollectedRows));
         Assert.Equal("已回收", viewModel.Rows[1].CollectionState);
         Assert.Equal("2026-10-05 09:30:00", viewModel.Rows[1].ReceivedText);
-        Assert.Equal("实际参试 2 人；已回收 1 份；未回收 1 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 2 人；已回收 1 份；未回收 1 份。", viewModel.CountsText);
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal("已交卷", Assert.Single(viewModel.Rows).BusinessState);
         Assert.Equal("未回收", viewModel.Rows[0].CollectionState);
-        Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
         Assert.Same(viewModel.Rows[0], Assert.Single(viewModel.UncollectedRows));
     }
 
@@ -131,7 +131,7 @@ public sealed class MonitoringViewModelTests
         api.Configure("https://localhost:5001/", "synthetic-token", "operator-1");
         using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
         await viewModel.LoadAsync();
-        Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
 
         // 补传：服务器在之后拿到回执，考务端下一次权威读取即更新计数。
         viewModel.SelectedRow = viewModel.Rows[0];
@@ -158,8 +158,8 @@ public sealed class MonitoringViewModelTests
 
         Assert.Empty(viewModel.Rows);
         Assert.Empty(viewModel.UncollectedRows);
-        Assert.Equal("实际参试 0 人；已回收 0 份；未回收 0 份。", viewModel.CountsText);
-        Assert.Contains("还没有实际参试考生", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal("实际参加考试 0 人；已回收 0 份；未回收 0 份。", viewModel.CountsText);
+        Assert.Contains("还没有实际参加考试考生", viewModel.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -215,10 +215,10 @@ public sealed class MonitoringViewModelTests
                 MonitoringFixture.Participant(receiptId: "receipt-1", collectionState: "未回收"))),
             ("未定义业务状态", MonitoringFixture.Snapshot("exam-1",
                 MonitoringFixture.Participant(businessState: (ParticipationBusinessState)99))),
-            ("同一名考生两条参试记录", MonitoringFixture.Snapshot("exam-1",
+            ("同一名考生两条参加考试记录", MonitoringFixture.Snapshot("exam-1",
                 MonitoringFixture.Participant(), MonitoringFixture.Participant(participationId: "part-2"))),
             ("版本越界", MonitoringFixture.Snapshot("exam-1", MonitoringFixture.Participant(entryVersion: 0))),
-            ("未回收不属于参试列表", MonitoringFixture.Snapshot("exam-1",
+            ("未回收不属于参加考试列表", MonitoringFixture.Snapshot("exam-1",
                 new[] { MonitoringFixture.Participant() },
                 new[] { MonitoringFixture.Participant(participationId: "part-9", candidateId: "candidate-9") })),
         };
@@ -394,7 +394,7 @@ public sealed class MonitoringViewModelTests
 
         Assert.Equal(new[] { "未回收", "回收中" }, viewModel.FilteredRows.Select(row => row.CollectionState));
         // 与回收统计、未回收名单口径一致。
-        Assert.Equal("实际参试 3 人；已回收 1 份；未回收 2 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 3 人；已回收 1 份；未回收 2 份。", viewModel.CountsText);
         Assert.Equal(2, viewModel.UncollectedRows.Count);
     }
 
@@ -452,7 +452,7 @@ public sealed class MonitoringViewModelTests
         Assert.Empty(viewModel.CollectionEvents);
         Assert.Empty(viewModel.SelectedCommands);
         Assert.Empty(viewModel.SelectedConflictDevices);
-        Assert.Equal("实际参试 0 人；已回收 0 份；未回收 0 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 0 人；已回收 0 份；未回收 0 份。", viewModel.CountsText);
         Assert.Contains("已切换", viewModel.Status, StringComparison.Ordinal);
     }
 

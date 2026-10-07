@@ -19,6 +19,35 @@ namespace Exam.AdminUnitTests;
 public sealed class ExamImportWorkflowTests
 {
     [Fact]
+    [Trait("Category", "Wpf")]
+    public Task ImportContinuesAcrossPagesAndKeepsItsCompletedPreview() => ExamCatalogViewModelTests.OnStaAsync(async () =>
+    {
+        using var source = new SourceFixture();
+        var service = new FakeImportService(source.Directory) { PrepareRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var main = new MainViewModel(new AdminApiClient(), service);
+        main.Import.SetCurrentExam(Summary("synthetic-exam-1"));
+        main.Import.SourcePath = source.Directory;
+        main.SelectedPage = MainViewModel.ImportPage;
+        var importing = main.Import.CheckAsync();
+        foreach (var page in new[] { MainViewModel.SettingsPage, MainViewModel.ActivationPage, MainViewModel.HomePage })
+        {
+            main.SelectedPage = page;
+            Assert.True(main.Import.IsChecking);
+            Assert.False(service.PrepareCancellation.IsCancellationRequested);
+            Assert.Equal(source.Directory, main.Import.SourcePath);
+        }
+        service.PrepareRelease.SetResult();
+        await importing;
+        Assert.Equal(MainViewModel.HomePage, main.SelectedPage);
+        Assert.True(main.Import.HasPreview);
+        Assert.Single(main.Import.Questions);
+        main.ShowImportProgressCommand.Execute(null);
+        Assert.Equal(MainViewModel.ImportPage, main.SelectedPage);
+        Assert.True(main.Import.HasPreview);
+        Assert.Contains("检查通过", main.Import.Status, StringComparison.Ordinal);
+    });
+
+    [Fact]
     public void SyntheticPackage_BindsOnlyMatchingNamedExam_WithoutEditingOriginal()
     {
         var sample = FindSyntheticMinimal();
@@ -340,12 +369,16 @@ public sealed class ExamImportWorkflowTests
         public bool LoseReceipt { get; set; }
         public string? ResultExamId { get; set; }
         public TaskCompletionSource? PublishRelease { get; set; }
+        public TaskCompletionSource? PrepareRelease { get; set; }
+        public CancellationToken PrepareCancellation { get; private set; }
         public ExamVersionSnapshot? LastResult { get; private set; }
         public PreparedExamImport? LastPrepared { get; private set; }
         public int PublishCalls { get; private set; }
         public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default,
             string? reason = null, IReadOnlyList<string>? changedQuestions = null)
         {
+            PrepareCancellation = ct;
+            if (PrepareRelease is not null) await PrepareRelease.Task.WaitAsync(ct);
             if (FailNextCheck) throw new InvalidDataException("合成错误包");
             var workspace = await ExamImportWorkspace.CreateAsync(source, ct);
             var manifest = new ExamManifest(1, examId, "合成考试", [], [], [], []);

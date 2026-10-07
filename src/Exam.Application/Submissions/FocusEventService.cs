@@ -38,10 +38,10 @@ public sealed class FocusEventService(
                 FocusEventPersistenceStatus.AuthorizationRevoked =>
                     SubmissionOperationResult<FocusEventsReceipt>.Failure(
                         SubmissionErrorCode.AuthorizationRevoked,
-                        "设备授权或参试版本已失效，失焦事件未留痕。"),
+                        "设备授权或参加考试版本已失效，失焦事件未留痕。"),
                 _ => SubmissionOperationResult<FocusEventsReceipt>.Failure(
                     SubmissionErrorCode.NotFound,
-                    "未找到参试记录。")
+                    "未找到参加考试记录。")
             };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -92,12 +92,12 @@ public sealed class FocusEventService(
             string.IsNullOrWhiteSpace(request.ParticipationId) ||
             string.IsNullOrWhiteSpace(request.DeviceId))
         {
-            return "考试、考生、参试、设备或请求标识不能为空。";
+            return "考试、考生、参加考试、设备或请求标识不能为空。";
         }
 
         if (request.EntryVersion < 1 || request.AuthorizationVersion < 1 || request.PaperVersion < 1)
         {
-            return "参试或试卷版本无效。";
+            return "参加考试或试卷版本无效。";
         }
 
         if (request.Events is null || request.Events.Count == 0)

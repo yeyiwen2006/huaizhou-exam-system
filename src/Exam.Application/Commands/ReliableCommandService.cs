@@ -175,7 +175,7 @@ public sealed class ReliableCommandService
         {
             return CommandOperationResult<IReadOnlyList<CommandDelivery>>.Failure(
                 CommandErrorCode.AuthorizationRevoked,
-                "设备授权或参试版本已失效。");
+                "设备授权或参加考试版本已失效。");
         }
 
         var now = _timeProvider.GetUtcNow();

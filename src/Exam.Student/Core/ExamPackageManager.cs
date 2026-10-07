@@ -61,13 +61,16 @@ public sealed partial class ExamPackageManager : IDisposable
                 ServerId = device.ServerId,
                 DeviceId = device.DeviceId,
                 CandidateId = _candidateId,
-                ExamId = examId
+                ExamId = examId,
+                AnswersInitialized = false
             });
         }
         catch { _store.Dispose(); throw; }
         // An earlier run already started this participation. A missing answer database
         // must not be mistaken for a first-time blank exam during local persistence recovery.
-        RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null;
+        RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null &&
+            (_state.AnswersInitialized == true || _state.ProtectedUnlockMaterial is not null ||
+                _state.AnswersInitialized is null && _state.Ended);
         CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
             _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
             _state.Participation is not null ? Phase.ConfirmedWaiting : Phase.Idle;
@@ -100,6 +103,13 @@ public sealed partial class ExamPackageManager : IDisposable
     public bool ExamStarted => _state.Started;
     public bool ExamEnded => _state.Ended || _terminalInMemory;
     public bool HasPendingConfirmation => _state.PendingConfirm is not null;
+    public bool CanLeaveWaitingPage => Participation is null ||
+        Participation.BusinessState is ParticipationBusinessState.Waiting or ParticipationBusinessState.NotParticipating;
+    public Task<bool> MarkLocalAnswersInitializedAsync(CancellationToken ct = default) => LockedAsync(() =>
+    {
+        if (_state.AnswersInitialized != true) Save(_state with { AnswersInitialized = true });
+        return Task.FromResult(true);
+    }, ct);
     public bool HasPackage => IsPackageComplete();
     public bool HasInstructions => Descriptor is { } descriptor && Instructions is { } instructions &&
         instructions.Version == descriptor.InstructionsVersion && instructions.Lines.Count > 0;
@@ -188,7 +198,7 @@ public sealed partial class ExamPackageManager : IDisposable
         {
             if (!CanConfirmParticipation || Descriptor is null || Instructions is null || _state.Preparation is null)
             {
-                LastError = "试题和考试说明尚未全部就绪，不能确认参试。";
+                LastError = "试题和考试说明尚未全部就绪，不能确认参加考试。";
                 return null;
             }
             var request = _state.PendingConfirm ?? new ConfirmParticipationRequest(RequestIds.New(),
@@ -406,7 +416,7 @@ public sealed partial class ExamPackageManager : IDisposable
         }
         ValidateParticipation(participation);
         if (participation.BusinessState is not (ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering))
-            throw new InvalidDataException("确认参试未返回可等待或恢复的参试记录。");
+            throw new InvalidDataException("确认参加考试未返回可等待或恢复的参加考试记录。");
         var ended = _state.Ended || participation.Lifecycle == ExamLifecycle.Ended;
         Save(_state with
         {
@@ -448,10 +458,10 @@ public sealed partial class ExamPackageManager : IDisposable
             var confirmation = await ConfirmCoreAsync(_state.PendingConfirm, unlock: false, ct);
             if (confirmation is null || !confirmation.IsSuccess) return confirmation;
         }
-        if (_state.PendingWithdraw is null && (Participation is null || ExamStarted || ExamEnded ||
+        if (_state.PendingWithdraw is null && (Participation is null ||
                 Participation.BusinessState != ParticipationBusinessState.Waiting))
         {
-            LastError = "当前状态不能退出参试，请等待服务器确认。";
+            LastError = "当前状态不能直接退出考试，请先核对服务器状态。";
             return null;
         }
         var request = _state.PendingWithdraw ?? new WithdrawParticipationRequest(RequestIds.New(),
@@ -468,7 +478,7 @@ public sealed partial class ExamPackageManager : IDisposable
         ValidateParticipation(withdrawn);
         if (withdrawn.ParticipationId != request.ParticipationId || withdrawn.BusinessState != ParticipationBusinessState.NotParticipating ||
             withdrawn.EntryVersion != Participation?.EntryVersion || withdrawn.Version < request.ExpectedVersion)
-            throw new InvalidDataException("退出响应未确认当前参试登记已经退出。");
+            throw new InvalidDataException("退出响应未确认当前参加考试登记已经退出。");
         Save(_state with
         {
             PendingWithdraw = null,
@@ -635,7 +645,7 @@ public sealed partial class ExamPackageManager : IDisposable
         if (participation.ExamId != ExamId || participation.CandidateId != _candidateId ||
             participation.AuthorizedDeviceId != _device.DeviceId || string.IsNullOrWhiteSpace(participation.ParticipationId) ||
             participation.EntryVersion < 1 || participation.AuthorizationVersion < 1 || participation.Version < 1)
-            throw new InvalidDataException("服务器返回的参试身份或授权与当前考生不一致。");
+            throw new InvalidDataException("服务器返回的参加考试身份或授权与当前考生不一致。");
     }
     private void ValidateServer<T>(ApiEnvelope<T> response)
     {

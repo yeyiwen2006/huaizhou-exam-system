@@ -86,8 +86,8 @@ public sealed class PostgresReportSource(NpgsqlDataSource dataSource, PostgresAc
             new(examId, state, reason, members.Length, members.Length-missing.Length, graded,
                 rosterVersion, paperVersion, gradingVersion, null, missing), null);
         if (lifecycle != "Ended") return Unavailable(ReportState.ExamNotEnded, "考试尚未结束。");
-        if (members.Length == 0) return Unavailable(ReportState.NoParticipants, "本场考试没有实际参试者。");
-        if (missing.Length != 0) return Unavailable(ReportState.Collecting, "实际参试考生的答卷尚未全部回收。");
+        if (members.Length == 0) return Unavailable(ReportState.NoParticipants, "本场考试没有实际参加考试者。");
+        if (missing.Length != 0) return Unavailable(ReportState.Collecting, "实际参加考试考生的答卷尚未全部回收。");
         if (gradingVersion <= 0 || graded != members.Length)
             return Unavailable(ReportState.Grading, "计分尚未完成或正在重新计分。");
         try

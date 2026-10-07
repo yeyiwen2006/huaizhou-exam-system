@@ -108,7 +108,7 @@ public sealed class PostgresMigrationRunner(
             await tableLock.ExecuteNonQueryAsync(cancellationToken);
             await using var active = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {table} WHERE {predicate});", connection, transaction);
             if (await active.ExecuteScalarAsync(cancellationToken) is true)
-                throw new InvalidOperationException("考试正在进行或仍有等待、作答中的参试记录，禁止迁移数据库。请在考试及收卷完成后的维护窗口升级。");
+                throw new InvalidOperationException("考试正在进行或仍有等待、作答中的参加考试记录，禁止迁移数据库。请在考试及收卷完成后的维护窗口升级。");
         }
     }
 

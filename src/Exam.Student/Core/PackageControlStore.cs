@@ -47,6 +47,7 @@ internal sealed record PackageControlState
     public ParticipationResult? Participation { get; init; }
     public byte[]? ProtectedUnlockMaterial { get; init; }
     public bool Started { get; init; }
+    public bool? AnswersInitialized { get; init; }
     public bool Ended { get; init; }
     public bool Revoked { get; init; }
     public long LifecycleStateVersion { get; init; }

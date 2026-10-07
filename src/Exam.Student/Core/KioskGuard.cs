@@ -23,8 +23,9 @@ public sealed class KioskGuard
 {
     private const int WhKeyboardLl = 13;
     private const int WmKeydown = 0x0100;
+    private const int WmKeyup = 0x0101;
     private const int WmSyskeydown = 0x0104;
-    private const int LlkhfInjected = 0x00000010;
+    private const int WmSyskeyup = 0x0105;
 
     private const int VkTab = 0x09;
     private const int VkEscape = 0x1B;
@@ -39,6 +40,7 @@ public sealed class KioskGuard
     private readonly WeakReference _window = new(null);
     private nint _hook;
     private bool _disposed;
+    private readonly HashSet<int> _suppressedKeys = [];
 
     private KioskGuard() { }
     public bool IsInstalled => _hook != nint.Zero && !_disposed;
@@ -127,27 +129,28 @@ public sealed class KioskGuard
         }
 
         var message = wParam.ToInt32();
-        if (message is not (WmKeydown or WmSyskeydown))
+        if (message is not (WmKeydown or WmSyskeydown or WmKeyup or WmSyskeyup))
         {
             return Native.CallNextHookEx(nint.Zero, code, wParam, lParam);
         }
 
         var data = Marshal.PtrToStructure<Native.KbdLlHookStruct>(lParam);
-        if ((data.Flags & LlkhfInjected) != 0)
+        var released = message is WmKeyup or WmSyskeyup;
+        if (released && guard._suppressedKeys.Remove(data.VkCode))
         {
-            // 注入事件来自辅助技术或本进程模拟，不属于要拦截的考生按键。
-            return Native.CallNextHookEx(nint.Zero, code, wParam, lParam);
+            return (nint)1;
         }
 
         // Ctrl 是另一个已经按下的修饰键；flags 的 0x02 是 LOWER_IL_INJECTED，不是 Ctrl。
         var controlDown = (Native.GetAsyncKeyState(0x11) & 0x8000) != 0;
-        var decision = Decide(data.VkCode, data.Flags, message == WmSyskeydown, controlDown);
+        var decision = Decide(data.VkCode, data.Flags, message is WmSyskeydown or WmSyskeyup, controlDown);
         if (decision == KioskKeyDecision.Allow)
         {
             return Native.CallNextHookEx(nint.Zero, code, wParam, lParam);
         }
 
-        if (decision == KioskKeyDecision.SuppressAndRefocus &&
+        if (!released) guard._suppressedKeys.Add(data.VkCode);
+        if (!released &&
             guard._window.Target is System.Windows.Window { } window)
         {
             window.Dispatcher.BeginInvoke(() =>
@@ -168,8 +171,6 @@ public sealed class KioskGuard
     public static KioskKeyDecision Decide(int vkCode, int flags, bool isSystemKey, bool controlDown = false)
     {
         const int LlkhfAltDown = 0x00000020;
-        if ((flags & LlkhfInjected) != 0) return KioskKeyDecision.Allow;
-
         var alt = (flags & LlkhfAltDown) != 0;
         var ctrl = controlDown;
 

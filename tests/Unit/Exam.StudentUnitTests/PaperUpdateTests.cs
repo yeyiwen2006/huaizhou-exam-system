@@ -42,6 +42,9 @@ public sealed partial class PaperUpdateTests
         Assert.Equal(KioskKeyDecision.SuppressAndRefocus, KioskGuard.Decide(vkTab, alt, isSystemKey: true));
         Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, alt, isSystemKey: true));
         Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, 0, isSystemKey: false, controlDown: true));
+        Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkEsc, alt, isSystemKey: true, controlDown: true));
+        Assert.Equal(KioskKeyDecision.SuppressAndRefocus, KioskGuard.Decide(vkLwin, 0x10, isSystemKey: false));
+        Assert.Equal(KioskKeyDecision.Allow, KioskGuard.Decide(vkA, 0x10, isSystemKey: false));
         Assert.Equal(KioskKeyDecision.Suppress, KioskGuard.Decide(vkF4, alt, isSystemKey: true));
         // 普通按键与不带 Alt 的 F4（应用内自定义场景）放行。
         Assert.Equal(KioskKeyDecision.Allow, KioskGuard.Decide(vkA, 0, isSystemKey: false));

@@ -20,7 +20,7 @@ public sealed partial class ReportPageViewModel
         Session.HasTables ? "成绩已生成" : _observedStatus?.State switch
         {
             ReportState.ExamNotEnded => "考试尚未结束",
-            ReportState.NoParticipants => "暂无参试记录",
+            ReportState.NoParticipants => "暂无参加考试记录",
             ReportState.Collecting => "等待答卷回收",
             ReportState.Grading => "等待计分完成",
             ReportState.InvalidSource => "数据需要核对",

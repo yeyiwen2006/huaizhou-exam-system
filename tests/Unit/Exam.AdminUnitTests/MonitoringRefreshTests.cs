@@ -47,7 +47,7 @@ public sealed class MonitoringRefreshTests
         // 页面在前台时无需手动刷新：列表跟随权威快照自动更新。
         Assert.True(Volatile.Read(ref calls) >= 3);
         Assert.Equal(3, viewModel.Rows.Count);
-        Assert.Equal("实际参试 3 人；已回收 0 份；未回收 3 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 3 人；已回收 0 份；未回收 3 份。", viewModel.CountsText);
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public sealed class MonitoringRefreshTests
         await UntilAsync(() => viewModel.Rows.Count == 1);
 
         Assert.DoesNotContain("请点击", viewModel.Status, StringComparison.Ordinal);
-        Assert.Equal("共 1 名实际参试考生；已回收 0 份；未回收 1 份。", viewModel.Status);
+        Assert.Equal("共 1 名实际参加考试考生；已回收 0 份；未回收 1 份。", viewModel.Status);
     }
 
     [Fact]
@@ -332,7 +332,7 @@ public sealed class MonitoringRefreshTests
         await viewModel.LoadAsync();
 
         Assert.StartsWith("1 次 / 共 ", Assert.Single(viewModel.Rows).FocusSummary, StringComparison.Ordinal);
-        Assert.Equal("实际参试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
+        Assert.Equal("实际参加考试 1 人；已回收 0 份；未回收 1 份。", viewModel.CountsText);
     }
 
     [Fact]

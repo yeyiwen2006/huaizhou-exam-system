@@ -44,7 +44,7 @@ public sealed class ReliableCommandDispatcher(
             {
                 connections.Remove(connection.ConnectionId);
                 await hub.Clients.Client(connection.ConnectionId)
-                    .SendAsync("AuthorizationRevoked", "设备激活或参试授权已失效。", cancellationToken);
+                    .SendAsync("AuthorizationRevoked", "设备激活或参加考试授权已失效。", cancellationToken);
                 return;
             }
 

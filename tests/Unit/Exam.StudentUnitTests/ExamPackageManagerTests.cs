@@ -19,6 +19,61 @@ namespace Exam.StudentUnitTests;
 public sealed class ExamPackageManagerTests
 {
     [Fact]
+    public async Task WithdrawalAllowsWaitingAndReturningBeforeASecondConfirmation()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(manager.CanLeaveWaitingPage);
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        Assert.True(manager.CanLeaveWaitingPage);
+        Assert.True((await manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(manager.CanLeaveWaitingPage);
+        Assert.True((await manager.WithdrawAsync())?.IsSuccess);
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        Assert.Equal(ExamPackageManager.Phase.Downloaded, manager.CurrentPhase);
+        Assert.True(manager.CanLeaveWaitingPage);
+    }
+
+    [Fact]
+    public async Task FailedUnlockBeforeFirstAnswersDoesNotRequireANonexistentAnswerDatabase()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
+        fixture.Api.DenyUnlock = true;
+        using (var first = fixture.Manager())
+        {
+            Assert.True(await first.PrepareAndDownloadAsync());
+            await first.ConfirmParticipationAsync();
+            Assert.True(first.ExamStarted);
+            Assert.Null(first.UnlockedPayload);
+        }
+        using var restored = fixture.Manager();
+        Assert.False(restored.RequiresLocalAnswerRecovery);
+        fixture.Api.DenyUnlock = false;
+        Assert.True(await restored.PrepareAndDownloadAsync());
+        await restored.ConfirmParticipationAsync();
+        Assert.Equal(ExamPackageManager.Phase.Unlocked, restored.CurrentPhase);
+        Assert.Equal(fixture.Api.Plaintext, restored.UnlockedPayload);
+    }
+
+    [Fact]
+    public async Task WaitingRecoveryUsesServerStateToUnlockAfterAStartEventWasMissed()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        using var manager = fixture.Manager();
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        await manager.ConfirmParticipationAsync();
+        Assert.False(manager.ExamStarted);
+        fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        await manager.ConfirmParticipationAsync();
+        Assert.Equal(ExamPackageManager.Phase.Unlocked, manager.CurrentPhase);
+        Assert.False(manager.CanLeaveWaitingPage);
+    }
+
+    [Fact]
     public async Task ScheduleUpdates_AreVersionedDurableAndRejectChangedReplay()
     {
         using var fixture = await Fixture.CreateAsync();

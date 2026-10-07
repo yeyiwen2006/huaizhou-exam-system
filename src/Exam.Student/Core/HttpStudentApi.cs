@@ -166,7 +166,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         Exam.Contracts.Versioning.ConfirmPaperReviewRequest request, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(examId) || string.IsNullOrWhiteSpace(participantId))
-            throw new ArgumentException("确认试卷复核需要完整的考试与参试标识。");
+            throw new ArgumentException("确认试卷复核需要完整的考试与参加考试标识。");
         return SendAsync<Exam.Contracts.Versioning.ExamVersionSnapshot>(
             HttpMethod.Post,
             $"/api/v1/versioning/exams/{Uri.EscapeDataString(examId)}" +
@@ -181,7 +181,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         if (string.IsNullOrWhiteSpace(participationId) || string.IsNullOrWhiteSpace(deviceId) ||
             entryVersion < 1 || authorizationVersion < 1)
         {
-            throw new ArgumentException("查询最终提交需要完整的参试与设备授权信息。");
+            throw new ArgumentException("查询最终提交需要完整的参加考试与设备授权信息。");
         }
 
         var query = $"participationId={Uri.EscapeDataString(participationId)}" +

@@ -26,6 +26,8 @@ public partial class WaitingExamPage : UserControl
     private string? _lastRuntimeError;
     private int _arbitrationRetryCountdown;
     private bool _updateRefreshQueued;
+    private bool _recovering;
+    private int _unlockRetryCountdown;
 
     public string ExamName => _exam.Name;
 
@@ -60,7 +62,7 @@ public partial class WaitingExamPage : UserControl
 
     private async Task PrepareAndDownloadAsync()
     {
-        if (_lifetime.IsCancellationRequested || _busy || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
+        if (_lifetime.IsCancellationRequested || _busy || _recovering || App.Services.Session.LoginResult is not { } session || App.Services.Device is not { } device)
         {
             return;
         }
@@ -155,7 +157,7 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnConfirmParticipation(object sender, RoutedEventArgs e)
     {
-        if (_busy || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
+        if (_busy || _recovering || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
         {
             return;
         }
@@ -216,7 +218,7 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnRetryConnection(object sender, RoutedEventArgs e)
     {
-        if (_busy || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
+        if (_busy || _recovering || _runtime is null || !_runtime.LocalRecoveryChecked || _runtime.HasFixedSubmission)
         {
             return;
         }
@@ -249,7 +251,8 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnGoBack(object sender, RoutedEventArgs e)
     {
-        if (_busy || Window.GetWindow(this) is not { } window)
+        if (_busy || _recovering && !HasReachedExamEnd() || _runtime?.HasFixedSubmission == true ||
+            (_runtime?.Manager.CanLeaveWaitingPage == false && !HasReachedExamEnd()) || Window.GetWindow(this) is not { } window)
         {
             return;
         }
@@ -260,21 +263,29 @@ public partial class WaitingExamPage : UserControl
             return;
         }
 
+        if (_runtime?.HasFixedSubmission == true || _runtime?.Manager.CanLeaveWaitingPage == false && !HasReachedExamEnd())
+        {
+            ErrorBanner.Show("考试状态已变化，请继续答题或完成交卷后退出考试。");
+            RefreshState();
+            return;
+        }
+
         SetBusy(true, "正在退出考试…");
         ErrorBanner.Hide();
         try
         {
-            if (_runtime is not null && _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Withdrawn &&
-                (_runtime.Manager.Participation is not null || _runtime.Manager.HasPendingConfirmation))
+            if (!HasReachedExamEnd() && _runtime is not null && _runtime.Manager.CurrentPhase != ExamPackageManager.Phase.Withdrawn &&
+                (_runtime.Manager.Participation?.BusinessState == ParticipationBusinessState.Waiting || _runtime.Manager.HasPendingConfirmation))
             {
                 var response = await _runtime.Manager.WithdrawAsync(_lifetime.Token);
                 if (response?.IsSuccess != true || response.Result?.BusinessState != ParticipationBusinessState.NotParticipating)
                 {
-                    ErrorBanner.Show(response?.Error?.Message ?? _runtime.Manager.LastError ?? "退出处理中，请重试。收到服务器确认前仍保留原参试登记。");
+                    ErrorBanner.Show(response?.Error?.Message ?? _runtime.Manager.LastError ?? "退出处理中，请重试。收到服务器确认前仍保留原参加考试登记。");
                     return;
                 }
             }
 
+            _lifetime.Cancel();
             await App.Services.Session.ReleaseExamAsync();
             _navigated = true;
             _navigation.GoToExamSelection();
@@ -298,7 +309,7 @@ public partial class WaitingExamPage : UserControl
 
     private async void OnRetryLocalSave(object sender, RoutedEventArgs e)
     {
-        if (_busy || _runtime is null) { return; }
+        if (_busy || _recovering || _runtime is null) { return; }
         SetBusy(true, "正在重试保存…");
         try
         {
@@ -329,7 +340,7 @@ public partial class WaitingExamPage : UserControl
     /// <summary>等待/已下载阶段收到试卷更新事件后自动重新获取新版资料。</summary>
     private async void MaybeAutoRefreshForUpdate()
     {
-        if (_lifetime.IsCancellationRequested || _busy || _navigated || _updateRefreshQueued ||
+        if (_lifetime.IsCancellationRequested || _busy || _recovering || _navigated || _updateRefreshQueued ||
             _runtime?.Manager is not { } manager || manager.DeviceDecisionPending)
         {
             return;
@@ -380,7 +391,7 @@ public partial class WaitingExamPage : UserControl
         DownloadPill.Text = manager?.HasPackage == true ? "试题已下载" : "试题尚未下载完成";
         DownloadPill.Level = manager?.HasPackage == true ? StatusLevel.Success : StatusLevel.Warning;
         DownloadBar.Value = manager?.HasPackage == true ? 100 : DownloadBar.Value;
-        ConfirmButton.IsEnabled = !_busy && _runtime?.LocalRecoveryChecked == true &&
+        ConfirmButton.IsEnabled = !_busy && !_recovering && _runtime?.LocalRecoveryChecked == true &&
             !_runtime.HasFixedSubmission && manager?.CanConfirmParticipation == true;
         ConfirmButton.Content = manager?.Participation is null ? "确认参加考试" : "继续参加考试";
         RetryDownloadButton.Visibility = _runtime?.HasFixedSubmission == true ||
@@ -389,13 +400,18 @@ public partial class WaitingExamPage : UserControl
         RetryConnectionButton.Visibility = _runtime?.LocalRecoveryChecked == true && !_runtime.HasFixedSubmission &&
             manager?.Participation is not null && !manager.ExamEnded && manager.CurrentPhase != ExamPackageManager.Phase.Revoked
             ? Visibility.Visible : Visibility.Collapsed;
+        RetryDownloadButton.IsEnabled = !_busy && !_recovering;
+        RetryConnectionButton.IsEnabled = !_busy && !_recovering;
         if (_exitButton is not null)
         {
-            _exitButton.IsEnabled = !_busy && (manager?.Participation is null || manager.CurrentPhase is ExamPackageManager.Phase.ConfirmedWaiting or ExamPackageManager.Phase.Withdrawn);
+            _exitButton.IsEnabled = !_busy && (!_recovering || HasReachedExamEnd()) && _runtime?.HasFixedSubmission != true &&
+                ((manager?.CanLeaveWaitingPage ?? true) || HasReachedExamEnd());
         }
 
         (StatePill.Text, StatePill.Level, ConfirmHint.Text) = manager?.CurrentPhase switch
         {
+            ExamPackageManager.Phase.ConfirmedWaiting when manager.ExamStarted =>
+                ("已开考，正在恢复试题", StatusLevel.Warning, "服务器已确认开考，正在恢复试题解锁；如未恢复，可点击“重新连接”。"),
             ExamPackageManager.Phase.ConfirmedWaiting when _runtime?.NotificationsStarted != true =>
                 ("正在恢复连接", StatusLevel.Warning, "已确认参加考试，正在重新连接服务器。"),
             ExamPackageManager.Phase.ConfirmedWaiting => ("已确认参加考试，等待开考", StatusLevel.Info, "请保持程序运行，开考后试题将自动显示。"),
@@ -445,6 +461,12 @@ public partial class WaitingExamPage : UserControl
     {
         RefreshRuntimeError();
 
+        if (_runtime?.Manager.ExamEnded == true)
+        {
+            CountdownText.Text = "考试已结束";
+            RefreshState();
+            return;
+        }
         if (!App.Services.Clock.IsSynchronized)
         {
             CountdownText.Text = "正在同步时间…";
@@ -456,6 +478,49 @@ public partial class WaitingExamPage : UserControl
         CountdownText.Text = remain > TimeSpan.Zero ? $"距开考 {remain:hh\\:mm\\:ss}" : "已到开考时间，请等待试题解锁";
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
         MaybeRetryArbitration();
+        MaybeRecoverUnlock();
+        if (HasReachedExamEnd()) RefreshState();
+    }
+
+    private bool HasReachedExamEnd() => _runtime?.Manager.ExamEnded == true ||
+        App.Services.Clock.IsSynchronized && App.Services.Clock.UtcNow >= (_runtime?.Manager.OverriddenScheduledEnd ?? _exam.ScheduledEnd);
+
+    private void MaybeRecoverUnlock()
+    {
+        if (_lifetime.IsCancellationRequested || _navigated || _busy || _recovering ||
+            HasReachedExamEnd() ||
+            _runtime is not { LocalRecoveryChecked: true, HasFixedSubmission: false } runtime ||
+            runtime.Manager is not { ExamEnded: false } manager ||
+            manager.CurrentPhase is ExamPackageManager.Phase.Unlocked or ExamPackageManager.Phase.Revoked or ExamPackageManager.Phase.Withdrawn ||
+            manager.Participation?.BusinessState is not (ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering)) return;
+        var start = manager.OverriddenScheduledStart ?? _exam.ScheduledStart;
+        if (!manager.ExamStarted && App.Services.Clock.UtcNow < start) return;
+        if (_unlockRetryCountdown > 0) { _unlockRetryCountdown--; return; }
+        _unlockRetryCountdown = 5;
+        _ = RecoverUnlockAsync(runtime);
+    }
+
+    private async Task RecoverUnlockAsync(StudentExamRuntime runtime)
+    {
+        _recovering = true;
+        RefreshState();
+        try
+        {
+            // 只核对已确认的参试登记；开考与解锁仍以服务器响应为准。
+            if (!await runtime.Manager.PrepareAndDownloadAsync(ct: _lifetime.Token)) return;
+            var confirmation = await runtime.Manager.ConfirmParticipationAsync(_lifetime.Token);
+            if (confirmation?.IsSuccess == true) await ConnectNotificationsAsync();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (IsRecoverable(error))
+        {
+            StudentMessages.ShowWithDetail(ErrorBanner, "试题解锁尚未完成，将继续重试；也可点击“重新连接”。", error.Message);
+        }
+        finally
+        {
+            _recovering = false;
+            if (!_lifetime.IsCancellationRequested) RefreshState();
+        }
     }
 
     private void RefreshTimeText()
@@ -489,6 +554,14 @@ public partial class WaitingExamPage : UserControl
     private void RefreshRuntimeError()
     {
         var connectionError = _runtime?.ConnectionError;
+        if (string.IsNullOrWhiteSpace(connectionError) && _runtime?.Manager is { ExamStarted: true, ExamEnded: false, LastError: { Length: > 0 } unlockError } manager &&
+            manager.CurrentPhase != ExamPackageManager.Phase.Unlocked)
+        {
+            const string message = "试题尚未解锁，正在核对服务器状态；也可点击“重新连接”重试。";
+            StudentMessages.ShowWithDetail(ErrorBanner, message, unlockError);
+            _lastRuntimeError = message;
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(connectionError))
         {
             StudentMessages.ShowWithDetail(ErrorBanner, StudentMessages.ConnectionProblem, connectionError);

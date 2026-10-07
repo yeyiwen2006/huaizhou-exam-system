@@ -125,17 +125,14 @@ public partial class ActivationPage : UserControl
         _requesting = true;
         UpdateRequestEnabled();
 
-        ActivationPill.Text = "等待考务端批准…";
+        ActivationPill.Text = "正在请求激活…";
         ActivationPill.Level = StatusLevel.Warning;
 
         try
         {
             for (var attempt = 0; attempt < MaxPollAttempts; attempt++)
             {
-                Busy.Message = attempt == 0 ? "正在申请或恢复设备激活…" : "正在等待考务端批准…";
-                Busy.IsBusy = true;
                 var result = await App.Services.Activation.RequestOrPollAsync(host, port, _lifetime.Token);
-                Busy.IsBusy = false;
                 ShowRequestCode(result.ActivationRequestId);
                 if (result.Status == ActivationStatus.Active && result.ClientNumber is not null)
                 {
@@ -154,6 +151,7 @@ public partial class ActivationPage : UserControl
                     throw new StudentIdentityException("激活申请未获批准，请联系监考人员。");
                 }
 
+                ActivationPill.Text = "等待考务端批准…";
                 await Task.Delay(1500, _lifetime.Token);
             }
 
@@ -192,7 +190,6 @@ public partial class ActivationPage : UserControl
         }
         finally
         {
-            Busy.IsBusy = false;
             _requesting = false;
             UpdateRequestEnabled();
         }

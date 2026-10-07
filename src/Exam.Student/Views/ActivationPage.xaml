@@ -78,8 +78,5 @@
             </Border>
         </ScrollViewer>
 
-        <controls:BusyOverlay x:Name="Busy"
-                              Grid.RowSpan="2"
-                              Message="正在向服务器请求激活…" />
     </Grid>
 </UserControl>

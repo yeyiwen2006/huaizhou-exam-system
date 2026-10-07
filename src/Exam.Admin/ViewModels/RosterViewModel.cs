@@ -159,7 +159,7 @@ public sealed class RosterViewModel : BindableBase, IDisposable
         if (person is null || input is null) return;
         var snapshot = _snapshot;
         await MutateAsync(() => _api!.UpdateRosterEntryAsync(snapshot.ExamId, person.CandidateId, snapshot.Version, input),
-            "考生信息已保存到服务器。已经准备入场或参试的身份由服务器禁止更改。");
+            "考生信息已保存到服务器。已经准备入场或参加考试的身份由服务器禁止更改。");
     }
 
     public async Task DeleteSelectedAsync()

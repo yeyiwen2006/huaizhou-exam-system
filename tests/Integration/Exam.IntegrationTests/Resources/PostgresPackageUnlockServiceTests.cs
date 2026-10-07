@@ -23,6 +23,35 @@ namespace Exam.IntegrationTests.Resources;
 [Trait("Category", "Postgres")]
 public sealed class PostgresPackageUnlockServiceTests(PostgresDatabaseFixture fixture)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingDeploymentStateIsAllowedOnlyByTheExplicitLocalDebugProfile(bool localDebug)
+    {
+        using var node = CreateCertificate();
+        var data = await SeedAsync(node);
+        await using (var remove = fixture.DataSource.CreateCommand("DELETE FROM exam.server_state WHERE server_id = $1;"))
+        {
+            remove.Parameters.AddWithValue(data.Identity.ServerId);
+            await remove.ExecuteNonQueryAsync();
+        }
+        var unwrapper = new TestUnwrapper(node);
+        var service = new PostgresPackageUnlockService(fixture.DataSource, data.Identity, unwrapper, localDebug);
+        if (!localDebug)
+        {
+            var rejected = await Assert.ThrowsAsync<PackageUnlockException>(() => service.UnlockAsync(data.Request, data.Request.DeviceId));
+            Assert.Equal(ErrorCodes.NotActiveServer, rejected.Code);
+            return;
+        }
+        using var material = await service.UnlockAsync(data.Request, data.Request.DeviceId);
+        await using var plaintext = new MemoryStream();
+        await PackageCiphertext.DecryptAsync(new MemoryStream(data.Ciphertext), plaintext, material);
+        Assert.Equal(data.Plaintext, plaintext.ToArray());
+        await ChangeParticipationAsync(data.Request.ParticipationId, "waiting", 1);
+        var waiting = await Assert.ThrowsAsync<PackageUnlockException>(() => service.UnlockAsync(data.Request, data.Request.DeviceId));
+        Assert.Equal(ErrorCodes.KeyNotReleased, waiting.Code);
+    }
+
     [Fact]
     public async Task AuthorizedHttpsUnlock_ReturnsOnlyClientMaterial_AndDecryptsPersistedV2Package()
     {

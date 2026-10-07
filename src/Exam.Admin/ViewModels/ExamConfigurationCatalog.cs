@@ -90,7 +90,7 @@ public sealed partial class ExamConfigurationViewModel
     public string VisibilityNote => IsNewExam
         ? "考试保存后才能设置是否在学生端显示。"
         : _visibilityLocked
-            ? "已有考生确认参试，全部实际参试考生的答卷回收完成前，不能取消在学生端显示。"
+            ? "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。"
             : _visibleToStudents ? "学生登录后可以在选择考试页面看到本场考试。" : "学生端目前看不到本场考试。";
 
     /// <summary>开始新建：清空为一份可直接修改的默认设置，保存时在服务器创建考试。</summary>

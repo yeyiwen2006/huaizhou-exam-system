@@ -52,6 +52,16 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         get => _selectedRow;
         set { if (!_applyingSnapshot) SelectRow(value, fillOperatorInputs: true); }
     }
+    public MonitoringRow? SelectedTableRow
+    {
+        get => _selectedRow is { } row && MatchesFilter(row) ? row : null;
+        set { if (!_applyingSnapshot && (value is not null || SelectedTableRow is not null)) SelectedRow = value; }
+    }
+    public MonitoringRow? SelectedUncollectedRow
+    {
+        get => _selectedRow is { } row && UncollectedRows.Contains(row) ? row : null;
+        set { if (!_applyingSnapshot && (value is not null || SelectedUncollectedRow is not null)) SelectedRow = value; }
+    }
 
     /// <summary>
     /// 切换选中行。只有操作者主动选中（<paramref name="fillOperatorInputs"/>）才改写裁决与重发输入，
@@ -62,6 +72,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     {
         var previous = _selectedRow;
         if (!SetProperty(ref _selectedRow, row)) return;
+        OnPropertyChanged(nameof(SelectedTableRow));
+        OnPropertyChanged(nameof(SelectedUncollectedRow));
         var selectedEventId = _selectedCommand?.Command.EventId;
         var selectedConflictDeviceId = _selectedConflictDevice?.DeviceId;
         SelectedCommands.Clear();
@@ -181,7 +193,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private string _resendDeviceId = string.Empty;
     private string _entryVersionText = string.Empty;
     private string _authorizationVersionText = string.Empty;
-    private string _status = "选择考试后点击“刷新”，查看实际参试考生的在线、作答和回收状态。";
+    private string _status = "选择考试后点击“刷新”，查看实际参加考试考生的在线、作答和回收状态。";
     private string _refreshNote = string.Empty;
     private string _collectionStatus = "尚未查询收齐记录。";
     private MonitoringCommandRow? _selectedCommand;
@@ -215,11 +227,17 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
 
     /// <summary>按现场使用的信息筛选：试场、学生端编号、姓名、班级、准考证号，可组合。</summary>
     public IEnumerable<MonitoringRow> FilteredRows => Rows.Where(MatchesFilter);
+    private void RefreshFilteredRows()
+    {
+        if (_selectedRow is { } row && !MatchesFilter(row) && !UncollectedRows.Contains(row)) SelectedRow = null;
+        OnPropertyChanged(nameof(FilteredRows));
+        OnPropertyChanged(nameof(SelectedTableRow));
+    }
 
     public IReadOnlyList<string> RoomGroupOptions =>
         Rows.Select(row => row.RoomGroup).Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
 
-    public string CountsText => $"实际参试 {_actualCount} 人；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
+    public string CountsText => $"实际参加考试 {_actualCount} 人；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
 
     public string AsOfText => _asOf is { } asOf
         ? $"状态读取时间 {asOf:yyyy-MM-dd HH:mm:ss}（考试状态：{LifecycleText}）。"
@@ -261,38 +279,38 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public string FilterText
     {
         get => _filterText;
-        set { if (SetProperty(ref _filterText, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _filterText, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     public string RoomGroupFilter
     {
         get => _roomGroupFilter;
-        set { if (SetProperty(ref _roomGroupFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _roomGroupFilter, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     public string ClientNumberFilter
     {
         get => _clientNumberFilter;
-        set { if (SetProperty(ref _clientNumberFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _clientNumberFilter, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     public string NameFilter
     {
         get => _nameFilter;
-        set { if (SetProperty(ref _nameFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _nameFilter, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     public string ClassFilter
     {
         get => _classFilter;
-        set { if (SetProperty(ref _classFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _classFilter, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     public string AdmissionNoFilter
     {
         get => _admissionNoFilter;
-        set { if (SetProperty(ref _admissionNoFilter, value ?? string.Empty)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _admissionNoFilter, value ?? string.Empty)) RefreshFilteredRows(); }
     }
     /// <summary>只看未回收：对应回收统计中的未回收名单。</summary>
     public bool OnlyUncollected
     {
         get => _onlyUncollected;
-        set { if (SetProperty(ref _onlyUncollected, value)) OnPropertyChanged(nameof(FilteredRows)); }
+        set { if (SetProperty(ref _onlyUncollected, value)) RefreshFilteredRows(); }
     }
     public string ParticipationId { get => _participationId; set { if (SetProperty(ref _participationId, value)) _decisionInputVersion++; } }
     public string SelectedDeviceId { get => _selectedDeviceId; set { if (SetProperty(ref _selectedDeviceId, value)) _decisionInputVersion++; } }
@@ -714,12 +732,14 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(AsOfText));
         }
         finally { _applyingSnapshot = false; }
+        OnPropertyChanged(nameof(SelectedTableRow));
+        OnPropertyChanged(nameof(SelectedUncollectedRow));
     }
 
     /// <summary>本次读取的汇总文案；只由手动刷新写入状态栏，自动刷新不覆盖考务的操作反馈。</summary>
     private string Summarize() => _actualCount == 0
-        ? "本场考试还没有实际参试考生。"
-        : $"共 {_actualCount} 名实际参试考生；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
+        ? "本场考试还没有实际参加考试考生。"
+        : $"共 {_actualCount} 名实际参加考试考生；已回收 {_collectedCount} 份；未回收 {_actualCount - _collectedCount} 份。";
 
     public async Task DecideDeviceAsync()
     {

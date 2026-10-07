@@ -12,6 +12,24 @@ namespace Exam.AdminUnitTests;
 
 public sealed class ServerRoomViewModelTests
 {
+    [Theory]
+    [InlineData(null, "全部试场")]
+    [InlineData("", "未分组")]
+    [InlineData("room-a", "合成试场A")]
+    public async Task RoomFilterSelectionSurvivesRepeatedDirectoryQueries(string? groupId, string label)
+    {
+        using var test = new RoomServer();
+        await test.Model.RefreshDirectoryAsync();
+        test.Model.SelectedFilterChoice = test.Model.FilterChoices.Single(choice => choice.RoomGroupId == groupId);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await test.Model.QueryDeviceAsync();
+            Assert.Equal(groupId, test.Model.FilterRoomGroupId);
+            Assert.Equal(label, test.Model.SelectedFilterChoice!.Name);
+            Assert.Contains(test.Model.SelectedFilterChoice, test.Model.FilterChoices);
+        }
+    }
+
     [Fact]
     public async Task GroupWritesUseServerIdsAndVersions_DeletionChecksAllServerDevices()
     {
@@ -279,10 +297,10 @@ public sealed class ServerRoomViewModelTests
         await test.Model.RefreshDirectoryAsync();
         foreach (var device in test.Model.Devices) device.IsSelected = true;
         test.Model.MoveToRoomGroupId = "room-b";
-        test.Model.MoveReason = "合成调度原因";
         await test.Model.MoveSelectedDevicesAsync();
         var sent = Assert.Single(test.Requests, x => x.Path == "/api/v1/rooms/move-devices");
         var body = JsonSerializer.Deserialize<MoveDevicesRequest>(sent.Body, JsonDefaults.Create())!;
+        Assert.Equal("考务调整试场", body.Reason);
         Assert.Equal(new[] { "20261002001", "20261002002" }, body.Devices.Select(x => x.ClientNumber));
         Assert.Equal(new long[] { 1, 4 }, body.Devices.Select(x => x.ExpectedVersion));
         Assert.All(test.Model.Devices, x => Assert.Equal("合成试场B", x.RoomGroupName));
@@ -300,7 +318,6 @@ public sealed class ServerRoomViewModelTests
         await test.Model.RefreshDirectoryAsync();
         test.Model.SelectedDevice = Assert.Single(test.Model.Devices);
         test.Model.MoveToRoomGroupId = "room-b";
-        test.Model.MoveReason = "合成原因";
         await test.Model.MoveSelectedDevicesAsync();
         Assert.Equal("room-a", Assert.Single(test.Model.Devices).RoomGroupId);
         Assert.StartsWith("操作失败", test.Model.Status, StringComparison.Ordinal);
@@ -331,14 +348,12 @@ public sealed class ServerRoomViewModelTests
         await test.Model.RefreshDirectoryAsync();
         test.Model.SelectedDevice = test.Model.Devices[0];
         test.Model.SelectedGroup = test.Model.Groups[0];
-        test.Model.MoveReason = "旧服务器操作理由";
         test.Model.QueryDeviceId = "000001";
         test.Api.Disconnect();
         Assert.Empty(test.Model.Groups);
         Assert.Empty(test.Model.Devices);
         Assert.Empty(test.Model.DeviceHistory);
         Assert.Empty(test.Model.QueryDeviceId);
-        Assert.Empty(test.Model.MoveReason);
         Assert.Null(test.Model.SelectedDevice);
         Assert.Null(test.Model.SelectedGroup);
         Assert.False(test.Model.CanEditDirectory);

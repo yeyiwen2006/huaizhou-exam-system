@@ -966,7 +966,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
     private static void RequireSameAuthorization(AnswerStateRecord first, AnswerStateRecord next) => Require(
         first.ParticipationId == next.ParticipationId && first.EntryVersion == next.EntryVersion &&
         first.DeviceId == next.DeviceId && first.AuthorizationVersion == next.AuthorizationVersion,
-        "不能用另一次参试或设备授权覆盖已有答案，请先核对服务端权限并保留原记录。");
+        "不能用另一次参加考试或设备授权覆盖已有答案，请先核对服务端权限并保留原记录。");
 
     private static void ValidateAnswers(IReadOnlyDictionary<string, AnswerValue> answers)
     {

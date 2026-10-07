@@ -15,14 +15,16 @@
         <Grid>
             <TextBox x:Name="Input"
                      TextChanged="OnTextChanged" />
-            <TextBlock x:Name="WatermarkText"
+            <Border Margin="{Binding BorderThickness, ElementName=Input}" IsHitTestVisible="False">
+                <TextBlock x:Name="WatermarkText"
                        Text=""
                        FontSize="{DynamicResource Font.Size.Body}"
                        Foreground="{DynamicResource Brush.Text.Disabled}"
-                       Margin="{StaticResource Padding.Control}"
+                       Margin="{Binding Padding, ElementName=Input}"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"
                        Visibility="Collapsed" />
+            </Border>
         </Grid>
         <TextBlock x:Name="ErrorTextBlock"
                    Text=""

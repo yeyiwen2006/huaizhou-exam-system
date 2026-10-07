@@ -194,7 +194,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             pending.Parameters.AddWithValue("exam_id", examId);
             if ((long)(await pending.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) > 0)
                 throw Rule(ExamCatalogErrorCodes.VisibilityLocked,
-                    "已有考生确认参试，全部实际参试考生的答卷回收完成前，不能取消在学生端显示。");
+                    "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。");
         }
         await using (var update = new NpgsqlCommand("""
             UPDATE exam.exam_catalog

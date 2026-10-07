@@ -142,7 +142,7 @@ public sealed class InMemoryParticipationPersistence : IParticipationPersistence
             var key = CreateParticipationKey(participation.ExamId, participation.CandidateId);
             if (state.ParticipationKeys.TryGetValue(key, out var existingId) && existingId != participation.ParticipationId)
             {
-                throw new InvalidOperationException("同场同考生只能保留一条参试记录。");
+                throw new InvalidOperationException("同场同考生只能保留一条参加考试记录。");
             }
 
             state.ParticipationKeys[key] = participation.ParticipationId;

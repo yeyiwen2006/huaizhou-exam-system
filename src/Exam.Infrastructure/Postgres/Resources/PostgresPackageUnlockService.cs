@@ -67,7 +67,8 @@ public sealed class CertificateStorePackageKeyUnwrapper(
 public sealed class PostgresPackageUnlockService(
     NpgsqlDataSource dataSource,
     PackageUnlockIdentity identity,
-    IPackageKeyUnwrapper keyUnwrapper)
+    IPackageKeyUnwrapper keyUnwrapper,
+    bool allowUninitializedState = false)
 {
     private static readonly JsonSerializerOptions JsonOptions = JsonDefaults.Create();
 
@@ -110,7 +111,7 @@ public sealed class PostgresPackageUnlockService(
         {
             lookup.Parameters.AddWithValue(request.ParticipationId);
             examId = await lookup.ExecuteScalarAsync(cancellationToken) as string
-                ?? throw Reject(ErrorCodes.NotFound, "未找到当前参试登记。");
+                ?? throw Reject(ErrorCodes.NotFound, "未找到当前参加考试登记。");
         }
 
         await RequireCurrentExamAsync(connection, transaction, request, examId, cancellationToken);
@@ -193,8 +194,12 @@ public sealed class PostgresPackageUnlockService(
             """, connection, transaction);
         command.Parameters.AddWithValue(identity.ServerId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken) ||
-            !string.Equals(reader.GetString(0), identity.NodeId, StringComparison.Ordinal) ||
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            if (allowUninitializedState) return;
+            throw Reject(ErrorCodes.NotActiveServer, "当前节点不是已就绪的权威活动节点。");
+        }
+        if (!string.Equals(reader.GetString(0), identity.NodeId, StringComparison.Ordinal) ||
             reader.GetString(2) == "Recovering")
         {
             throw Reject(ErrorCodes.NotActiveServer, "当前节点不是已就绪的权威活动节点。");
@@ -298,12 +303,12 @@ public sealed class PostgresPackageUnlockService(
             !string.Equals(reader.GetString(1), request.DeviceId, StringComparison.Ordinal) ||
             reader.GetInt64(2) != request.AuthorizationVersion)
         {
-            throw Reject(ErrorCodes.AuthorizationRevoked, "参试登记或设备授权已变化。");
+            throw Reject(ErrorCodes.AuthorizationRevoked, "参加考试登记或设备授权已变化。");
         }
 
         if (reader.GetString(3) != "answering")
         {
-            throw Reject(ErrorCodes.KeyNotReleased, "当前参试状态不能解锁试题。");
+            throw Reject(ErrorCodes.KeyNotReleased, "当前参加考试状态不能解锁试题。");
         }
     }
 

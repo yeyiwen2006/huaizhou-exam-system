@@ -187,7 +187,9 @@ public static class PostgresRuntimeRegistration
             identity.NodeId,
             configuration["PackageSecurity:CertificateThumbprint"] ?? string.Empty,
             System.Security.Cryptography.X509Certificates.StoreLocation.LocalMachine));
-        services.AddSingleton<PostgresPackageUnlockService>();
+        services.AddSingleton(provider => new PostgresPackageUnlockService(
+            provider.GetRequiredService<NpgsqlDataSource>(), provider.GetRequiredService<PackageUnlockIdentity>(),
+            provider.GetRequiredService<IPackageKeyUnwrapper>(), allowUninitializedFailoverState));
         services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentDirectory>();
         services.AddSingleton<Exam.Infrastructure.Postgres.Student.PostgresStudentExamMetadataService>();
         services.AddSingleton<Exam.Infrastructure.Postgres.Exams.PostgresExamCatalog>();

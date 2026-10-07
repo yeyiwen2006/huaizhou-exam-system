@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Exam.Contracts.Common;
+using Exam.Contracts.Commands;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Participation;
 using Exam.Contracts.Submissions;
@@ -35,6 +36,152 @@ public sealed class UiScreenshotTests
     private const string DirectoryVariable = "EXAM_UI_SCREENSHOT_DIRECTORY";
     private static readonly double[] Scales = [1.0, 1.25, 1.5];
     private static readonly string[] OptionIds = ["A", "B", "C", "D"];
+
+    [Fact]
+    [Trait("Category", "Wpf")]
+    public async Task ActivationAndLoginForms_AlignTextAndSubmitWithoutConfirmation()
+    {
+        var directory = Environment.GetEnvironmentVariable(DirectoryVariable);
+        if (string.IsNullOrWhiteSpace(directory)) return;
+        Directory.CreateDirectory(directory);
+        using var fixture = await StudentPaperFixture.CreateAsync();
+        await OnStaAsync(async () =>
+        {
+            var application = System.Windows.Application.Current ?? new System.Windows.Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            application.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml", UriKind.Absolute)
+            });
+            var host = new ContentControl();
+            var window = new Window { Width = 1000, Height = 850, Left = -4000, Top = -4000,
+                ShowInTaskbar = false, ShowActivated = false, Content = host };
+            var navigation = new MainWindow.Navigation(new ContentControl());
+            try
+            {
+                window.Show();
+                var activation = new ActivationPage(navigation);
+                await ShowAsync(window, host, activation);
+                Assert.Empty(Descendants<BusyOverlay>(activation));
+                await CheckAlignmentAsync((ValidatedInput)activation.FindName("HostInput"), "192.0.2.10");
+                await CheckAlignmentAsync((ValidatedInput)activation.FindName("PortInput"), "5443");
+                await CaptureAsync(window, directory, "activation-stable-form");
+
+                App.Services.ConfigureDevice(fixture.Device);
+                var login = new LoginPage(navigation);
+                await ShowAsync(window, host, login);
+                await CheckAlignmentAsync((ValidatedInput)login.FindName("NameInput"), "合成考生01");
+                await CheckAlignmentAsync((ValidatedInput)login.FindName("ClassInput"), "01");
+                await CheckAlignmentAsync((ValidatedInput)login.FindName("AdmissionInput"), "2027017");
+                await CaptureAsync(window, directory, "login-input-alignment");
+                var checkedDialog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)(() =>
+                {
+                    try { Assert.Empty(window.OwnedWindows.OfType<ConfirmDialog>()); checkedDialog.SetResult(); }
+                    catch (Exception error) { checkedDialog.SetException(error); }
+                    finally { foreach (var dialog in window.OwnedWindows.OfType<ConfirmDialog>().ToArray()) dialog.Close(); }
+                }));
+                ((Button)login.FindName("LoginButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await checkedDialog.Task;
+                // 合成设备未写入应用登记：直接进入登录校验，并保留既有的本机身份核对。
+                await WaitUntilAsync(() => ((Banner)login.FindName("ErrorBanner")).Visibility == Visibility.Visible, TimeSpan.FromSeconds(5));
+                Assert.Empty(window.OwnedWindows.OfType<ConfirmDialog>());
+                var guard = KioskGuard.Enable(window);
+                try { Assert.True(guard.IsInstalled, $"键盘拦截安装失败：{guard.InstallationError}"); }
+                finally { guard.Disable(); }
+                await VerifyWaitingExitAsync(window, host, fixture, directory);
+            }
+            finally
+            {
+                host.Content = null;
+                await App.Services.Session.ReleaseExamAsync();
+                App.Services.Session.Logout();
+                window.Close();
+            }
+        });
+    }
+
+    private static async Task VerifyWaitingExitAsync(Window window, ContentControl host,
+        StudentPaperFixture fixture, string directory)
+    {
+        fixture.BusinessState = ParticipationBusinessState.Waiting;
+        App.Services.Session.OnLoggedIn(fixture.Session);
+        var region = new ContentControl();
+        var navigation = new MainWindow.Navigation(region);
+        var exam = new ExamOverview("exam", "合成退出流程检查", DateTimeOffset.Now.AddHours(1),
+            DateTimeOffset.Now.AddHours(2), ["合成科目"], ExamLifecycle.Scheduled);
+        var runtime = await fixture.StartRuntimeAsync(confirmParticipation: false);
+        App.Services.Session.RegisterExam(runtime);
+        var page = new WaitingExamPage(navigation, exam);
+        await ShowAsync(window, host, page);
+        await WaitUntilAsync(() => !((BusyOverlay)page.FindName("BusyLayer")).IsBusy, TimeSpan.FromSeconds(5));
+        Button Exit() => Assert.Single(Descendants<Button>(page), button => Equals(button.Content, "退出考试"));
+        void Refresh() => typeof(WaitingExamPage).GetMethod("RefreshState",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(page, null);
+        Assert.True(Exit().IsEnabled); // 尚未确认参加考试也可以返回。
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Refresh();
+        Assert.True(Exit().IsEnabled); // 确认后的等待状态可正常退出登记。
+        await CaptureAsync(window, directory, "waiting-exit-enabled");
+        async Task ClickExitAsync()
+        {
+            var clicked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)(() =>
+            {
+                try
+                {
+                    var dialog = Assert.Single(window.OwnedWindows.OfType<ConfirmDialog>());
+                    Assert.Equal("退出考试", ((TextBlock)dialog.FindName("TitleText")).Text);
+                    ((Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    clicked.TrySetResult();
+                }
+                catch (Exception error)
+                {
+                    clicked.TrySetException(error);
+                    foreach (var dialog in window.OwnedWindows.OfType<ConfirmDialog>().ToArray()) dialog.Close();
+                }
+            }));
+            Exit().RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await clicked.Task;
+            await WaitUntilAsync(() => App.Services.Session.ActiveExam is null, TimeSpan.FromSeconds(5));
+            Assert.IsType<ExamSelectionPage>(region.Content);
+        }
+        await ClickExitAsync();
+        Assert.Equal(1, fixture.WithdrawCalls);
+        host.Content = null;
+        runtime = await fixture.StartRuntimeAsync(confirmParticipation: false);
+        App.Services.Session.RegisterExam(runtime);
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        page = new WaitingExamPage(navigation, exam);
+        await ShowAsync(window, host, page);
+        await WaitUntilAsync(() => !((BusyOverlay)page.FindName("BusyLayer")).IsBusy, TimeSpan.FromSeconds(5));
+        Assert.True((await runtime.Manager.ConfirmParticipationAsync())?.IsSuccess);
+        Assert.True(await runtime.Manager.HandleCommandAsync(new CommandDelivery(new("server", "node", 1),
+            "ui-end", "exam", "participation", 1, CommandEventType.End, 1, "device", 1, null, null,
+            new Dictionary<string, string>(), DateTimeOffset.UtcNow, 1)));
+        Refresh();
+        Assert.True(Exit().IsEnabled);
+        await CaptureAsync(window, directory, "ended-waiting-exit-enabled");
+        await ClickExitAsync();
+        Assert.Equal(1, fixture.WithdrawCalls); // 考试结束后不再请求撤销等待登记。
+    }
+
+    private static async Task CheckAlignmentAsync(ValidatedInput control, string text)
+    {
+        control.Text = string.Empty;
+        await IdleAsync();
+        var editor = (TextBox)control.FindName("Input");
+        var watermark = (TextBlock)control.FindName("WatermarkText");
+        var watermarkLeft = watermark.TranslatePoint(new Point(0, 0), editor).X;
+        control.Text = text;
+        editor.CaretIndex = 0;
+        editor.Focus();
+        await IdleAsync();
+        editor.UpdateLayout();
+        var caret = editor.GetRectFromCharacterIndex(0);
+        Assert.True(Math.Abs(caret.Left - watermarkLeft) <= 3,
+            $"{control.Label}：光标位置 {caret.Left}，提示位置 {watermarkLeft}，输入框留白 {editor.Padding}。");
+        Assert.Equal(0, editor.CaretIndex);
+    }
 
     [Fact]
     [Trait("Category", "Wpf")]

@@ -185,7 +185,7 @@ public sealed class ExamEventHub(
         {
             await Clients.Client(replacedConnectionId).SendAsync(
                 "ConnectionReplaced",
-                "同一参试授权已建立新连接。",
+                "同一参加考试授权已建立新连接。",
                 Context.ConnectionAborted);
         }
         await Groups.AddToGroupAsync(

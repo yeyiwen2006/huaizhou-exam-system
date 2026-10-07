@@ -118,7 +118,7 @@ public static class ReliableCommandPolicy
              string.IsNullOrWhiteSpace(request.TargetDeviceId) ||
              request.TargetAuthorizationVersion is null))
         {
-            return "面向学生端的指令必须指定参试记录、设备和授权版本。";
+            return "面向学生端的指令必须指定参加考试记录、设备和授权版本。";
         }
 
         if (request.EventType == CommandEventType.Start &&

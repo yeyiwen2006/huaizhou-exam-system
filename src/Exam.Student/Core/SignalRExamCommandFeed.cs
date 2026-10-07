@@ -43,7 +43,7 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
     private readonly TimeSpan _catchUpInterval = catchUpInterval ?? TimeSpan.FromSeconds(30);
     public Func<CancellationToken, Task>? AuthorizationLost { get; set; }
     public string? LastError => _replaced
-        ? "当前设备授权或连接已失效，已停止处理试题，请重新核对参试状态。"
+        ? "当前设备授权或连接已失效，已停止处理试题，请重新核对参加考试状态。"
         : _processingError ?? _connectionError;
     public bool IsConnected => _connection?.State == HubConnectionState.Connected && !_replaced;
 
@@ -58,7 +58,7 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
             server.ServerEpoch < device.ServerEpoch || server.ServerEpoch < 1 ||
             participation.AuthorizedDeviceId != device.DeviceId || participation.EntryVersion < 1 || participation.AuthorizationVersion < 1)
         {
-            throw new InvalidOperationException("实时连接身份与当前参试授权不匹配。");
+            throw new InvalidOperationException("实时连接身份与当前参加考试授权不匹配。");
         }
         var endpoint = new UriBuilder(Uri.UriSchemeHttps, device.Host, device.Port, "/hubs/exam-events")
         {

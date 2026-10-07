@@ -282,11 +282,11 @@ internal static class ApiEndpointResults
     {
         VersioningErrorCode.ExamAlreadyExists => "这场考试已经存在，请刷新考试列表。",
         VersioningErrorCode.ExamNotFound => "找不到这场考试，请刷新考试列表后重试。",
-        VersioningErrorCode.ParticipantNotFound => "找不到本次参试记录，请核对入场状态。",
+        VersioningErrorCode.ParticipantNotFound => "找不到本次参加考试记录，请核对入场状态。",
         VersioningErrorCode.VersionConflict => "考试信息已更新，请刷新后核对当前版本，再重试。",
         VersioningErrorCode.InvalidSchedule => "考试时间无效，结束时间必须晚于开始时间。",
         VersioningErrorCode.InvalidRequest => "提交的内容不完整或格式无效，请核对后重试。",
-        VersioningErrorCode.InvalidStateTransition => "当前考试或参试状态不允许这项操作，请刷新后核对。",
+        VersioningErrorCode.InvalidStateTransition => "当前考试或参加考试状态不允许这项操作，请刷新后核对。",
         VersioningErrorCode.ExamEnded => "考试已经结束，不能继续修改这项内容。",
         VersioningErrorCode.PublicationNotReady => "试卷或计分材料尚未通过完整校验，未发布。",
         VersioningErrorCode.StructuralChangeRejected => "本次修订改变了试卷结构，未发布，请核对题目与选项。",

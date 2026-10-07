@@ -15,7 +15,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     private string? _filterRoomGroupId;
     private string _appliedDirectoryQuery = string.Empty;
     private string? _appliedDirectoryFilter;
-    private string _moveToRoomGroupId = string.Empty, _moveReason = string.Empty;
+    private string _moveToRoomGroupId = string.Empty;
+    private bool _rebuildingChoices;
     private string _status = "读取服务器试场和设备目录；未激活设备的申请在待审批列表中处理。";
     private string _directoryStatus = "尚未读取服务器设备目录。";
     private RoomGroupDraft? _selectedGroup;
@@ -54,12 +55,38 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     public string NewGroupName { get => _newGroupName; set => SetProperty(ref _newGroupName, value); }
     public string SelectedGroupName { get => _selectedGroupName; set => SetProperty(ref _selectedGroupName, value); }
     public string ActivationRequestId { get => _activationRequestId; set => SetProperty(ref _activationRequestId, value ?? string.Empty); }
-    public string ApprovalRoomGroupId { get => _approvalRoomGroupId; set => SetProperty(ref _approvalRoomGroupId, value ?? string.Empty); }
+    public string ApprovalRoomGroupId
+    {
+        get => _approvalRoomGroupId;
+        set { if (SetProperty(ref _approvalRoomGroupId, value ?? string.Empty)) OnPropertyChanged(nameof(SelectedApprovalChoice)); }
+    }
+    public RoomGroupChoice? SelectedApprovalChoice
+    {
+        get => GroupChoices.FirstOrDefault(x => x.RoomGroupId == ApprovalRoomGroupId);
+        set { if (!_rebuildingChoices && value is not null) ApprovalRoomGroupId = value.RoomGroupId ?? string.Empty; }
+    }
     // Kept as a binding-compatible property; its input is now a public client number or a human-readable search, never a DeviceId.
     public string QueryDeviceId { get => _queryDeviceId; set => SetProperty(ref _queryDeviceId, value ?? string.Empty); }
-    public string? FilterRoomGroupId { get => _filterRoomGroupId; set => SetProperty(ref _filterRoomGroupId, value); }
-    public string MoveToRoomGroupId { get => _moveToRoomGroupId; set => SetProperty(ref _moveToRoomGroupId, value ?? string.Empty); }
-    public string MoveReason { get => _moveReason; set => SetProperty(ref _moveReason, value); }
+    public string? FilterRoomGroupId
+    {
+        get => _filterRoomGroupId;
+        set { if (SetProperty(ref _filterRoomGroupId, value)) OnPropertyChanged(nameof(SelectedFilterChoice)); }
+    }
+    public RoomGroupChoice? SelectedFilterChoice
+    {
+        get => FilterChoices.FirstOrDefault(x => x.RoomGroupId == FilterRoomGroupId);
+        set { if (!_rebuildingChoices && value is not null) FilterRoomGroupId = value.RoomGroupId; }
+    }
+    public string MoveToRoomGroupId
+    {
+        get => _moveToRoomGroupId;
+        set { if (SetProperty(ref _moveToRoomGroupId, value ?? string.Empty)) OnPropertyChanged(nameof(SelectedMoveChoice)); }
+    }
+    public RoomGroupChoice? SelectedMoveChoice
+    {
+        get => GroupChoices.FirstOrDefault(x => x.RoomGroupId == MoveToRoomGroupId);
+        set { if (!_rebuildingChoices && value is not null) MoveToRoomGroupId = value.RoomGroupId ?? string.Empty; }
+    }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public string DirectoryStatus { get => _directoryStatus; private set => SetProperty(ref _directoryStatus, value); }
 
@@ -297,11 +324,9 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         if (rows.Any(x => x.Version < 1)) { Status = "设备尚未取得服务器版本，请重新读取目录。"; return; }
         var target = string.IsNullOrWhiteSpace(MoveToRoomGroupId) ? null : MoveToRoomGroupId;
         if (target is not null && !Groups.Any(x => x.RoomGroupId == target)) { Status = "目标试场已失效，请刷新后重选。"; return; }
-        var reason = MoveReason.Trim();
-        if (reason.Length == 0) { Status = "请填写转组原因。"; return; }
         var context = _context;
         var moved = await MutateAsync(() => _api.MoveDevicesAsync(target,
-            rows.Select(x => new DeviceMoveTarget(x.ClientNumber, x.Version)).ToArray(), reason), _ => { _groupsLoaded = false; },
+            rows.Select(x => new DeviceMoveTarget(x.ClientNumber, x.Version)).ToArray(), "考务调整试场"), _ => { _groupsLoaded = false; },
             "服务器已整批保存转组，正在重新读取版本与归属。");
         if (moved && context == _context)
         {
@@ -378,13 +403,22 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         var approval = ApprovalRoomGroupId;
         var move = MoveToRoomGroupId;
         var filter = FilterRoomGroupId;
-        GroupChoices.Clear(); FilterChoices.Clear();
-        GroupChoices.Add(new("", "未分组"));
-        FilterChoices.Add(new(null, "全部试场")); FilterChoices.Add(new("", "未分组"));
-        foreach (var group in Groups) { GroupChoices.Add(new(group.RoomGroupId, group.Name)); FilterChoices.Add(new(group.RoomGroupId, group.Name)); }
-        ApprovalRoomGroupId = Groups.Any(x => x.RoomGroupId == approval) ? approval : "";
-        MoveToRoomGroupId = Groups.Any(x => x.RoomGroupId == move) ? move : "";
-        FilterRoomGroupId = filter is null || filter == "" || Groups.Any(x => x.RoomGroupId == filter) ? filter : null;
+        _rebuildingChoices = true;
+        try
+        {
+            GroupChoices.Clear(); FilterChoices.Clear();
+            GroupChoices.Add(new("", "未分组"));
+            FilterChoices.Add(new(null, "全部试场")); FilterChoices.Add(new("", "未分组"));
+            foreach (var group in Groups) { GroupChoices.Add(new(group.RoomGroupId, group.Name)); FilterChoices.Add(new(group.RoomGroupId, group.Name)); }
+            ApprovalRoomGroupId = Groups.Any(x => x.RoomGroupId == approval) ? approval : "";
+            MoveToRoomGroupId = Groups.Any(x => x.RoomGroupId == move) ? move : "";
+            FilterRoomGroupId = filter is null || filter == "" || Groups.Any(x => x.RoomGroupId == filter) ? filter : null;
+        }
+        finally { _rebuildingChoices = false; }
+        // 全部试场的编号是 null；以选项对象恢复选择，避免被 WPF 当作“未选择”。
+        OnPropertyChanged(nameof(SelectedFilterChoice));
+        OnPropertyChanged(nameof(SelectedApprovalChoice));
+        OnPropertyChanged(nameof(SelectedMoveChoice));
         if (_appliedDirectoryFilter is not null && _appliedDirectoryFilter != "" &&
             !Groups.Any(x => x.RoomGroupId == _appliedDirectoryFilter)) _appliedDirectoryFilter = null;
     }
@@ -423,7 +457,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         _busy = _reading = _groupsLoaded = false;
         PendingRequests.Clear(); Devices.Clear(); Groups.Clear(); DeviceHistory.Clear();
         SelectedPendingRequest = null; SelectedDevice = null; SelectedGroup = null;
-        ActivationRequestId = ApprovalRoomGroupId = QueryDeviceId = NewGroupName = SelectedGroupName = MoveToRoomGroupId = MoveReason = string.Empty;
+        ActivationRequestId = ApprovalRoomGroupId = QueryDeviceId = NewGroupName = SelectedGroupName = MoveToRoomGroupId = string.Empty;
         FilterRoomGroupId = null; RebuildChoices();
         DirectoryStatus = "尚未读取当前服务器的设备目录。";
         Status = "连接已更换，旧试场、设备、查询结果和操作输入已清除。";

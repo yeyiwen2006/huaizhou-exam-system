@@ -194,6 +194,8 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
 
     public DeviceRecord Device => _device;
     public StudentSessionResult Session => _session;
+    public ParticipationBusinessState BusinessState { get; set; } = ParticipationBusinessState.Answering;
+    public int WithdrawCalls { get; private set; }
 
     /// <param name="questionPdfs">可选：按题目标识提供的合成 PDF 字节；未提供时仍写入只有文件头的占位 PDF。</param>
     /// <param name="device">可选：替换合成设备记录（DeviceId 须保持 "device"）。</param>
@@ -317,10 +319,17 @@ internal sealed class StudentPaperFixture : IExamPackageApi, IDisposable
         yield return _ciphertext;
     }
     public Task<ApiEnvelope<ParticipationResult>> ConfirmParticipationAsync(ConfirmParticipationRequest request, CancellationToken ct = default) =>
-        Task.FromResult(Ok(new ParticipationResult("participation", "exam", "candidate", ParticipationBusinessState.Answering,
-            "device", 1, 1, 1, "resource-envelope:package", Lifecycle: ExamLifecycle.Running)));
+        Task.FromResult(Ok(new ParticipationResult("participation", "exam", "candidate", BusinessState,
+            "device", 1, 1, 1, BusinessState == ParticipationBusinessState.Answering ? "resource-envelope:package" : null,
+            Lifecycle: BusinessState == ParticipationBusinessState.Answering ? ExamLifecycle.Running : ExamLifecycle.Scheduled)));
     public Task<ApiEnvelope<ParticipationResult>> WithdrawParticipationAsync(WithdrawParticipationRequest request, CancellationToken ct = default) =>
-        throw new NotSupportedException("Not exercised by this synthetic fixture.");
+        WithdrawResult(request);
+    private Task<ApiEnvelope<ParticipationResult>> WithdrawResult(WithdrawParticipationRequest request)
+    {
+        WithdrawCalls++;
+        return Task.FromResult(Ok(new ParticipationResult("participation", "exam", "candidate",
+            ParticipationBusinessState.NotParticipating, "device", 1, 1, request.ExpectedVersion + 1, null)));
+    }
     public Task<ApiEnvelope<PackageUnlockMaterial>> ResolveUnlockAsync(PackageUnlockRequest request, CancellationToken ct = default) =>
         Task.FromResult(Ok(new PackageUnlockMaterial(_envelope.PackageId, _envelope.PaperVersion, _envelope.ChunkSize,
             _envelope.NoncePrefix, PackageEncryptionService.UnwrapDataKey(_envelope, "node", _node))));

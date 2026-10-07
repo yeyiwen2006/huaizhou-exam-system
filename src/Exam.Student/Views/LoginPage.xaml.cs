@@ -9,7 +9,7 @@ using Exam.Student.Core;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 登录页：姓名 / 班级 / 准考证号（后两项仅数字），登录前弹出确认页核对信息。
+/// 登录页：姓名 / 班级 / 准考证号（后两项仅数字），填写后直接提交登录。
 /// 名册不符（ROSTER_MISMATCH）时显示服务器返回的中文说明。
 /// </summary>
 public partial class LoginPage : UserControl
@@ -72,23 +72,6 @@ public partial class LoginPage : UserControl
             !classText.All(char.IsAsciiDigit) || !admissionNo.All(char.IsAsciiDigit))
         {
             ErrorBanner.Show("请填写姓名，班级和准考证号只能包含数字。");
-            return;
-        }
-
-        var body = new TextBlock
-        {
-            Text = $"姓名：{name}\n班级：{classText}\n准考证号：{admissionNo}\n\n请确认以上信息是否正确。",
-            TextWrapping = TextWrapping.Wrap,
-        };
-        var window = Window.GetWindow(this);
-        if (window is null)
-        {
-            return;
-        }
-
-        var confirmed = await ConfirmDialog.ShowAsync(window, "确认登录信息", body, "确认正确");
-        if (!confirmed)
-        {
             return;
         }
 

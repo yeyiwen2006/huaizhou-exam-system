@@ -3,6 +3,7 @@ using System.Windows.Input;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Exams;
+using Exam.Infrastructure.Packaging;
 
 namespace Exam.Admin.ViewModels;
 
@@ -30,7 +31,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     /// <summary>使用指定的服务器客户端（测试用合成服务器）；客户端随本对象一同释放。</summary>
-    public MainViewModel(AdminApiClient api)
+    public MainViewModel(AdminApiClient api, IExamImportService? importService = null)
     {
         _api = api;
         Connection = new ConnectionViewModel(_api);
@@ -38,7 +39,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService(), _api);
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
-        Import = new ExamImportViewModel(_api);
+        Import = new ExamImportViewModel(_api, service: importService);
         GradingRevision = new GradingRevisionViewModel(_api);
         Connection.PropertyChanged += OnConnectionPropertyChanged;
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
@@ -50,11 +51,13 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Import.PaperPublicationChanged += OnPaperPublicationChanged;
         _api.ConfigurationChanged += OnConfigurationChanged;
         BackToHomeCommand = new RelayCommand(() => SelectedPage = HomePage);
+        ShowImportProgressCommand = new RelayCommand(() => SelectedPage = ImportPage);
     }
 
     public ExamHomeViewModel Home { get; }
     public OperatorAccountsViewModel Accounts { get; }
     public RelayCommand BackToHomeCommand { get; }
+    public RelayCommand ShowImportProgressCommand { get; }
 
     public int SelectedPage
     {

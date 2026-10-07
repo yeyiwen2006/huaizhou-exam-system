@@ -287,7 +287,7 @@ public sealed class SubmissionSyncService(
             snapshot.ParticipationId != participation.ParticipationId || snapshot.EntryVersion != participation.EntryVersion ||
             snapshot.DeviceId != device.DeviceId || snapshot.AuthorizationVersion != participation.AuthorizationVersion ||
             snapshot.PaperVersion != runtime.Manager.Descriptor?.PaperVersion)
-            return await BlockAsync("可靠快照与当前参试、设备或版本不一致，原记录已保留，请核对后恢复。");
+            return await BlockAsync("可靠快照与当前参加考试、设备或版本不一致，原记录已保留，请核对后恢复。");
 
         // 复焦只触发原答案快照的幂等核对，不伪造同版本新写入，也不宣称已保存失焦事件。
         var focusRevision = focus?.Revision ?? 0;
@@ -352,7 +352,7 @@ public sealed class SubmissionSyncService(
     private async Task<TimeSpan> AcceptReceiptAsync(SubmissionReceipt receipt, FixedSubmissionRecord record, CancellationToken ct)
     {
         if (!SubmissionReceiptValidation.Matches(receipt, record, runtime.Manager.ExamId, runtime.Manager.CandidateId))
-            return await BlockAsync("服务器回执与原考试、考生、参试、提交或试卷版本不一致，已停止自动重试；原答卷保留，请人工核对。");
+            return await BlockAsync("服务器回执与原考试、考生、参加考试、提交或试卷版本不一致，已停止自动重试；原答卷保留，请人工核对。");
         _receiptToSave = receipt;
         var saved = await runtime.SaveSubmissionReceiptAsync(receipt, ct).ConfigureAwait(false);
         if (!saved.Succeeded) return ScheduleRetry("服务器已收卷，但原回执尚未可靠保存在本机；正在重试保存");

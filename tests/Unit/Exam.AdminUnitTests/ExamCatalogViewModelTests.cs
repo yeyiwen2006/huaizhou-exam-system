@@ -31,7 +31,7 @@ public sealed class ExamCatalogViewModelTests
         await main.Home.RefreshAsync();
         var card = Assert.Single(main.Home.Exams);
         Assert.Equal("合成模拟考试", card.Name);
-        Assert.Equal("学生端可见", card.VisibilityText);
+        Assert.True(card.VisibleToStudents);
         Assert.Equal("未开始", card.StateText);
         Assert.Equal("试卷已发布", card.PublicationText);
 
@@ -67,6 +67,81 @@ public sealed class ExamCatalogViewModelTests
         Assert.Equal(expected, import.PublicationText);
         import.SourcePath = "synthetic-new-preview";
         Assert.Equal(expected, import.PublicationText);
+    }
+
+    [Fact]
+    public async Task HomeVisibilityToggleImmediatelySendsOnlyTheVisibilityRequest()
+    {
+        var summary = Summary("exam", "合成考试", visible: true);
+        SetExamVisibilityRequest? posted = null;
+        using var api = Configured(new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Get) return Success(new[] { summary });
+            Assert.Equal("/api/v1/exams/exam/visibility", request.RequestUri!.AbsolutePath);
+            posted = request.Content!.ReadFromJsonAsync<SetExamVisibilityRequest>(Json).Result;
+            return Success(summary with { VisibleToStudents = posted!.VisibleToStudents });
+        }));
+        var home = new ExamHomeViewModel(api);
+        await home.RefreshAsync();
+        var card = Assert.Single(home.Exams);
+        card.VisibleToStudents = false;
+        await WaitAsync(() => !card.IsVisibilitySaving);
+        Assert.NotNull(posted);
+        Assert.False(posted!.VisibleToStudents);
+        Assert.False(card.Exam.VisibleToStudents);
+        Assert.Contains("已设置", home.Status, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HomeVisibilityLockAndServerRefusalKeepTheConfirmedValue(bool locked)
+    {
+        var puts = 0;
+        using var api = Configured(new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Get) return Success(new[] { Summary("exam", "合成考试", true, locked) });
+            puts++;
+            return Error(HttpStatusCode.Conflict, ExamCatalogErrorCodes.VisibilityLocked);
+        }));
+        var home = new ExamHomeViewModel(api);
+        await home.RefreshAsync();
+        var card = Assert.Single(home.Exams);
+        Assert.Equal(!locked, card.CanChangeVisibility);
+        card.VisibleToStudents = false;
+        await WaitAsync(() => !card.IsVisibilitySaving);
+        Assert.True(card.VisibleToStudents);
+        Assert.True(card.Exam.VisibleToStudents);
+        Assert.Equal(locked ? 0 : 1, puts);
+    }
+
+    [Fact]
+    public async Task DelayedExamListDoesNotOverwriteANewerVisibilityReceipt()
+    {
+        var original = Summary("exam", "合成考试", visible: false);
+        var pendingList = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listCalls = 0;
+        using var api = Configured(new AsyncHandler(request =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return ++listCalls == 1 ? Task.FromResult(Success(new[] { original })) : pendingList.Task;
+            return Task.FromResult(Success(original with { VisibleToStudents = true, SettingsVersion = 2 }));
+        }));
+        var home = new ExamHomeViewModel(api);
+        await home.RefreshAsync();
+        var oldRefresh = home.RefreshAsync();
+        var card = Assert.Single(home.Exams);
+        card.VisibleToStudents = true;
+        await WaitAsync(() => !card.IsVisibilitySaving);
+        pendingList.SetResult(Success(new[] { original }));
+        await oldRefresh;
+        var current = Assert.Single(home.Exams);
+        Assert.True(current.VisibleToStudents);
+        Assert.Equal(2, current.Exam.SettingsVersion);
+        ExamSummary? opened = null;
+        home.ExamOpened += summary => opened = summary;
+        current.OpenCommand.Execute(null);
+        Assert.True(opened!.VisibleToStudents);
     }
 
     [Fact]
@@ -158,7 +233,7 @@ public sealed class ExamCatalogViewModelTests
         Assert.Contains("学生登录后", main.Exam.VisibilityNote, StringComparison.Ordinal);
     });
 
-    private static async Task OnStaAsync(Func<Task> test)
+    internal static async Task OnStaAsync(Func<Task> test)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
@@ -208,12 +283,16 @@ public sealed class ExamCatalogViewModelTests
     private static HttpResponseMessage Error(HttpStatusCode status, string code) => new(status)
     {
         Content = JsonContent.Create(new ApiEnvelope<object>("server-1", "node-1", 1, "catalog-test", null,
-            new ApiError(code, "已有考生确认参试，全部实际参试考生的答卷回收完成前，不能取消在学生端显示。")), options: Json)
+            new ApiError(code, "已有考生确认参加考试，全部实际参加考试考生的答卷回收完成前，不能取消在学生端显示。")), options: Json)
     };
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(respond(request));
+    }
+    private sealed class AsyncHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => respond(request);
     }
 }

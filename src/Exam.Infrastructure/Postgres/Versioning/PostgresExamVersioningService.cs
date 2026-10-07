@@ -547,7 +547,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
 
         if (request is ChangeParticipantStateRequest change && change.State != target.State)
         {
-            return new(VersioningErrorCode.InvalidStateTransition, "版本服务不能覆盖参试与收卷事务确定的参试状态。");
+            return new(VersioningErrorCode.InvalidStateTransition, "版本服务不能覆盖参加考试与收卷事务确定的参加考试状态。");
         }
 
         if (request is ReportPaperTransferRequest transfer && !MatchesAuthorization(target, transfer))

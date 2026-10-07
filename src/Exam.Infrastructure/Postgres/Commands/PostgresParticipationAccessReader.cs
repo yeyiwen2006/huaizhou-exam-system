@@ -73,6 +73,6 @@ public sealed class PostgresParticipationAccessReader(NpgsqlDataSource dataSourc
             "waiting" => ParticipationBusinessState.Waiting,
             "answering" => ParticipationBusinessState.Answering,
             "submitted" => ParticipationBusinessState.Submitted,
-            _ => throw new InvalidDataException($"数据库中的参试状态无效：{value}")
+            _ => throw new InvalidDataException($"数据库中的参加考试状态无效：{value}")
         };
 }

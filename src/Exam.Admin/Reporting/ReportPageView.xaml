@@ -61,7 +61,7 @@
         <UniformGrid x:Name="SummaryCards" Grid.Row="2" Columns="3" Margin="0,0,0,10">
             <Border Style="{DynamicResource Report.Metric}" Margin="0,0,10,0">
                 <StackPanel>
-                    <TextBlock Text="实际参试" Style="{DynamicResource Report.MetricLabel}" />
+                    <TextBlock Text="实际参加考试" Style="{DynamicResource Report.MetricLabel}" />
                     <TextBlock Text="{Binding ParticipantCountText}" Style="{DynamicResource Report.MetricValue}" />
                 </StackPanel>
             </Border>

@@ -80,7 +80,7 @@ public static class ExamApiEndpointExtensions
                         configuration,
                         context.TraceIdentifier,
                         ParticipationErrorCodes.AuthorizationRevoked,
-                        "当前设备无权下载该参试记录的题包。",
+                        "当前设备无权下载该参加考试记录的题包。",
                         StatusCodes.Status403Forbidden);
                 }
 
@@ -100,7 +100,7 @@ public static class ExamApiEndpointExtensions
                     configuration,
                     context.TraceIdentifier,
                     ParticipationErrorCodes.InvalidRequest,
-                    "必须提供完整且互斥的进入准备凭据或参试授权凭据。",
+                    "必须提供完整且互斥的进入准备凭据或参加考试授权凭据。",
                     StatusCodes.Status400BadRequest);
             }
 
@@ -111,7 +111,7 @@ public static class ExamApiEndpointExtensions
                     configuration,
                     context.TraceIdentifier,
                     "RESOURCE_NOT_FOUND",
-                    "找不到与当前进入准备或参试授权匹配的题包。",
+                    "找不到与当前进入准备或参加考试授权匹配的题包。",
                     StatusCodes.Status404NotFound);
             }
 
@@ -316,7 +316,7 @@ public static class ExamApiEndpointExtensions
                     configuration,
                     context.TraceIdentifier,
                     "PARTICIPATION_NOT_FOUND",
-                    "找不到参试记录。",
+                    "找不到参加考试记录。",
                     StatusCodes.Status404NotFound)
                 : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, result);
         });

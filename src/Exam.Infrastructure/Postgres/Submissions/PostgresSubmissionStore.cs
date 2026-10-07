@@ -614,7 +614,7 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
         var affected = await command.ExecuteNonQueryAsync(cancellationToken);
         if (affected != 1)
         {
-            throw new DBConcurrencyException("参试记录在交卷事务内消失。");
+            throw new DBConcurrencyException("参加考试记录在交卷事务内消失。");
         }
     }
 

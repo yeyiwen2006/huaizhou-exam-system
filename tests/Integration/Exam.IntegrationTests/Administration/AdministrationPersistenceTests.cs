@@ -147,7 +147,7 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
     [Fact]
     public async Task Monitoring_IsHumanReadable_SeparatesOfflineFromBusinessState_AndCountsOnlyDurableReceipts()
     {
-        var exam=CreateExam();var roster=await Roster.ImportAsync(exam,new(Id(),0,[new(1,"合成参试考生","001","000001"),new(2,"仅在名册中","002","000002")]),Actor);
+        var exam=CreateExam();var roster=await Roster.ImportAsync(exam,new(Id(),0,[new(1,"合成参加考试考生","001","000001"),new(2,"仅在名册中","002","000002")]),Actor);
         var person=roster.Snapshot.Entries[0];var device=await SeedDevice();var part=await SeedParticipation(exam,person,device);
         var session=await SeedSession(exam,person,device);var clock=new MutableClock();var presence=new PostgresDevicePresenceService(fixture.DataSource,clock);
         var paper = new PaperPublicationInfo(1,"synthetic-paper",new([new("q1",7,"subject","group","single",["A","B"])]),[],clock.GetUtcNow(),Actor,"合成监測测试");

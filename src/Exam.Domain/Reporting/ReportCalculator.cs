@@ -153,7 +153,7 @@ public static class ReportCalculator
         ArgumentNullException.ThrowIfNull(input.Submissions);
         if (input.Subjects.Count == 0) throw new ArgumentException("报表缺少科目。");
         if (input.Participants.Count == 0)
-            throw new ArgumentException("本场考试没有实际参试考生，暂不能生成成绩报表。");
+            throw new ArgumentException("本场考试没有实际参加考试考生，暂不能生成成绩报表。");
 
         var subjectIds = new HashSet<string>(StringComparer.Ordinal);
         var subjectOrders = new HashSet<int>();
@@ -197,7 +197,7 @@ public static class ReportCalculator
             if (!IsDigits(participant.ExamNumber) || !IsDigits(participant.ClassNumber) ||
                 !participants.TryAdd(participant.CandidateId, participant) ||
                 !examNumbers.Add(participant.ExamNumber))
-                throw new ArgumentException("参试者标识、编号或班级无效或重复。");
+                throw new ArgumentException("参加考试者标识、编号或班级无效或重复。");
         }
 
         var submissionIds = new HashSet<string>(StringComparer.Ordinal);
@@ -255,7 +255,7 @@ public static class ReportCalculator
                 submission.TotalScore));
         }
         if (students.Count != participants.Count)
-            throw new ArgumentException("实际参试者仍有答卷或成绩缺失。");
+            throw new ArgumentException("实际参加考试者仍有答卷或成绩缺失。");
         return (Array.AsReadOnly(subjects), Array.AsReadOnly(students.Values.ToArray()));
     }
 

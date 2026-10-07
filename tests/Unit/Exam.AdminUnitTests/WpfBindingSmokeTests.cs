@@ -54,6 +54,15 @@ public sealed class WpfBindingSmokeTests
                 DrainDispatcher(); window.UpdateLayout();
                 Assert.Contains(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷未发布");
                 Assert.Contains(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷已发布");
+                var firstCard = viewModel.Home.Exams[0];
+                var showExam = Assert.Single(Descendants<CheckBox>(window), box => ReferenceEquals(box.DataContext, firstCard) && Equals(box.Content, "在学生端显示"));
+                showExam.IsChecked = false;
+                AdminUiFixture.Until(() => !firstCard.IsVisibilitySaving);
+                Assert.False(firstCard.Exam.VisibleToStudents);
+                Assert.Equal(MainViewModel.HomePage, tabsAtStart.SelectedIndex);
+                showExam.IsChecked = true;
+                AdminUiFixture.Until(() => !firstCard.IsVisibilitySaving);
+                Assert.True(firstCard.Exam.VisibleToStudents);
                 SaveEditorScreenshot(window, (FrameworkElement)((TabItem)tabsAtStart.Items[MainViewModel.HomePage]).Content, "exam-publication-cards");
                 fixture.OpenExam();
                 window.UpdateLayout();
@@ -75,11 +84,8 @@ public sealed class WpfBindingSmokeTests
                 Assert.Same(ScrollBar.PageLeftCommand, track.DecreaseRepeatButton.Command);
                 Assert.Same(ScrollBar.PageRightCommand, track.IncreaseRepeatButton.Command);
                 var group = viewModel.Exam.SelectedSubject!.Groups[0];
-                var typeSelector = Assert.Single(Descendants<ComboBox>(window), combo => ReferenceEquals(combo.DataContext, group));
-                Assert.Equal(new[] { "single", "multiple", "indeterminate" }, typeSelector.Items.Cast<QuestionTypeOption>().Select(item => item.Value));
-                Assert.Equal(new[] { "单项选择题", "多项选择题", "不定项选择题" }, typeSelector.Items.Cast<QuestionTypeOption>().Select(item => item.Label));
-                typeSelector.SelectedValue = "multiple";
-                DrainDispatcher();
+                var groupGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Exam.SelectedSubject.Groups));
+                EditGroupType(groupGrid, group, "multiple");
                 Assert.Equal("multiple", group.Type);
                 Assert.Equal("多项选择题", group.TypeLabel);
                 var oneCorrect = Assert.Single(Descendants<TextBox>(window), box =>
@@ -91,22 +97,17 @@ public sealed class WpfBindingSmokeTests
                 allCorrect.Text = "3";
                 allCorrect.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
                 Assert.Equal("3", group.AllCorrect);
-                var countInput = Assert.Single(Descendants<TextBox>(window), box =>
-                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path is "QuestionCount" or "QuestionCountText");
+                var countColumn = groupGrid.Columns.Single(column => Equals(column.Header, "题量"));
                 var originalCount = group.QuestionCount;
-                countInput.Text = "invalid-count";
-                countInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                EditCell(groupGrid, group, countColumn, "invalid-count");
                 Assert.Equal(0, group.QuestionCount);
                 Assert.Contains(viewModel.Exam.Validate(), error => error.Contains("题量", StringComparison.Ordinal));
-                countInput.Text = originalCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                countInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                EditCell(groupGrid, group, countColumn, originalCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 Assert.Equal(originalCount, group.QuestionCount);
-                typeSelector.SelectedValue = "single";
-                DrainDispatcher();
+                EditGroupType(groupGrid, group, "single");
                 Assert.True(oneCorrect.IsVisible); Assert.False(allCorrect.IsVisible);
                 Assert.Equal("3", group.AllCorrect);
-                typeSelector.SelectedValue = "indeterminate";
-                DrainDispatcher();
+                EditGroupType(groupGrid, group, "indeterminate");
                 Assert.True(oneCorrect.IsVisible); Assert.True(allCorrect.IsVisible);
                 Assert.Equal("3", group.AllCorrect);
                 VerifyScoreTokenEditing(window, viewModel, group);
@@ -139,9 +140,26 @@ public sealed class WpfBindingSmokeTests
                         var queryInput = Assert.Single(Descendants<TextBox>(window), input =>
                             BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Activation.QueryDeviceId");
                         var roomFilter = Assert.Single(Descendants<ComboBox>(window), input =>
-                            BindingOperations.GetBinding(input, Selector.SelectedValueProperty)?.Path.Path == "Activation.FilterRoomGroupId");
+                            BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == "Activation.SelectedFilterChoice");
                         var queryButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.QueryDeviceCommand));
                         var reloadButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.RefreshDirectoryCommand));
+                        AdminUiFixture.Until(() => viewModel.Activation.CanEditDirectory);
+                        foreach (var name in new[] { "全部试场", "未分组", "全部试场", "全部试场" })
+                        {
+                            roomFilter.SelectedItem = viewModel.Activation.FilterChoices.Single(choice => choice.Name == name);
+                            queryButton.Command.Execute(null);
+                            AdminUiFixture.Until(() => viewModel.Activation.QueryDeviceCommand.CanExecute(null));
+                            Assert.Equal(name, Assert.IsType<RoomGroupChoice>(roomFilter.SelectedItem).Name);
+                        }
+                        Assert.DoesNotContain(Descendants<TextBox>(window), input =>
+                            BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Activation.MoveReason");
+                        foreach (var binding in new[] { "Activation.SelectedApprovalChoice", "Activation.SelectedMoveChoice" })
+                        {
+                            var choice = Assert.Single(Descendants<ComboBox>(window), input =>
+                                BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == binding);
+                            Assert.Equal("未分组", Assert.IsType<RoomGroupChoice>(choice.SelectedItem).Name);
+                        }
+                        SaveEditorScreenshot(window, roomFilter, "activation-room-filter");
                         var top = queryInput.TranslatePoint(new Point(0, 0), window).Y;
                         Assert.All(new FrameworkElement[] { roomFilter, queryButton, reloadButton }, control =>
                         {
@@ -169,15 +187,37 @@ public sealed class WpfBindingSmokeTests
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
                         AdminUiFixture.Until(() => viewModel.Monitoring.Rows.Count != 0);
-                        viewModel.Monitoring.SelectedRow = viewModel.Monitoring.Rows.First(row => row.AvailableCommands.Any(command => command.CanResend));
+                        var mainGrid = Assert.Single(Descendants<DataGrid>(window), grid =>
+                            BindingOperations.GetBinding(grid, DataGrid.SelectedItemProperty)?.Path.Path == "Monitoring.SelectedTableRow");
+                        var missingGrid = Assert.Single(Descendants<DataGrid>(window), grid =>
+                            BindingOperations.GetBinding(grid, DataGrid.SelectedItemProperty)?.Path.Path == "Monitoring.SelectedUncollectedRow");
+                        var collected = viewModel.Monitoring.Rows.First(row => !viewModel.Monitoring.UncollectedRows.Contains(row));
+                        mainGrid.SelectedItem = collected;
+                        DrainDispatcher();
+                        Assert.Same(collected, viewModel.Monitoring.SelectedRow);
+                        Assert.Null(missingGrid.SelectedItem);
+                        var missing = viewModel.Monitoring.UncollectedRows.First(row => row.AvailableCommands.Any(command => command.CanResend));
+                        missingGrid.SelectedItem = missing;
+                        DrainDispatcher();
+                        Assert.Same(missing, viewModel.Monitoring.SelectedRow);
+                        Assert.Same(missing, mainGrid.SelectedItem);
+                        Assert.Contains(viewModel.Monitoring.SelectedCommands, command => command.CanResend);
+                        foreach (var header in new[] { "准考证号", "学生端编号", "当前页面", "最后通信" })
+                        {
+                            var column = Assert.Single(mainGrid.Columns, column => Equals(column.Header, header));
+                            Assert.True(column.Width.IsSizeToCells);
+                            Assert.True(column.MinWidth >= (header == "最后通信" ? 210 : 140));
+                        }
                         viewModel.Monitoring.DecisionReason = "合成界面保留输入检查";
                         DrainDispatcher();
-                        var participant = viewModel.Monitoring.SelectedRow.ParticipationId;
+                        var participant = Assert.IsType<MonitoringRow>(viewModel.Monitoring.SelectedRow).ParticipationId;
                         var commandId = viewModel.Monitoring.EventId;
                         viewModel.Monitoring.LoadCommand.Execute(null);
-                        AdminUiFixture.Until(() => viewModel.Monitoring.Status.Contains("实际参试"));
+                        AdminUiFixture.Until(() => viewModel.Monitoring.Status.Contains("实际参加考试"));
                         DrainDispatcher();
                         Assert.Equal(participant, viewModel.Monitoring.SelectedRow?.ParticipationId);
+                        Assert.Same(viewModel.Monitoring.SelectedRow, mainGrid.SelectedItem);
+                        Assert.Same(viewModel.Monitoring.SelectedRow, missingGrid.SelectedItem);
                         Assert.Equal(commandId, viewModel.Monitoring.EventId);
                         Assert.Equal("合成界面保留输入检查", viewModel.Monitoring.DecisionReason);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "查询收齐记录") && button.Command is not null);
@@ -391,8 +431,21 @@ public sealed class WpfBindingSmokeTests
         EditCell(groupGrid, groups[0], groupNameColumn, "一、化学选择题");
         Assert.Equal("一、化学选择题", groups[0].Name);
         Assert.Equal(groups, groupGrid.Items.Cast<GroupDraftViewModel>());
-        Assert.All(groupGrid.Columns.Where(column => column != groupNameColumn), column => Assert.True(column.IsReadOnly));
-        SaveEditorScreenshot(window, groupGrid, "exam-group-name-inline");
+        Assert.All(groupGrid.Columns, column => Assert.False(column.IsReadOnly));
+        var originalOrder = groups[0].OrderText;
+        var originalCount = groups[0].QuestionCountText;
+        var originalScore = groups[0].MaxScore;
+        EditCell(groupGrid, groups[0], groupGrid.Columns.Single(column => Equals(column.Header, "顺序")), "3");
+        Assert.Equal(3, groups[0].Order);
+        EditCell(groupGrid, groups[0], groupGrid.Columns.Single(column => Equals(column.Header, "题量")), "12");
+        Assert.Equal(12, groups[0].QuestionCount);
+        EditCell(groupGrid, groups[0], groupGrid.Columns.Single(column => Equals(column.Header, "满分")), "24");
+        Assert.Equal("24", groups[0].MaxScore);
+        Assert.Equal(groups, groupGrid.Items.Cast<GroupDraftViewModel>());
+        SaveEditorScreenshot(window, groupGrid, "exam-group-fields-inline");
+        groups[0].OrderText = originalOrder;
+        groups[0].QuestionCountText = originalCount;
+        groups[0].MaxScore = originalScore;
 
         while (viewModel.Exam.Subjects.Count < 8) viewModel.Exam.AddSubjectCommand.Execute(null);
         DrainDispatcher(); window.UpdateLayout();
@@ -425,6 +478,25 @@ public sealed class WpfBindingSmokeTests
         Assert.True(grid.CommitEdit(DataGridEditingUnit.Row, true));
         DrainDispatcher();
         Assert.Equal(originalTop, row.TranslatePoint(new Point(0, 0), grid).Y);
+    }
+
+    private static void EditGroupType(DataGrid grid, GroupDraftViewModel group, string type)
+    {
+        var column = grid.Columns.Single(column => Equals(column.Header, "题型"));
+        grid.ScrollIntoView(group, column);
+        grid.SelectedItem = group;
+        grid.CurrentCell = new DataGridCellInfo(group, column);
+        grid.Focus();
+        Assert.True(grid.BeginEdit());
+        DrainDispatcher();
+        var selector = Assert.Single(Descendants<ComboBox>(column.GetCellContent(group)));
+        Assert.Equal(new[] { "single", "multiple", "indeterminate" }, selector.Items.Cast<QuestionTypeOption>().Select(item => item.Value));
+        Assert.Equal(new[] { "单项选择题", "多项选择题", "不定项选择题" }, selector.Items.Cast<QuestionTypeOption>().Select(item => item.Label));
+        selector.SelectedValue = type;
+        DrainDispatcher();
+        Assert.Equal(type, group.Type);
+        Assert.True(grid.CommitEdit(DataGridEditingUnit.Row, true));
+        DrainDispatcher();
     }
 
     private static void VerifyRoomInputAlignment(MainWindow window, MainViewModel viewModel)
