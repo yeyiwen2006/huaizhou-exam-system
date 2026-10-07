@@ -197,7 +197,6 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
         var group = new GroupDraftViewModel
         {
             GroupId = $"{SelectedSubject.SubjectId}-group-{number}",
-            Name = $"{number}、单项选择题",
             Type = "single",
             Order = number,
             QuestionCount = 10,
@@ -378,7 +377,8 @@ public sealed class SubjectDraftViewModel : BindableBase
 public sealed class GroupDraftViewModel : BindableBase
 {
     private string _groupId = string.Empty;
-    private string _name = string.Empty;
+    private string _name = "一、单项选择题";
+    private bool _useDefaultName = true;
     private string _type = "single";
     private int _order = 1;
     private int _questionCount = 1;
@@ -395,15 +395,38 @@ public sealed class GroupDraftViewModel : BindableBase
     private string _multipleWrong = "0";
 
     public string GroupId { get => _groupId; set => SetProperty(ref _groupId, value); }
-    public string Name { get => _name; set => SetProperty(ref _name, value); }
-    public string Type { get => _type; set { if (SetProperty(ref _type, value)) OnPropertyChanged(nameof(TypeLabel)); } }
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            _useDefaultName = value == DefaultName || value == $"{Order}、{TypeLabel}";
+            SetProperty(ref _name, value);
+        }
+    }
+    public string Type
+    {
+        get => _type;
+        set
+        {
+            if (!SetProperty(ref _type, value)) return;
+            OnPropertyChanged(nameof(TypeLabel));
+            UpdateDefaultName();
+        }
+    }
+    private string DefaultName => $"{FormatGroupNumber(Order)}、{TypeLabel}";
+    private void UpdateDefaultName()
+    {
+        if (_useDefaultName && Order is >= 1 and <= 9999)
+            SetProperty(ref _name, DefaultName, nameof(Name));
+    }
     public string TypeLabel => Type switch { "single" => "单项选择题", "multiple" => "多项选择题", "indeterminate" => "不定项选择题", _ => "未选择" };
     // Preserve invalid input in the draft instead of letting WPF retain a previously valid integer.
     // The existing domain rules reject zero, so neither save path can submit that stale value.
     public int Order
     {
         get => _order;
-        set { SetProperty(ref _order, value); OrderText = value.ToString(CultureInfo.InvariantCulture); }
+        set => OrderText = value.ToString(CultureInfo.InvariantCulture);
     }
     public int QuestionCount
     {
@@ -416,7 +439,10 @@ public sealed class GroupDraftViewModel : BindableBase
         set
         {
             if (SetProperty(ref _orderText, value))
+            {
                 SetProperty(ref _order, ParseDraftInteger(value), nameof(Order));
+                UpdateDefaultName();
+            }
         }
     }
     public string QuestionCountText
@@ -428,6 +454,31 @@ public sealed class GroupDraftViewModel : BindableBase
                 SetProperty(ref _questionCount, ParseDraftInteger(value), nameof(QuestionCount));
         }
     }
+    private static string FormatGroupNumber(int number)
+    {
+        // Settings permit group orders from 1 to 9999.
+        if (number is < 1 or > 9999) return number.ToString(CultureInfo.InvariantCulture);
+        const string digits = "零一二三四五六七八九";
+        string[] units = ["", "十", "百", "千"];
+        var result = new System.Text.StringBuilder();
+        var pendingZero = false;
+        for (int divisor = 1000, unit = 3; divisor > 0; divisor /= 10, unit--)
+        {
+            var digit = number / divisor;
+            number %= divisor;
+            if (digit == 0)
+            {
+                if (result.Length > 0 && number > 0) pendingZero = true;
+                continue;
+            }
+            if (pendingZero) result.Append('零');
+            pendingZero = false;
+            result.Append(digits[digit]).Append(units[unit]);
+        }
+        var text = result.ToString();
+        return text.StartsWith("一十", StringComparison.Ordinal) ? text[1..] : text;
+    }
+
     private static int ParseDraftInteger(string value) =>
         int.TryParse(value?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
     public string MaxScore { get => _maxScore; set => SetProperty(ref _maxScore, value); }

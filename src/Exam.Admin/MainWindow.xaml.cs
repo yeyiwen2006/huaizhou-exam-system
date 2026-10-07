@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using Exam.Admin.ViewModels;
 using Exam.Admin.Views;
 using Exam.Admin.ServiceManagement;
@@ -81,6 +82,38 @@ public partial class MainWindow : Window
     }
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
+
+    private void OnScoreFieldFocused(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is Panel fields && e.NewFocus is TextBox input)
+            fields.Tag = input;
+    }
+
+    private void OnScoreFieldsDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        // Changing the selected group must not reuse an input selection from the previous group.
+        if (sender is Panel fields) fields.Tag = null;
+    }
+
+    private void OnScoreTokenClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Panel { Tag: Panel { Tag: TextBox input } fields } ||
+            e.OriginalSource is not Button { Tag: string token } || !input.IsEnabled || input.IsReadOnly ||
+            !fields.IsAncestorOf(input) || !ReferenceEquals(input.DataContext, fields.DataContext)) return;
+
+        var start = input.SelectionStart;
+        var selected = input.SelectedText;
+        input.BeginChange();
+        try
+        {
+            input.SelectedText = token == "()" ? "(" + selected + ")" : token;
+            if (token == "()") input.Select(start + 1, selected.Length);
+            else input.Select(start + token.Length, 0);
+        }
+        finally { input.EndChange(); }
+        input.Focus();
+        e.Handled = true;
+    }
     public void OpenManagement()
     {
         if (_router.Route != AdminWorkspaceRoute.LocalManagement) _businessPage = _viewModel.SelectedPage;

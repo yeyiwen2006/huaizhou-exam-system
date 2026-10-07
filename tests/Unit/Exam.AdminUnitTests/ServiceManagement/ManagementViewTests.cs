@@ -117,6 +117,13 @@ public sealed class ManagementViewTests
             window.Show(); Drain(); window.UpdateLayout();
             Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "登录管理"));
             Assert.True(Descendants<PasswordBox>(view).Single().IsVisible);
+            var connectionSettings = (Expander)view.FindName("ConnectionSettingsExpander");
+            Assert.False(connectionSettings.IsExpanded);
+            Assert.Single(Descendants<TextBox>(view), b => b.IsVisible);
+            Assert.True(((Button)view.FindName("LoginButton")).IsEnabled);
+            connectionSettings.IsExpanded = true; Drain();
+            Assert.Equal(4, Descendants<TextBox>(view).Count(b => b.IsVisible));
+            connectionSettings.IsExpanded = false; Drain();
             Assert.All(Descendants<TextBox>(view).Where(b => b.IsVisible), b => Assert.True(b.ActualWidth >= 120));
             Save(view, scale, width, height, "login");
             model.LoginAsync("synthetic").GetAwaiter().GetResult(); // The synthetic connection completes synchronously.
@@ -139,6 +146,28 @@ public sealed class ManagementViewTests
             Assert.Equal(string.Empty, ((PasswordBox)view.FindName("LoginPassword")).Password);
         }
         finally { trace.Listeners.Remove(listener); trace.Switch.Level = previous; window.Close(); }
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task MissingAndDebugConnectionsShowGuidanceAndDisableLogin(bool localDebug) => Sta(() =>
+    {
+        using var model = new ServiceManagementViewModel(_ => new SyntheticConnection(), new EmptyStore(), localDebug: localDebug);
+        var view = new ServiceManagementView(model);
+        var window = new Window { Content = view, Width = 1120, Height = 720,
+            ShowInTaskbar = false, ShowActivated = false, Left = -5000, Top = -5000 };
+        Theme(window);
+        try
+        {
+            window.Show(); Drain(); window.UpdateLayout();
+            Assert.False(((Button)view.FindName("LoginButton")).IsEnabled);
+            Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains(localDebug ? "未部署独立管理服务" : "联系系统部署人员"));
+            var import = Assert.Single(Descendants<Button>(view), button => Equals(button.Content, "导入连接配置"));
+            Assert.Equal(!localDebug, import.IsEnabled);
+            Save(view, 1, 1120, 720, localDebug ? "debug-unavailable" : "missing-connection");
+        }
+        finally { window.Close(); }
     });
 
     private static ServiceManagementViewModel Synthetic() => new(_ => new SyntheticConnection(), new EmptyStore())

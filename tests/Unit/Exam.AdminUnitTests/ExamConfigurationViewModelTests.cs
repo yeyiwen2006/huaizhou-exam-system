@@ -21,9 +21,29 @@ public sealed class ExamConfigurationViewModelTests
         Assert.Empty(errors);
         var group = Assert.Single(Assert.Single(viewModel.Subjects).Groups);
         Assert.Equal("single", group.Type);
+        Assert.Equal("一、单项选择题", group.Name);
         Assert.Equal("1", group.Correct);
         Assert.Equal("0", group.OneBlank);
         Assert.Equal("0", group.OneWrong);
+    }
+
+    [Fact]
+    public void AddedGroups_UseChineseOrdinalsAndPreserveEditedNames()
+    {
+        using var api = new AdminApiClient();
+        var viewModel = new ExamConfigurationViewModel(api);
+        var subject = Assert.Single(viewModel.Subjects);
+        subject.Groups[0].Name = "自定义题组名称";
+        for (var number = 2; number <= 21; number++) viewModel.AddGroupCommand.Execute(null);
+
+        Assert.Equal("自定义题组名称", subject.Groups[0].Name);
+        Assert.Equal("二、单项选择题", subject.Groups[1].Name);
+        Assert.Equal("十、单项选择题", subject.Groups[9].Name);
+        Assert.Equal("十一、单项选择题", subject.Groups[10].Name);
+        Assert.Equal("二十、单项选择题", subject.Groups[19].Name);
+        Assert.Equal("二十一、单项选择题", subject.Groups[20].Name);
+        viewModel.RefreshInstructionsCommand.Execute(null);
+        Assert.Contains("二、单项选择题：", viewModel.InstructionsText);
     }
 
     [Theory]

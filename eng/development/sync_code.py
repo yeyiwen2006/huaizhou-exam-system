@@ -58,7 +58,7 @@ def public_path(relative: str) -> bool:
     lower = [part.lower() for part in parts]
     name = lower[-1]
     return not (any(p in PRIVATE_ROOTS | {'bin', 'obj', '__pycache__'} for p in lower)
-                or name.startswith('.env') or name in {'server.json', 'local-settings.json'}
+                or name.startswith('.env') or name in {'server.json', 'local-settings.json', 'management-connection.json'}
                 or name.startswith('appsettings.') and ('.local.' in name or '.development.' in name)
                 or Path(name).suffix in PRIVATE_SUFFIXES or '.db-' in name or '.sqlite-' in name)
 

@@ -27,7 +27,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private PendingManagementRequest? _pending;
     private ManagementOperation? _operation;
     private string _address = string.Empty, _server = string.Empty, _node = string.Empty, _username = string.Empty;
-    private string _message = "业务停止时仍可登录本机管理。请填写部署提供的独立管理地址与节点身份。";
+    private string _message = string.Empty;
     private string _process = "尚未查询", _readiness = "未核实", _epoch = "当前代次未核实";
     private string _bind = string.Empty, _port = string.Empty, _data = string.Empty;
     private bool _ha;
@@ -39,8 +39,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public ServiceManagementViewModel(Func<ManagementTarget, IManagementConnection> factory,
         IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, bool localDebug = false)
     {
+        IsLocalDebugEnvironment = localDebug;
         _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory; _time = time ?? TimeProvider.System;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsSignedIn, OnError);
@@ -58,6 +59,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         ResumeRestoreCommand = new AsyncRelayCommand(ResumeRestoreAsync, () => IsSignedIn && CanResumeRestore && !IsBusy, OnError);
         RetryOriginalCommand = new AsyncRelayCommand(RetryOriginalAsync, () => IsSignedIn && _pending is not null && _missingOriginal && !IsBusy && !_readBusy, OnError);
         CancelWaitCommand = new RelayCommand(CancelWaiting, () => IsBusy || _readBusy);
+        SaveConnectionCommand = new RelayCommand(SaveConnectionSettings, () => CanConfigureConnection && HasConnectionConfiguration);
         LoadSettings();
         LoadProtectionWarning();
     }
@@ -65,19 +67,40 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public static ServiceManagementViewModel CreateDefault()
     {
         var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exam.Admin", "Management");
+        var localDebug = false;
 #if DEBUG
         if (Environment.GetEnvironmentVariable("EXAM_ADMIN_DATA_DIRECTORY") is { Length: > 0 } localDirectory)
+        {
             directory = System.IO.Path.Combine(System.IO.Path.GetFullPath(localDirectory), "Management");
+            localDebug = true;
+        }
 #endif
         return new(target => new ManagementConnection(target), new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
-            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json")),
-            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")));
+            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json"), localDebug ? null :
+                System.IO.Path.Combine(AppContext.BaseDirectory, "management-connection.json")),
+            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")), localDebug: localDebug);
     }
 
     public Func<ManagementConfirmation, Task<bool>> ConfirmAsync { get; set; } = _ => Task.FromResult(false);
-    public string Address { get => _address; set => SetProperty(ref _address, value); }
-    public string ServerId { get => _server; set => SetProperty(ref _server, value); }
-    public string NodeId { get => _node; set => SetProperty(ref _node, value); }
+    public string Address { get => _address; set { if (SetProperty(ref _address, value)) ConnectionSettingsChanged(); } }
+    public string ServerId { get => _server; set { if (SetProperty(ref _server, value)) ConnectionSettingsChanged(); } }
+    public string NodeId { get => _node; set { if (SetProperty(ref _node, value)) ConnectionSettingsChanged(); } }
+    public bool IsLocalDebugEnvironment { get; }
+    public bool HasConnectionConfiguration
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Address) || string.IsNullOrWhiteSpace(ServerId) || string.IsNullOrWhiteSpace(NodeId)) return false;
+            try { new ManagementTarget(Address, ServerId, NodeId).Validate(); return true; }
+            catch (ArgumentException) { return false; }
+        }
+    }
+    public bool CanConfigureConnection => IsSignedOut && !IsBusy && !IsLocalDebugEnvironment;
+    public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
+    public string ConnectionStatus => IsLocalDebugEnvironment
+        ? "当前为本机调试环境，未部署独立管理服务。请返回考务；后台启停请使用本机调试启动窗口。"
+        : HasConnectionConfiguration ? "连接已配置，请使用已启用的考务账号和密码登录。"
+        : "本机管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string Message { get => _message; private set => SetProperty(ref _message, value); }
     public string ProcessText { get => _process; private set => SetProperty(ref _process, value); }
@@ -100,7 +123,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public bool IsSignedOut => !IsSignedIn;
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
-    public string TargetText => _connection is null ? "本机服务管理" : $"{_connection.Target.ServerId} / {_connection.Target.NodeId} · 独立管理会话";
+    public string TargetText => IsLocalDebugEnvironment ? "本机调试 · 管理服务未部署" :
+        _connection is not null || HasConnectionConfiguration ? "当前管理服务器：本机" : "本机管理连接待配置";
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -115,6 +139,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public AsyncRelayCommand ResumeRestoreCommand { get; }
     public AsyncRelayCommand RetryOriginalCommand { get; }
     public RelayCommand CancelWaitCommand { get; }
+    public RelayCommand SaveConnectionCommand { get; }
     private AsyncRelayCommand OperationCommand(ManagementOperationKind kind) =>
         new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && _pending is null && CanIssueHighAvailability(kind), OnError);
 
@@ -131,6 +156,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task LoginAsync(string password)
     {
         if (_disposed || IsBusy) return;
+        if (!CanLogin) { Message = ConnectionStatus; return; }
         ResetSession();
         var generation = _generation;
         var target = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
@@ -474,7 +500,41 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void LoadSettings()
     {
         try { if (_settings?.Load() is { } target) { Address = target.Address; ServerId = target.ServerId; NodeId = target.NodeId; } }
-        catch { Message = "管理连接配置不可读取，请按部署信息重新填写。"; }
+        catch { Message = "管理连接配置不可读取，请联系系统部署人员，或重新导入连接配置。"; }
+    }
+
+    public void ImportConnectionSettings(string path)
+    {
+        if (!CanConfigureConnection) return;
+        try
+        {
+            var target = ManagementEndpointSettings.LoadFile(path);
+            if (_settings is null) throw new InvalidOperationException("未配置连接记录目录。");
+            _settings.Save(target);
+            Address = target.Address; ServerId = target.ServerId; NodeId = target.NodeId;
+            LoadProtectionWarning();
+            Message = "连接配置已导入并保存，请输入考务账号和密码。";
+        }
+        catch { Message = "连接配置导入失败。请使用部署人员提供的有效本机管理连接文件；原连接配置已保留。"; }
+    }
+
+    private void SaveConnectionSettings()
+    {
+        try
+        {
+            if (!CanConfigureConnection || !HasConnectionConfiguration || _settings is null) return;
+            _settings.Save(new(Address.Trim(), ServerId.Trim(), NodeId.Trim()));
+            LoadProtectionWarning();
+            Message = "连接设置已保存，下次打开时自动使用。";
+        }
+        catch { Message = "连接设置未能保存，请联系系统部署人员检查本机配置目录。"; }
+    }
+
+    private void ConnectionSettingsChanged()
+    {
+        OnPropertyChanged(nameof(HasConnectionConfiguration)); OnPropertyChanged(nameof(ConnectionStatus));
+        OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(CanLogin));
+        SaveConnectionCommand?.RaiseCanExecuteChanged();
     }
     public void ReportError(Exception? error = null) => OnError(error ?? new InvalidOperationException());
     private void OnError(Exception error) => Message = error is ArgumentException ? "输入无效，请核对目标身份、路径、端口及配置版本。" :
@@ -486,6 +546,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                      BackupCommand, RestoreCommand, TakeoverCommand, EmergencyCommand, RebuildCommand, ReprotectCommand,
                      QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
         CancelWaitCommand?.RaiseCanExecuteChanged();
+        SaveConnectionCommand?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanConfigureConnection));
     }
     private static string SafeError(HttpStatusCode status) => status switch
     { HttpStatusCode.Conflict => "配置版本或请求内容冲突。表单已保留，请核对并重新确认", HttpStatusCode.Forbidden => "操作权限或操作者不一致",

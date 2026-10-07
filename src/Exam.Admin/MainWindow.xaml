@@ -25,6 +25,19 @@
             <Setter Property="MinWidth" Value="96" />
             <Setter Property="Padding" Value="14,0" />
         </Style>
+        <Style x:Key="ScoreTokenButton" TargetType="Button" BasedOn="{StaticResource Btn.Secondary}">
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="MinWidth" Value="36" />
+            <Setter Property="Padding" Value="10,0" />
+        </Style>
+        <Style x:Key="ScoreTokenBar" TargetType="WrapPanel">
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Tag.Tag, RelativeSource={RelativeSource Self}}" Value="{x:Null}">
+                    <Setter Property="IsEnabled" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="PageScroller" TargetType="ScrollViewer">
             <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
@@ -292,6 +305,10 @@
                                         </StackPanel>
                                     </WrapPanel>
                                     <CheckBox Content="允许考生选择“不作答”" IsChecked="{Binding AllowAbstain}" Margin="0,8,0,14"/>
+                                    <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap"
+                                               Text="{}计分规则支持整数、有限小数（如 0.5、-0.75）、{正确选项总数}、{选择的正确选项数}，以及 +、-、*、/ 和括号。先点击要编辑的计分框，再用下方按钮在光标处插入；括号按钮也可包住所选内容。"/>
+                                    <TextBlock Style="{StaticResource CardNote}" TextWrapping="Wrap"
+                                               Text="{}例如，选对但不全可填 {选择的正确选项数} * 0.5，表示每选对一个选项得 0.5 分。规则不能除以零，最终每题得分必须是有限小数。"/>
                                     <StackPanel>
                                         <StackPanel.Style>
                                             <Style TargetType="StackPanel">
@@ -301,8 +318,8 @@
                                                 </Style.Triggers>
                                             </Style>
                                         </StackPanel.Style>
-                                        <TextBlock Text="一个正确答案 · 每题得分" Style="{StaticResource FormLabel}"/>
-                                        <WrapPanel>
+                                        <TextBlock Text="计分规则（一个正确答案的试题）" Style="{StaticResource FormLabel}"/>
+                                        <WrapPanel x:Name="OneCorrectScoreFields" GotKeyboardFocus="OnScoreFieldFocused" DataContextChanged="OnScoreFieldsDataContextChanged">
                                             <StackPanel Width="160" Margin="0,0,16,0">
                                                 <TextBlock Text="选对" Style="{StaticResource FormLabel}"/>
                                                 <TextBox Text="{Binding Correct, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
@@ -316,6 +333,15 @@
                                                 <TextBox Text="{Binding OneWrong, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
                                             </StackPanel>
                                         </WrapPanel>
+                                        <WrapPanel Style="{StaticResource ScoreTokenBar}" Tag="{Binding ElementName=OneCorrectScoreFields}" ButtonBase.Click="OnScoreTokenClicked">
+                                            <Button Content="{}{正确选项总数}" Tag="{}{正确选项总数}" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="{}{选择的正确选项数}" Tag="{}{选择的正确选项数}" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="+" Tag="+" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="-" Tag="-" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="*" Tag="*" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="/" Tag="/" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="（ ）" Tag="()" ToolTip="插入成对括号，或包住所选内容" Style="{StaticResource ScoreTokenButton}"/>
+                                        </WrapPanel>
                                     </StackPanel>
                                     <StackPanel>
                                         <StackPanel.Style>
@@ -326,8 +352,8 @@
                                                 </Style.Triggers>
                                             </Style>
                                         </StackPanel.Style>
-                                        <TextBlock Text="多个正确答案 · 每题得分" Style="{StaticResource FormLabel}"/>
-                                        <WrapPanel>
+                                        <TextBlock Text="计分规则（多个正确答案的试题）" Style="{StaticResource FormLabel}"/>
+                                        <WrapPanel x:Name="MultipleCorrectScoreFields" GotKeyboardFocus="OnScoreFieldFocused" DataContextChanged="OnScoreFieldsDataContextChanged">
                                             <StackPanel Width="160" Margin="0,0,16,0">
                                                 <TextBlock Text="全部选对" Style="{StaticResource FormLabel}"/>
                                                 <TextBox Text="{Binding AllCorrect, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
@@ -344,6 +370,15 @@
                                                 <TextBlock Text="选错" Style="{StaticResource FormLabel}"/>
                                                 <TextBox Text="{Binding MultipleWrong, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}"/>
                                             </StackPanel>
+                                        </WrapPanel>
+                                        <WrapPanel Style="{StaticResource ScoreTokenBar}" Tag="{Binding ElementName=MultipleCorrectScoreFields}" ButtonBase.Click="OnScoreTokenClicked">
+                                            <Button Content="{}{正确选项总数}" Tag="{}{正确选项总数}" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="{}{选择的正确选项数}" Tag="{}{选择的正确选项数}" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="+" Tag="+" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="-" Tag="-" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="*" Tag="*" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="/" Tag="/" Style="{StaticResource ScoreTokenButton}"/>
+                                            <Button Content="（ ）" Tag="()" ToolTip="插入成对括号，或包住所选内容" Style="{StaticResource ScoreTokenButton}"/>
                                         </WrapPanel>
                                     </StackPanel>
                                 </StackPanel>
@@ -789,14 +824,14 @@
                                 <StackPanel>
                                     <TextBlock Text="新试场名称" Style="{StaticResource FormLabel}"/>
                                     <DockPanel>
-                                        <Button DockPanel.Dock="Right" Content="新增" Style="{StaticResource ActionButton}" Command="{Binding Activation.AddGroupCommand}"/>
+                                        <Button DockPanel.Dock="Right" Content="新增" Style="{StaticResource ActionButton}" Margin="12,0,0,0" VerticalAlignment="Top" Command="{Binding Activation.AddGroupCommand}"/>
                                         <TextBox Text="{Binding Activation.NewGroupName, UpdateSourceTrigger=PropertyChanged}"/>
                                     </DockPanel>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
                                     <TextBlock Text="选中试场的新名称" Style="{StaticResource FormLabel}"/>
                                     <DockPanel>
-                                        <Button DockPanel.Dock="Right" Content="重命名" Style="{StaticResource ActionButton}" Command="{Binding Activation.RenameGroupCommand}"/>
+                                        <Button DockPanel.Dock="Right" Content="重命名" Style="{StaticResource ActionButton}" Margin="12,0,0,0" VerticalAlignment="Top" Command="{Binding Activation.RenameGroupCommand}"/>
                                         <TextBox Text="{Binding Activation.SelectedGroupName, UpdateSourceTrigger=PropertyChanged}"/>
                                     </DockPanel>
                                 </StackPanel>

@@ -512,3 +512,6 @@ real-exams/
 # Private material in the local testing copy, including nested directories.
 机考单题文件/
 机考答案文件/
+
+# Machine-specific management connection configuration (generated during deployment).
+management-connection.json

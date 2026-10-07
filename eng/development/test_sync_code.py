@@ -89,6 +89,7 @@ class SynchronizationTests(unittest.TestCase):
             'tests/private-exams/说明.md',
             'eng/.artifacts/说明.md',
             'docs/exports/说明.md',
+            'docs/management-connection.json',
         )
         for relative in private_files:
             self.put(self.testing, relative, '人工构造的私有测试材料\n')

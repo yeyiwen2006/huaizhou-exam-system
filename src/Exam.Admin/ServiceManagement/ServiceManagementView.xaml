@@ -14,6 +14,13 @@
         <Style x:Key="Management.Section" TargetType="Border" BasedOn="{StaticResource Card}">
             <Setter Property="Margin" Value="0,0,0,16"/>
         </Style>
+        <Style x:Key="Management.Message" TargetType="TextBlock" BasedOn="{StaticResource BodyText}">
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,12,0,12"/>
+            <Style.Triggers>
+                <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
     <DockPanel>
         <Border DockPanel.Dock="Top" Style="{StaticResource TopBar}">
@@ -28,7 +35,7 @@
         <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
-                <TextBlock Text="{Binding Message}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,12,0,12"/>
+                <TextBlock Text="{Binding Message}" Style="{StaticResource Management.Message}"/>
                 <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}" Margin="0,0,0,12">
                     <TextBlock x:Name="PersistentPendingText" Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
                     <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
@@ -40,20 +47,9 @@
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding IsSignedOut, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <TextBlock Text="独立管理登录" Style="{StaticResource SectionTitle}"/>
-                        <TextBlock Text="使用部署提供的本机管理端口。业务停止或数据库不可用时，管理宿主按已启用账号的受保护缓存认证。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,16"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                            <StackPanel><TextBlock Text="本机服务管理入口HTTPS地址" Style="{StaticResource FieldLabel}"/>
-                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="管理地址"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1"><TextBlock Text="当前考试系统标识" Style="{StaticResource FieldLabel}"/>
-                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding ServerId, UpdateSourceTrigger=PropertyChanged}"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2"><TextBlock Text="当前服务器标识" Style="{StaticResource FieldLabel}"/>
-                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding NodeId, UpdateSourceTrigger=PropertyChanged}"/>
-                            </StackPanel>
-                        </Grid>
-                        <Grid>
+                        <TextBlock Text="{Binding ConnectionStatus}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,8,0,12"/>
+                        <TextBlock Text="请在管理服务器本机操作；办公电脑上的“本机”指办公电脑自身。连接信息由部署人员配置，考务人员无需记忆内部标识。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+                        <Grid IsEnabled="{Binding CanLogin}">
                             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel><TextBlock Text="考务账号" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
@@ -61,8 +57,29 @@
                             <StackPanel Grid.Column="1"><TextBlock Text="密码" Style="{StaticResource FieldLabel}"/>
                                 <PasswordBox x:Name="LoginPassword" Margin="0,4,12,12"/>
                             </StackPanel>
-                            <Button x:Name="LoginButton" Grid.Column="2" Content="登录管理" Style="{StaticResource Btn.Primary}" Margin="0,20,0,12" Click="OnLogin"/>
+                            <Button x:Name="LoginButton" Grid.Column="2" Content="登录管理" Style="{StaticResource Btn.Primary}" Margin="0,0,0,12" VerticalAlignment="Bottom" Click="OnLogin"/>
                         </Grid>
+                        <Button Content="导入连接配置" Style="{StaticResource Management.Action}" HorizontalAlignment="Left"
+                                IsEnabled="{Binding CanConfigureConnection}" Click="OnImportConnection"/>
+                        <Expander x:Name="ConnectionSettingsExpander" Header="连接设置（部署人员）" IsExpanded="False" Margin="0,8,0,0"
+                                  IsEnabled="{Binding CanConfigureConnection}">
+                            <StackPanel Margin="0,12,0,0">
+                                <TextBlock Text="这些值必须与本机管理服务的部署配置一致。考试系统标识不是考试名称，服务器标识也不一定是电脑名称。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="本机服务管理 HTTPS 地址" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="管理地址"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="考试系统标识" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding ServerId, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock Text="服务器标识" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding NodeId, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Button Content="保存连接设置" Style="{StaticResource Management.Action}" HorizontalAlignment="Left" Command="{Binding SaveConnectionCommand}"/>
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
                 </Border>
                 <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}">

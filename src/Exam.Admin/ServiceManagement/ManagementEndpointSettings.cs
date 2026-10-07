@@ -4,15 +4,20 @@ using Exam.Contracts.Common;
 
 namespace Exam.Admin.ServiceManagement;
 
-public sealed class ManagementEndpointSettings(string path)
+public sealed class ManagementEndpointSettings(string path, string? deploymentPath = null)
 {
-    public ManagementTarget? Load()
+    public ManagementTarget? Load() => File.Exists(path) ? LoadFile(path) :
+        deploymentPath is not null && File.Exists(deploymentPath) ? LoadFile(deploymentPath) : null;
+
+    public static ManagementTarget LoadFile(string path)
     {
-        if (!File.Exists(path)) return null;
         if (new FileInfo(path).Length > 8192 || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("管理连接配置无效。");
         var target = JsonSerializer.Deserialize<ManagementTarget>(File.ReadAllText(path), JsonDefaults.Create())
             ?? throw new InvalidDataException("管理连接配置为空。");
+        if (string.IsNullOrWhiteSpace(target.Address) || string.IsNullOrWhiteSpace(target.ServerId) || string.IsNullOrWhiteSpace(target.NodeId))
+            throw new InvalidDataException("管理连接配置缺少地址或服务器标识。");
+        target = target with { Address = target.Address.Trim(), ServerId = target.ServerId.Trim(), NodeId = target.NodeId.Trim() };
         target.Validate();
         return target;
     }
@@ -25,7 +30,12 @@ public sealed class ManagementEndpointSettings(string path)
         Directory.CreateDirectory(parent);
         if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) throw new IOException("管理连接配置不能是链接。");
         var temporary = Path.Combine(parent, ".endpoint-" + Guid.NewGuid().ToString("N"));
-        try { File.WriteAllText(temporary, JsonSerializer.Serialize(target, JsonDefaults.Create())); File.Move(temporary, path, true); }
+        try
+        {
+            // Connection files contain only public routing information, never credentials or imported extra fields.
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new { target.Address, target.ServerId, target.NodeId }, JsonDefaults.Create()));
+            File.Move(temporary, path, true);
+        }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 }

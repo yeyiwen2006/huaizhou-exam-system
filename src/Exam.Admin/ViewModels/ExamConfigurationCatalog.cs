@@ -210,7 +210,7 @@ public sealed partial class ExamConfigurationViewModel
             {
                 draft.Groups.Add(new GroupDraftViewModel
                 {
-                    GroupId = group.GroupId, Name = group.Name, Type = group.Type, Order = group.Order,
+                    GroupId = group.GroupId, Type = group.Type, Order = group.Order, Name = group.Name,
                     QuestionCount = group.QuestionCount, MaxScore = group.MaxScore, AllowAbstain = group.AllowAbstain,
                     Correct = group.OneCorrect?.Correct ?? "1", OneBlank = group.OneCorrect?.Blank ?? "0", OneWrong = group.OneCorrect?.Wrong ?? "0",
                     AllCorrect = group.MultipleCorrect?.AllCorrect ?? "1", PartialCorrect = group.MultipleCorrect?.PartialCorrect ?? "0",

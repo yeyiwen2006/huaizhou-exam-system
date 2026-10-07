@@ -5,6 +5,35 @@ namespace Exam.AdminUnitTests;
 
 public sealed class GroupDraftIntegerTests
 {
+    [Fact]
+    public void DefaultNameFollowsTypeAndOrderButPreservesACustomName()
+    {
+        var group = new GroupDraftViewModel();
+        Assert.Equal("一、单项选择题", group.Name);
+        group.Type = "indeterminate";
+        Assert.Equal("一、不定项选择题", group.Name);
+        group.Type = "multiple";
+        Assert.Equal("一、多项选择题", group.Name);
+        group.OrderText = "12";
+        Assert.Equal("十二、多项选择题", group.Name);
+        group.OrderText = "";
+        group.OrderText = "101";
+        Assert.Equal("一百零一、多项选择题", group.Name);
+        group.Name = "自定义综合题组";
+        group.Type = "single"; group.Order = 2;
+        Assert.Equal("自定义综合题组", group.Name);
+    }
+
+    [Fact]
+    public void LoadedDefaultNamesContinueFollowingChanges()
+    {
+        var group = new GroupDraftViewModel { Type = "multiple", Order = 2, Name = "二、多项选择题" };
+        group.Type = "single";
+        Assert.Equal("二、单项选择题", group.Name);
+        group.Name = "2、单项选择题";
+        group.Type = "indeterminate";
+        Assert.Equal("二、不定项选择题", group.Name);
+    }
     [Theory]
     [InlineData("")]
     [InlineData("abc")]

@@ -31,12 +31,24 @@ public partial class ServiceManagementView : UserControl
     }
     private async void OnLogin(object sender, RoutedEventArgs e)
     {
-        LoginButton.IsEnabled = false;
         var password = LoginPassword.Password;
         LoginPassword.Clear();
         try { await _viewModel.LoginAsync(password); }
         catch (Exception error) { _viewModel.ReportError(error); }
-        finally { password = string.Empty; LoginButton.IsEnabled = true; LoginPassword.Clear(); }
+        finally { password = string.Empty; LoginPassword.Clear(); }
+    }
+    private void OnImportConnection(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "导入部署人员提供的本机管理连接配置",
+            Filter = "管理连接配置 (*.json)|*.json", CheckFileExists = true, Multiselect = false
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            LoginPassword.Clear();
+            _viewModel.ImportConnectionSettings(dialog.FileName);
+        }
     }
     private async void OnReload(object sender, RoutedEventArgs e)
     { try { await _viewModel.ReloadConfigurationAsync(); } catch (Exception error) { _viewModel.ReportError(error); } }

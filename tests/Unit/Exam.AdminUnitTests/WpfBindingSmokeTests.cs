@@ -104,6 +104,7 @@ public sealed class WpfBindingSmokeTests
                 DrainDispatcher();
                 Assert.True(oneCorrect.IsVisible); Assert.True(allCorrect.IsVisible);
                 Assert.Equal("3", group.AllCorrect);
+                VerifyScoreTokenEditing(window, viewModel, group);
                 // 考生说明预览按字形分段渲染：正文黑体、数字 Times New Roman，并显示预览来源说明。
                 Assert.Single(Descendants<ItemsControl>(window), control =>
                     BindingOperations.GetBinding(control, ItemsControl.ItemsSourceProperty)?.Path.Path == "Exam.InstructionPreview");
@@ -128,6 +129,7 @@ public sealed class WpfBindingSmokeTests
                     window.UpdateLayout();
                     if ((string)tab.Header == "激活与试场分组")
                     {
+                        VerifyRoomInputAlignment(window, viewModel);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);
                         var queryInput = Assert.Single(Descendants<TextBox>(window), input =>
                             BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Activation.QueryDeviceId");
@@ -236,6 +238,104 @@ public sealed class WpfBindingSmokeTests
         var frame = new DispatcherFrame();
         Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false));
         Dispatcher.PushFrame(frame);
+    }
+
+    private static void VerifyScoreTokenEditing(MainWindow window, MainViewModel viewModel, GroupDraftViewModel group)
+    {
+        var fields = (WrapPanel)window.FindName("MultipleCorrectScoreFields");
+        var oneFields = (WrapPanel)window.FindName("OneCorrectScoreFields");
+        var toolbar = Assert.Single(Descendants<WrapPanel>(window), panel => ReferenceEquals(panel.Tag, fields));
+        var oneToolbar = Assert.Single(Descendants<WrapPanel>(window), panel => ReferenceEquals(panel.Tag, oneFields));
+        var partial = Assert.Single(Descendants<TextBox>(fields), box =>
+            BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "PartialCorrect");
+        var correct = Assert.Single(Descendants<TextBox>(oneFields), box =>
+            BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "Correct");
+        var originalPartial = group.PartialCorrect;
+        var originalCorrect = group.Correct;
+        Button Token(Panel panel, string token) => Assert.Single(Descendants<Button>(panel), button => Equals(button.Tag, token));
+        void Click(Panel panel, string token)
+        {
+            var button = Token(panel, token);
+            Assert.True(button.IsEnabled);
+            button.Focus(); // Keyboard activation must preserve the previous text selection too.
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+            DrainDispatcher();
+        }
+        Assert.Equal(new[] { "{正确选项总数}", "{选择的正确选项数}", "+", "-", "*", "/", "()" },
+            Descendants<Button>(toolbar).Select(button => button.Tag));
+        partial.BringIntoView(); DrainDispatcher();
+        Assert.True(partial.Focus());
+        partial.SelectAll();
+        Click(toolbar, "()");
+        Assert.Equal("(" + originalPartial + ")", partial.Text);
+        Click(toolbar, "{选择的正确选项数}");
+        foreach (var token in new[] { "+", "{正确选项总数}" }) Click(toolbar, token);
+        Assert.Equal("({选择的正确选项数}+{正确选项总数})", partial.Text);
+        partial.Select(partial.Text.Length, 0);
+        Click(toolbar, "*");
+        partial.SelectedText = "0.5";
+        partial.Select(partial.Text.Length, 0);
+        Click(toolbar, "-");
+        partial.SelectedText = "1";
+        partial.Select(partial.Text.Length, 0);
+        Click(toolbar, "/");
+        partial.SelectedText = "2";
+        DrainDispatcher();
+        Assert.Equal("({选择的正确选项数}+{正确选项总数})*0.5-1/2", group.PartialCorrect);
+        Assert.True(Exam.Domain.Scoring.ScoreExpressionParser.Check(group.PartialCorrect).IsValid);
+        Assert.Equal(originalCorrect, group.Correct);
+
+        correct.BringIntoView(); DrainDispatcher();
+        Assert.True(correct.Focus()); correct.SelectAll();
+        Click(oneToolbar, "{正确选项总数}");
+        Assert.Equal("{正确选项总数}", group.Correct);
+        Assert.Equal("({选择的正确选项数}+{正确选项总数})*0.5-1/2", group.PartialCorrect);
+        SaveEditorScreenshot(window, correct, "scoring-rules");
+
+        // A new group starts with no selected score field; its toolbar cannot alter the old group.
+        viewModel.Exam.AddGroupCommand.Execute(null);
+        DrainDispatcher();
+        Assert.False(oneToolbar.IsEnabled);
+        viewModel.Exam.RemoveGroupCommand.Execute(null);
+        viewModel.Exam.SelectedSubject!.SelectedGroup = group;
+        group.Correct = originalCorrect; group.PartialCorrect = originalPartial;
+        DrainDispatcher();
+    }
+
+    private static void VerifyRoomInputAlignment(MainWindow window, MainViewModel viewModel)
+    {
+        foreach (var (binding, command) in new[]
+        {
+            ("Activation.NewGroupName", viewModel.Activation.AddGroupCommand),
+            ("Activation.SelectedGroupName", viewModel.Activation.RenameGroupCommand)
+        })
+        {
+            var input = Assert.Single(Descendants<TextBox>(window), box =>
+                BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == binding);
+            var button = Assert.Single(Descendants<Button>(window), item => ReferenceEquals(item.Command, command));
+            input.BringIntoView(); DrainDispatcher(); window.UpdateLayout();
+            var position = input.TranslatePoint(new Point(0, 0), window);
+            var buttonPosition = button.TranslatePoint(new Point(0, 0), window);
+            Assert.InRange(Math.Abs(position.Y - buttonPosition.Y), 0, 0.5);
+            Assert.InRange(Math.Abs(input.ActualHeight - button.ActualHeight), 0, 0.5);
+            Assert.InRange(buttonPosition.X - position.X - input.ActualWidth, 11.5, 12.5);
+            SaveEditorScreenshot(window, input, "room-groups");
+        }
+    }
+
+    private static void SaveEditorScreenshot(Window window, FrameworkElement input, string name)
+    {
+        var directory = Environment.GetEnvironmentVariable("EXAM_EDITOR_SCREENSHOT_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(directory)) return;
+        input.BringIntoView(); DrainDispatcher(); window.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth), (int)Math.Ceiling(window.ActualHeight),
+            96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        Directory.CreateDirectory(directory);
+        using var file = File.Create(Path.Combine(directory, name + ".png"));
+        encoder.Save(file);
     }
 
     private static IEnumerable<T> Descendants<T>(DependencyObject parent) where T : DependencyObject
