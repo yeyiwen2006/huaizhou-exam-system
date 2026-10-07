@@ -42,7 +42,11 @@ public sealed class FileDialogService : IFileDialogService, IManifestFileDialogS
 
     public string? OpenNewMaterialDirectory()
     {
-        var dialog = new OpenFolderDialog { Title = "选择放置取回源材料的父目录" };
+        var dialog = new OpenFolderDialog
+        {
+            Title = "选择放置取回源材料的父目录",
+            InitialDirectory = Environment.GetEnvironmentVariable("EXAM_LOCAL_EXPORT_DIRECTORY") ?? string.Empty
+        };
         return dialog.ShowDialog() == true ? dialog.FolderName : null;
     }
 
@@ -125,6 +129,7 @@ public sealed class FileDialogService : IFileDialogService, IManifestFileDialogS
         var dialog = new SaveFileDialog
         {
             Filter = ExcelFilter,
+            InitialDirectory = Environment.GetEnvironmentVariable("EXAM_LOCAL_EXPORT_DIRECTORY") ?? string.Empty,
             FileName = suggestedName,
             AddExtension = true,
             DefaultExt = ".xlsx",

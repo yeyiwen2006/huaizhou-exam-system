@@ -205,7 +205,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
 public sealed class ConnectionViewModel : BindableBase
 {
     private readonly AdminApiClient _api;
-    private string _serverAddress = "https://localhost:5001/";
+    private string _serverAddress = Environment.GetEnvironmentVariable("EXAM_ADMIN_SERVER_URL") is { Length: > 0 } address
+        ? address : "https://localhost:5001/";
     private string _username = string.Empty;
     private string _displayName = string.Empty;
     private string _password = string.Empty;

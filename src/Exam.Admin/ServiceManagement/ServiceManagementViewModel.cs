@@ -65,6 +65,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public static ServiceManagementViewModel CreateDefault()
     {
         var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exam.Admin", "Management");
+#if DEBUG
+        if (Environment.GetEnvironmentVariable("EXAM_ADMIN_DATA_DIRECTORY") is { Length: > 0 } localDirectory)
+            directory = System.IO.Path.Combine(System.IO.Path.GetFullPath(localDirectory), "Management");
+#endif
         return new(target => new ManagementConnection(target), new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
             new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json")),
             new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")));
