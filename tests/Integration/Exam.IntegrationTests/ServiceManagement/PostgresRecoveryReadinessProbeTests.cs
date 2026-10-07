@@ -145,6 +145,52 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         Assert.DoesNotContain(checks, c => c.Message.Contains("synthetic-secret", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(null, "resource-envelope:synthetic-resource", true)]
+    [InlineData(1L, "resource-envelope:synthetic-resource", true)]
+    [InlineData(2L, "resource-envelope:synthetic-resource", false)]
+    [InlineData(null, "resource-envelope:missing-resource", false)]
+    public async Task GeneratedStartHasPaperVersion_AndLegacyStartResolvesItsImmutableReference(
+        long? storedVersion, string unlockReference, bool expectedReady)
+    {
+        CreateExam();
+        await StoreResourceAsync();
+        var service = new PostgresExamVersioningService(_database.DataSource);
+        var published = service.PublishPaper(new("synthetic-exam", 0, "synthetic-resource",
+            SyntheticRecoveryPaper.Structure(), [], new(true, true, true, true), "operator",
+            "合成开考恢复检查", DateTimeOffset.UtcNow, "publish-recovery-paper"));
+        Assert.True(published.Succeeded, published.Error);
+        await ExecuteAsync("""
+            INSERT INTO exam.activation_daily_sequences VALUES ('2026-09-27', 1);
+            INSERT INTO exam.activation_devices VALUES
+              ('device', '20260927001', '2026-09-27', 'active', NULL, 'synthetic-verifier', 1, now(), NULL, 1);
+            INSERT INTO exam.candidate_roster_entries (exam_id, candidate_id, candidate_name, class_text, admission_no)
+              VALUES ('synthetic-exam', 'candidate', '合成考生', '01', '000001');
+            UPDATE exam.exam_entry_access SET instructions_ready=true WHERE exam_id='synthetic-exam';
+            """);
+        await new PostgresSubmissionStore(_database.DataSource).SetAuthorizationStateAsync(new(
+            "synthetic-exam", "candidate", "participation", 1, "device", 1, ParticipationBusinessState.Waiting, 1, 1));
+        var snapshot = service.GetExam("synthetic-exam").Value!;
+        var started = service.ExecuteScheduleTrigger(new("synthetic-exam", snapshot.Versions.ScheduleVersion,
+            ScheduleTriggerKind.Start, snapshot.Schedule.StartsAt.AddSeconds(1), "start-recovery-paper"));
+        Assert.True(started.Succeeded, started.Error);
+        await using (var generated = _database.DataSource.CreateCommand(
+            "SELECT resource_version FROM exam.command_events WHERE event_type='Start'"))
+            Assert.Equal(1L, await generated.ExecuteScalarAsync());
+        await using (var historical = _database.DataSource.CreateCommand("""
+            UPDATE exam.command_events SET resource_version=$1, protected_unlock_reference=$2
+             WHERE event_type='Start';
+            """))
+        {
+            historical.Parameters.AddWithValue(NpgsqlTypes.NpgsqlDbType.Bigint, storedVersion ?? (object)DBNull.Value);
+            historical.Parameters.AddWithValue(unlockReference);
+            await historical.ExecuteNonQueryAsync();
+        }
+        var checks = await InspectAsync();
+        Assert.Equal(expectedReady, Assert.Single(checks, check => check.Name == "reliable-events").Passed);
+        if (expectedReady) Assert.All(checks, check => Assert.True(check.Passed, check.Name));
+    }
+
     [Fact]
     public async Task OrphanReliableEventBlocksRecovery()
     {

@@ -49,13 +49,16 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
             await AddAsync(Names[2], () => CheckResourcesAsync(connection, transaction, token));
             await AddAsync(Names[3], () => CheckReceiptsAsync(connection, transaction, token));
             await AddAsync(Names[5], () => CheckPaperMaterialsAsync(connection, transaction, token));
+            // Older START events identify the immutable package by its unlock reference without
+            // a separate resource_version. Resolve that reference; an explicit version must match.
             await AddAsync(Names[4], async () => await NoRowsAsync("""
                 SELECT 1 FROM exam.command_events e
                 LEFT JOIN exam.participations p ON p.participation_id = e.participation_id
                 WHERE (e.event_type <> 'CollectionCompleted' AND (p.participation_id IS NULL OR p.exam_id <> e.exam_id))
                    OR (e.event_type = 'Start' AND NOT EXISTS (
                      SELECT 1 FROM exam.versioned_resources r WHERE r.exam_id = e.exam_id
-                       AND r.resource_kind = 'paper-package' AND r.resource_version = e.resource_version
+                       AND r.resource_kind = 'paper-package'
+                       AND (e.resource_version IS NULL OR r.resource_version = e.resource_version)
                        AND e.protected_unlock_reference = 'resource-envelope:' || r.resource_id))
                    OR (e.acknowledgement_request_id IS NOT NULL AND NOT EXISTS (
                      SELECT 1 FROM exam.command_acknowledgement_requests a

@@ -783,7 +783,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
         var stateVersion = eventType == CommandEventType.PaperUpdated
             ? snapshot.Versions.PaperVersion
             : snapshot.Versions.ScheduleVersion;
-        var resourceVersion = eventType == CommandEventType.PaperUpdated
+        var resourceVersion = eventType is CommandEventType.Start or CommandEventType.PaperUpdated
             ? snapshot.Versions.PaperVersion
             : (long?)null;
         using var command = new NpgsqlCommand(
