@@ -43,6 +43,30 @@ public sealed class StudentLoginWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task LegacyNumberUpgradesOnLoginWithoutReplacingProtectedDeviceIdentity()
+    {
+        var store = new DeviceStore(_directory);
+        var legacy = new DeviceRecord("legacy-device", "synthetic-legacy-credential", "20261008007",
+            "exam.example", 5443, new DateTimeOffset(2026, 10, 8, 0, 0, 0, TimeSpan.Zero),
+            "server", ActivationStatus.Active, CredentialVersion: 1, ServerEpoch: 1);
+        store.Save(legacy);
+        using var api = new HttpStudentApi(new Handler(async message =>
+        {
+            var request = (await message.Content!.ReadFromJsonAsync<LoginStudentRequest>(JsonDefaults.Create()))!;
+            Assert.Equal(legacy.DeviceId, request.DeviceId);
+            Assert.Equal(legacy.Credential, request.Credential);
+            return Reply(request, new DateOnly(2026, 10, 8), "0008");
+        }));
+
+        var result = await new StudentLoginWorkflow(store, api).LoginAsync("exam.example", 5443, "合成考生", "01", "0001");
+
+        Assert.Equal("202610080008", result.Device.ClientNumber);
+        Assert.Equal(legacy.DeviceId, result.Device.DeviceId);
+        Assert.Equal(legacy.Credential, result.Device.Credential);
+        Assert.Equal(result.Device, new DeviceStore(_directory).Load());
+    }
+
+    [Fact]
     public async Task LostLoginResponseKeepsIdentity_AndWrongSameDayNumberCannotOverwriteIt()
     {
         var calls = 0;

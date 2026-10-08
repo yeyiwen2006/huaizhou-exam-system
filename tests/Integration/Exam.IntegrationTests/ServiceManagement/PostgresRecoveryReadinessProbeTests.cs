@@ -115,15 +115,30 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         Assert.All(await InspectAsync(), check => Assert.True(check.Passed, check.Name));
     }
 
-    [Fact]
-    public async Task DeviceSequenceMustCoverAlreadyAllocatedNumbers()
+    [Theory]
+    [InlineData("20260927001", 1)]
+    [InlineData("202609270001", 1)]
+    [InlineData("202609271000", 1000)]
+    [InlineData("202609271001", 1001)]
+    [InlineData("202609279999", 9999)]
+    public async Task DeviceSequenceMustCoverAlreadyAllocatedNumbers(string number, int sequence)
     {
-        await ExecuteAsync("""
+        await using var device = _database.DataSource.CreateCommand("""
             INSERT INTO exam.activation_devices VALUES
-              ('synthetic-device', '20260927001', '2026-09-27', 'active', NULL, 'synthetic-verifier', 1, now(), NULL, 1);
+              ('synthetic-device', $1, '2026-09-27', 'active', NULL, 'synthetic-verifier', 1, now(), NULL, 1);
             """);
+        device.Parameters.AddWithValue(number);
+        await device.ExecuteNonQueryAsync();
         Assert.Contains(await InspectAsync(), c => c.Name == "activation-sequences" && !c.Passed);
-        await ExecuteAsync("INSERT INTO exam.activation_daily_sequences VALUES ('2026-09-27', 1)");
+        await using var counter = _database.DataSource.CreateCommand("""
+            INSERT INTO exam.activation_daily_sequences VALUES ('2026-09-27', $1)
+            ON CONFLICT (activation_date) DO UPDATE SET last_sequence=EXCLUDED.last_sequence;
+            """);
+        counter.Parameters.AddWithValue(sequence - 1);
+        await counter.ExecuteNonQueryAsync();
+        Assert.Contains(await InspectAsync(), c => c.Name == "activation-sequences" && !c.Passed);
+        counter.Parameters[0].Value = sequence;
+        await counter.ExecuteNonQueryAsync();
         Assert.All(await InspectAsync(), c => Assert.True(c.Passed, c.Name));
     }
 

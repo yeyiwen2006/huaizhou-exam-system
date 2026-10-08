@@ -76,12 +76,14 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
         await Assert.ThrowsAsync<ParticipationRuleException>(()=>Roster.DeleteAsync(a,person.CandidateId,new(Id(),0),Actor));
         var deleted=await Roster.DeleteAsync(a,person.CandidateId,new(Id(),1),Actor);Assert.Empty(deleted.Entries);Assert.Equal(2,deleted.Version);
     }
-    [Fact]
-    public async Task Rooms_BatchMoveIsVersionedAtomicAuditedAndDoesNotChangeCredentials()
+    [Theory]
+    [InlineData("20261008001", "20261008002")]
+    [InlineData("202610080001", "202610080002")]
+    public async Task Rooms_BatchMoveIsVersionedAtomicAuditedAndDoesNotChangeCredentials(string firstNumber, string secondNumber)
     {
         var first=await Rooms.CreateAsync(new(Id(),"合成试场甲-"+Id()),Actor);
         var second=await Rooms.CreateAsync(new(Id(),"合成试场乙-"+Id()),Actor);
-        var a=await SeedDevice();var b=await SeedDevice();
+        var a=await SeedDevice(firstNumber);var b=await SeedDevice(secondNumber);
         var invalid=new MoveDevicesRequest(Id(),first.GroupId,[new(a.Number,1),new(b.Number,9)],"合成冲突测试");
         await Assert.ThrowsAsync<ParticipationRuleException>(()=>Rooms.MoveAsync(invalid,Actor));
         var directory=new PostgresDeviceDirectory(fixture.DataSource);
@@ -109,6 +111,26 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
         var request=new DeleteRoomGroupRequest(Id(),2);Assert.True((await Rooms.DeleteAsync(first.GroupId,request,Actor)).Deleted);
         Assert.True((await Rooms.DeleteAsync(first.GroupId,request,Actor)).Deleted);
         Assert.DoesNotContain(await Rooms.ListAsync(),x=>x.GroupId==first.GroupId);
+    }
+
+    [Theory]
+    [InlineData("20261007011", "202610090011")]
+    [InlineData("202610070011", "202610100011")]
+    public async Task RoomHistorySurvivesLegacyUpgradeAndDailyNumberChange(string oldNumber, string currentNumber)
+    {
+        var room = await Rooms.CreateAsync(new(Id(), "合成历史试场-" + Id()), Actor);
+        var device = await SeedDevice(oldNumber);
+        await Rooms.MoveAsync(new(Id(), room.GroupId, [new(device.Number, 1)], "合成首次转组"), Actor);
+        await Sql("UPDATE exam.activation_devices SET client_number=$2 WHERE device_id=$1", device.Id, currentNumber);
+        await Rooms.MoveAsync(new(Id(), null, [new(currentNumber, 2)], "合成取消分组"), Actor);
+
+        var history = await Rooms.HistoryAsync(currentNumber);
+        Assert.Equal(2, history.Count);
+        Assert.All(history, entry => Assert.Equal(currentNumber, entry.ClientNumber));
+        Assert.Contains(history, entry => entry.FromGroupName == "未分组" && entry.ToGroupName == room.Name);
+        Assert.Contains(history, entry => entry.FromGroupName == room.Name && entry.ToGroupName == "未分组");
+        Assert.Single(await Rooms.HistoryAsync(oldNumber));
+        Assert.Equal(1L, await Scalar("SELECT count(*) FROM exam.device_room_history WHERE device_id=$1 AND client_number=$2", device.Id, oldNumber));
     }
     [Fact]
     public async Task Presence_RejectsLateProcessesAndChangedReplays_AndLogoutClearsCandidate()
@@ -256,9 +278,9 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
         Assert.True(new PostgresExamVersioningService(fixture.DataSource).CreateExam(new(id,new(now.AddHours(1),now.AddHours(2)),now,Id())).Succeeded);
         return id;
     }
-    private async Task<(string Id,string Number)> SeedDevice()
+    private async Task<(string Id,string Number)> SeedDevice(string? clientNumber=null)
     {
-        var device=Id();var number=Random.Shared.NextInt64(10000000000,99999999999).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var device=Id();var number=clientNumber??Random.Shared.NextInt64(10000000000,99999999999).ToString(System.Globalization.CultureInfo.InvariantCulture);
         await Sql("""
             INSERT INTO exam.activation_devices(device_id,client_number,activation_date,activation_status,protected_credential,credential_version,created_at,version)
             VALUES($1,$2,DATE '2026-10-02','active','synthetic-verifier-not-a-secret',1,$3,1);

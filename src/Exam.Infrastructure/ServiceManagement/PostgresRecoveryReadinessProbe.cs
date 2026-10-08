@@ -42,8 +42,8 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                 SELECT 1 FROM exam.activation_devices d
                 LEFT JOIN exam.activation_daily_sequences s ON s.activation_date = d.activation_date
                 WHERE left(d.client_number, 8) <> to_char(d.activation_date, 'YYYYMMDD')
-                   OR right(d.client_number, 3)::integer < 1
-                   OR s.last_sequence IS NULL OR s.last_sequence < right(d.client_number, 3)::integer
+                   OR substring(d.client_number from 9)::integer < 1
+                   OR s.last_sequence IS NULL OR s.last_sequence < substring(d.client_number from 9)::integer
                 """, connection, transaction, token));
             await AddAsync(Names[1], () => CheckVersionsAsync(connection, transaction, token));
             await AddAsync(Names[2], () => CheckResourcesAsync(connection, transaction, token));

@@ -52,7 +52,7 @@ public sealed class PostgresRoomService(NpgsqlDataSource source,TimeProvider? ti
     public Task<MoveDevicesResult> MoveAsync(MoveDevicesRequest request,string actor,CancellationToken ct=default)
     {
         ArgumentNullException.ThrowIfNull(request);AdministrationSql.Require(request.Reason,"转组原因",500);
-        if(request.Devices is null || request.Devices.Count is <1 or >2000 || request.Devices.Any(x=>x is null||x.ExpectedVersion<1||x.ClientNumber?.Length!=11||!x.ClientNumber.All(c=>c is >= '0' and <= '9')) ||
+        if(request.Devices is null || request.Devices.Count is <1 or >2000 || request.Devices.Any(x=>x is null||x.ExpectedVersion<1||x.ClientNumber?.Length is not (11 or 12)||!x.ClientNumber.All(char.IsAsciiDigit)) ||
            request.Devices.Select(x=>x.ClientNumber).Distinct(StringComparer.Ordinal).Count()!=request.Devices.Count)throw AdministrationSql.Invalid("请选择1至2000台不同的设备，并提供已加载的版本。");
         var now=_time.GetUtcNow();var target=string.IsNullOrWhiteSpace(request.RoomGroupId)?null:request.RoomGroupId;
         return AdministrationSql.MutateAsync(source,"room.move-devices","rooms",request.RequestId,actor,request,now,async(c,t,token)=>
@@ -83,11 +83,16 @@ public sealed class PostgresRoomService(NpgsqlDataSource source,TimeProvider? ti
     }
     public async Task<IReadOnlyList<DeviceRoomHistory>> HistoryAsync(string clientNumber,CancellationToken ct=default)
     {
-        AdministrationSql.Require(clientNumber,"学生端编号",11);
+        AdministrationSql.Require(clientNumber,"学生端编号",12);
         await using var c=await source.OpenConnectionAsync(ct);
+        // Current numbers resolve the stable device identity, including history before a number change.
+        // The response identifies the requested number; stored audit rows keep their original numbers.
         await using var command=AdministrationSql.Command(c,null,"""
-            SELECT client_number,from_group_id,from_group_name,to_group_id,to_group_name,actor_id,reason,changed_at
-              FROM exam.device_room_history WHERE client_number=$1 ORDER BY changed_at DESC,request_id DESC LIMIT 2000;
+            SELECT $1::text,from_group_id,from_group_name,to_group_id,to_group_name,actor_id,reason,changed_at
+              FROM exam.device_room_history
+             WHERE device_id=(SELECT device_id FROM exam.activation_devices WHERE client_number=$1)
+                OR client_number=$1
+             ORDER BY changed_at DESC,request_id DESC LIMIT 2000;
             """,clientNumber);
         var rows=new List<DeviceRoomHistory>();await using var reader=await command.ExecuteReaderAsync(ct);
         while(await reader.ReadAsync(ct))rows.Add(new(reader.GetString(0),reader.IsDBNull(1)?null:reader.GetString(1),reader.GetString(2),reader.IsDBNull(3)?null:reader.GetString(3),reader.GetString(4),reader.GetString(5),reader.GetString(6),reader.GetFieldValue<DateTimeOffset>(7)));return rows;

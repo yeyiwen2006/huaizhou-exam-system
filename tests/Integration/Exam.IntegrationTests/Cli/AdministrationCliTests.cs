@@ -153,13 +153,15 @@ public sealed class AdministrationCliTests
         finally { File.Delete(input); }
     }
 
-    [Fact]
-    public async Task RoomsAndDevices_CommandsUseTheAdministrationApi()
+    [Theory]
+    [InlineData("20270115001")]
+    [InlineData("202701150001")]
+    public async Task RoomsAndDevices_CommandsUseTheAdministrationApi(string number)
     {
         var rooms = new[] { new RoomGroup("room-a", "合成试场A", 1, 1), new RoomGroup("room-b", "合成试场B", 1, 0) };
         var devices = new DeviceDirectoryPage(
         [
-            new DeviceDirectoryEntry("device-1", "20270115001", "room-a", "合成试场A", ActivationStatus.Active,
+            new DeviceDirectoryEntry("device-1", number, "room-a", "合成试场A", ActivationStatus.Active,
                 DeviceConnectionState.Online, "合成考生甲", "001", "00001", "exam-1", "合成考试", "正在答题", null,
                 Start.AddMinutes(-1), 1),
         ], null, Start);
@@ -169,11 +171,11 @@ public sealed class AdministrationCliTests
             app.MapPost("/api/v1/rooms", () => self.Envelope(new RoomGroup("room-c", "合成试场C", 1, 0)));
             app.MapPut("/api/v1/rooms/room-a", () => self.Envelope(new RoomGroup("room-a", "合成试场A改", 2, 1)));
             app.MapDelete("/api/v1/rooms/room-b", () => self.Envelope(new DeletedRoomGroup("room-b", true)));
-            app.MapPost("/api/v1/rooms/move-devices", () => self.Envelope(new MoveDevicesResult(1, ["20270115001"])));
+            app.MapPost("/api/v1/rooms/move-devices", () => self.Envelope(new MoveDevicesResult(1, [number])));
             app.MapGet("/api/v1/devices", () => self.Envelope(devices));
-            app.MapGet("/api/v1/devices/20270115001/room-history", () => self.Envelope(new[]
+            app.MapGet("/api/v1/devices/" + number + "/room-history", () => self.Envelope(new[]
             {
-                new DeviceRoomHistory("20270115001", null, "未分组", "room-a", "合成试场A", "synthetic-operator",
+                new DeviceRoomHistory(number, null, "未分组", "room-a", "合成试场A", "synthetic-operator",
                     "合成转组原因", Start),
             }));
         });
@@ -194,8 +196,7 @@ public sealed class AdministrationCliTests
         Assert.Equal(0, delete.Exit);
         Assert.True(JsonSerializer.Deserialize<DeletedRoomGroup>(delete.Out, Json)!.Deleted);
 
-        var moveInput = CliProcess.WriteInput(
-            """{"clientNumbers":["20270115001"],"reason":"合成转组原因"}""");
+        var moveInput = CliProcess.WriteInput(JsonSerializer.Serialize(new { clientNumbers = new[] { number }, reason = "合成转组原因" }, Json));
         try
         {
             var move = await CliProcess.RunAsync("rooms", "move", "合成试场A", "--input", moveInput, "--server", host.Address);
@@ -208,11 +209,11 @@ public sealed class AdministrationCliTests
         Assert.Equal(0, devicesList.Exit);
         Assert.Equal("001", Assert.Single(JsonSerializer.Deserialize<DeviceDirectoryEntry[]>(devicesList.Out, Json)!).ClassText);
 
-        var show = await CliProcess.RunAsync("devices", "show", "20270115001", "--server", host.Address);
+        var show = await CliProcess.RunAsync("devices", "show", number, "--server", host.Address);
         Assert.Equal(0, show.Exit);
         Assert.Equal("合成考生甲", JsonSerializer.Deserialize<DeviceDirectoryEntry>(show.Out, Json)!.CandidateName);
 
-        var history = await CliProcess.RunAsync("devices", "history", "20270115001", "--server", host.Address);
+        var history = await CliProcess.RunAsync("devices", "history", number, "--server", host.Address);
         Assert.Equal(0, history.Exit);
         Assert.Equal("合成试场A", Assert.Single(JsonSerializer.Deserialize<DeviceRoomHistory[]>(history.Out, Json)!).ToGroupName);
 
@@ -255,10 +256,14 @@ public sealed class AdministrationCliTests
         Assert.Contains(host.Calls, call => call == "GET /api/v1/exams/exam-1/uncollected");
     }
 
-    [Fact]
-    public async Task Activation_ApprovalUsesPendingRequestAndRevokeUsesClientNumber()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("20261006001")]
+    [InlineData("202610060001")]
+    public async Task Activation_ApprovalUsesPendingRequestAndRevokeUsesClientNumber(string? pendingNumber)
     {
-        var pending = new ActivationRequestResult("request-1", "device-1", ActivationStatus.Pending, null, 1, Start);
+        var number = pendingNumber ?? "202610060001";
+        var pending = new ActivationRequestResult("request-1", "device-1", ActivationStatus.Pending, pendingNumber, 1, Start);
         var bodies = new ConcurrentQueue<string>();
         await using var host = await CliHost.StartAsync((self, app) =>
         {
@@ -267,28 +272,28 @@ public sealed class AdministrationCliTests
             app.MapPost("/api/v1/activation/approve", async (HttpContext context) =>
             {
                 bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
-                return self.Envelope(new ActivationResult("device-1", "20261006001", new DateOnly(2026, 10, 6),
+                return self.Envelope(new ActivationResult("device-1", number, new DateOnly(2026, 10, 6),
                     ActivationStatus.Active, "room-a", 1, 1));
             });
             app.MapGet("/api/v1/devices", () => self.Envelope(new DeviceDirectoryPage(
             [
-                new DeviceDirectoryEntry("device-1", "20261006001", "room-a", "合成试场A", ActivationStatus.Active,
+                new DeviceDirectoryEntry("device-1", number, "room-a", "合成试场A", ActivationStatus.Active,
                     DeviceConnectionState.Online, null, null, null, null, null, "登录", null, Start, 1),
             ], null, Start)));
             app.MapPost("/api/v1/activation/revoke", async (HttpContext context) =>
             {
                 bodies.Enqueue(await new StreamReader(context.Request.Body).ReadToEndAsync());
-                return self.Envelope(new ActivationResult("device-1", "20261006001", new DateOnly(2026, 10, 6),
+                return self.Envelope(new ActivationResult("device-1", number, new DateOnly(2026, 10, 6),
                     ActivationStatus.Revoked, "room-a", 1, 2));
             });
         });
 
         var list = await CliProcess.RunAsync("activation", "pending", "--server", host.Address);
         Assert.Equal(0, list.Exit);
-        Assert.Null(Assert.Single(JsonSerializer.Deserialize<ActivationRequestResult[]>(list.Out, Json)!).ClientNumber);
+        Assert.Equal(pendingNumber, Assert.Single(JsonSerializer.Deserialize<ActivationRequestResult[]>(list.Out, Json)!).ClientNumber);
 
-        // 首次批准使用待审批列表中的申请标识；此时尚未分配学生端编号。
-        var approve = await CliProcess.RunAsync("activation", "approve", "request-1", "合成试场A", "--server", host.Address);
+        // 兼容旧申请标识与两种长度的公开编号，最终都解析为原申请标识。
+        var approve = await CliProcess.RunAsync("activation", "approve", pendingNumber ?? "request-1", "合成试场A", "--server", host.Address);
         Assert.Equal(0, approve.Exit);
         Assert.Equal("Active", JsonSerializer.Deserialize<ActivationResult>(approve.Out, Json)!.Status.ToString());
         var approveJson = ReadBody(Assert.Single(bodies));
@@ -299,7 +304,7 @@ public sealed class AdministrationCliTests
         var revokeInput = CliProcess.WriteInput("""{"reason":"合成撤回原因"}""");
         try
         {
-            var revoke = await CliProcess.RunAsync("activation", "revoke", "20261006001", "--input", revokeInput, "--server", host.Address);
+            var revoke = await CliProcess.RunAsync("activation", "revoke", number, "--input", revokeInput, "--server", host.Address);
             Assert.Equal(0, revoke.Exit);
             Assert.Equal("Revoked", JsonSerializer.Deserialize<ActivationResult>(revoke.Out, Json)!.Status.ToString());
             var revokeBody = bodies.Last();

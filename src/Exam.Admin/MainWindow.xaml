@@ -753,7 +753,8 @@
                             </WrapPanel>
                             <TextBlock Text="{Binding Activation.DirectoryStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
                             <DataGrid ItemsSource="{Binding Activation.Devices}" SelectedItem="{Binding Activation.SelectedDevice}" IsReadOnly="False"
-                                Height="270" HorizontalScrollBarVisibility="Auto" CanUserAddRows="False" CanUserDeleteRows="False">
+                                Height="270" HorizontalScrollBarVisibility="Auto" CanUserAddRows="False" CanUserDeleteRows="False"
+                                SelectionMode="Single" SelectionUnit="FullRow">
                                 <DataGrid.Columns>
                                     <DataGridCheckBoxColumn Header="转组" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
                                     <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="145" IsReadOnly="True"/>
@@ -772,9 +773,11 @@
                                 <Button Content="取消勾选" Style="{StaticResource ActionButton}" Command="{Binding Activation.ClearDeviceSelectionCommand}"/>
                                 <ComboBox ItemsSource="{Binding Activation.GroupChoices}" SelectedItem="{Binding Activation.SelectedMoveChoice, Mode=TwoWay}"
                                     DisplayMemberPath="Name" Width="190" Margin="0,0,12,10"/>
-                                <Button Content="整批转入所选试场" Style="{StaticResource PrimaryAction}" Command="{Binding Activation.MoveDevicesCommand}"/>
+                                <Button Content="转入所选试场" Style="{StaticResource PrimaryAction}" Command="{Binding Activation.MoveDevicesCommand}"/>
                             </WrapPanel>
-                            <TextBlock Text="勾选多台设备可整批转组；未勾选时处理当前选中设备。任一设备版本变化都不会部分转组。" Style="{StaticResource CaptionText}"/>
+                            <TextBlock Text="勾选复选框时，转移所有勾选的设备；没有勾选时，只转移表格中高亮选中的一台设备。" Style="{StaticResource CaptionText}"/>
+                            <TextBlock Text="多台设备一起转组时，任一台未能转入，整批保持原试场。" Style="{StaticResource CaptionText}"/>
+                            <TextBlock Text="{Binding Activation.Status}" Style="{StaticResource StatusLine}"/>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,14"/>
                             <DockPanel>
                                 <Button DockPanel.Dock="Right" Content="查看选中设备的转组历史" Style="{StaticResource ActionButton}" Command="{Binding Activation.DeviceHistoryCommand}"/>

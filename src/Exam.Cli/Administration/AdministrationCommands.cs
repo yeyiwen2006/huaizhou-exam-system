@@ -304,7 +304,7 @@ internal static partial class ExamCli
                     {
                         // A first activation has no client number until approval. The pending list supplies the request identifier.
                         var activationRequestId=approvalKey;
-                        if(approvalKey.Length==11&&approvalKey.All(char.IsAsciiDigit))
+                        if(approvalKey.Length is 11 or 12&&approvalKey.All(char.IsAsciiDigit))
                         {
                             var pending=await Send<ActivationRequestResult[]>(HttpMethod.Get,"/api/v1/activation/pending");
                             activationRequestId=pending.SingleOrDefault(x=>x.ClientNumber==approvalKey&&x.Status==ActivationStatus.Pending)?.ActivationRequestId

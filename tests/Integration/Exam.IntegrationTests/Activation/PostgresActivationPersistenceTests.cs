@@ -133,6 +133,35 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
         Assert.Equal(Exam.Contracts.Administration.DeviceConnectionState.Online, visible.ConnectionState);
     }
 
+    [Fact]
+    public async Task LegacyDeviceUpgradesOnceWithoutChangingIdentityCredentialOrRoom()
+    {
+        await ResetAsync();
+        var now = new DateTimeOffset(2026, 10, 8, 8, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        var protector = new FastCredentialProtector();
+        var room = await new Exam.Infrastructure.Postgres.Administration.PostgresRoomService(fixture.DataSource)
+            .CreateAsync(new(Guid.NewGuid().ToString("N"), "合成旧编号试场"), "synthetic-operator");
+        await new PostgresActivationPersistence(fixture.DataSource).ExecuteTransactionAsync(transaction =>
+        {
+            transaction.SaveDevice(new("legacy-device", "20261008007", new DateOnly(2026, 10, 8),
+                ActivationStatus.Active, room.GroupId, protector.Protect("legacy-credential"), 1, now, now, 1));
+            transaction.SetLastDailySequence(new DateOnly(2026, 10, 8), 7);
+            return true;
+        });
+
+        var service = CreateService(clock, protector);
+        var upgraded = await service.ConnectAsync("legacy-device", "legacy-credential");
+        Assert.Equal("202610080008", upgraded.ClientNumber);
+        Assert.Equal("legacy-device", upgraded.DeviceId);
+        Assert.Equal(room.GroupId, upgraded.RoomGroupId);
+        Assert.Equal(1, upgraded.CredentialVersion);
+        Assert.True(await service.ValidateActiveDeviceAsync("legacy-device", "legacy-credential"));
+        Assert.Equal(upgraded.ClientNumber,
+            (await CreateService(clock, protector).ConnectAsync("legacy-device", "legacy-credential")).ClientNumber);
+        Assert.Equal("202610080009", (await service.ConnectAsync("next-device", "next-credential")).ClientNumber);
+    }
+
     private ActivationService CreateService(TimeProvider clock, IDeviceCredentialProtector protector) =>
         new(new PostgresActivationPersistence(fixture.DataSource), protector, clock);
 

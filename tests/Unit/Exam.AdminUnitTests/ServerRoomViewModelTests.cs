@@ -135,14 +135,17 @@ public sealed class ServerRoomViewModelTests
         Assert.DoesNotContain(test.Requests, x => x.Path.StartsWith("/api/v1/activation/devices/", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task PublicNumberLookupDoesNotSelectAPartialOrOtherNumber()
+    [Theory]
+    [InlineData("20261002002")]
+    [InlineData("202610020002")]
+    public async Task PublicNumberLookupDoesNotSelectAPartialOrOtherNumber(string number)
     {
         using var test = new RoomServer();
-        test.Devices.Add(test.Devices[0] with { DeviceId = "device-b", ClientNumber = "20261002002" });
-        test.Model.QueryDeviceId = "20261002002";
+        test.Devices[0] = test.Devices[0] with { ClientNumber = number.Length == 11 ? number + "0" : number[..11] };
+        test.Devices.Add(test.Devices[0] with { DeviceId = "device-b", ClientNumber = number });
+        test.Model.QueryDeviceId = number;
         await test.Model.QueryDeviceAsync();
-        Assert.Equal("20261002002", Assert.Single(test.Model.Devices).ClientNumber);
+        Assert.Equal(number, Assert.Single(test.Model.Devices).ClientNumber);
     }
 
     [Fact]
@@ -321,6 +324,31 @@ public sealed class ServerRoomViewModelTests
         await test.Model.MoveSelectedDevicesAsync();
         Assert.Equal("room-a", Assert.Single(test.Model.Devices).RoomGroupId);
         Assert.StartsWith("操作失败", test.Model.Status, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MoveUsesCheckedDevicesOrTheSingleHighlightedDeviceWhenNoneAreChecked(bool checkFirstDevice)
+    {
+        using var test = new RoomServer();
+        test.Groups.Add(new("room-b", "合成试场B", 1, 0));
+        test.Devices[0] = test.Devices[0] with { ClientNumber = "202610080001", RoomGroupId = null, RoomGroupName = "未分组" };
+        test.Devices.Add(test.Devices[0] with { DeviceId = "device-b", ClientNumber = "202610080002" });
+        await test.Model.RefreshDirectoryAsync();
+        test.Model.Devices[0].IsSelected = checkFirstDevice;
+        test.Model.SelectedDevice = test.Model.Devices[1];
+        test.Model.SelectedMoveChoice = test.Model.GroupChoices.Single(choice => choice.RoomGroupId == "room-b");
+
+        await test.Model.MoveSelectedDevicesAsync();
+
+        var sent = Assert.Single(test.Requests, request => request.Path == "/api/v1/rooms/move-devices");
+        var body = JsonSerializer.Deserialize<MoveDevicesRequest>(sent.Body, JsonDefaults.Create())!;
+        var movedNumber = checkFirstDevice ? "202610080001" : "202610080002";
+        Assert.Equal(movedNumber, Assert.Single(body.Devices).ClientNumber);
+        Assert.Equal("room-b", body.RoomGroupId);
+        Assert.Equal("合成试场B", test.Model.Devices.Single(row => row.ClientNumber == movedNumber).RoomGroupName);
+        Assert.Equal("未分组", test.Model.Devices.Single(row => row.ClientNumber != movedNumber).RoomGroupName);
     }
 
     [Fact]
