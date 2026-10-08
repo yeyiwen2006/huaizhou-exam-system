@@ -208,13 +208,14 @@ public sealed class ServerRoomViewModelTests
         test.Requests.Clear();
         test.Model.QueryDeviceId = "尚未查询的新条件";
         test.Model.FilterRoomGroupId = null;
-        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        test.Model.Devices.CollectionChanged += (_, _) =>
+        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        test.Intercept = (request, _) =>
         {
-            if (test.Model.Devices.Count == 1) loaded.TrySetResult();
+            if (request.RequestUri!.AbsolutePath == "/api/v1/devices") requested.TrySetResult();
+            return Task.FromResult<HttpResponseMessage?>(null);
         };
         test.Model.StartPolling();
-        await loaded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await requested.Task.WaitAsync(TimeSpan.FromSeconds(5));
         test.Model.StopPolling();
 
         var request = Assert.Single(test.Requests, request => request.Path == "/api/v1/devices");
@@ -385,6 +386,112 @@ public sealed class ServerRoomViewModelTests
         Assert.Null(test.Model.SelectedDevice);
         Assert.Null(test.Model.SelectedGroup);
         Assert.False(test.Model.CanEditDirectory);
+    }
+
+    [Fact]
+    public async Task RefreshPreservesRowsChecksHistoryAndEditedGroupNameWhileUpdatingValues()
+    {
+        using var test = new RoomServer();
+        await test.Model.RefreshDirectoryAsync();
+        var row = Assert.Single(test.Model.Devices);
+        var group = Assert.Single(test.Model.Groups);
+        row.IsSelected = true;
+        test.Model.SelectedDevice = row;
+        test.Model.SelectedGroup = group;
+        test.Model.SelectedGroupName = "尚未保存的新名称";
+        test.Model.SelectedMoveChoice = test.Model.GroupChoices.Single(choice => choice.RoomGroupId == group.RoomGroupId);
+        var choice = test.Model.SelectedMoveChoice;
+        test.Intercept = (request, _) => Task.FromResult<HttpResponseMessage?>(request.RequestUri!.AbsolutePath.EndsWith("/room-history", StringComparison.Ordinal)
+            ? Ok(new[] { new DeviceRoomHistory(row.ClientNumber, null, "未分组", group.RoomGroupId, group.Name, "synthetic-operator", "合成转组", RoomServer.Now) }) : null);
+        await test.Model.LoadSelectedHistoryAsync();
+        var history = Assert.Single(test.Model.DeviceHistory);
+        test.Devices[0] = test.Devices[0] with { ConnectionState = DeviceConnectionState.Offline, Page = "已退出", Version = 2 };
+        test.Groups[0] = test.Groups[0] with { Name = "服务器更新的试场名", DeviceCount = 2, Version = 2 };
+
+        await test.Model.QueryDeviceAsync();
+
+        Assert.Same(row, Assert.Single(test.Model.Devices));
+        Assert.Same(row, test.Model.SelectedDevice);
+        Assert.True(row.IsSelected);
+        Assert.Equal("离线", row.ConnectionStatus);
+        Assert.Equal("已退出", row.Page);
+        Assert.Equal(2, row.Version);
+        Assert.Same(history, Assert.Single(test.Model.DeviceHistory));
+        Assert.Same(group, test.Model.SelectedGroup);
+        Assert.Equal(2, group.DeviceCount);
+        Assert.Equal("尚未保存的新名称", test.Model.SelectedGroupName);
+        Assert.Same(choice, test.Model.SelectedMoveChoice);
+        Assert.Equal("服务器更新的试场名", choice!.Name);
+    }
+
+    [Fact]
+    public async Task UnchangedRefreshDoesNotRebuildCollectionsOrRows()
+    {
+        using var test = new RoomServer();
+        await test.Model.RefreshDirectoryAsync();
+        var changes = new List<string>();
+        test.Model.Devices.CollectionChanged += (_, _) => changes.Add("devices");
+        test.Model.Groups.CollectionChanged += (_, _) => changes.Add("groups");
+        test.Model.GroupChoices.CollectionChanged += (_, _) => changes.Add("choices");
+        test.Model.FilterChoices.CollectionChanged += (_, _) => changes.Add("filters");
+        test.Model.Devices[0].PropertyChanged += (_, _) => changes.Add("device properties");
+        test.Model.Groups[0].PropertyChanged += (_, _) => changes.Add("group properties");
+
+        await test.Model.QueryDeviceAsync();
+        await test.Model.QueryDeviceAsync();
+
+        Assert.Empty(changes);
+    }
+
+    [Fact]
+    public async Task RefreshClearsHistoryOnlyWhenSelectedDeviceLeavesTheResults()
+    {
+        using var test = new RoomServer();
+        test.Devices.Add(test.Devices[0] with { DeviceId = "device-b", ClientNumber = "202610080002" });
+        await test.Model.RefreshDirectoryAsync();
+        var selected = test.Model.Devices[1];
+        test.Model.SelectedDevice = selected;
+        test.Model.DeviceHistory.Add(new("10-08", "未分组", "合成试场A", "synthetic-operator", "合成转组"));
+        test.Devices.RemoveAt(0);
+        await test.Model.QueryDeviceAsync();
+        Assert.Same(selected, test.Model.SelectedDevice);
+        Assert.Single(test.Model.DeviceHistory);
+        test.Devices.Clear();
+        await test.Model.QueryDeviceAsync();
+        Assert.Null(test.Model.SelectedDevice);
+        Assert.Empty(test.Model.DeviceHistory);
+    }
+
+    [Fact]
+    public async Task BackgroundRefreshKeepsControlsAvailableDuringAMove()
+    {
+        using var test = new RoomServer();
+        test.Groups.Add(new("room-b", "合成试场B", 1, 0));
+        await test.Model.RefreshDirectoryAsync();
+        test.Model.SelectedDevice = test.Model.Devices[0];
+        test.Model.MoveToRoomGroupId = "room-b";
+        var prior = test.Devices.ToArray();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = NewResponse();
+        test.Intercept = (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/api/v1/devices") return Task.FromResult<HttpResponseMessage?>(null);
+            started.TrySetResult();
+            return pending.Task;
+        };
+        test.Model.StartPolling();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(test.Model.CanEditDirectory);
+        Assert.True(test.Model.MoveDevicesCommand.CanExecute(null));
+        Assert.True(test.Model.QueryDeviceCommand.CanExecute(null));
+        Assert.True(test.Model.RefreshDirectoryCommand.CanExecute(null));
+        test.Intercept = null;
+        await test.Model.MoveSelectedDevicesAsync();
+        Assert.Equal("room-b", Assert.Single(test.Model.Devices).RoomGroupId);
+        test.Model.StopPolling();
+        pending.SetResult(Ok(new DeviceDirectoryPage(prior, null, RoomServer.Now)));
+        await test.Model.QueryDeviceAsync();
+        Assert.Equal("room-b", Assert.Single(test.Model.Devices).RoomGroupId);
     }
 
     private static TaskCompletionSource<HttpResponseMessage?> NewResponse() => new(TaskCreationOptions.RunContinuationsAsynchronously);

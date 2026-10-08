@@ -50,6 +50,7 @@ public sealed class WpfBindingSmokeTests
                 Assert.Equal(Visibility.Collapsed, tabsAtStart.Visibility);
                 var connect = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Connection.ConnectCommand));
                 Assert.Equal(new Thickness(14, 0, 14, 0), connect.Padding);
+                VerifyLoginInputAlignment(window);
                 fixture.Login();
                 DrainDispatcher(); window.UpdateLayout();
                 Assert.Contains(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window), pill => pill.Text == "试卷未发布");
@@ -164,6 +165,25 @@ public sealed class WpfBindingSmokeTests
                                 BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == binding);
                             Assert.Equal("未分组", Assert.IsType<RoomGroupChoice>(choice.SelectedItem).Name);
                         }
+                        var devicesGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Activation.Devices));
+                        var selectedDevice = viewModel.Activation.Devices[0];
+                        devicesGrid.SelectedItem = selectedDevice;
+                        selectedDevice.IsSelected = true;
+                        var historyRow = new DeviceRoomHistoryRow("2026-10-08 12:00:00", "未分组", "合成试场A", "synthetic-operator", "合成转组");
+                        viewModel.Activation.DeviceHistory.Add(historyRow);
+                        DrainDispatcher(); window.UpdateLayout();
+                        var deviceContainer = Assert.IsType<DataGridRow>(devicesGrid.ItemContainerGenerator.ContainerFromItem(selectedDevice));
+                        for (var refresh = 0; refresh < 3; refresh++)
+                        {
+                            queryButton.Command.Execute(null);
+                            AdminUiFixture.Until(() => viewModel.Activation.QueryDeviceCommand.CanExecute(null));
+                            DrainDispatcher(); window.UpdateLayout();
+                            Assert.Same(selectedDevice, devicesGrid.SelectedItem);
+                            Assert.Same(deviceContainer, devicesGrid.ItemContainerGenerator.ContainerFromItem(selectedDevice));
+                            Assert.Same(historyRow, Assert.Single(viewModel.Activation.DeviceHistory));
+                            Assert.True(selectedDevice.IsSelected);
+                        }
+                        SaveEditorScreenshot(window, devicesGrid, "stable-device-directory");
                         SaveEditorScreenshot(window, roomFilter, "activation-room-filter");
                         var top = queryInput.TranslatePoint(new Point(0, 0), window).Y;
                         Assert.All(new FrameworkElement[] { roomFilter, queryButton, reloadButton }, control =>
@@ -523,6 +543,28 @@ public sealed class WpfBindingSmokeTests
             Assert.InRange(buttonPosition.X - position.X - input.ActualWidth, 11.5, 12.5);
             SaveEditorScreenshot(window, input, "room-groups");
         }
+    }
+
+    private static void VerifyLoginInputAlignment(Window window)
+    {
+        var username = Assert.Single(Descendants<TextBox>(window), box => box.Name == "UsernameBox");
+        var password = Assert.Single(Descendants<PasswordBox>(window), box => box.Name == "PasswordInput");
+        foreach (var value in new[] { string.Empty, "synthetic-input" })
+        {
+            username.Text = value;
+            password.Password = value;
+            DrainDispatcher(); window.UpdateLayout();
+            var usernameHost = (ScrollViewer)username.Template.FindName("PART_ContentHost", username);
+            var passwordHost = (ScrollViewer)password.Template.FindName("PART_ContentHost", password);
+            var usernameView = Assert.IsAssignableFrom<Visual>(usernameHost.Content);
+            var passwordView = Assert.IsAssignableFrom<Visual>(passwordHost.Content);
+            var textStart = usernameView.TransformToAncestor(username).Transform(new Point()).X;
+            var passwordStart = passwordView.TransformToAncestor(password).Transform(new Point()).X;
+            Assert.InRange(Math.Abs(textStart - passwordStart), 0, 1);
+            Assert.Equal(TextAlignment.Left, username.TextAlignment);
+            Assert.Equal(HorizontalAlignment.Left, password.HorizontalContentAlignment);
+        }
+        SaveEditorScreenshot(window, username, "aligned-login-inputs");
     }
 
     private static void SaveEditorScreenshot(Window window, FrameworkElement input, string name)

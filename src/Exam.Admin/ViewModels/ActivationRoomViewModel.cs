@@ -22,7 +22,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     private RoomGroupDraft? _selectedGroup;
     private ActivationPendingRow? _selectedPendingRequest;
     private ActivationDeviceRow? _selectedDevice;
-    private bool _busy, _reading, _groupsLoaded, _disposed;
+    private bool _busy, _reading, _backgroundReading, _groupsLoaded, _disposed;
     private long _context, _directoryOperation, _pendingOperation, _historyOperation;
     private CancellationTokenSource? _pollCts;
 
@@ -34,8 +34,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         RenameGroupCommand = new AsyncRelayCommand(RenameGroupAsync, () => CanEditDirectory && SelectedGroup is { Version: > 0 });
         RemoveGroupCommand = new AsyncRelayCommand(RemoveGroupAsync, () => CanEditDirectory && SelectedGroup is { Version: > 0 });
         ApproveCommand = new AsyncRelayCommand(ApproveAsync, () => !_busy && !_disposed);
-        QueryDeviceCommand = new AsyncRelayCommand(QueryDeviceAsync, () => Ready && !_reading);
-        RefreshDirectoryCommand = new AsyncRelayCommand(RefreshDirectoryAsync, () => Ready && !_reading);
+        QueryDeviceCommand = new AsyncRelayCommand(QueryDeviceAsync, () => CanReadDirectory);
+        RefreshDirectoryCommand = new AsyncRelayCommand(RefreshDirectoryAsync, () => CanReadDirectory);
         RefreshPendingCommand = new AsyncRelayCommand(RefreshPendingAsync, () => Ready);
         MoveDevicesCommand = new AsyncRelayCommand(MoveSelectedDevicesAsync, () => CanEditDirectory);
         DeviceHistoryCommand = new AsyncRelayCommand(LoadSelectedHistoryAsync, () => Ready && SelectedDevice is not null);
@@ -51,7 +51,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     public ObservableCollection<ActivationDeviceRow> Devices { get; } = [];
     public ObservableCollection<DeviceRoomHistoryRow> DeviceHistory { get; } = [];
     private bool Ready => !_disposed && !_busy && _api.IsConfigured;
-    public bool CanEditDirectory => Ready && !_reading && _groupsLoaded;
+    private bool CanReadDirectory => Ready && (!_reading || _backgroundReading);
+    public bool CanEditDirectory => CanReadDirectory && _groupsLoaded;
     public string NewGroupName { get => _newGroupName; set => SetProperty(ref _newGroupName, value); }
     public string SelectedGroupName { get => _selectedGroupName; set => SetProperty(ref _selectedGroupName, value); }
     public string ActivationRequestId { get => _activationRequestId; set => SetProperty(ref _activationRequestId, value ?? string.Empty); }
@@ -189,7 +190,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
 
     public Task RefreshDirectoryAsync()
     {
-        if (!Ready || _reading) return Task.CompletedTask;
+        if (!CanReadDirectory) return Task.CompletedTask;
         QueryDeviceId = _appliedDirectoryQuery = string.Empty;
         FilterRoomGroupId = _appliedDirectoryFilter = null;
         return RefreshDirectoryCoreAsync(CancellationToken.None, silent: false);
@@ -197,12 +198,13 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     public Task QueryDeviceAsync() => RefreshDirectoryCoreAsync(CancellationToken.None, silent: false, queryRequested: true);
     private async Task RefreshDirectoryCoreAsync(CancellationToken cancellationToken, bool silent, bool queryRequested = false)
     {
-        if (!Ready || _reading) return;
+        if (!Ready || (_reading && (silent || !_backgroundReading))) return;
         var context = _context;
         var operation = ++_directoryOperation;
         var filter = queryRequested ? FilterRoomGroupId : _appliedDirectoryFilter;
         var query = queryRequested ? QueryDeviceId.Trim() : _appliedDirectoryQuery;
         _reading = true;
+        _backgroundReading = silent;
         NotifyCommands();
         try
         {
@@ -234,12 +236,16 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             { DirectoryStatus = "查询条件已变化，请重新查询；未应用旧条件的结果。"; return; }
             _appliedDirectoryQuery = query;
             _appliedDirectoryFilter = filter;
-            var marked = Devices.Where(x => x.IsSelected).Select(x => x.DeviceId).ToHashSet(StringComparer.Ordinal);
-            var selectedId = SelectedDevice?.DeviceId;
             ApplyGroups(groups);
-            Devices.Clear();
-            foreach (var item in incoming) Devices.Add(FromDevice(item, marked.Contains(item.DeviceId)));
-            SelectedDevice = Devices.FirstOrDefault(x => x.DeviceId == selectedId);
+            var existing = Devices.ToDictionary(row => row.DeviceId, StringComparer.Ordinal);
+            var rows = incoming.Select(item =>
+            {
+                if (!existing.TryGetValue(item.DeviceId, out var row)) return FromDevice(item, false);
+                row.UpdateFrom(FromDevice(item, row.IsSelected));
+                return row;
+            }).ToArray();
+            SynchronizeRows(Devices, rows);
+            if (SelectedDevice is not null && !Devices.Contains(SelectedDevice)) SelectedDevice = null;
             _groupsLoaded = true;
             DirectoryStatus = $"服务器目录：{Devices.Count} 台设备；最后读取 {asOf.ToLocalTime():yyyy-MM-dd HH:mm:ss}。";
             if (!silent) Status = Devices.Count == 0 ? "没有符合当前编号、姓名或试场条件的设备。" : "已读取服务器试场和设备目录。";
@@ -251,7 +257,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             DirectoryStatus = "目录未能刷新，旧结果仅供核对，重新读取成功前不能修改试场或转组。";
             if (!silent) SetError(error);
         }
-        finally { if (context == _context && operation == _directoryOperation) { _reading = false; NotifyCommands(); } }
+        finally { if (context == _context && operation == _directoryOperation) { _reading = _backgroundReading = false; NotifyCommands(); } }
     }
 
     public async Task AddGroupAsync()
@@ -361,7 +367,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         _busy = true;
         _directoryOperation++;
         _pendingOperation++;
-        _reading = false;
+        _reading = _backgroundReading = false;
         NotifyCommands();
         try
         {
@@ -378,23 +384,28 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
 
     private void ApplyGroups(IReadOnlyList<RoomGroup> groups)
     {
-        var selected = SelectedGroup?.RoomGroupId;
         var editedName = SelectedGroupName;
         var previousName = SelectedGroup?.Name;
-        Groups.Clear();
-        foreach (var row in groups) Groups.Add(new(row.GroupId, row.Name, row.Version, row.DeviceCount));
-        SelectedGroup = Groups.FirstOrDefault(x => x.RoomGroupId == selected);
-        if (SelectedGroup?.RoomGroupId == selected && editedName != previousName) SelectedGroupName = editedName;
+        var existing = Groups.ToDictionary(row => row.RoomGroupId, StringComparer.Ordinal);
+        var rows = groups.Select(group =>
+        {
+            if (!existing.TryGetValue(group.GroupId, out var row))
+                return new RoomGroupDraft(group.GroupId, group.Name, group.Version, group.DeviceCount);
+            row.UpdateFrom(group);
+            return row;
+        }).ToArray();
+        SynchronizeRows(Groups, rows);
+        if (SelectedGroup is not null && !Groups.Contains(SelectedGroup)) SelectedGroup = null;
+        else if (SelectedGroup is not null && editedName == previousName) SelectedGroupName = SelectedGroup.Name;
         RebuildChoices();
     }
     private void ApplyGroup(RoomGroup group)
     {
         if (group.Version < 1 || string.IsNullOrWhiteSpace(group.GroupId)) throw new InvalidDataException("试场回执无效。");
         var previous = Groups.FirstOrDefault(x => x.RoomGroupId == group.GroupId);
-        var wasSelected = SelectedGroup?.RoomGroupId == group.GroupId;
-        var replacement = new RoomGroupDraft(group.GroupId, group.Name, group.Version, group.DeviceCount);
-        if (previous is null) Groups.Add(replacement); else Groups[Groups.IndexOf(previous)] = replacement;
-        if (wasSelected) SelectedGroup = replacement;
+        if (previous is null) Groups.Add(new(group.GroupId, group.Name, group.Version, group.DeviceCount));
+        else previous.UpdateFrom(group);
+        if (SelectedGroup?.RoomGroupId == group.GroupId) SelectedGroupName = group.Name;
         RebuildChoices();
     }
     private void RebuildChoices()
@@ -405,10 +416,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         _rebuildingChoices = true;
         try
         {
-            GroupChoices.Clear(); FilterChoices.Clear();
-            GroupChoices.Add(new("", "未分组"));
-            FilterChoices.Add(new(null, "全部试场")); FilterChoices.Add(new("", "未分组"));
-            foreach (var group in Groups) { GroupChoices.Add(new(group.RoomGroupId, group.Name)); FilterChoices.Add(new(group.RoomGroupId, group.Name)); }
+            SynchronizeChoices(GroupChoices, [new("", "未分组"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
+            SynchronizeChoices(FilterChoices, [new(null, "全部试场"), new("", "未分组"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
             ApprovalRoomGroupId = Groups.Any(x => x.RoomGroupId == approval) ? approval : "";
             MoveToRoomGroupId = Groups.Any(x => x.RoomGroupId == move) ? move : "";
             FilterRoomGroupId = filter is null || filter == "" || Groups.Any(x => x.RoomGroupId == filter) ? filter : null;
@@ -420,6 +429,30 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(SelectedMoveChoice));
         if (_appliedDirectoryFilter is not null && _appliedDirectoryFilter != "" &&
             !Groups.Any(x => x.RoomGroupId == _appliedDirectoryFilter)) _appliedDirectoryFilter = null;
+    }
+    private static void SynchronizeChoices(ObservableCollection<RoomGroupChoice> choices, IReadOnlyList<RoomGroupChoice> incoming)
+    {
+        var rows = incoming.Select(choice =>
+        {
+            var existing = choices.FirstOrDefault(row => row.RoomGroupId == choice.RoomGroupId);
+            if (existing is null) return choice;
+            existing.Name = choice.Name;
+            return existing;
+        }).ToArray();
+        SynchronizeRows(choices, rows);
+    }
+    private static void SynchronizeRows<T>(ObservableCollection<T> rows, IReadOnlyList<T> incoming) where T : class
+    {
+        var retained = incoming.ToHashSet();
+        for (var index = rows.Count - 1; index >= 0; index--)
+            if (!retained.Contains(rows[index])) rows.RemoveAt(index);
+        for (var index = 0; index < incoming.Count; index++)
+        {
+            if (index < rows.Count && ReferenceEquals(rows[index], incoming[index])) continue;
+            var previous = rows.IndexOf(incoming[index]);
+            if (previous < 0) rows.Insert(index, incoming[index]);
+            else rows.Move(previous, index);
+        }
     }
     private static ActivationDeviceRow FromDevice(DeviceDirectoryEntry device, bool selected) =>
         new(device.DeviceId, device.ClientNumber, ActivationText(device.ActivationStatus), device.RoomGroupId ?? "",
@@ -453,7 +486,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         _appliedDirectoryQuery = string.Empty;
         _appliedDirectoryFilter = null;
         StopPolling(); _context++; _directoryOperation++; _pendingOperation++; _historyOperation++;
-        _busy = _reading = _groupsLoaded = false;
+        _busy = _reading = _backgroundReading = _groupsLoaded = false;
         PendingRequests.Clear(); Devices.Clear(); Groups.Clear(); DeviceHistory.Clear();
         SelectedPendingRequest = null; SelectedDevice = null; SelectedGroup = null;
         ActivationRequestId = ApprovalRoomGroupId = QueryDeviceId = NewGroupName = SelectedGroupName = MoveToRoomGroupId = string.Empty;
@@ -471,8 +504,23 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     }
 }
 
-public sealed record RoomGroupDraft(string RoomGroupId, string Name, long Version = 0, int DeviceCount = 0);
-public sealed record RoomGroupChoice(string? RoomGroupId, string Name);
+public sealed class RoomGroupDraft(string roomGroupId, string name, long version = 0, int deviceCount = 0) : BindableBase
+{
+    private string _name = name;
+    private long _version = version;
+    private int _deviceCount = deviceCount;
+    public string RoomGroupId { get; } = roomGroupId;
+    public string Name { get => _name; private set => SetProperty(ref _name, value); }
+    public long Version { get => _version; private set => SetProperty(ref _version, value); }
+    public int DeviceCount { get => _deviceCount; private set => SetProperty(ref _deviceCount, value); }
+    public void UpdateFrom(RoomGroup group) { Name = group.Name; Version = group.Version; DeviceCount = group.DeviceCount; }
+}
+public sealed class RoomGroupChoice(string? roomGroupId, string name) : BindableBase
+{
+    private string _name = name;
+    public string? RoomGroupId { get; } = roomGroupId;
+    public string Name { get => _name; set => SetProperty(ref _name, value); }
+}
 public sealed record ActivationPendingRow(string ActivationRequestId, string DeviceId, string RequestedAtText)
 {
     public string VerificationCode => ActivationDisplay.RequestCode(ActivationRequestId);
@@ -484,18 +532,29 @@ public sealed class ActivationDeviceRow(string deviceId, string clientNumber, st
 {
     private bool _isSelected;
     private string _roomGroupName = "未分组";
+    private string _clientNumber = clientNumber, _activationStatus = activationStatus, _roomGroupId = roomGroupId;
+    private string _candidate = candidate, _connectionStatus = connectionStatus, _lastSeen = lastSeen;
+    private string _classText = "—", _admissionNo = "—", _examName = "尚未选择考试", _page = "等待状态上报";
+    private long _version;
     public string DeviceId { get; } = deviceId;
-    public string ClientNumber { get; } = clientNumber;
-    public string ActivationStatus { get; } = activationStatus;
-    public string RoomGroupId { get; } = roomGroupId;
-    public string Candidate { get; } = candidate;
-    public string ConnectionStatus { get; } = connectionStatus;
-    public string LastSeen { get; } = lastSeen;
+    public string ClientNumber { get => _clientNumber; private set => SetProperty(ref _clientNumber, value); }
+    public string ActivationStatus { get => _activationStatus; private set => SetProperty(ref _activationStatus, value); }
+    public string RoomGroupId { get => _roomGroupId; private set => SetProperty(ref _roomGroupId, value); }
+    public string Candidate { get => _candidate; private set => SetProperty(ref _candidate, value); }
+    public string ConnectionStatus { get => _connectionStatus; private set => SetProperty(ref _connectionStatus, value); }
+    public string LastSeen { get => _lastSeen; private set => SetProperty(ref _lastSeen, value); }
     public string RoomGroupName { get => _roomGroupName; set => SetProperty(ref _roomGroupName, value); }
-    public string ClassText { get; init; } = "—";
-    public string AdmissionNo { get; init; } = "—";
-    public string ExamName { get; init; } = "尚未选择考试";
-    public string Page { get; init; } = "等待状态上报";
-    public long Version { get; init; }
+    public string ClassText { get => _classText; set => SetProperty(ref _classText, value); }
+    public string AdmissionNo { get => _admissionNo; set => SetProperty(ref _admissionNo, value); }
+    public string ExamName { get => _examName; set => SetProperty(ref _examName, value); }
+    public string Page { get => _page; set => SetProperty(ref _page, value); }
+    public long Version { get => _version; set => SetProperty(ref _version, value); }
     public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
+    public void UpdateFrom(ActivationDeviceRow row)
+    {
+        ClientNumber = row.ClientNumber; ActivationStatus = row.ActivationStatus; RoomGroupId = row.RoomGroupId;
+        Candidate = row.Candidate; ConnectionStatus = row.ConnectionStatus; LastSeen = row.LastSeen;
+        RoomGroupName = row.RoomGroupName; ClassText = row.ClassText; AdmissionNo = row.AdmissionNo;
+        ExamName = row.ExamName; Page = row.Page; Version = row.Version;
+    }
 }

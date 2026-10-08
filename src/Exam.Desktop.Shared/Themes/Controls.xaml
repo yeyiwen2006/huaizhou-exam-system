@@ -127,6 +127,8 @@
     <!-- ============ 输入 ============ -->
 
     <Style x:Key="Tbx.Base" TargetType="TextBox">
+        <Setter Property="TextAlignment" Value="Left" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Family}" />
         <Setter Property="FontSize" Value="{DynamicResource Font.Size.Body}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Primary}" />
@@ -176,6 +178,7 @@
 
     <!-- 口令输入：与文本框同一外观，内容不进入绑定 -->
     <Style TargetType="PasswordBox">
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Family}" />
         <Setter Property="FontSize" Value="{DynamicResource Font.Size.Body}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Primary}" />
@@ -197,7 +200,6 @@
                             CornerRadius="{DynamicResource Radius.MD}"
                             SnapsToDevicePixels="True">
                         <ScrollViewer x:Name="PART_ContentHost"
-                                      Margin="{TemplateBinding Padding}"
                                       VerticalAlignment="Center"
                                       Focusable="False"
                                       HorizontalScrollBarVisibility="Hidden"
