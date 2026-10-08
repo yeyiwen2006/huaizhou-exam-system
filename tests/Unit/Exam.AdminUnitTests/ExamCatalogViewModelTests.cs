@@ -13,6 +13,33 @@ namespace Exam.AdminUnitTests;
 /// <summary>主页考试卡片、新建考试、按名称进入考试与学生端显示开关。全部为合成数据。</summary>
 public sealed class ExamCatalogViewModelTests
 {
+    [Fact]
+    public Task SingleChoiceMaximumMismatch_PreventsSavingBeforeAnApiRequest() => OnStaAsync(async () =>
+    {
+        var requests = 0;
+        using var api = Configured(new Handler(_ =>
+        {
+            requests++;
+            throw new InvalidOperationException("Invalid settings must not be sent.");
+        }));
+        var draft = new ExamConfigurationViewModel(api);
+        draft.ResetForNew();
+        draft.Name = "合成满分校验考试";
+        var group = draft.Subjects[0].Groups[0];
+        group.QuestionCount = 10;
+        group.Correct = "2";
+        group.MaxScore = "19";
+
+        await draft.SaveAsync();
+
+        Assert.Equal(0, requests);
+        Assert.Contains("单项选择题满分不一致", draft.ValidationSummary);
+        Assert.Contains("10 × 每小题选对得分 2 = 20", draft.ValidationSummary);
+        Assert.Contains("填写内容有误", draft.Status);
+        group.MaxScore = "20";
+        Assert.Empty(draft.Validate());
+    });
+
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
     private static readonly DateTimeOffset Start = new(2027, 1, 15, 9, 0, 0, TimeSpan.FromHours(8));
 

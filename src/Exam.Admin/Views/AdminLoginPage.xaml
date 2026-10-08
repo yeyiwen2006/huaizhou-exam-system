@@ -42,6 +42,13 @@
                              Margin="0,4,0,14"
                              Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" />
 
+                    <!-- 注册时先填写姓名，再填写密码 -->
+                    <StackPanel Visibility="{Binding ShowRegisterFields, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="姓名" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="DisplayNameBox" Margin="0,4,0,14"
+                                 Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+
                     <!-- 密码 -->
                     <TextBlock Text="密码" Style="{StaticResource FieldLabel}" />
                     <PasswordBox x:Name="PasswordInput"
@@ -51,9 +58,6 @@
                     <!-- 注册额外字段 -->
                     <StackPanel Margin="0,14,0,0"
                                 Visibility="{Binding ShowRegisterFields, Converter={StaticResource BoolToVis}}">
-                        <TextBlock Text="姓名" Style="{StaticResource FieldLabel}" />
-                        <TextBox Margin="0,4,0,14"
-                                 Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Text="再次输入密码" Style="{StaticResource FieldLabel}" />
                         <PasswordBox x:Name="ConfirmPasswordInput"
                                      Margin="0,4,0,0"

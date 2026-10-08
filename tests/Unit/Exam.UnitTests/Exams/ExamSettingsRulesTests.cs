@@ -6,6 +6,62 @@ namespace Exam.UnitTests.Exams;
 
 public sealed class ExamSettingsRulesTests
 {
+    [Theory]
+    [InlineData(20, "3", "60", true)]
+    [InlineData(20, "3", "59", false)]
+    [InlineData(3, "0.1", "0.3", true)]
+    [InlineData(3, "0.1", "0.3000000000000000001", false)]
+    [InlineData(3, "1/2", "1.5", true)]
+    [InlineData(3, "2*{正确选项总数}+{选择的正确选项数}", "9", true)]
+    public void SingleChoice_GroupMaximumMustEqualCountTimesCorrectScore(int count, string correct, string maximum, bool valid)
+    {
+        var subject = Settings().Subjects[0];
+        var group = subject.Groups[0] with
+        {
+            QuestionCount = count, MaxScore = maximum, OneCorrect = new(correct, "0", "0")
+        };
+        var errors = ExamSettingsRules.Validate("考试", new([subject with { Groups = [group] }]));
+        if (valid) Assert.Empty(errors);
+        else Assert.Contains(errors, error => error.Contains("单项选择题满分不一致", StringComparison.Ordinal)
+            && error.Contains(group.Name, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SingleChoice_ChecksEachGroupEvenIfTheirIncorrectMaximumsCancelOut()
+    {
+        var subject = Settings().Subjects[0];
+        var group = subject.Groups[0] with { QuestionCount = 2, MaxScore = "5" };
+        var second = group with { GroupId = "second", Name = "第二组", Order = 2, MaxScore = "7" };
+        var errors = ExamSettingsRules.Validate("考试", new([subject with { MaxScore = "12", Groups = [group, second] }]));
+        Assert.Equal(2, errors.Count(error => error.Contains("单项选择题满分不一致", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("multiple")]
+    [InlineData("indeterminate")]
+    public void OtherChoiceTypes_DoNotCheckCountTimesCorrectScore(string type)
+    {
+        var subject = Settings().Subjects[0];
+        var group = subject.Groups[0] with
+        {
+            Type = type, QuestionCount = 3, MaxScore = "100",
+            OneCorrect = type == "indeterminate" ? new("2", "0", "0") : null,
+            MultipleCorrect = new("3*{正确选项总数}", "{选择的正确选项数}", "0", "0")
+        };
+        Assert.Empty(ExamSettingsRules.Validate("考试", new([subject with { Groups = [group] }])));
+    }
+
+    [Theory]
+    [InlineData("1/({正确选项总数}-1)", "除零")]
+    [InlineData("{正确选项总数}/3", "有限小数")]
+    public void SingleChoice_InvalidEvaluatedCorrectScoreIsReported(string correct, string message)
+    {
+        var subject = Settings().Subjects[0];
+        var group = subject.Groups[0] with { OneCorrect = new(correct, "0", "0") };
+        Assert.Contains(ExamSettingsRules.Validate("考试", new([subject with { Groups = [group] }])),
+            error => error.Contains(message, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ValidSettings_PassAndInstructionsFollowRequirementFormat()
     {

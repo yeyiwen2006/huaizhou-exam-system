@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls">
+                    xmlns:controls="clr-namespace:Exam.Desktop.Shared.Controls"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
     <!--
       控件样式规范：按钮族（Primary / Secondary / Danger / Ghost）、输入、表格、进度。
@@ -683,7 +684,12 @@
     <!-- ============ 滚动条 ============ -->
 
     <Style TargetType="ScrollBar">
-        <Setter Property="Width" Value="8" />
+        <Style.Resources>
+            <!-- WPF Track uses half these button dimensions as the minimum thumb length. -->
+            <sys:Double x:Key="{x:Static SystemParameters.VerticalScrollBarButtonHeightKey}">48</sys:Double>
+            <sys:Double x:Key="{x:Static SystemParameters.HorizontalScrollBarButtonWidthKey}">48</sys:Double>
+        </Style.Resources>
+        <Setter Property="Width" Value="{DynamicResource {x:Static SystemParameters.VerticalScrollBarWidthKey}}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Template">
             <Setter.Value>
@@ -697,10 +703,22 @@
                                 <RepeatButton x:Name="IncreaseButton" Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
                             </Track.IncreaseRepeatButton>
                             <Track.Thumb>
-                                <Thumb MinWidth="4" MinHeight="4" Focusable="False">
+                                <Thumb Focusable="False">
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Border Background="{DynamicResource Brush.Border.Strong}" CornerRadius="4" Margin="1" />
+                                            <!-- The full thumb rectangle accepts dragging, including the visual inset. -->
+                                            <Grid Background="Transparent">
+                                                <Border x:Name="Grip" Background="{DynamicResource Brush.Border.Strong}"
+                                                        CornerRadius="4" Margin="2" />
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Brush.Text.Secondary}" />
+                                                </Trigger>
+                                                <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Brush.Primary}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
@@ -720,7 +738,7 @@
         <Style.Triggers>
             <Trigger Property="Orientation" Value="Horizontal">
                 <Setter Property="Width" Value="Auto" />
-                <Setter Property="Height" Value="8" />
+                <Setter Property="Height" Value="{DynamicResource {x:Static SystemParameters.HorizontalScrollBarHeightKey}}" />
             </Trigger>
         </Style.Triggers>
     </Style>

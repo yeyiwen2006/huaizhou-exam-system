@@ -147,6 +147,7 @@ public sealed class ScheduleReplyBoundaryTests
             ScheduledEndText = "2026-10-01 12:00 +08:00"
         };
         draft.Subjects[0].Groups[0].QuestionCount = 10;
+        draft.Subjects[0].Groups[0].MaxScore = "10";
         return draft;
     }
 

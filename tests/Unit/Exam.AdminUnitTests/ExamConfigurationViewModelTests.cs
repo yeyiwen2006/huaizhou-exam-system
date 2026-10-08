@@ -136,7 +136,11 @@ public sealed class ExamConfigurationViewModelTests
 
         Assert.Equal(3, subject.Groups.Select(group => group.GroupId).Distinct().Count());
         Assert.Equal(3, subject.Groups.Select(group => group.Order).Distinct().Count());
-        foreach (var draft in viewModel.Subjects.SelectMany(item => item.Groups)) draft.QuestionCount = 10;
+        foreach (var draft in viewModel.Subjects.SelectMany(item => item.Groups))
+        {
+            draft.QuestionCount = 10;
+            draft.MaxScore = "10";
+        }
         Assert.Empty(viewModel.Validate());
     }
 
@@ -158,6 +162,7 @@ public sealed class ExamConfigurationViewModelTests
         indeterminate.Type = "indeterminate";
         indeterminate.Name = "不定项组";
         foreach (var group in subject.Groups) group.QuestionCount = 10;
+        single.MaxScore = "10";
 
         viewModel.RefreshInstructionsCommand.Execute(null);
 
@@ -280,6 +285,7 @@ public sealed class ExamConfigurationViewModelTests
             ScheduleChangeReason = "合成回执校验"
         };
         draft.Subjects[0].Groups[0].QuestionCount = 10;
+        draft.Subjects[0].Groups[0].MaxScore = "10";
         return draft;
     }
 

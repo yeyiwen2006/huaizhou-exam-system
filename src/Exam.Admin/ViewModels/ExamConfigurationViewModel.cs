@@ -257,7 +257,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
     {
         var errors = Validate();
         ValidationSummary = errors.Count == 0
-            ? "填写格式检查通过。计分规则能否算出正确的满分，要在导入试题和答案时再核对。"
+            ? "考试设置校验通过。单项选择题已核对题量、选对得分与题组满分；多项选择题和不定项选择题不作这项乘积校验。"
             : string.Join(Environment.NewLine, errors.Select(error => $"• {error}"));
         InstructionsText = BuildInstructions();
         UpdateInstructionPreview();

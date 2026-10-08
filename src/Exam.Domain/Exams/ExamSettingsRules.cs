@@ -84,7 +84,32 @@ public static class ExamSettingsRules
         if (group.OneCorrect is { } one) expressions.AddRange([one.Correct, one.Blank, one.Wrong]);
         if (group.MultipleCorrect is { } many) expressions.AddRange([many.AllCorrect, many.PartialCorrect, many.Blank, many.Wrong]);
         if (expressions.Any(expression => !ScoreExpressionParser.Check(expression).IsValid))
+        {
             errors.Add($"{label}的计分规则只能使用数字、加减乘除、括号和 {{正确选项总数}}、{{选择的正确选项数}} 两个变量，且不能除以零。");
+            return;
+        }
+
+        // Only single-choice groups have a fixed correct-answer count before answers are imported.
+        // Multiple/indeterminate groups must not use this question-count multiplication check.
+        if (group.Type != "single" || group.QuestionCount is < 1 or > 9999 ||
+            !ScoreConstantRules.TryParse(group.MaxScore?.Trim(), out var declaredMaximum)) return;
+        var correctExpression = ScoreExpressionParser.Check(group.OneCorrect!.Correct);
+        try
+        {
+            var perQuestion = ScoreExpressionParser.Evaluate(correctExpression.Root!, 1, 1);
+            if (!perQuestion.IsFiniteDecimal)
+            {
+                errors.Add($"{label}的单项选择题选对得分必须能算出有限小数。");
+                return;
+            }
+            var expectedMaximum = perQuestion * ExactRational.FromInteger(group.QuestionCount);
+            if (expectedMaximum != declaredMaximum)
+                errors.Add($"{label}的单项选择题满分不一致：题量 {group.QuestionCount} × 每小题选对得分 {perQuestion} = {expectedMaximum}，但题组满分为 {declaredMaximum}。");
+        }
+        catch (DivideByZeroException)
+        {
+            errors.Add($"{label}的单项选择题选对得分代入正确选项总数 1、选择的正确选项数 1 后发生除零，请修改计分规则。");
+        }
     }
 
     /// <summary>按科目、题组顺序生成考试说明，每科一行标题，每个题组一行（与需求示例格式一致）。</summary>

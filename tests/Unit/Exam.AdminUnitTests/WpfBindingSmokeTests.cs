@@ -75,13 +75,13 @@ public sealed class WpfBindingSmokeTests
                 Assert.Same(application.FindResource("Brush.Surface"), subjectGrid.AlternatingRowBackground);
                 VerifyExamSettingsEditing(window, viewModel, subjectGrid);
                 var horizontalBar = new ScrollBar { Style = (Style)application.FindResource(typeof(ScrollBar)), Orientation = Orientation.Horizontal, Minimum = 0, Maximum = 100, ViewportSize = 10 };
-                horizontalBar.Measure(new Size(200, 8));
-                horizontalBar.Arrange(new Rect(0, 0, 200, 8));
+                horizontalBar.Measure(new Size(200, SystemParameters.HorizontalScrollBarHeight));
+                horizontalBar.Arrange(new Rect(0, 0, 200, SystemParameters.HorizontalScrollBarHeight));
                 var track = Assert.IsType<Track>(horizontalBar.Template.FindName("PART_Track", horizontalBar));
                 Assert.IsType<Thumb>(track.Thumb);
                 Assert.False(track.IsDirectionReversed);
                 Assert.True(double.IsNaN(horizontalBar.Width));
-                Assert.Equal(8, horizontalBar.Height);
+                Assert.Equal(SystemParameters.HorizontalScrollBarHeight, horizontalBar.Height);
                 Assert.Same(ScrollBar.PageLeftCommand, track.DecreaseRepeatButton.Command);
                 Assert.Same(ScrollBar.PageRightCommand, track.IncreaseRepeatButton.Command);
                 var group = viewModel.Exam.SelectedSubject!.Groups[0];
@@ -574,6 +574,16 @@ public sealed class WpfBindingSmokeTests
             Assert.Equal(HorizontalAlignment.Left, password.HorizontalContentAlignment);
         }
         SaveEditorScreenshot(window, username, "aligned-login-inputs");
+        connection.IsRegistering = true;
+        DrainDispatcher(); window.UpdateLayout();
+        var name = Assert.Single(Descendants<TextBox>(window), box => box.Name == "DisplayNameBox");
+        Assert.True(name.IsVisible);
+        Assert.True(username.TransformToAncestor(window).Transform(new Point()).Y < name.TransformToAncestor(window).Transform(new Point()).Y);
+        Assert.True(name.TransformToAncestor(window).Transform(new Point()).Y < password.TransformToAncestor(window).Transform(new Point()).Y);
+        SaveEditorScreenshot(window, name, "registration-field-order");
+        connection.IsRegistering = false;
+        DrainDispatcher(); window.UpdateLayout();
+        Assert.False(name.IsVisible);
     }
 
     private static void SaveEditorScreenshot(Window window, FrameworkElement input, string name)

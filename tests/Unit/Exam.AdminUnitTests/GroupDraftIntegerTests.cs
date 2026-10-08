@@ -46,6 +46,7 @@ public sealed class GroupDraftIntegerTests
         var exam = new ExamConfigurationViewModel(api);
         var group = exam.Subjects[0].Groups[0];
         group.QuestionCount = 10;
+        group.MaxScore = "10";
         group.Order = 1;
         group.QuestionCountText = invalid;
         group.OrderText = invalid;
