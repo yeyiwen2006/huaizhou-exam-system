@@ -681,6 +681,11 @@
         </Setter>
     </Style>
 
+    <!-- Nested tables and input hosts pass the wheel to the page once they cannot scroll. -->
+    <Style TargetType="ScrollViewer">
+        <Setter Property="controls:MouseWheelScrollChaining.IsEnabled" Value="True" />
+    </Style>
+
     <!-- ============ 滚动条 ============ -->
 
     <Style TargetType="ScrollBar">

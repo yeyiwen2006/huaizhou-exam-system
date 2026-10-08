@@ -239,6 +239,23 @@ public sealed class ExamApiEndpointTests
         Assert.Equal(new ScheduleWindow(Now.AddHours(2), Now.AddHours(3)), saved.Schedule);
     }
 
+    [Fact]
+    public async Task HttpTimeExtensionReopensAnEndedExamUsingServerTime()
+    {
+        await using var app = await CreateApplicationAsync();
+        var service = app.Services.GetRequiredService<IExamVersioningService>();
+        Assert.True(service.CreateExam(new("synthetic-reopen-api", new(Now.AddHours(-2), Now.AddHours(-1)), Now)).Succeeded);
+        using var client = app.GetTestClient();
+        using var response = await client.PutAsJsonAsync("/api/v1/versioning/exams/synthetic-reopen-api/schedule",
+            new UpdateScheduleApiRequest("synthetic-reopen-request", 1, new(Now.AddHours(-2), Now.AddHours(1)), "合成延时"),
+            JsonDefaults.Create());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<ApiEnvelope<ExamVersionSnapshot>>(JsonDefaults.Create()))!.Result!;
+        Assert.Equal(ExamLifecycle.Running, result.LifecycleState);
+        Assert.Equal(2, result.ReopenedAtScheduleVersion);
+        Assert.Null(result.ActualEndedAt);
+    }
+
     [Theory]
     [InlineData("paper-transfer")]
     [InlineData("paper-review")]

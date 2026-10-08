@@ -28,7 +28,8 @@ public sealed class PostgresParticipationAccessReader(NpgsqlDataSource dataSourc
                    COALESCE(version_state.lifecycle, entry_access.lifecycle, 'Scheduled'),
                    participation.business_state,
                    participation.current_paper_version,
-                   participation.current_grading_version
+                   participation.current_grading_version,
+                   COALESCE((version_state.snapshot->>'reopenedAtScheduleVersion')::bigint, 0)
               FROM exam.participations AS participation
               LEFT JOIN exam.version_state AS version_state
                 ON version_state.exam_id = participation.exam_id
@@ -54,7 +55,8 @@ public sealed class PostgresParticipationAccessReader(NpgsqlDataSource dataSourc
             ParseLifecycle(reader.GetString(6)),
             ParseBusinessState(reader.GetString(7)),
             reader.GetInt64(8),
-            reader.GetInt64(9));
+            reader.GetInt64(9))
+        { ReopenedAtScheduleVersion = reader.GetInt64(10) };
     }
 
     private static ExamLifecycle ParseLifecycle(string value) =>

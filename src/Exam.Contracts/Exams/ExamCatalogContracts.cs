@@ -43,6 +43,11 @@ public sealed record ExamSummary(
 {
     /// <summary>服务器当前试卷版本；0 表示未发布，null 表示未提供发布状态。</summary>
     public long? PaperVersion { get; init; }
+
+    /// <summary>考务端列表整理状态，与学生端显示开关无关。</summary>
+    public bool HiddenForCurrentOperator { get; init; }
+    public bool HiddenForAllOperators { get; init; }
+    public bool IsHidden => HiddenForCurrentOperator || HiddenForAllOperators;
 }
 
 public sealed record ExamDetail(
@@ -67,6 +72,12 @@ public sealed record UpdateExamSettingsRequest(
 public sealed record SetExamVisibilityRequest(
     string RequestId,
     bool VisibleToStudents);
+
+public enum ExamHidingScope { CurrentOperator, AllOperators }
+
+public sealed record SetExamHidingRequest(string RequestId, bool Hidden, ExamHidingScope Scope);
+
+public sealed record ExamHidingState(string ExamId, bool HiddenForCurrentOperator, bool HiddenForAllOperators);
 
 public static class ExamCatalogErrorCodes
 {

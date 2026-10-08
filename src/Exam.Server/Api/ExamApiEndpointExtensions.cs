@@ -560,7 +560,11 @@ public static class ExamApiEndpointExtensions
                     request.ExpectedVersion,
                     request.Schedule,
                     timeProvider.GetUtcNow(),
-                    request.RequestId) { Operator = actor, Reason = request.Reason?.Trim() ?? string.Empty }));
+                    request.RequestId)
+                {
+                    Operator = actor, Reason = request.Reason?.Trim() ?? string.Empty,
+                    ReopenEndedExam = true
+                }));
         });
 
         group.MapPost("/exams/{examId}/grading-publications", async (

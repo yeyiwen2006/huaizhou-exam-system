@@ -196,9 +196,12 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
     {
         var events = await _connection!.InvokeAsync<IReadOnlyList<CommandDelivery>>("CatchUp", ct)
             ?? throw new HttpRequestException("服务器未返回有效指令列表。");
-        // A batch can contain an old, unacknowledged START followed by END. Apply the stop first;
-        // the manager can then reject that START without fetching or exposing the old key.
-        foreach (var delivery in events.OrderBy(delivery => delivery?.EventType == CommandEventType.End ? 0 : 1))
+        // Process the newest schedule first. Within one schedule END still precedes START;
+        // an older END cannot freeze answers before a newer extension/reopening is applied.
+        foreach (var delivery in events.OrderByDescending(delivery => delivery?.EventType is
+                     CommandEventType.Start or CommandEventType.End or CommandEventType.ScheduleChanged
+                     ? delivery.StateVersion : 0)
+                 .ThenBy(delivery => delivery?.EventType == CommandEventType.End ? 0 : 1))
         {
             await QueueDelivery(delivery, handler, _lifetime!.Token).WaitAsync(ct);
         }

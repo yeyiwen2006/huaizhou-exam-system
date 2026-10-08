@@ -151,6 +151,14 @@ internal sealed class AdminUiFixture : IDisposable
 
     private sealed class Handler : HttpMessageHandler
     {
+        private readonly Dictionary<string, ExamSummary> _summaries = new[]
+        {
+            Summary,
+            Summary with { ExamId = "synthetic-second", Name = "合成第二场考试", StartsAt = Start.AddDays(1), EndsAt = Start.AddDays(1).AddHours(2), PaperVersion = 2 },
+            Summary with { ExamId = "synthetic-hidden-self", Name = "合成个人隐藏考试", HiddenForCurrentOperator = true },
+            Summary with { ExamId = "synthetic-hidden-all", Name = "合成全体隐藏考试", HiddenForAllOperators = true, PaperVersion = 2 }
+        }.ToDictionary(item => item.ExamId);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -160,14 +168,25 @@ internal sealed class AdminUiFixture : IDisposable
             if (path == "/api/v1/operators/me") return Reply(Account);
             if (path == "/api/v1/operators") return Reply(new[] { Account,
                 new OperatorAccount("synthetic-pending", "合成待审批人员", OperatorStatus.Pending, false, Start.AddHours(-1), null) });
-            if (path == "/api/v1/exams") return Reply(new[] { Summary,
-                Summary with { ExamId = "synthetic-second", Name = "合成第二场考试", StartsAt = Start.AddDays(1), EndsAt = Start.AddDays(1).AddHours(2), PaperVersion = 2 } });
+            if (path == "/api/v1/exams") return Reply(_summaries.Values.ToArray());
             if (path == "/api/v1/exams/" + ExamId + "/visibility" && request.Method == HttpMethod.Put)
             {
                 var input = request.Content!.ReadFromJsonAsync<SetExamVisibilityRequest>(JsonDefaults.Create()).Result!;
-                return Reply(Summary with { VisibleToStudents = input.VisibleToStudents, SettingsVersion = 2 });
+                _summaries[ExamId] = _summaries[ExamId] with { VisibleToStudents = input.VisibleToStudents, SettingsVersion = 2 };
+                return Reply(_summaries[ExamId]);
             }
-            if (path == "/api/v1/exams/" + ExamId) return Reply(Detail());
+            if (path.EndsWith("/hiding", StringComparison.Ordinal) && request.Method == HttpMethod.Put)
+            {
+                var input = request.Content!.ReadFromJsonAsync<SetExamHidingRequest>(JsonDefaults.Create()).Result!;
+                var examId = path.Split('/')[^2];
+                var summary = _summaries[examId];
+                summary = input.Scope == ExamHidingScope.CurrentOperator
+                    ? summary with { HiddenForCurrentOperator = input.Hidden }
+                    : summary with { HiddenForAllOperators = input.Hidden };
+                _summaries[examId] = summary;
+                return Reply(new ExamHidingState(examId, summary.HiddenForCurrentOperator, summary.HiddenForAllOperators));
+            }
+            if (path == "/api/v1/exams/" + ExamId) return Reply(Detail() with { Summary = _summaries[ExamId] });
             if (path.EndsWith("/roster", StringComparison.Ordinal)) return Reply(new CandidateRosterSnapshot(ExamId, 1,
                 [new("synthetic-person-1", "合成考生甲", "001", "000001"), new("synthetic-person-2", "合成考生乙", "002", "000002")]));
             if (path == "/api/v1/rooms") return Reply(new[] { new RoomGroup("synthetic-room-a", "合成试场A", 1, 2), new RoomGroup("synthetic-room-b", "合成试场B", 1, 0) });

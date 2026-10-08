@@ -60,4 +60,5 @@
 | COV-054 | 考试选择与等待 | src/Exam.Student/Views/WaitingExamPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-055 | 答题、时间与全屏 | src/Exam.Student/Views/ExamInProgressPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-056 | 交卷与恢复 | src/Exam.Student/Views/SubmittedPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
-| COV-057 | 修改考试时间与审计 | src/Exam.Admin/ViewModels/ExamConfigurationCatalog.cs | exams schedule 名称 --input 文件 | 要求原预期版本和原因；操作者由当前登录会话绑定，原请求重试不重复修改 |
+| COV-057 | 修改考试时间与审计 | src/Exam.Admin/ViewModels/ExamConfigurationCatalog.cs | exams schedule 名称 --input 文件 | 按原预期版本保存；结束后延长可重开并可靠推送学生端，已固定答卷保留，历史重放不重开 |
+| COV-058 | 隐藏考试及按范围取消隐藏 | src/Exam.Admin/ViewModels/ExamHomeViewModel.cs | exams hidden / exams hide / exams unhide（self 或 all） | 个人与全体隐藏分别持久化；按认证账号读取，保留学生端显示和所有考试数据 |

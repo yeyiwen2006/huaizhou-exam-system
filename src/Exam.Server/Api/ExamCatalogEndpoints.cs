@@ -15,7 +15,7 @@ public static class ExamCatalogEndpoints
         group.MapGet("", async ([FromServices] PostgresExamCatalog catalog, HttpContext context,
                 IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier,
-                () => catalog.ListAsync(cancellationToken)));
+                () => catalog.ListAsync(cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))));
 
         group.MapPost("", async (CreateExamRequest request, [FromServices] PostgresExamCatalog catalog,
                 HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
@@ -26,7 +26,7 @@ public static class ExamCatalogEndpoints
         group.MapGet("/{examId}", async (string examId, [FromServices] PostgresExamCatalog catalog,
                 HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier,
-                () => catalog.GetAsync(examId, cancellationToken)));
+                () => catalog.GetAsync(examId, cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))));
 
         group.MapPut("/{examId}/settings", async (string examId, UpdateExamSettingsRequest request,
                 [FromServices] PostgresExamCatalog catalog, HttpContext context, IConfiguration configuration,
@@ -40,6 +40,13 @@ public static class ExamCatalogEndpoints
                 CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, request.RequestId,
                 () => catalog.SetVisibilityAsync(examId, request,
+                    ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context), cancellationToken)));
+
+        group.MapPut("/{examId}/hiding", async (string examId, SetExamHidingRequest request,
+                [FromServices] PostgresExamCatalog catalog, HttpContext context, IConfiguration configuration,
+                CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(context, configuration, request.RequestId,
+                () => catalog.SetHidingAsync(examId, request,
                     ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context), cancellationToken)));
 
         return api;

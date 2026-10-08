@@ -19,6 +19,10 @@ public sealed class ExamHomeViewModel : BindableBase
     private long _visibilityRevision;
     private readonly Dictionary<string, (long Revision, ExamSummary Summary)> _visibilityUpdates = [];
     private readonly Dictionary<string, bool> _pendingVisibility = [];
+    private readonly List<ExamCardViewModel> _cards = [];
+    private long _hidingRevision;
+    private readonly Dictionary<string, (long Revision, ExamHidingState State)> _hidingUpdates = [];
+    private readonly HashSet<string> _pendingHiding = [];
 
     public ExamHomeViewModel(AdminApiClient api)
     {
@@ -29,6 +33,10 @@ public sealed class ExamHomeViewModel : BindableBase
         {
             _generation++;
             Exams.Clear();
+            HiddenExams.Clear();
+            _cards.Clear();
+            _hidingUpdates.Clear();
+            _pendingHiding.Clear();
             _publicationUpdates.Clear();
             _visibilityUpdates.Clear();
             _pendingVisibility.Clear();
@@ -39,6 +47,7 @@ public sealed class ExamHomeViewModel : BindableBase
     }
 
     public ObservableCollection<ExamCardViewModel> Exams { get; } = [];
+    public ObservableCollection<ExamCardViewModel> HiddenExams { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
     public RelayCommand NewExamCommand { get; }
 
@@ -52,29 +61,34 @@ public sealed class ExamHomeViewModel : BindableBase
         var generation = ++_generation;
         var publicationRevision = _publicationRevision;
         var visibilityRevision = _visibilityRevision;
+        var hidingRevision = _hidingRevision;
         Status = "正在读取考试列表…";
         var exams = await _api.ListExamsAsync();
         if (generation != _generation) return;
-        Exams.Clear();
+        _cards.Clear();
         foreach (var loaded in exams)
         {
             var exam = _visibilityUpdates.TryGetValue(loaded.ExamId, out var visibility) && visibility.Revision > visibilityRevision
                 ? visibility.Summary : loaded;
             if (_publicationUpdates.TryGetValue(loaded.ExamId, out var update) && update.Revision > publicationRevision)
                 exam = exam with { PaperVersion = update.Version };
+            if (_hidingUpdates.TryGetValue(loaded.ExamId, out var hiding) && hiding.Revision > hidingRevision)
+                exam = WithHiding(exam, hiding.State);
             ExamCardViewModel? card = null;
-            card = new ExamCardViewModel(exam, () => ExamOpened?.Invoke(card!.Exam), ChangeVisibilityAsync);
+            card = new ExamCardViewModel(exam, () => ExamOpened?.Invoke(card!.Exam), ChangeVisibilityAsync, ChangeHidingAsync);
             if (_pendingVisibility.TryGetValue(exam.ExamId, out var requested)) card.SetVisibilitySaving(true, requested);
-            Exams.Add(card);
+            if (_pendingHiding.Contains(exam.ExamId)) card.SetHidingSaving(true);
+            _cards.Add(card);
         }
-        Status = Exams.Count == 0 ? "服务器上还没有考试，请点击“新建考试”。" : $"共 {Exams.Count} 场考试，点击卡片进入。";
+        RebuildLists();
+        Status = _cards.Count == 0 ? "服务器上还没有考试，请点击“新建考试”。" : $"共 {Exams.Count} 场显示的考试，{HiddenExams.Count} 场隐藏的考试，点击卡片进入。";
     }
 
     public void UpdatePaperVersion(string examId, long? paperVersion)
     {
         // Preserve updates received while an older list request is still in flight.
         _publicationUpdates[examId] = (++_publicationRevision, paperVersion);
-        var card = Exams.FirstOrDefault(item => item.Exam.ExamId == examId);
+        var card = _cards.FirstOrDefault(item => item.Exam.ExamId == examId);
         if (card is null) return;
         card.ApplySummary(card.Exam with { PaperVersion = paperVersion });
         if (_pendingVisibility.TryGetValue(examId, out var requested)) card.SetVisibilitySaving(true, requested);
@@ -86,6 +100,7 @@ public sealed class ExamHomeViewModel : BindableBase
         if (!_api.IsConfigured || _pendingVisibility.ContainsKey(examId)) return;
         var generation = _api.Generation;
         var publicationRevision = _publicationRevision;
+        var hidingRevision = _hidingRevision;
         _pendingVisibility[examId] = visible;
         card.SetVisibilitySaving(true);
         Status = $"正在同步“{card.Name}”的学生端显示设置…";
@@ -98,17 +113,20 @@ public sealed class ExamHomeViewModel : BindableBase
             // Preserve that event (including an unknown result) rather than rolling it back.
             if (_publicationUpdates.TryGetValue(examId, out var update) && update.Revision > publicationRevision)
                 summary = summary with { PaperVersion = update.Version };
+            if (_hidingUpdates.TryGetValue(examId, out var hiding) && hiding.Revision > hidingRevision)
+                summary = WithHiding(summary, hiding.State);
             _visibilityUpdates[examId] = (++_visibilityRevision, summary);
             card.ApplySummary(summary);
-            foreach (var current in Exams.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))
+            foreach (var current in _cards.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))
                 current.ApplySummary(summary);
+            RebuildLists();
             Status = $"“{summary.Name}”已设置为{(summary.VisibleToStudents ? "在学生端显示" : "不在学生端显示")}。";
         }
         catch (Exception error)
         {
             if (generation != _api.Generation) return;
             card.ApplySummary(card.Exam);
-            foreach (var current in Exams.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))
+            foreach (var current in _cards.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))
                 current.ApplySummary(current.Exam);
             Status = $"学生端显示设置未确认：{FriendlyErrors.Describe(error)}；请刷新考试列表核对。";
         }
@@ -118,9 +136,61 @@ public sealed class ExamHomeViewModel : BindableBase
             {
                 _pendingVisibility.Remove(examId);
                 card.SetVisibilitySaving(false);
-                foreach (var current in Exams.Where(item => item.Exam.ExamId == examId)) current.SetVisibilitySaving(false);
+                foreach (var current in _cards.Where(item => item.Exam.ExamId == examId)) current.SetVisibilitySaving(false);
             }
         }
+    }
+
+    private async Task ChangeHidingAsync(ExamCardViewModel card, ExamHidingScope scope)
+    {
+        var examId = card.Exam.ExamId;
+        if (!_api.IsConfigured || !_pendingHiding.Add(examId)) return;
+        var generation = _api.Generation;
+        var hidden = !card.Exam.IsHidden;
+        card.SetHidingSaving(true);
+        Status = $"正在{(hidden ? "隐藏" : "取消隐藏")}“{card.Name}”…";
+        try
+        {
+            var state = await _api.SetExamHidingAsync(examId, hidden, scope);
+            if (generation != _api.Generation) return;
+            if (state.ExamId != examId) throw new InvalidDataException("隐藏设置回执不属于当前考试。");
+            _hidingUpdates[examId] = (++_hidingRevision, state);
+            card.ApplySummary(WithHiding(card.Exam, state));
+            foreach (var current in _cards.Where(item => item.Exam.ExamId == examId && !ReferenceEquals(item, card)))
+                current.ApplySummary(WithHiding(current.Exam, state));
+            RebuildLists();
+            var scopeText = scope == ExamHidingScope.CurrentOperator ? "当前账号" : "所有考务账号";
+            Status = $"“{card.Name}”已{(hidden ? "隐藏" : "取消隐藏")}（{scopeText}）。";
+            if (!hidden && card.Exam.IsHidden) Status += "另一范围的隐藏仍生效，可继续取消。";
+        }
+        catch (Exception error)
+        {
+            if (generation == _api.Generation)
+                Status = $"隐藏设置未确认：{FriendlyErrors.Describe(error)}；请刷新考试列表核对。";
+        }
+        finally
+        {
+            if (generation == _api.Generation)
+            {
+                _pendingHiding.Remove(examId);
+                card.SetHidingSaving(false);
+                foreach (var current in _cards.Where(item => item.Exam.ExamId == examId)) current.SetHidingSaving(false);
+            }
+        }
+    }
+
+    private static ExamSummary WithHiding(ExamSummary summary, ExamHidingState state) => summary with
+    {
+        HiddenForCurrentOperator = state.HiddenForCurrentOperator,
+        HiddenForAllOperators = state.HiddenForAllOperators
+    };
+
+    private void RebuildLists()
+    {
+        Exams.Clear();
+        HiddenExams.Clear();
+        foreach (var card in _cards)
+            (card.Exam.IsHidden ? HiddenExams : Exams).Add(card);
     }
 
     private void SetError(Exception exception) => Status = $"考试列表读取失败：{FriendlyErrors.Describe(exception)}";
@@ -129,13 +199,20 @@ public sealed class ExamHomeViewModel : BindableBase
 public sealed class ExamCardViewModel : BindableBase
 {
     private readonly Func<ExamCardViewModel, bool, Task>? _changeVisibility;
-    private bool _visibleToStudents, _visibilitySaving;
-    public ExamCardViewModel(ExamSummary exam, Action open, Func<ExamCardViewModel, bool, Task>? changeVisibility = null)
+    private readonly Func<ExamCardViewModel, ExamHidingScope, Task>? _changeHiding;
+    private bool _visibleToStudents, _visibilitySaving, _hidingSaving;
+    public ExamCardViewModel(ExamSummary exam, Action open, Func<ExamCardViewModel, bool, Task>? changeVisibility = null,
+        Func<ExamCardViewModel, ExamHidingScope, Task>? changeHiding = null)
     {
         Exam = exam;
         _visibleToStudents = exam.VisibleToStudents;
         _changeVisibility = changeVisibility;
+        _changeHiding = changeHiding;
         OpenCommand = new RelayCommand(open);
+        ChangePersonalHidingCommand = new AsyncRelayCommand(() => _changeHiding!(this, ExamHidingScope.CurrentOperator),
+            () => CanChangeHiding && (!Exam.IsHidden || Exam.HiddenForCurrentOperator));
+        ChangeSharedHidingCommand = new AsyncRelayCommand(() => _changeHiding!(this, ExamHidingScope.AllOperators),
+            () => CanChangeHiding && (!Exam.IsHidden || Exam.HiddenForAllOperators));
     }
     public ExamSummary Exam { get; private set; }
     public bool VisibleToStudents
@@ -150,7 +227,34 @@ public sealed class ExamCardViewModel : BindableBase
         }
     }
     public bool IsVisibilitySaving => _visibilitySaving;
-    public bool CanChangeVisibility => _changeVisibility is not null && !_visibilitySaving && !(Exam.VisibleToStudents && Exam.Lifecycle == ExamLifecycle.Running);
+    public bool CanChangeVisibility => _changeVisibility is not null && !_visibilitySaving && !_hidingSaving && !(Exam.VisibleToStudents && Exam.Lifecycle == ExamLifecycle.Running);
+    public bool IsHidingSaving => _hidingSaving;
+    public bool CanChangeHiding => _changeHiding is not null && !_visibilitySaving && !_hidingSaving;
+    public string HidingActionText => Exam.IsHidden ? "取消隐藏" : "隐藏该考试";
+    public string HidingScopeText => (Exam.HiddenForCurrentOperator, Exam.HiddenForAllOperators) switch
+    {
+        (true, true) => "隐藏范围：当前账号及所有考务账号",
+        (true, false) => "隐藏范围：当前账号",
+        (false, true) => "隐藏范围：所有考务账号",
+        _ => string.Empty
+    };
+    public AsyncRelayCommand ChangePersonalHidingCommand { get; }
+    public AsyncRelayCommand ChangeSharedHidingCommand { get; }
+    internal void SetHidingSaving(bool saving)
+    {
+        _hidingSaving = saving;
+        OnPropertyChanged(nameof(IsHidingSaving));
+        OnPropertyChanged(nameof(CanChangeVisibility));
+        NotifyHidingChanged();
+    }
+    private void NotifyHidingChanged()
+    {
+        OnPropertyChanged(nameof(CanChangeHiding));
+        OnPropertyChanged(nameof(HidingActionText));
+        OnPropertyChanged(nameof(HidingScopeText));
+        ChangePersonalHidingCommand.RaiseCanExecuteChanged();
+        ChangeSharedHidingCommand.RaiseCanExecuteChanged();
+    }
     public string VisibilityNote => Exam.VisibleToStudents && Exam.Lifecycle == ExamLifecycle.Running
         ? "考试进行中不能取消显示；考试结束后可以取消显示。" : "勾选或取消后自动同步到服务器。";
     internal void SetVisibilitySaving(bool saving, bool? requested = null)
@@ -160,6 +264,7 @@ public sealed class ExamCardViewModel : BindableBase
         OnPropertyChanged(nameof(VisibleToStudents));
         OnPropertyChanged(nameof(IsVisibilitySaving));
         OnPropertyChanged(nameof(CanChangeVisibility));
+        NotifyHidingChanged();
     }
     internal void ApplySummary(ExamSummary summary)
     {
@@ -168,6 +273,7 @@ public sealed class ExamCardViewModel : BindableBase
         foreach (var property in new[] { nameof(Exam), nameof(Name), nameof(TimeText), nameof(StateText), nameof(StateLevel),
             nameof(VisibleToStudents), nameof(CanChangeVisibility), nameof(VisibilityNote), nameof(PublicationText),
             nameof(PublicationLevel), nameof(ParticipantsText) }) OnPropertyChanged(property);
+        NotifyHidingChanged();
     }
     public string Name => Exam.Name;
     public string TimeText => Exam.StartsAt.Date == Exam.EndsAt.Date

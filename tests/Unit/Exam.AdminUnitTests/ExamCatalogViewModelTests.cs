@@ -11,7 +11,7 @@ using Exam.Contracts.Importing;
 namespace Exam.AdminUnitTests;
 
 /// <summary>主页考试卡片、新建考试、按名称进入考试与学生端显示开关。全部为合成数据。</summary>
-public sealed class ExamCatalogViewModelTests
+public sealed partial class ExamCatalogViewModelTests
 {
     [Theory]
     [InlineData(false)]

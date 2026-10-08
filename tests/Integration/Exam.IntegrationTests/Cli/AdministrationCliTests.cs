@@ -79,6 +79,41 @@ public sealed class AdministrationCliTests
     }
 
     [Fact]
+    public async Task HidingCommandsSelectScopeAndListsRemainSeparate()
+    {
+        var summary = Summary();
+        await using var host = await CliHost.StartAsync((self, app) =>
+        {
+            app.MapGet("/api/v1/exams", () => self.Envelope(new[] { summary }));
+            app.MapPut("/api/v1/exams/exam-1/hiding", async (HttpContext context) =>
+            {
+                var input = (await context.Request.ReadFromJsonAsync<SetExamHidingRequest>(Json))!;
+                Assert.NotEmpty(input.RequestId);
+                summary = input.Scope == ExamHidingScope.CurrentOperator
+                    ? summary with { HiddenForCurrentOperator = input.Hidden }
+                    : summary with { HiddenForAllOperators = input.Hidden };
+                return self.Envelope(new ExamHidingState(summary.ExamId, summary.HiddenForCurrentOperator, summary.HiddenForAllOperators));
+            });
+        });
+        foreach (var scope in new[] { "self", "all" })
+        {
+            var hide = await CliProcess.RunAsync("exams", "hide", "合成考试", scope, "--server", host.Address);
+            Assert.True(hide.Exit == 0, hide.Out + hide.Error);
+            Assert.Equal(scope == "self", summary.HiddenForCurrentOperator);
+            Assert.Equal(scope == "all", summary.HiddenForAllOperators);
+            var visible = await CliProcess.RunAsync("exams", "list", "--server", host.Address);
+            Assert.Equal(0, visible.Exit);
+            Assert.Empty(JsonSerializer.Deserialize<ExamSummary[]>(visible.Out, Json)!);
+            var hidden = await CliProcess.RunAsync("exams", "hidden", "--server", host.Address);
+            Assert.Equal(0, hidden.Exit);
+            Assert.True(Assert.Single(JsonSerializer.Deserialize<ExamSummary[]>(hidden.Out, Json)!).IsHidden);
+            var undo = await CliProcess.RunAsync("exams", "unhide", "合成考试", scope, "--server", host.Address);
+            Assert.Equal(0, undo.Exit);
+            Assert.False(summary.IsHidden);
+        }
+    }
+
+    [Fact]
     public async Task Roster_CommandsUseTheAuthoritativeRosterApi()
     {
         var snapshot = new CandidateRosterSnapshot("exam-1", 4,

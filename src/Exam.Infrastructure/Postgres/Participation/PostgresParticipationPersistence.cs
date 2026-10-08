@@ -72,7 +72,7 @@ public sealed class PostgresParticipationPersistence(NpgsqlDataSource dataSource
                 return false;
             }
 
-            return reader.GetFieldValue<DateTimeOffset>(0) == expected.ScheduledStart.ToUniversalTime() &&
+            var current = reader.GetFieldValue<DateTimeOffset>(0) == expected.ScheduledStart.ToUniversalTime() &&
                 reader.GetFieldValue<DateTimeOffset>(1) == expected.ScheduledEnd.ToUniversalTime() &&
                 string.Equals(reader.GetString(2), ToDatabaseLifecycle(expected.Lifecycle), StringComparison.Ordinal) &&
                 reader.GetBoolean(3) == expected.PackageReady &&
@@ -82,6 +82,21 @@ public sealed class PostgresParticipationPersistence(NpgsqlDataSource dataSource
                 reader.GetInt64(7) == expected.PaperVersion &&
                 reader.GetInt64(8) == expected.InstructionsVersion &&
                 string.Equals(reader.IsDBNull(9) ? null : reader.GetString(9), expected.UnlockReference, StringComparison.Ordinal);
+            reader.Close();
+            if (!current) return false;
+
+            // The shared entry lock also blocks schedule mutations. Read the versions after
+            // taking it, so even a window changed back to its old values cannot replay old state.
+            using var versions = CreateCommand("""
+                SELECT schedule_version, COALESCE((snapshot->>'reopenedAtScheduleVersion')::bigint, 0)
+                  FROM exam.version_state WHERE exam_id = $1;
+                """);
+            versions.Parameters.AddWithValue(expected.ExamId);
+            using var versionReader = versions.ExecuteReader();
+            return versionReader.Read()
+                ? versionReader.GetInt64(0) == expected.ScheduleVersion &&
+                  versionReader.GetInt64(1) == expected.ReopenedAtScheduleVersion
+                : expected.ScheduleVersion == 0 && expected.ReopenedAtScheduleVersion == 0;
         }
 
         public StudentSession? FindSession(string sessionId)

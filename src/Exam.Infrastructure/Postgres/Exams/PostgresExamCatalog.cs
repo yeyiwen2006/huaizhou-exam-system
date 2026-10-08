@@ -18,7 +18,7 @@ namespace Exam.Infrastructure.Postgres.Exams;
 /// 考试本体（起止时间、生命周期、版本）仍由 版本服务负责；本服务在同一事务内
 /// 同步写入学生端可见的名称、科目与由结构化规则生成的考试说明。
 /// </summary>
-public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersioningService versioning, TimeProvider time)
+public sealed partial class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersioningService versioning, TimeProvider time)
 {
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
 
@@ -31,13 +31,13 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
           WHERE p.exam_id = e.exam_id AND p.business_state IN ('waiting', 'answering', 'submitted')) AS collected
         """;
 
-    public async ValueTask<IReadOnlyList<ExamSummary>> ListAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<IReadOnlyList<ExamSummary>> ListAsync(CancellationToken cancellationToken = default, string? actor = null)
     {
         // 没有目录行、也没有学生端元数据的考试只可能是创建中途失败的残留，不列出。
         await using var command = dataSource.CreateCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
                    e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
-                   v.paper_version AS published_paper_version
+                   v.paper_version AS published_paper_version, {HidingSql}
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
@@ -45,17 +45,18 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
              WHERE c.exam_id IS NOT NULL OR m.exam_id IS NOT NULL
              ORDER BY e.scheduled_start DESC, 2;
             """);
+        command.Parameters.AddWithValue(OperatorKey(actor));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<ExamSummary>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadSummary(reader));
         return result;
     }
 
-    public async ValueTask<ExamDetail> GetAsync(string examId, CancellationToken cancellationToken = default)
+    public async ValueTask<ExamDetail> GetAsync(string examId, CancellationToken cancellationToken = default, string? actor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
+        return await ReadDetailAsync(connection, null, examId, cancellationToken, actor).ConfigureAwait(false);
     }
 
     public async ValueTask<ExamDetail> CreateAsync(CreateExamRequest request, string actor, CancellationToken cancellationToken = default)
@@ -74,7 +75,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
         {
             if (await FindReplayAsync(connection, null, request.RequestId, hash, cancellationToken).ConfigureAwait(false))
-                return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
+                return await ReadDetailAsync(connection, null, examId, cancellationToken, actor).ConfigureAwait(false);
             await EnsureNameFreeAsync(connection, null, request.Name, null, cancellationToken).ConfigureAwait(false);
         }
 
@@ -94,7 +95,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         if (await FindReplayAsync(write, transaction, request.RequestId, hash, cancellationToken).ConfigureAwait(false))
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return await ReadDetailAsync(write, null, examId, cancellationToken).ConfigureAwait(false);
+            return await ReadDetailAsync(write, null, examId, cancellationToken, actor).ConfigureAwait(false);
         }
         await RequireScheduledAsync(write, transaction, examId, cancellationToken).ConfigureAwait(false);
         try
@@ -120,7 +121,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         await WriteStudentMetadataAsync(write, transaction, examId, request.Name, request.Settings, actor, cancellationToken).ConfigureAwait(false);
         await SaveReplayAsync(write, transaction, request.RequestId, hash, examId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return await ReadDetailAsync(write, null, examId, cancellationToken).ConfigureAwait(false);
+        return await ReadDetailAsync(write, null, examId, cancellationToken, actor).ConfigureAwait(false);
     }
 
     public async ValueTask<ExamDetail> UpdateSettingsAsync(string examId, UpdateExamSettingsRequest request, string actor,
@@ -140,7 +141,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         if (await FindReplayAsync(connection, transaction, request.RequestId, hash, cancellationToken).ConfigureAwait(false))
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
+            return await ReadDetailAsync(connection, null, examId, cancellationToken, actor).ConfigureAwait(false);
         }
         var current = await ReadCatalogVersionAsync(connection, transaction, examId, cancellationToken).ConfigureAwait(false);
         var settingsChanged = await RequireSettingsChangeAllowedAsync(connection, transaction, examId, request.Settings, cancellationToken).ConfigureAwait(false);
@@ -183,7 +184,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         }
         await SaveReplayAsync(connection, transaction, request.RequestId, hash, examId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false);
+        return await ReadDetailAsync(connection, null, examId, cancellationToken, actor).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -219,7 +220,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return (await ReadDetailAsync(connection, null, examId, cancellationToken).ConfigureAwait(false)).Summary;
+        return (await ReadDetailAsync(connection, null, examId, cancellationToken, actor).ConfigureAwait(false)).Summary;
     }
 
     private static void ValidateOrThrow(string? name, ExamSettings? settings)
@@ -327,7 +328,7 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
     }
 
     private static async Task<ExamDetail> ReadDetailAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
-        string examId, CancellationToken cancellationToken)
+        string examId, CancellationToken cancellationToken, string? actor = null)
     {
         ExamSummary summary;
         ExamSettings settings;
@@ -335,15 +336,16 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
         await using (var command = new NpgsqlCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
                    e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
-                   c.settings::text, v.schedule_version, v.paper_version AS published_paper_version
+                   c.settings::text, v.schedule_version, v.paper_version AS published_paper_version, {HidingSql}
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
               LEFT JOIN exam.version_state v ON v.exam_id = e.exam_id
-             WHERE e.exam_id = @exam_id;
+             WHERE e.exam_id = $2;
             """, connection, transaction))
         {
-            command.Parameters.AddWithValue("exam_id", examId);
+            command.Parameters.AddWithValue(OperatorKey(actor));
+            command.Parameters.AddWithValue(examId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw Rule(ParticipationErrorCodes.ExamNotFound, "找不到这场考试。");
@@ -383,7 +385,9 @@ public sealed class PostgresExamCatalog(NpgsqlDataSource dataSource, IExamVersio
             reader.GetBoolean(5), reader.GetString(4) == "running", actual, collected, reader.GetInt64(6))
         {
             PaperVersion = reader.IsDBNull(reader.GetOrdinal("published_paper_version"))
-                ? null : reader.GetInt64(reader.GetOrdinal("published_paper_version"))
+                ? null : reader.GetInt64(reader.GetOrdinal("published_paper_version")),
+            HiddenForCurrentOperator = reader.GetBoolean(reader.GetOrdinal("hidden_for_current")),
+            HiddenForAllOperators = reader.GetBoolean(reader.GetOrdinal("hidden_for_all"))
         };
     }
 

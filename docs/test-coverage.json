@@ -422,7 +422,7 @@
       "requirement": "学生端连接、编号与试场分组",
       "action": "连接与每日编号",
       "gui": "src/Exam.Student/Views/LoginPage.xaml",
-      "cli": "不适用：学生端仅要求 GUI",
+      "cli": "不适用，学生端仅提供 GUI",
       "sharedApi": "POST /api/v1/student/login",
       "successTest": "tests/Unit/Exam.UnitTests/Participation/DirectStudentLoginTests.cs",
       "failureTest": "tests/Unit/Exam.StudentIdentityTests/StudentLoginWorkflowTests.cs",
@@ -432,7 +432,7 @@
       ],
       "automatedEvidence": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
       "manualCheck": "按验收标准执行真实设备、完整考试和现场交互核对",
-      "status": "直接登录后分配每日编号，无需考务批准",
+      "status": "无需批准直接登录，同一设备当天沿用编号，次日重分",
       "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由单机及多机测试执行，必须以实际执行记录确认。"
     },
     {
@@ -450,7 +450,7 @@
       ],
       "automatedEvidence": "tests/Integration/Exam.IntegrationTests/Activation/PostgresActivationPersistenceTests.cs",
       "manualCheck": "按验收标准执行真实设备、完整考试和现场交互核对",
-      "status": "查看设备和当前考生信息，退出后显示断开状态",
+      "status": "查看学生端信息、当前考生和连接状态，无学生设备批准组件",
       "gap": "入口已接线；现场设备、2秒时延、300会话及双机验收由单机及多机测试执行，必须以实际执行记录确认。"
     },
     {
@@ -1018,16 +1018,31 @@
       "gui": "src/Exam.Admin/ViewModels/ExamConfigurationCatalog.cs",
       "cli": "exams schedule 名称 --input 文件",
       "sharedApi": "PUT /api/v1/versioning/exams/{examId}/schedule",
-      "successTest": "tests/Integration/Exam.IntegrationTests/Cli/PostgresBusinessCliTests.cs",
-      "failureTest": "tests/Integration/Exam.IntegrationTests/Versioning/PostgresExamVersioningServiceTests.cs",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Versioning/PostgresScheduleReopeningTests.cs",
+      "failureTest": "tests/Unit/Exam.StudentUnitTests/ScheduleReopeningRuntimeTests.cs",
       "category": [
         "core",
         "postgres"
       ],
-      "automatedEvidence": "run-report.json / time-modification audit and retry regressions",
-      "manualCheck": "按验收标准核对已开考、结束边界、修改通知及两端显示",
-      "status": "要求原预期版本和原因；操作者由当前登录会话绑定，原请求重试不重复修改",
+      "automatedEvidence": "run-report.json / PostgresScheduleReopeningTests / ScheduleReopeningPackageTests / ScheduleReopeningRuntimeTests / ScheduleReopeningPushTests / HttpTimeExtensionReopensAnEndedExamUsingServerTime",
+      "manualCheck": "按 S09 核对结束后延长、学生端实时推送、离线重连、旧结束通知及已交卷保护",
+      "status": "按原预期版本保存；结束后延长可重开并可靠推送学生端，已固定答卷保留，历史重放不重开",
       "gap": "真实设备通知时延与完整考试边界按对应验收场景记录，不由静态接线代替。"
+    },
+    {
+      "id": "COV-058",
+      "requirement": "考试设置与计分",
+      "action": "隐藏考试及按范围取消隐藏",
+      "gui": "src/Exam.Admin/ViewModels/ExamHomeViewModel.cs",
+      "cli": "exams hidden / exams hide / exams unhide（self 或 all）",
+      "sharedApi": "GET /api/v1/exams; PUT /api/v1/exams/{examId}/hiding",
+      "successTest": "tests/Integration/Exam.IntegrationTests/Exams/PostgresExamHidingTests.cs",
+      "failureTest": "tests/Integration/Exam.IntegrationTests/Api/ExamHidingApiTests.cs",
+      "category": ["core", "postgres", "wpf"],
+      "automatedEvidence": "run-report.json / ExamHidingViewModelTests / WpfBindingSmokeTests / AdministrationCliTests",
+      "manualCheck": "核对卡片按钮、两个隐藏列表入口、范围选择及双账号重新登录后的显示",
+      "status": "个人与全体隐藏分别持久化；按认证账号读取，保留学生端显示和所有考试数据",
+      "gap": "合成数据验证不代替现场多机交互验收"
     }
   ]
 }

@@ -4,7 +4,7 @@ using Exam.Contracts.Versioning;
 
 namespace Exam.UnitTests.Versioning;
 
-public sealed class ExamVersioningServiceTests
+public sealed partial class ExamVersioningServiceTests
 {
     private static readonly DateTimeOffset BaseTime =
         new(2026, 9, 22, 8, 0, 0, TimeSpan.FromHours(8));
@@ -118,7 +118,7 @@ public sealed class ExamVersioningServiceTests
     }
 
     [Fact]
-    public void Extending_an_ended_exam_does_not_reopen_it_or_allow_new_participants()
+    public void Replaying_a_legacy_ended_exam_correction_does_not_reopen_or_allow_new_participants()
     {
         var service = CreateService(now: BaseTime.AddHours(3));
 

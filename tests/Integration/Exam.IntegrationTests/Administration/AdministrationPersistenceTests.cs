@@ -81,6 +81,18 @@ public sealed class AdministrationPersistenceTests(PostgresDatabaseFixture fixtu
     [InlineData("202610080001", "202610080002")]
     public async Task Rooms_BatchMoveIsVersionedAtomicAuditedAndDoesNotChangeCredentials(string firstNumber, string secondNumber)
     {
+        // Fixed legacy/current device numbers must not collide with daily-login tests in the shared fixture.
+        var isolated = new PostgresDatabaseFixture();
+        await isolated.InitializeAsync();
+        try
+        {
+            await new AdministrationPersistenceTests(isolated).VerifyBatchMoveAsync(firstNumber, secondNumber);
+        }
+        finally { await isolated.DisposeAsync(); }
+    }
+
+    private async Task VerifyBatchMoveAsync(string firstNumber, string secondNumber)
+    {
         var first=await Rooms.CreateAsync(new(Id(),"合成试场甲-"+Id()),Actor);
         var second=await Rooms.CreateAsync(new(Id(),"合成试场乙-"+Id()),Actor);
         var a=await SeedDevice(firstNumber);var b=await SeedDevice(secondNumber);

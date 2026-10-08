@@ -17,7 +17,7 @@ namespace Exam.IntegrationTests.Versioning;
 
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresExamVersioningServiceTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresExamVersioningServiceTests(PostgresDatabaseFixture fixture)
 {
     [Fact]
     public async Task ScheduleChange_PersistsFullWindowAndDeliversItFromPostgresAfterRestart()

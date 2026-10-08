@@ -692,12 +692,11 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             eventTypes.Add(CommandEventType.PaperUpdated);
         }
 
-        if (before.LifecycleState != after.LifecycleState)
-        {
-            eventTypes.Add(after.LifecycleState == ExamLifecycle.Running
-                ? CommandEventType.Start
-                : CommandEventType.End);
-        }
+        if (after.LifecycleState == ExamLifecycle.Running && before.LifecycleState != after.LifecycleState)
+            eventTypes.Add(CommandEventType.Start);
+        if (after.LifecycleState == ExamLifecycle.Ended &&
+            (before.LifecycleState != after.LifecycleState || operation == UpdateScheduleOperation))
+            eventTypes.Add(CommandEventType.End);
 
         if (eventTypes.Contains(CommandEventType.Start))
         {
@@ -831,7 +830,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             ["scheduleVersion"] = snapshot.Versions.ScheduleVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["paperVersion"] = snapshot.Versions.PaperVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
-        if (eventType == CommandEventType.ScheduleChanged)
+        if (eventType is CommandEventType.ScheduleChanged or CommandEventType.Start)
         {
             // 与时间计划和可靠事件一起提交；重发只读取这份不可变事件，不读取后来修改的计划。
             metadata["scheduledStart"] = snapshot.Schedule.StartsAt.ToOffset(TimeSpan.FromHours(8))
@@ -839,6 +838,9 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
             metadata["scheduledEnd"] = snapshot.Schedule.EndsAt.ToOffset(TimeSpan.FromHours(8))
                 .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
         }
+        if (snapshot.ReopenedAtScheduleVersion > 0)
+            metadata["reopenedAtScheduleVersion"] = snapshot.ReopenedAtScheduleVersion
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (eventType == CommandEventType.PaperUpdated && snapshot.Paper is { } paper)
         {
             metadata["changedQuestionIds"] = JsonSerializer.Serialize(
@@ -972,7 +974,15 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
         if (!reader.Read()) return false;
         var original = JsonSerializer.Deserialize<UpdateScheduleRequest>(reader.GetString(0), _json);
         if (reader.Read() || original is null) return false;
-        return string.Equals(storedHash, HashExactPayload(schedule with { Now = original.Now }), StringComparison.Ordinal);
+        var historical = schedule with { Now = original.Now };
+        if (!original.ReopenEndedExam && schedule.ReopenEndedExam)
+        {
+            // New HTTP arrivals opt into reopening. A retry of a pre-upgrade request must
+            // still return its original receipt, without executing it under the new policy.
+            historical = historical with { ReopenEndedExam = false };
+            if (string.Equals(storedHash, HashPayload(historical), StringComparison.Ordinal)) return true;
+        }
+        return string.Equals(storedHash, HashExactPayload(historical), StringComparison.Ordinal);
     }
 
     private static string RequestIdOf<TRequest>(TRequest request) =>

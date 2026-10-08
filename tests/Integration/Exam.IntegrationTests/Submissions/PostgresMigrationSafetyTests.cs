@@ -32,7 +32,7 @@ public sealed partial class PostgresSubmissionStoreTests
             var runner = new PostgresMigrationRunner(isolated.DataSource, typeof(PostgresSubmissionStoreTests).Assembly);
             if (blocked)
             {
-                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.MigrateAsync());
+                var error = await Assert.ThrowsAsync<PostgresMigrationBlockedException>(() => runner.MigrateAsync());
                 Assert.Contains("禁止迁移数据库", error.Message);
                 await using var probe = isolated.DataSource.CreateCommand("SELECT to_regclass('exam.migration_safety_probe') IS NULL;");
                 Assert.Equal(true, await probe.ExecuteScalarAsync());

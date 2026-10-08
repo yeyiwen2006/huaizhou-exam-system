@@ -18,7 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Exam.StudentUnitTests;
 
-public sealed class SignalRExamCommandFeedTests
+public sealed partial class SignalRExamCommandFeedTests
 {
     [Fact]
     public async Task RealHub_ReceivesDurableStartAndDoesNotResendAfterAcknowledgement()

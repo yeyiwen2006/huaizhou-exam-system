@@ -71,7 +71,11 @@ public sealed record ExamEntrySnapshot(
     long PackageLength,
     long PaperVersion,
     long InstructionsVersion,
-    string? UnlockReference);
+    string? UnlockReference)
+{
+    public long ScheduleVersion { get; init; }
+    public long ReopenedAtScheduleVersion { get; init; }
+}
 
 public interface IExamEntryDirectory
 {

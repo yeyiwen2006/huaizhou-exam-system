@@ -112,7 +112,9 @@ internal static partial class ExamCli
         Console.WriteLine("  logout | whoami                       退出登录 / 查看当前登录账号");
         Console.WriteLine("  operators list                        列出考务账号（管理员）");
         Console.WriteLine("  operators approve|disable|enable 用户名  批准、停用或重新启用考务账号（管理员）");
-        Console.WriteLine("  exams list                            列出全部考试（名称、时间、状态、是否在学生端显示）");
+        Console.WriteLine("  exams list                            列出未隐藏的考试（名称、时间、状态、是否在学生端显示）");
+        Console.WriteLine("  exams hidden                          列出对当前账号生效的隐藏考试及范围");
+        Console.WriteLine("  exams hide|unhide 名称 self|all       隐藏或取消隐藏：当前账号 / 所有考务账号");
         Console.WriteLine("  exams show 名称                       查看考试设置与考试说明");
         Console.WriteLine("  exams create --input FILE             新建考试（name、schedule、settings）");
         Console.WriteLine("  exams schedule NAME --input FILE      修改时间（expectedVersion、schedule、reason）");
