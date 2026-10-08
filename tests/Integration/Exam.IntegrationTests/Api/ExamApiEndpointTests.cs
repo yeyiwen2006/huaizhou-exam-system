@@ -28,6 +28,24 @@ namespace Exam.IntegrationTests.Api;
 public sealed class ExamApiEndpointTests
 {
     [Fact]
+    public async Task StudentLoginConnectsWithoutApprovalAndReturnsDeviceNumberAndTopology()
+    {
+        await using var application = await CreateApplicationAsync(withTopology: true);
+        using var client = application.GetTestClient();
+        var roster = (InMemoryCandidateRosterDirectory)application.Services.GetRequiredService<ICandidateRosterDirectory>();
+        roster.Add(new("exam-login", new("candidate-login", "合成考生", "01", "0001")));
+        var request = new LoginStudentRequest("direct-login", "new-device", "synthetic-credential", "合成考生", "01", "0001");
+        using var response = await client.PostAsJsonAsync("/api/v1/student/login", request, JsonDefaults.Create());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<ApiEnvelope<ConnectedStudentSessionResult>>(JsonDefaults.Create()))!.Result!;
+        Assert.Matches("^[0-9]{8}0001$", result.Device.ClientNumber);
+        Assert.NotNull(result.Device.Topology);
+        Assert.Equal("合成考生", result.Session.Candidate.Name);
+        Assert.Equal(request.DeviceId, result.Session.DeviceId);
+        Assert.Empty(await application.Services.GetRequiredService<ActivationService>().ListPendingRequestsAsync());
+    }
+
+    [Fact]
     public async Task GradingPublicationRequiresActualCompleteInputs_AndMatchesPublishedPaper()
     {
         const string manifest = """

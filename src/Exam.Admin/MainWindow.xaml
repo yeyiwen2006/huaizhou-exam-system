@@ -729,36 +729,11 @@
             <reporting:ReportPageView DataContext="{Binding Reports}" />
         </TabItem>
 
-        <TabItem Header="激活与试场分组" Tag="{StaticResource Icon.Device}">
+        <TabItem Header="设备与试场分组" Tag="{StaticResource Icon.Device}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="激活与试场分组" Tag="{StaticResource Icon.Device}"
-                        Content="审批设备激活，查看当前考生与连接情况；试场和转组记录保存在服务器。"/>
-                    <Border Style="{StaticResource CardGap}">
-                        <StackPanel>
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="刷新申请" Style="{StaticResource ActionButton}" Command="{Binding Activation.RefreshPendingCommand}"/>
-                                <TextBlock Text="待审批申请" Style="{StaticResource CardHeading}"/>
-                            </DockPanel>
-                            <TextBlock Text="选中申请后选择试场再批准；不指定试场时保存为“未分组”。请与学生端显示的申请识别码核对。" Style="{StaticResource CardNote}"/>
-                            <DataGrid ItemsSource="{Binding Activation.PendingRequests}" SelectedItem="{Binding Activation.SelectedPendingRequest}" Height="160" IsReadOnly="True">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="申请识别码" Binding="{Binding VerificationCode}" Width="*">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding ActivationRequestId}"/></Style>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
-                                    <DataGridTextColumn Header="申请时间" Binding="{Binding RequestedAtText}" Width="*"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <WrapPanel Margin="0,12,0,0">
-                                <TextBlock Text="{Binding Activation.PendingSelectionText}" VerticalAlignment="Center" Margin="0,0,20,10"/>
-                                <ComboBox ItemsSource="{Binding Activation.GroupChoices}" SelectedItem="{Binding Activation.SelectedApprovalChoice, Mode=TwoWay}"
-                                    DisplayMemberPath="Name" Width="190" Margin="0,0,12,10"/>
-                                <Button Content="审批" Style="{StaticResource PrimaryAction}" Command="{Binding Activation.ApproveCommand}"/>
-                            </WrapPanel>
-                        </StackPanel>
-                    </Border>
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备与试场分组" Tag="{StaticResource Icon.Device}"
+                        Content="查看已连接的学生端、当前考生与连接情况；试场和转组记录保存在服务器。"/>
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="设备目录" Style="{StaticResource CardHeading}"/>
@@ -781,9 +756,8 @@
                                 Height="270" HorizontalScrollBarVisibility="Auto" CanUserAddRows="False" CanUserDeleteRows="False">
                                 <DataGrid.Columns>
                                     <DataGridCheckBoxColumn Header="转组" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
-                                    <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="125" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="145" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="130" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="激活状态" Binding="{Binding ActivationStatus}" Width="90" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="90" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="75" IsReadOnly="True"/>

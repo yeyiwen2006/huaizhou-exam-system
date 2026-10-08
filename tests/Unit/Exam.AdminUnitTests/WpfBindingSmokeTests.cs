@@ -127,14 +127,17 @@ public sealed class WpfBindingSmokeTests
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);
                 Assert.Equal("考生名单", ((TabItem)tabs.Items[MainViewModel.RosterPage]).Header);
-                Assert.Equal("激活与试场分组", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
+                Assert.Equal("设备与试场分组", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
                 foreach (var tab in tabs.Items.Cast<TabItem>())
                 {
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
-                    if ((string)tab.Header == "激活与试场分组")
+                    if ((string)tab.Header == "设备与试场分组")
                     {
+                        Assert.DoesNotContain(Descendants<Button>(window), button =>
+                            ReferenceEquals(button.Command, viewModel.Activation.ApproveCommand) ||
+                            ReferenceEquals(button.Command, viewModel.Activation.RefreshPendingCommand));
                         VerifyRoomInputAlignment(window, viewModel);
                         Assert.Contains(Descendants<Button>(window), button => Equals(button.Content, "重命名") && button.Command is not null);
                         var queryInput = Assert.Single(Descendants<TextBox>(window), input =>
@@ -153,7 +156,9 @@ public sealed class WpfBindingSmokeTests
                         }
                         Assert.DoesNotContain(Descendants<TextBox>(window), input =>
                             BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Activation.MoveReason");
-                        foreach (var binding in new[] { "Activation.SelectedApprovalChoice", "Activation.SelectedMoveChoice" })
+                        Assert.DoesNotContain(Descendants<ComboBox>(window), input =>
+                            BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == "Activation.SelectedApprovalChoice");
+                        foreach (var binding in new[] { "Activation.SelectedMoveChoice" })
                         {
                             var choice = Assert.Single(Descendants<ComboBox>(window), input =>
                                 BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == binding);

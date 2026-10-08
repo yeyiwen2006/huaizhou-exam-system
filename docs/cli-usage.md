@@ -1,14 +1,12 @@
 # 考务 CLI 操作与持续监测
 
-这些命令与考务 GUI 使用同一服务器接口、登录身份及业务校验。首次激活申请没有学生端编号，不能要求先输入一个尚未分配的编号。
+这些命令与考务 GUI 使用同一服务器接口、登录身份及业务校验。学生端每次填写连接信息后直接登录，无需 CLI 或考务 GUI 批准。
 
-## 激活、裁决和补传
+## 设备查询、裁决和补传
 
 | 命令 | 用途与输入 |
 | --- | --- |
-| `activation pending` | 查询待审批申请；首次申请的 `clientNumber` 为空，使用返回的 `activationRequestId` 审批 |
-| `activation approve 申请标识 [试场名称]` | 批准并分组，默认未分组；服务器在批准时分配编号。已有11位编号的待审批申请仍可按编号解析 |
-| `activation revoke 学生端编号 --input FILE` | 撤销该设备激活；JSON 包含 `reason` |
+| `devices list` | 查看学生端编号、试场和连接信息 |
 | `decisions keep 考试名称 学生端编号 --input FILE` | 从该考生的冲突设备中选择保留端；JSON 包含 `device`（保留设备的公开编号）和 `reason` |
 | `commands resend 考试名称 学生端编号 start/end` | 最后一个位置参数为 `start` 或 `end`；只选择当前可重发的对应指令 |
 | `commands reupload 考试名称 学生端编号` | 对尚未回收的考生重发原结束指令，请求原答卷补传，不恢复作答 |
@@ -18,8 +16,7 @@
 为可恢复操作提供稳定的 `--request-id`。例如：
 
 ```text
-activation approve 待审批列表中的申请标识 合成试场 --request-id synthetic-approval-001
-commands reupload 合成考试 20261006001 --request-id synthetic-reupload-001
+commands reupload 合成考试 202610060001 --request-id synthetic-reupload-001
 ```
 
 发送前，CLI 将逻辑服务器、登录账号、请求编号、原始输入指纹及解析后的请求加密保存在当前 Windows 账号的 CLI 目录。使用当前用户 DPAPI；同一请求的并发准备由文件锁保护。目录默认位于本机用户配置目录，可沿用 `EXAM_CLI_SESSION_DIRECTORY` 指定独立目录。
@@ -54,3 +51,5 @@ commands reupload 合成考试 20261006001 --request-id synthetic-reupload-001
 先用 `exams show "考试名称"` 读取当前 `scheduleVersion`。`exams schedule "考试名称" --input time-change.json` 接受 `requestId`、`expectedVersion`、`schedule`（`startsAt` 和 `endsAt`）及选填的 `reason`。原因可以留空，填写时不超过1000字；操作者由服务器从当前登录会话取得，不能由输入文件冒充。
 
 重试使用同一文件、原请求标识和原预期版本。其他人已修改时返回冲突，不自动读取新版本覆盖其修改。新建考试仍用 `exams create`；时间修改入口不创建考试。服务器把操作者、原因、修改时间、预期版本和新时间窗写入同一持久事件，历史事件不被重写。
+
+旧版 `activation` 命令仅为兼容既有客户端保留，新学生端不使用激活或批准流程。

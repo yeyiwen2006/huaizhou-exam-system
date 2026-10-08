@@ -23,7 +23,7 @@
 | `Brush.Border` / `Brush.Border.Strong` | `#E1E6EE` / `#C3CCD9` | 卡片与表格分隔 / 输入框描边 |
 | `Brush.Text.Primary` / `.Secondary` | `#1B2433` / `#5F6B7E` | 主文本 / 辅助文本 |
 | `Brush.Nav.*` | 深蓝 `#132A4C` 系 | 仅用于考务端侧栏导航外壳（背景、悬停、选中、强调条、文字） |
-| `Brush.Brand.Gradient` | `#2A6CC4` → `#173F78` | 激活/登录/等待页卡片顶部品牌带与侧栏标识，只作装饰，不承载语义 |
+| `Brush.Brand.Gradient` | `#2A6CC4` → `#173F78` | 登录/等待页卡片顶部品牌带与侧栏标识，只作装饰，不承载语义 |
 | `Brush.Scrim` | 白色 95% | 撤权等整页遮罩 |
 | **`Brush.Answer`** | `#2E9E5B` | **已作答语义（题号方框绿色填充）** |
 | **`Brush.Mark`** | `#E04B4B` | **私人标记语义（题号右上角红点）** |
@@ -52,7 +52,7 @@
 |---|---|
 | `Btn.Primary` / `Btn.Secondary` | 主/次按钮，含 Hover、Pressed、Focus 环、禁用态 |
 | `Btn.Danger` | 红色危险按钮（右上角提交答卷 / 退出系统 / 返回） |
-| `Btn.Ghost` | 小字链接型按钮（登录页“取消激活”等） |
+| `Btn.Ghost` | 小字链接型按钮（辅助操作） |
 | TextBox 隐式样式 | 36 高、圆角、聚焦主色描边、校验错误红框 |
 | DataGrid 隐式样式 + `TableFooterRow` | 表格及固定平均分行（供成绩报表使用） |
 | ProgressBar / ScrollBar | 统一细样式 |
@@ -69,7 +69,7 @@
 | `StatusPill` | 圆点胶囊状态标识（Info/Success/Warning/Danger/Neutral） |
 | `Banner` | 业务消息条（“当前不可进入该考试！”“试题获取失败！”等） |
 | `BusyOverlay` | **网络等待遮罩：所有网络等待必须可见**，转圈动画 + 文案 + 阻断输入 |
-| `ConfirmDialog` | 统一确认弹窗（登录确认、提前交卷、退出系统、取消激活等），`isDanger` 切红色确认键 |
+| `ConfirmDialog` | 统一确认弹窗（登录确认、提前交卷、退出系统等），`isDanger` 切红色确认键 |
 | `QuestionBox` | 题号方框：已答绿色填充 / 标记右上角红点 / 当前题主色描边，点击跳题 |
 | 布局样式（`Components.xaml`） | `PageTitle`/`PageSubtitle` 页头，`FieldLabel` 表单标签，`Card`/`Card.Flat` 卡片，`IconTile`/`IconTile.Glyph` 图标块，`Hint` 提示条，`TopBar` 顶部条，`BrandBand` 品牌带，`BoolToVis` 布尔可见性转换器 |
 | 图标（`Icons.xaml`） | `Icon.*` 24×24 线性几何，配合 `Icon.Stroke` 或 `IconTile.Glyph`；图标只作识别辅助，含义始终由相邻文字表达 |

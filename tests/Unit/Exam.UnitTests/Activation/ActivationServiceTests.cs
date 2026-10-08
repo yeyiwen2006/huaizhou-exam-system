@@ -25,7 +25,7 @@ public sealed class ActivationServiceTests
 
         Assert.Equal(300, approvals.Select(result => result.ClientNumber).Distinct().Count());
         Assert.Equal(
-            Enumerable.Range(1, 300).Select(sequence => $"20260922{sequence:000}"),
+            Enumerable.Range(1, 300).Select(sequence => $"20260922{sequence:0000}"),
             approvals.Select(result => result.ClientNumber).Order(StringComparer.Ordinal));
     }
 
@@ -44,8 +44,8 @@ public sealed class ActivationServiceTests
         Assert.Equal(first, replay);
         Assert.Equal(first, semanticReplay);
         Assert.Equal("room-a", semanticReplay.RoomGroupId);
-        Assert.Equal("20260922001", first.ClientNumber);
-        Assert.Equal("20260922002", next.ClientNumber);
+        Assert.Equal("202609220001", first.ClientNumber);
+        Assert.Equal("202609220002", next.ClientNumber);
     }
 
     [Fact]
@@ -138,24 +138,24 @@ public sealed class ActivationServiceTests
     }
 
     [Fact]
-    public async Task SequenceStopsAt999_AndStartsAt001OnNextServerDate()
+    public async Task SequenceStopsAt9999_AndStartsAt0001OnNextServerDate()
     {
         var fixture = new Fixture(new DateTimeOffset(2026, 9, 22, 23, 59, 0, TimeSpan.Zero));
-        ActivationResult? last = null;
-        for (var index = 1; index <= 999; index++)
+        await fixture.Persistence.ExecuteTransactionAsync(transaction =>
         {
-            last = await fixture.ApplyAndApproveAsync($"device-{index}", $"secret-{index}", index.ToString());
-        }
-
-        Assert.Equal("20260922999", last!.ClientNumber);
-        var overflowRequest = await fixture.Service.SubmitRequestAsync(new("apply-overflow", "overflow", "secret"));
+            transaction.SetLastDailySequence(new DateOnly(2026, 9, 22), 9998);
+            return true;
+        });
+        var last = await fixture.Service.ConnectAsync("last-device", "last-secret");
+        Assert.Equal("202609229999", last.ClientNumber);
+        Assert.Equal(last.ClientNumber, (await fixture.Service.ConnectAsync("last-device", "last-secret")).ClientNumber);
         var error = await Assert.ThrowsAsync<ActivationRuleException>(() =>
-            fixture.Service.ApproveAsync(new("approve-overflow", overflowRequest.ActivationRequestId)).AsTask());
+            fixture.Service.ConnectAsync("overflow", "secret").AsTask());
         Assert.Equal(ActivationErrorCodes.DailySequenceExhausted, error.Code);
 
         fixture.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.Zero));
-        var nextDay = await fixture.Service.ApproveAsync(new("approve-next-day", overflowRequest.ActivationRequestId));
-        Assert.Equal("20260923001", nextDay.ClientNumber);
+        var nextDay = await fixture.Service.ConnectAsync("overflow", "secret");
+        Assert.Equal("202609230001", nextDay.ClientNumber);
     }
 
     [Fact]
@@ -169,7 +169,61 @@ public sealed class ActivationServiceTests
         var request = await restarted.SubmitRequestAsync(new("apply-2", "device-2", "secret-2"));
         var second = await restarted.ApproveAsync(new("approve-2", request.ActivationRequestId));
 
-        Assert.Equal("20260922002", second.ClientNumber);
+        Assert.Equal("202609220002", second.ClientNumber);
+    }
+
+    [Fact]
+    public async Task DirectConnection_UsesOneNumberPerDevicePerServerDate_AndSurvivesRestart()
+    {
+        var fixture = new Fixture();
+        var first = await fixture.Service.ConnectAsync("direct-device", "credential");
+        Assert.Equal("202609220001", first.ClientNumber);
+        Assert.Null(first.RoomGroupId);
+        Assert.Empty(await fixture.Service.ListPendingRequestsAsync());
+        var duplicates = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ =>
+            fixture.Service.ConnectAsync("direct-device", "credential").AsTask()));
+        Assert.All(duplicates, result => Assert.Equal(first.ClientNumber, result.ClientNumber));
+        var restarted = new ActivationService(fixture.Persistence, fixture.CredentialProtector, fixture.Clock);
+        Assert.Equal(first.ClientNumber, (await restarted.ConnectAsync("direct-device", "credential")).ClientNumber);
+        Assert.Equal("202609220002", (await restarted.ConnectAsync("second", "other-credential")).ClientNumber);
+        fixture.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.Zero));
+        var nextDay = await restarted.ConnectAsync("direct-device", "credential");
+        Assert.Equal("202609230001", nextDay.ClientNumber);
+        Assert.Equal(first.DeviceId, nextDay.DeviceId);
+        Assert.Equal(first.CredentialVersion, nextDay.CredentialVersion);
+        Assert.Equal(nextDay.ClientNumber, (await restarted.ConnectAsync("direct-device", "credential")).ClientNumber);
+    }
+
+    [Fact]
+    public async Task DirectConnection_ConcurrentNewDevicesUseFourDigitsAndRejectWrongCredential()
+    {
+        var fixture = new Fixture();
+        var devices = await Task.WhenAll(Enumerable.Range(1, 32).Select(index =>
+            fixture.Service.ConnectAsync($"direct-{index}", $"credential-{index}").AsTask()));
+        Assert.Equal(Enumerable.Range(1, 32).Select(index => $"20260922{index:0000}"),
+            devices.Select(device => device.ClientNumber).Order(StringComparer.Ordinal));
+        var error = await Assert.ThrowsAsync<ActivationRuleException>(() =>
+            fixture.Service.ConnectAsync("direct-1", "wrong-credential").AsTask());
+        Assert.Equal(ActivationErrorCodes.InvalidCredential, error.Code);
+        Assert.Equal("202609220033", (await fixture.Service.ConnectAsync("next", "credential")).ClientNumber);
+    }
+
+    [Fact]
+    public async Task DirectConnection_UpgradesLegacyDeviceWithoutLosingRoomOrCredential()
+    {
+        var fixture = new Fixture();
+        await fixture.Persistence.ExecuteTransactionAsync(transaction =>
+        {
+            transaction.SaveDevice(new("legacy", "20260921017", new DateOnly(2026, 9, 21),
+                ActivationStatus.Revoked, "room-7", fixture.CredentialProtector.Protect("credential"),
+                1, fixture.Clock.GetUtcNow().AddDays(-1), null, 4));
+            return true;
+        });
+        var device = await fixture.Service.ConnectAsync("legacy", "credential");
+        Assert.Equal("202609220001", device.ClientNumber);
+        Assert.Equal("room-7", device.RoomGroupId);
+        Assert.Equal(ActivationStatus.Active, device.Status);
+        Assert.True(await fixture.Service.ValidateActiveDeviceAsync("legacy", "credential"));
     }
 
     private sealed class Fixture

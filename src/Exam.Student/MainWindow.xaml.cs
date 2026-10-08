@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Controls;
 using Exam.Student.Core;
 using Exam.Student.Views;
-using Exam.Contracts.Activation;
 using Exam.Contracts.Submissions;
 
 namespace Exam.Student;
@@ -10,8 +9,8 @@ namespace Exam.Student;
 /// <summary>
 /// 学生端主壳：承载页面区域与导航。所有页面切换经由 Navigation，
 /// 统一处理编号姓名显示、账号数据隔离、全屏和断线重连。
-/// 激活态霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
-/// 取消激活后恢复常规窗口。Ctrl+Alt+Del 用户态不可拦截，属文档注明边界。
+/// 登录后霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
+/// 退出登录后恢复常规窗口。Ctrl+Alt+Del 用户态不可拦截，属文档注明边界。
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -33,10 +32,10 @@ public partial class MainWindow : Window
         ApplyKioskState();
     }
 
-    /// <summary>激活态霸屏：拦截标题栏与系统关闭；取消激活后恢复常规关闭。</summary>
+    /// <summary>登录后霸屏：拦截标题栏与系统关闭；退出登录后恢复常规关闭。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (!_applicationExitRequested && App.Services.Session.IsActivated)
+        if (!_applicationExitRequested && App.Services.Session.LoginResult is not null)
         {
             e.Cancel = true;
             if (WindowState != WindowState.Maximized)
@@ -69,35 +68,19 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
-    /// <summary>启动流程：已激活 → 登录页；未激活 → 激活页。</summary>
-    public async Task StartAsync()
+    /// <summary>启动流程：每次启动均进入连接与登录页。</summary>
+    public Task StartAsync()
     {
         _navigation = new Navigation(PageRegion);
-        App.Services.StartPresence();
-
-        var device = await Task.Run(App.Services.DeviceStore.Load);
-        if (device is not null)
-        {
-            App.Services.ConfigureDevice(device);
-        }
-
-        if (device is { Status: ActivationStatus.Active })
-        {
-            device = await App.Services.EnsureTrustedTopologyAsync(device);
-            App.Services.ConfigureDevice(device);
-            App.Services.StartClock();
-            _navigation.GoToLogin();
-            return;
-        }
-
-        _navigation.GoToActivation();
+        _navigation.GoToLogin();
+        return Task.CompletedTask;
     }
 
-    /// <summary>根据激活状态切换霸屏与常规窗口；每次页面切换都会核对。</summary>
+    /// <summary>根据登录状态切换霸屏与常规窗口；每次页面切换都会核对。</summary>
     private void ApplyKioskState()
     {
-        var activated = App.Services.Session.IsActivated;
-        if (activated && _kiosk is null)
+        var loggedIn = App.Services.Session.LoginResult is not null;
+        if (loggedIn && _kiosk is null)
         {
             _kiosk = KioskGuard.Enable(this);
             Topmost = true;
@@ -105,7 +88,7 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, $"本机考试防护未能开启，请联系监考人员。（错误代码 {_kiosk.InstallationError}）",
                     "考试防护未开启", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        else if (!activated && _kiosk is not null)
+        else if (!loggedIn && _kiosk is not null)
         {
             _kiosk.Disable();
             _kiosk = null;
@@ -128,20 +111,16 @@ public partial class MainWindow : Window
             _region.Content = page;
             if (Window.GetWindow(_region) is { } window)
             {
-                window.WindowStyle = App.Services.Session.IsActivated ? WindowStyle.None : WindowStyle.SingleBorderWindow;
-                window.ResizeMode = App.Services.Session.IsActivated ? ResizeMode.NoResize : ResizeMode.CanResize;
-                window.WindowState = App.Services.Session.IsActivated ? WindowState.Maximized : WindowState.Normal;
-                // 霸屏随激活状态启停（含取消激活后的恢复）。
+                var loggedIn = App.Services.Session.LoginResult is not null;
+                window.WindowStyle = loggedIn ? WindowStyle.None : WindowStyle.SingleBorderWindow;
+                window.ResizeMode = loggedIn ? ResizeMode.NoResize : ResizeMode.CanResize;
+                window.WindowState = loggedIn ? WindowState.Maximized : WindowState.Normal;
+                // 霸屏随登录状态启停。
                 if (window is MainWindow main)
                 {
                     main.ApplyKioskState();
                 }
             }
-        }
-
-        public void GoToActivation()
-        {
-            Set(new ActivationPage(this));
         }
 
         public void GoToLogin()

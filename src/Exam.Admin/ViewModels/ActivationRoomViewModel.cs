@@ -17,7 +17,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     private string? _appliedDirectoryFilter;
     private string _moveToRoomGroupId = string.Empty;
     private bool _rebuildingChoices;
-    private string _status = "读取服务器试场和设备目录；未激活设备的申请在待审批列表中处理。";
+    private string _status = "读取服务器试场和设备目录，查看已连接的学生端和当前考生。";
     private string _directoryStatus = "尚未读取服务器设备目录。";
     private RoomGroupDraft? _selectedGroup;
     private ActivationPendingRow? _selectedPendingRequest;
@@ -152,7 +152,6 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             do
             {
                 if (source.IsCancellationRequested) break;
-                await RefreshPendingCoreAsync(source.Token, silent: true);
                 if (!_busy && !_reading) await RefreshDirectoryCoreAsync(source.Token, silent: true);
             }
             while (await timer.WaitForNextTickAsync(source.Token));
@@ -230,7 +229,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             if (incoming.Select(x => x.DeviceId).Distinct(StringComparer.Ordinal).Count() != incoming.Count ||
                 incoming.Select(x => x.ClientNumber).Distinct(StringComparer.Ordinal).Count() != incoming.Count)
                 throw new InvalidDataException("设备目录出现重复身份，未应用该次查询。");
-            if (query.Length == 11 && query.All(char.IsAsciiDigit)) incoming = incoming.Where(x => x.ClientNumber == query).ToList();
+            if (query.Length is 11 or 12 && query.All(char.IsAsciiDigit)) incoming = incoming.Where(x => x.ClientNumber == query).ToList();
             if (queryRequested && (filter != FilterRoomGroupId || query != QueryDeviceId.Trim()))
             { DirectoryStatus = "查询条件已变化，请重新查询；未应用旧条件的结果。"; return; }
             _appliedDirectoryQuery = query;

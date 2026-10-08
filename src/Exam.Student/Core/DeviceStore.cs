@@ -68,7 +68,8 @@ public sealed class DeviceStore
             if (existing is not null &&
                 (existing.DeviceId != record.DeviceId || existing.Credential != record.Credential ||
                  (existing.ServerId is not null && existing.ServerId != record.ServerId) ||
-                 (existing.ClientNumber is not null && existing.ClientNumber != record.ClientNumber) ||
+                 (existing.ClientNumber is not null && existing.ClientNumber != record.ClientNumber &&
+                     !IsNewDailyNumber(existing, record)) ||
                  (existing.SubmitRequestId is not null && existing.SubmitRequestId != record.SubmitRequestId) ||
                  (existing.ActivationRequestId is not null && existing.ActivationRequestId != record.ActivationRequestId) ||
                  (existing.PendingOperationRequestId is not null && record.PendingOperationRequestId is not null &&
@@ -87,13 +88,18 @@ public sealed class DeviceStore
 
     public static string NormalizeHost(string host)
     {
-        if (!IPAddress.TryParse(host.Trim(), out var address))
-        {
-            throw new ArgumentException("服务器 IP 地址格式不正确。", nameof(host));
-        }
-
-        return address.ToString();
+        var value = host.Trim();
+        if (IPAddress.TryParse(value, out var address)) return address.ToString();
+        if (Uri.CheckHostName(value) != UriHostNameType.Dns)
+            throw new ArgumentException("请填写有效的服务器 IP 地址或域名，不要包含协议、端口或路径。", nameof(host));
+        return value.TrimEnd('.').ToLowerInvariant();
     }
+
+    private static bool IsNewDailyNumber(DeviceRecord previous, DeviceRecord current) =>
+        current.Status == ActivationStatus.Active && current.ClientNumber is { Length: 12 } number &&
+        number.All(char.IsAsciiDigit) && number[8..] != "0000" &&
+        (previous.ClientNumber!.Length == 11 ||
+            string.CompareOrdinal(number[..8], previous.ClientNumber[..8]) > 0);
 
     private static string EndpointKey(string host, int port)
     {

@@ -23,6 +23,9 @@ internal static class ApiEndpointResults
             value = (T)(object)(activated with { Topology = StudentFailoverConfiguration.Read(configuration) });
         else if (value is ActivationResult device)
             value = (T)(object)(device with { Topology = StudentFailoverConfiguration.Read(configuration) });
+        else if (value is ConnectedStudentSessionResult login)
+            value = (T)(object)(login with
+                { Device = login.Device with { Topology = StudentFailoverConfiguration.Read(configuration) } });
         return Results.Json(
             Envelope(context, configuration, correlationId, value, null),
             statusCode: statusCode);

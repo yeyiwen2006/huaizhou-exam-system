@@ -104,6 +104,7 @@ public sealed class ExamApiAccessMiddleware(RequestDelegate next, BusinessRecove
             "/activation/cancel-own" or
             "/activation/reactivate" or
             "/participation/login" or
+            "/student/login" or
             "/operators/register" or
             "/operators/login") ||
         (HttpMethods.IsGet(method) && route == "/commands/time");

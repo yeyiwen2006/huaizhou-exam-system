@@ -11,6 +11,15 @@ public static class StudentApiEndpointExtensions
 {
     public static RouteGroupBuilder MapStudentApi(this RouteGroupBuilder api)
     {
+        api.MapPost("/student/login", async (
+            Exam.Contracts.Participation.LoginStudentRequest request,
+            Exam.Application.Participation.ParticipationService participation,
+            ActivationService connections,
+            HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
+            await ApiEndpointResults.ExecuteRuleAsync(context, configuration, request.RequestId,
+                () => participation.ConnectAndLoginAsync(request, connections, cancellationToken)))
+            .WithTags("Student Connection");
+
         api.MapGet("/student/server-topology", (HttpContext context, IConfiguration configuration) =>
         {
             _ = ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context);

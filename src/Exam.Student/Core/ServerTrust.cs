@@ -14,9 +14,11 @@ public static class ServerTrust
     private static string? _pinnedThumbprint;
     public static bool ValidateNodeCertificate(TrustedServerTopology topology, object? sender, X509Certificate? certificate)
     {
-        if (sender is not SslStream stream || certificate is null ||
-            !System.Net.IPAddress.TryParse(stream.TargetHostName.Trim('[', ']'), out var address)) return false;
-        var node = topology.Nodes.SingleOrDefault(node => node.Host == address.ToString());
+        if (sender is not SslStream stream || certificate is null) return false;
+        string host;
+        try { host = DeviceStore.NormalizeHost(stream.TargetHostName.Trim('[', ']')); }
+        catch (ArgumentException) { return false; }
+        var node = topology.Nodes.SingleOrDefault(node => DeviceStore.NormalizeHost(node.Host) == host);
         return node is not null && string.Equals(node.CertificateSha256,
             certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase);
     }

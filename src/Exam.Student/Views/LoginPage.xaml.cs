@@ -1,15 +1,12 @@
 using System.Windows;
 using System.Net.Http;
 using System.Windows.Controls;
-using Exam.Contracts.Activation;
-using Exam.Contracts.Participation;
-using Exam.Desktop.Shared.Controls;
 using Exam.Student.Core;
 
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 登录页：姓名 / 班级 / 准考证号（后两项仅数字），填写后直接提交登录。
+/// 登录页合并服务器连接与考生身份输入，填写后直接连接并登录。
 /// 名册不符（ROSTER_MISMATCH）时显示服务器返回的中文说明。
 /// </summary>
 public partial class LoginPage : UserControl
@@ -22,10 +19,6 @@ public partial class LoginPage : UserControl
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
-        if (App.Services.Device?.PendingOperation == "cancel")
-        {
-            ErrorBanner.Show("取消激活未完成，请重新点击“取消激活”。完成前不能登录。");
-        }
     }
 
     private async void OnExitSystem(object sender, RoutedEventArgs e)
@@ -39,12 +32,13 @@ public partial class LoginPage : UserControl
 
     private void OnInputChanged(object? sender, EventArgs e)
     {
-        if (LoginButton is null || NameInput is null || ClassInput is null || AdmissionInput is null)
+        if (LoginButton is null || HostInput is null || PortInput is null || NameInput is null || ClassInput is null || AdmissionInput is null)
         {
             return;
         }
 
-        LoginButton.IsEnabled = !_requesting && App.Services.Device?.PendingOperation is null && NameInput.Text.Trim().Length > 0
+        LoginButton.IsEnabled = !_requesting && HostInput.Text.Trim().Length > 0 && PortInput.Text.Trim().Length > 0
+            && NameInput.Text.Trim().Length > 0
             && ClassInput.Text.Trim().Length > 0
             && AdmissionInput.Text.Trim().Length > 0;
     }
@@ -56,11 +50,12 @@ public partial class LoginPage : UserControl
             return;
         }
 
-        var device = App.Services.Device;
-        if (device is not { Status: ActivationStatus.Active })
+        string host;
+        try { host = DeviceStore.NormalizeHost(HostInput.Text); }
+        catch (ArgumentException error) { ErrorBanner.Show(error.Message); return; }
+        if (!int.TryParse(PortInput.Text.Trim(), out var port) || port is < 1 or > 65535)
         {
-            // 正常流程不会到达：未激活设备无法打开登录页
-            ErrorBanner.Show("设备未激活，请先完成激活。");
+            ErrorBanner.Show("端口号必须在 1 到 65535 之间。");
             return;
         }
 
@@ -82,32 +77,23 @@ public partial class LoginPage : UserControl
 
         try
         {
-            var persisted = await Task.Run(App.Services.DeviceStore.Load);
-            if (persisted is null || persisted.DeviceId != device.DeviceId || persisted.PendingOperation is not null)
-            {
-                ErrorBanner.Show("本机激活状态尚未确认，请重新启动程序或联系监考人员。");
-                return;
-            }
-
-            var request = new LoginStudentRequest(
-                RequestIds.New(), device.DeviceId, device.Credential, name, classText, admissionNo);
-            var envelope = await App.Services.Api.LoginAsync(request);
-            if (!envelope.IsSuccess)
-            {
-                StudentMessages.ShowWithDetail(ErrorBanner, LoginFailure(envelope.Error!), envelope.Error!.Message);
-                return;
-            }
-
-            var result = envelope.Result!;
-            if (result.DeviceId != device.DeviceId || result.Candidate.Name != name ||
-                result.Candidate.ClassText != classText || result.Candidate.AdmissionNo != admissionNo)
-            {
-                ErrorBanner.Show("登录未完成，请重新登录。");
-                return;
-            }
-
+            await App.Services.StopPresenceAsync();
+            App.Services.StopClock();
+            var workflow = new StudentLoginWorkflow(App.Services.DeviceStore, App.Services.Api);
+            var (device, result) = await workflow.LoginAsync(host, port, name, classText, admissionNo);
+            App.Services.ConfigureDevice(device);
             App.Services.Session.OnLoggedIn(result);
+            App.Services.StartClock();
+            App.Services.StartPresence();
             _navigation.GoToExamSelection();
+        }
+        catch (StudentLoginException error)
+        {
+            StudentMessages.ShowWithDetail(ErrorBanner, LoginFailure(error.Error), error.Message);
+        }
+        catch (StudentIdentityException error)
+        {
+            ErrorBanner.Show(error.Message);
         }
         catch (DeviceStoreException error)
         {
@@ -132,78 +118,11 @@ public partial class LoginPage : UserControl
         }
     }
 
-    private async void OnCancelActivation(object sender, RoutedEventArgs e)
-    {
-        if (_requesting || App.Services.Device is not { } device)
-        {
-            return;
-        }
-
-        var window = Window.GetWindow(this);
-        if (window is null)
-        {
-            return;
-        }
-
-        var confirmed = await ConfirmDialog.ShowAsync(
-            window,
-            "取消激活",
-            "取消激活后本机将不能登录和参加考试，本机编号会保留。确定取消激活吗？",
-            "确定取消",
-            "返回",
-            isDanger: true);
-        if (!confirmed)
-        {
-            return;
-        }
-
-        _requesting = true;
-        Busy.Message = "正在取消激活…";
-        Busy.IsBusy = true;
-        ErrorBanner.Hide();
-        try
-        {
-            var persisted = await Task.Run(App.Services.DeviceStore.Load) ?? device;
-            var revoked = await App.Services.Activation.CancelAsync(persisted);
-            App.Services.StopClock();
-            App.Services.ConfigureDevice(revoked);
-            _navigation.GoToActivation();
-        }
-        catch (Exception error) when (error is DeviceStoreException or StudentIdentityException)
-        {
-            StudentMessages.ShowWithDetail(ErrorBanner, "操作未完成，请重试；如仍未完成，请联系监考人员。", error.Message);
-        }
-        catch (HttpStudentApi.UntrustedServerException error)
-        {
-            StudentMessages.ShowWithDetail(
-                ErrorBanner,
-                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
-                error.Message);
-        }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
-        {
-            ErrorBanner.Show("取消激活未完成，请重试。");
-        }
-        finally
-        {
-            Busy.IsBusy = false;
-            Busy.Message = "正在登录…";
-            var persisted = await Task.Run(App.Services.DeviceStore.Load);
-            if (persisted is not null)
-            {
-                App.Services.ConfigureDevice(persisted);
-            }
-
-            _requesting = false;
-            OnInputChanged(null, EventArgs.Empty);
-        }
-    }
-
     // 名册不匹配等明确原因照常提示；其余服务器原因统一为通俗说法。
     private static string LoginFailure(Exam.Contracts.Common.ApiError error) => error.Code switch
     {
         Exam.Contracts.Common.ErrorCodes.RosterMismatch => "姓名、班级或准考证号与考生名单不一致，请核对后重新填写。",
-        Exam.Contracts.Common.ErrorCodes.NotActivated => "本机尚未激活或激活已取消，请联系监考人员。",
+        Exam.Contracts.Common.ErrorCodes.NotActivated => "设备连接未能确认，请重新登录或联系监考人员。",
         _ => "登录未完成，请重试；如仍未完成，请联系监考人员。",
     };
 }

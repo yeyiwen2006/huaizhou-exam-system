@@ -18,6 +18,9 @@ public sealed record ExamOverview(
 public interface IStudentApi
 {
     void ConfigureConnection(DeviceRecord device);
+    void ConfigureLoginConnection(DeviceRecord device, string host, int port) => ConfigureConnection(device);
+    Task<ApiEnvelope<ConnectedStudentSessionResult>> ConnectAndLoginAsync(
+        LoginStudentRequest request, CancellationToken ct = default) => throw new NotSupportedException();
     Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(
         SubmitActivationRequest request, CancellationToken ct = default);
     Task<ApiEnvelope<ActivationRequestResult>> GetActivationStatusAsync(

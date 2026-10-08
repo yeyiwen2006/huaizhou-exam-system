@@ -30,7 +30,7 @@ public abstract class ObservableObject : INotifyPropertyChanged
 
 /// <summary>
 /// 当前会话状态：设备编号 + 当前登录考生。
-/// 编号在激活后保持稳定；姓名随登录切换；退出登录清除考生数据，确保无前一学生内容。
+/// 编号在同一服务器日期内保持稳定；姓名随登录切换；退出登录清除考生数据，确保无前一学生内容。
 /// </summary>
 public sealed class StudentSession : ObservableObject
 {
@@ -47,7 +47,7 @@ public sealed class StudentSession : ObservableObject
         private set => SetProperty(ref _isActivated, value);
     }
 
-    /// <summary>服务器分配的设备编号（激活后稳定，与服务器是否在线无关）。</summary>
+    /// <summary>服务器分配的当日设备编号。</summary>
     public string? ClientNumber
     {
         get => _clientNumber;

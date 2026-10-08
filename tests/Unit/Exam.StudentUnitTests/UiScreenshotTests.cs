@@ -42,7 +42,7 @@ public sealed class UiScreenshotTests
 
     [Fact]
     [Trait("Category", "Wpf")]
-    public async Task ActivationAndLoginForms_AlignTextAndSubmitWithoutConfirmation()
+    public async Task CombinedLoginForm_AlignsTextAndSubmitsWithoutConfirmation()
     {
         var directory = Environment.GetEnvironmentVariable(DirectoryVariable);
         if (string.IsNullOrWhiteSpace(directory)) return;
@@ -62,16 +62,11 @@ public sealed class UiScreenshotTests
             try
             {
                 window.Show();
-                var activation = new ActivationPage(navigation);
-                await ShowAsync(window, host, activation);
-                Assert.Empty(Descendants<BusyOverlay>(activation));
-                await CheckAlignmentAsync((ValidatedInput)activation.FindName("HostInput"), "192.0.2.10");
-                await CheckAlignmentAsync((ValidatedInput)activation.FindName("PortInput"), "5443");
-                await CaptureAsync(window, directory, "activation-stable-form");
-
                 App.Services.ConfigureDevice(fixture.Device);
                 var login = new LoginPage(navigation);
                 await ShowAsync(window, host, login);
+                await CheckAlignmentAsync((ValidatedInput)login.FindName("HostInput"), "192.0.2.10");
+                await CheckAlignmentAsync((ValidatedInput)login.FindName("PortInput"), "9");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("NameInput"), "合成考生01");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("ClassInput"), "01");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("AdmissionInput"), "2027017");
@@ -83,6 +78,7 @@ public sealed class UiScreenshotTests
                     catch (Exception error) { checkedDialog.SetException(error); }
                     finally { foreach (var dialog in window.OwnedWindows.OfType<ConfirmDialog>().ToArray()) dialog.Close(); }
                 }));
+                ((ValidatedInput)login.FindName("PortInput")).Text = "0";
                 ((Button)login.FindName("LoginButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await checkedDialog.Task;
                 // 合成设备未写入应用登记：直接进入登录校验，并保留既有的本机身份核对。
@@ -299,19 +295,12 @@ public sealed class UiScreenshotTests
         {
             window.Show();
 
-            // 1) 激活页：尚未配置设备，填入合成地址（TEST-NET 文档地址）。
-            var activation = new ActivationPage(navigation);
-            await ShowAsync(window, host, activation);
-            ((ValidatedInput)activation.FindName("HostInput")).Text = "192.0.2.10";
-            ((ValidatedInput)activation.FindName("PortInput")).Text = "5443";
-            await CaptureAsync(window, directory, "student-activation");
-            ((Banner)activation.FindName("ErrorBanner")).Show("服务器 IP 地址格式不正确！");
-            await CaptureAsync(window, directory, "student-activation-banner");
-
-            // 2) 登录页：已激活的合成设备 A-017。
+            // 合并后的服务器连接与考生登录页。
             services.ConfigureDevice(waitingFixture.Device);
             var login = new LoginPage(navigation);
             await ShowAsync(window, host, login);
+            ((ValidatedInput)login.FindName("HostInput")).Text = "192.0.2.10";
+            ((ValidatedInput)login.FindName("PortInput")).Text = "5443";
             ((ValidatedInput)login.FindName("NameInput")).Text = "合成考生01";
             ((ValidatedInput)login.FindName("ClassInput")).Text = "01";
             ((ValidatedInput)login.FindName("AdmissionInput")).Text = "2027017";

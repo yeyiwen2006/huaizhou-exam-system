@@ -27,8 +27,8 @@
 | COV-021 | 应急确认 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management emergency | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-022 | 接管 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management takeover | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-023 | 主节点重建 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management rebuild / management reprotect | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
-| COV-024 | 激活批准 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | activation pending / activation approve 申请标识 [试场名称] | 首次审批按待审批申请标识执行，批准后才分配编号；真实CLI/API/数据库接线已补齐 |
-| COV-025 | 激活撤销 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | activation revoke 学生端编号 --input FILE | 按公开编号撤销；原请求重试保持同一设备，服务器重新鉴权 |
+| COV-024 | 连接与每日编号 | src/Exam.Student/Views/LoginPage.xaml | 不适用，学生端仅提供 GUI | 无需批准直接登录，同一设备当天沿用编号，次日重分 |
+| COV-025 | 学生端连接状态 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | devices list / devices show | 查看学生端信息、当前考生和连接状态，无学生设备批准组件 |
 | COV-026 | 设备编号查询 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | devices list / devices show / devices history | 权威设备目录、编号精确查询与转组历史已接GUI/CLI |
 | COV-027 | 创建分组 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | rooms create | 试场创建已由服务器持久保存，GUI/CLI共用校验 |
 | COV-028 | 分组改名 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | rooms rename | 试场改名已持久化；同名冲突与期望版本由服务器核对 |
@@ -56,7 +56,7 @@
 | COV-050 | 结果开放状态 | src/Exam.Admin/Reporting/ReportWorkspaceView.xaml | reports status | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-051 | 查询五表 | src/Exam.Admin/Reporting/ReportWorkspaceView.xaml | reports show | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-052 | Excel 导出 | src/Exam.Admin/Reporting/ReportWorkspaceView.xaml | reports export | 入口已实现；模块验证由对应 profile 报告核对 |
-| COV-053 | 激活与登录 | src/Exam.Student/Views/ActivationPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
+| COV-053 | 连接与登录 | src/Exam.Student/Views/LoginPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-054 | 考试选择与等待 | src/Exam.Student/Views/WaitingExamPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-055 | 答题、时间与全屏 | src/Exam.Student/Views/ExamInProgressPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-056 | 交卷与恢复 | src/Exam.Student/Views/SubmittedPage.xaml | 不适用：学生端仅要求 GUI | 入口已实现；模块验证由对应 profile 报告核对 |

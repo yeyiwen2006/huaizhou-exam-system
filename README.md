@@ -4,7 +4,7 @@
 
 ## 使用入口
 
-学生使用 `Exam.Student` 完成设备激活、身份确认、等待、作答和交卷。考务人员使用 `Exam.Admin` 管理考试与成绩；`Exam.Cli` 提供对应命令。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立本机管理，业务服务停止时仍可查询和启停。
+学生使用 `Exam.Student` 填写服务器地址、端口和考生信息后直接登录，完成等待、作答和交卷。考务人员使用 `Exam.Admin` 管理考试与成绩；`Exam.Cli` 提供对应命令。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立本机管理，业务服务停止时仍可查询和启停。
 
 [系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[本机服务管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
 

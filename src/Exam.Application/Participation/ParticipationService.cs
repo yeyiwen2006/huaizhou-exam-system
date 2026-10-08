@@ -20,6 +20,18 @@ public sealed class ParticipationService(
     public async ValueTask<StudentSessionResult> LoginAsync(
         LoginStudentRequest request,
         CancellationToken cancellationToken = default)
+        => (await LoginCoreAsync(request, null, cancellationToken).ConfigureAwait(false)).Session;
+
+    public async ValueTask<ConnectedStudentSessionResult> ConnectAndLoginAsync(
+        LoginStudentRequest request, ActivationService connections,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await LoginCoreAsync(request, connections, cancellationToken).ConfigureAwait(false);
+        return new(result.Session, result.Device!);
+    }
+
+    private async ValueTask<(StudentSessionResult Session, Exam.Contracts.Activation.ActivationResult? Device)> LoginCoreAsync(
+        LoginStudentRequest request, ActivationService? connections, CancellationToken cancellationToken)
     {
         ValidateRequestId(request.RequestId);
         Require(request.DeviceId, nameof(request.DeviceId));
@@ -30,7 +42,7 @@ public sealed class ParticipationService(
         RequireAsciiDigits(request.ClassText, nameof(request.ClassText));
         RequireAsciiDigits(request.AdmissionNo, nameof(request.AdmissionNo));
 
-        if (!await deviceCredentialValidator.ValidateActiveDeviceAsync(
+        if (connections is null && !await deviceCredentialValidator.ValidateActiveDeviceAsync(
                 request.DeviceId,
                 request.Credential,
                 cancellationToken).ConfigureAwait(false))
@@ -65,7 +77,10 @@ public sealed class ParticipationService(
                 group => group.Key,
                 group => group.First().Candidate.CandidateId,
                 StringComparer.Ordinal);
-        return await persistence.ExecuteTransactionAsync(transaction =>
+        // Invalid roster input never creates a device or consumes a daily number.
+        var device = connections is null ? null : await connections.ConnectAsync(
+            request.DeviceId, request.Credential, cancellationToken).ConfigureAwait(false);
+        var result = await persistence.ExecuteTransactionAsync(transaction =>
         {
             EnsureActiveDevice(transaction, request.DeviceId);
             return RunIdempotent(transaction, request.RequestId, "participation.login", request, () =>
@@ -81,6 +96,7 @@ public sealed class ParticipationService(
                 return ToSessionResult(session);
             });
         }, cancellationToken).ConfigureAwait(false);
+        return (result, device);
     }
 
     public async ValueTask<EntryPreparationResult> PrepareEntryAsync(

@@ -6,6 +6,18 @@ namespace Exam.IntegrationTests.Api;
 
 public sealed partial class PostgresExamApiAccessMiddlewareTests
 {
+    [Fact]
+    public async Task StudentLoginDoesNotRequireAnApprovedDeviceOrOperatorSession()
+    {
+        var invoked = false;
+        var context = CreateJsonContext("/api/v1/student/login", "application/json", "{}");
+        await CreateMiddleware(() => invoked = true).InvokeAsync(context,
+            new FixedOperatorAuthenticator(Token, "operator-a"),
+            new AcceptingCredentialValidator(), CreateGuard(), server);
+        Assert.True(invoked);
+        Assert.Equal(StatusCodes.Status204NoContent, context.Response.StatusCode);
+    }
+
     [Theory]
     [InlineData("/api/v1/submissions/final")]
     [InlineData("/api/v1/SUBMISSIONS/FINAL")]

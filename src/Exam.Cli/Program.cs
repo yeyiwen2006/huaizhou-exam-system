@@ -132,9 +132,6 @@ internal static partial class ExamCli
         Console.WriteLine("  monitor follow 名称 [起始名单版本] [间隔秒] [轮数]  持续发出收齐事件（默认 1 秒，不限轮数）");
         Console.WriteLine("  monitor events 名称 [起始名单版本] [间隔秒] [轮数]");
         Console.WriteLine("                                        订阅监测事件：收齐、设备冲突与失败（给间隔秒则持续订阅）");
-        Console.WriteLine("  activation pending                    列出待审批的激活申请");
-        Console.WriteLine("  activation approve 申请标识 [试场名称]   批准激活并把设备分到试场（默认未分组）");
-        Console.WriteLine("  activation revoke 学生端编号 --input FILE   撤回激活（请求体给出 reason）");
         Console.WriteLine("  decisions keep 考试名称 学生端编号 --input FILE  设备冲突裁决（请求体给出 device 与 reason）");
         Console.WriteLine("  commands resend 考试名称 学生端编号 start|end   重发该考生仍可重发的开始或结束指令");
         Console.WriteLine("  commands reupload 考试名称 学生端编号      请求补传原答卷（重发未回收考生的结束指令）");

@@ -5,7 +5,7 @@ namespace Exam.Desktop.Shared.Controls;
 
 /// <summary>
 /// 统一页头：左上角设备编号与考生姓名区域，右侧操作插槽。
-/// 编号取激活时服务器分配的 clientNumber，姓名随登录切换，保证无前一学生内容。
+/// 编号取登录时服务器分配的 clientNumber，姓名随登录切换，保证无前一学生内容。
 /// </summary>
 public partial class PageHeader : UserControl
 {
@@ -61,7 +61,7 @@ public partial class PageHeader : UserControl
 
     private void UpdateIdentity()
     {
-        NumberText.Text = string.IsNullOrEmpty(ClientNumber) ? "未激活" : $"编号 {ClientNumber}";
+        NumberText.Text = string.IsNullOrEmpty(ClientNumber) ? "未连接" : $"编号 {ClientNumber}";
         NameText.Text = string.IsNullOrEmpty(CandidateName) ? "未登录" : CandidateName;
         ClassTextBlock.Text = ClassText ?? string.Empty;
     }

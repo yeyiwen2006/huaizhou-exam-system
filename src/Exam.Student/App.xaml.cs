@@ -6,7 +6,7 @@ using Exam.Student.Core;
 namespace Exam.Student;
 
 /// <summary>
-/// 学生端入口：组合根 + 启动流程（已激活 → 登录页；未激活 → 激活页）。
+/// 学生端入口：组合根 + 启动流程（每次启动均进入连接与登录页）。
 /// </summary>
 public partial class App : Application
 {
@@ -61,7 +61,7 @@ public partial class App : Application
         }
         catch (DeviceStoreException error)
         {
-            MessageBox.Show(error.Message, "本机激活信息异常", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(error.Message, "本机设备信息异常", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
         catch (Exception error) when (error is HttpRequestException or StudentIdentityException)
@@ -99,7 +99,7 @@ public partial class App : Application
 }
 
 /// <summary>
-/// 正式入口始终使用 HTTPS 客户端；无服务器配置时停留在激活页。
+/// 正式入口始终使用 HTTPS 客户端；每次启动由考生填写服务器地址和端口。
 /// </summary>
 public sealed class AppServices
 {
@@ -162,7 +162,7 @@ public sealed class AppServices
     public void ConfigureDevice(DeviceRecord device)
     {
         var replacePresence = Device?.DeviceId != device.DeviceId || Device?.ServerId != device.ServerId ||
-            Device?.Credential != device.Credential;
+            Device?.Credential != device.Credential || _presenceCancellation?.IsCancellationRequested != false;
         Device = device;
         Api.ConfigureConnection(device);
         Session.OnActivationChanged(device);

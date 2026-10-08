@@ -31,6 +31,10 @@ public sealed record StudentSessionResult(
     DateTimeOffset AuthenticatedAt,
     IReadOnlyDictionary<string, string>? CandidateIdsByExam = null);
 
+public sealed record ConnectedStudentSessionResult(
+    StudentSessionResult Session,
+    Exam.Contracts.Activation.ActivationResult Device);
+
 public sealed record PrepareExamEntryRequest(
     string RequestId,
     string SessionId,

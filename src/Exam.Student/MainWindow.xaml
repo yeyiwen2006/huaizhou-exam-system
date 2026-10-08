@@ -9,7 +9,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Brush.Background}"
         FontFamily="{DynamicResource Font.Family}">
-    <!-- 激活后以普通账户权限全屏显示，并拦截离开考试的快捷键 -->
+    <!-- 登录后以普通账户权限全屏显示，并拦截离开考试的快捷键 -->
     <DockPanel>
         <TextBlock x:Name="PresenceStatus" DockPanel.Dock="Bottom" Text="{Binding PresenceStatus}"
                    Foreground="#B45309" TextAlignment="Center" TextWrapping="Wrap">

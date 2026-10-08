@@ -36,11 +36,11 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ServerId) || Nodes is null || Nodes.Count != 2 ||
-            Nodes.Any(node => node is null || !IPAddress.TryParse(node.Host, out _) || node.Port is < 1 or > 65535 ||
+            Nodes.Any(node => node is null || Uri.CheckHostName(node.Host) == UriHostNameType.Unknown || node.Port is < 1 or > 65535 ||
                 string.IsNullOrWhiteSpace(node.NodeId) || node.CertificateSha256 is null ||
                 ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) != node.CertificateSha256) ||
             Nodes.Select(node => node.Address).Distinct().Count() != 2 ||
-            Nodes.Select(node => IPAddress.Parse(node.Host).ToString()).Distinct().Count() != 2 ||
+            Nodes.Select(node => DeviceStore.NormalizeHost(node.Host)).Distinct().Count() != 2 ||
             Nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != 2)
             throw new FormatException("主备可信配置无效或地址/节点重复。");
     }

@@ -74,9 +74,9 @@ public sealed record ServerEndpointConfig(string Host, int Port, string? Certifi
             }
 
             var host = hostElement.GetString()!.Trim();
-            if (!System.Net.IPAddress.TryParse(host, out _))
+            if (Uri.CheckHostName(host) == UriHostNameType.Unknown)
             {
-                return (null, new LoadError($"{FileName} 的 host 必须是服务器 IP 地址（与激活页输入要求一致）。"));
+                return (null, new LoadError($"{FileName} 的 host 必须是服务器 IP 地址或域名。"));
             }
 
             if (!root.TryGetProperty("port", out var portElement) || portElement.ValueKind != JsonValueKind.Number ||

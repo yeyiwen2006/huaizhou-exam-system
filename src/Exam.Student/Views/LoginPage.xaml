@@ -9,13 +9,11 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <controls:PageHeader Grid.Row="0"
-                            ClientNumber="{Binding ClientNumber, Mode=OneWay}">
+        <controls:PageHeader Grid.Row="0">
             <controls:PageHeader.RightContent>
                 <Button AutomationProperties.AutomationId="ExitSystemButton"
                         Style="{StaticResource Btn.Danger}"
                         Content="退出系统"
-                        Visibility="{Binding IsActivated, Converter={StaticResource BoolToVis}}"
                         Click="OnExitSystem" />
             </controls:PageHeader.RightContent>
         </controls:PageHeader>
@@ -37,14 +35,25 @@
                             </StackPanel>
                             <TextBlock Style="{StaticResource BrandBand.Title}" Text="考生登录" Margin="0,14,0,0" />
                             <TextBlock Style="{StaticResource BrandBand.Caption}"
-                                       Text="同一学生端可在不同考试登录不同考生账号；各账号数据互不互通。"
+                                       Text="填写服务器连接信息和考生信息后登录。"
                                        Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 
                     <StackPanel Margin="28,24,28,20">
+                        <controls:ValidatedInput x:Name="HostInput"
+                                                 Label="服务器名称（IP 或域名）"
+                                                 Watermark="请输入服务器 IP 地址或域名"
+                                                 InputChanged="OnInputChanged" />
+                        <controls:ValidatedInput x:Name="PortInput"
+                                                 Label="端口号"
+                                                 Watermark="请输入端口号"
+                                                 IsNumericOnly="True"
+                                                 Margin="0,14,0,0"
+                                                 InputChanged="OnInputChanged" />
                         <controls:ValidatedInput x:Name="NameInput"
                                                  Label="姓名"
+                                                 Margin="0,14,0,0"
                                                  Watermark="请输入姓名"
                                                  InputChanged="OnInputChanged" />
                         <controls:ValidatedInput x:Name="ClassInput"
@@ -73,13 +82,6 @@
                                         Level="Danger"
                                         Margin="0,16,0,0" />
 
-                        <!-- 登录页面的小字“取消激活”选项 -->
-                        <Button Style="{StaticResource Btn.Ghost}"
-                                Content="取消激活"
-                                Margin="0,14,0,0"
-                                Padding="12,0"
-                                HorizontalAlignment="Center"
-                                Click="OnCancelActivation" />
                     </StackPanel>
                 </StackPanel>
             </Border>

@@ -14,6 +14,48 @@ public sealed class ActivationService(
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
+    /// <summary>核对原设备凭据，直接登记连接，并按服务器日期分配公开编号。</summary>
+    public ValueTask<ActivationResult> ConnectAsync(
+        string deviceId, string credential, CancellationToken cancellationToken = default)
+    {
+        Require(deviceId, nameof(deviceId));
+        Require(credential, nameof(credential));
+        return persistence.ExecuteTransactionAsync(transaction =>
+        {
+            // The device key is locked even on its first connection. Concurrent logins
+            // therefore share one registration and one daily number.
+            var pending = transaction.FindLatestActivationRequestForDevice(deviceId);
+            var existing = transaction.FindDevice(deviceId);
+            if (existing is not null) EnsureCredential(credential, existing.ProtectedCredential);
+            else if (pending is not null) EnsureCredential(credential, pending.ProtectedCredential);
+
+            // Read the date after acquiring the device lock, including a login queued across midnight.
+            var now = _timeProvider.GetUtcNow();
+            var date = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, _timeProvider.LocalTimeZone).DateTime);
+
+            var number = existing?.ClientNumber;
+            if (existing?.ActivationDate != date || number?.Length != 12)
+            {
+                var sequence = checked(transaction.GetLastDailySequence(date) + 1);
+                if (sequence > 9999)
+                    throw Error(ActivationErrorCodes.DailySequenceExhausted, "服务器当日设备编号已用尽，请联系考务人员。");
+                number = string.Create(CultureInfo.InvariantCulture, $"{date:yyyyMMdd}{sequence:0000}");
+                transaction.SetLastDailySequence(date, sequence);
+            }
+
+            var device = existing is null
+                ? new DeviceRegistration(deviceId, number!, date, ActivationStatus.Active, null,
+                    pending?.ProtectedCredential ?? credentialProtector.Protect(credential),
+                    pending?.CredentialVersion ?? 1, now, now, 1)
+                : existing with { ClientNumber = number!, ActivationDate = date, Status = ActivationStatus.Active,
+                    LastSeenAt = now, Version = checked(existing.Version + 1) };
+            transaction.SaveDevice(device);
+            if (pending is not null)
+                transaction.SaveActivationRequest(pending with { Status = ActivationStatus.Active, ClientNumber = number });
+            return ToResult(device);
+        }, cancellationToken);
+    }
+
     public ValueTask<ActivationRequestResult> SubmitRequestAsync(
         SubmitActivationRequest request,
         CancellationToken cancellationToken = default)
@@ -118,14 +160,14 @@ public sealed class ActivationService(
                 }
 
                 var nextSequence = checked(transaction.GetLastDailySequence(activationDate) + 1);
-                if (nextSequence > 999)
+                if (nextSequence > 9999)
                 {
                     throw Error(ActivationErrorCodes.DailySequenceExhausted, "服务器当日设备编号已用尽。");
                 }
 
                 var clientNumber = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{activationDate:yyyyMMdd}{nextSequence:000}");
+                    $"{activationDate:yyyyMMdd}{nextSequence:0000}");
                 var device = new DeviceRegistration(
                     activationRequest.DeviceId,
                     clientNumber,

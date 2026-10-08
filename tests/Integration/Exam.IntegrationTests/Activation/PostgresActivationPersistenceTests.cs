@@ -32,7 +32,7 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
 
         Assert.Equal(300, approvals.Select(result => result.ClientNumber).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(
-            Enumerable.Range(1, 300).Select(sequence => $"20260922{sequence:000}"),
+            Enumerable.Range(1, 300).Select(sequence => $"20260922{sequence:0000}"),
             approvals.Select(result => result.ClientNumber).Order(StringComparer.Ordinal));
 
         var restarted = CreateService(clock, protector);
@@ -44,7 +44,7 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
 
         var nextRequest = await restarted.SubmitRequestAsync(new("pg-apply-next", "pg-device-next", "next-secret"));
         var next = await restarted.ApproveAsync(new("pg-approve-next", nextRequest.ActivationRequestId));
-        Assert.Equal("20260922301", next.ClientNumber);
+        Assert.Equal("202609220301", next.ClientNumber);
 
         await using var command = fixture.DataSource.CreateCommand("""
             SELECT protected_credential
@@ -56,7 +56,7 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
     }
 
     [Fact]
-    public async Task Sequence999BoundaryRollsBack_AndRevokedDeviceKeepsItsNumber()
+    public async Task Sequence9999BoundaryRollsBack_AndRevokedDeviceKeepsItsNumber()
     {
         await ResetAsync();
         var clock = new MutableTimeProvider(new DateTimeOffset(2026, 9, 22, 10, 0, 0, TimeSpan.Zero));
@@ -64,7 +64,7 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
         var service = CreateService(clock, protector);
         await using (var seed = fixture.DataSource.CreateCommand("""
                          INSERT INTO exam.activation_daily_sequences (activation_date, last_sequence)
-                         VALUES (DATE '2026-09-22', 998);
+                         VALUES (DATE '2026-09-22', 9998);
                          """))
         {
             await seed.ExecuteNonQueryAsync();
@@ -72,7 +72,7 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
 
         var firstRequest = await service.SubmitRequestAsync(new("boundary-apply-1", "boundary-device-1", "secret-1"));
         var first = await service.ApproveAsync(new("boundary-approve-1", firstRequest.ActivationRequestId));
-        Assert.Equal("20260922999", first.ClientNumber);
+        Assert.Equal("202609229999", first.ClientNumber);
 
         var overflowRequest = await service.SubmitRequestAsync(new("boundary-apply-2", "boundary-device-2", "secret-2"));
         var overflow = await Assert.ThrowsAsync<ActivationRuleException>(() =>
@@ -85,7 +85,52 @@ public sealed class PostgresActivationPersistenceTests(PostgresDatabaseFixture f
 
         clock.SetUtcNow(new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.Zero));
         var nextDay = await service.ApproveAsync(new("boundary-approve-next", overflowRequest.ActivationRequestId));
-        Assert.Equal("20260923001", nextDay.ClientNumber);
+        Assert.Equal("202609230001", nextDay.ClientNumber);
+    }
+
+    [Fact]
+    public async Task DirectConnections_PersistOneDailyNumberAndRolloverAcrossServiceRestart()
+    {
+        await ResetAsync();
+        var clock = new MutableTimeProvider(new DateTimeOffset(2026, 10, 8, 8, 0, 0, TimeSpan.Zero));
+        var protector = new FastCredentialProtector();
+        var service = CreateService(clock, protector);
+        var sameDevice = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ =>
+            CreateService(clock, protector).ConnectAsync("direct-device", "direct-credential").AsTask()));
+        Assert.All(sameDevice, device => Assert.Equal("202610080001", device.ClientNumber));
+        var others = await Task.WhenAll(Enumerable.Range(0, 16).Select(index =>
+            service.ConnectAsync($"direct-{index}", $"credential-{index}").AsTask()));
+        Assert.Equal(16, others.Select(device => device.ClientNumber).Distinct().Count());
+        Assert.Equal("202610080018", (await service.ConnectAsync("last", "credential")).ClientNumber);
+        clock.SetUtcNow(new DateTimeOffset(2026, 10, 9, 0, 0, 0, TimeSpan.Zero));
+        var next = await CreateService(clock, protector).ConnectAsync("direct-device", "direct-credential");
+        Assert.Equal("202610090001", next.ClientNumber);
+        Assert.Equal(next, await service.FindDeviceAsync("direct-device"));
+        Assert.Empty(await service.ListPendingRequestsAsync());
+        var directory = await new Exam.Infrastructure.Postgres.Administration.PostgresDeviceDirectory(fixture.DataSource).ListAsync(query: next.ClientNumber);
+        Assert.Equal(next.DeviceId, Assert.Single(directory.Items).DeviceId);
+
+        var examTime = DateTimeOffset.UtcNow.AddYears(80);
+        Assert.True(new Exam.Infrastructure.Postgres.Versioning.PostgresExamVersioningService(fixture.DataSource)
+            .CreateExam(new("direct-exam", new(examTime.AddHours(1), examTime.AddHours(2)), examTime, "direct-exam-request")).Succeeded);
+        await new Exam.Infrastructure.Postgres.Administration.PostgresCandidateRosterService(fixture.DataSource)
+            .ImportAsync("direct-exam", new("direct-roster", 0, [new(1, "合成考生", "01", "0001")]), "synthetic-operator");
+        var participation = new Exam.Application.Participation.ParticipationService(
+            new Exam.Infrastructure.Postgres.Participation.PostgresParticipationPersistence(fixture.DataSource), service,
+            new Exam.Infrastructure.Postgres.Participation.PostgresCandidateRosterDirectory(fixture.DataSource),
+            new Exam.Infrastructure.Postgres.Participation.PostgresExamEntryDirectory(fixture.DataSource), clock);
+        var login = await participation.ConnectAndLoginAsync(
+            new("direct-login", "direct-device", "direct-credential", "合成考生", "01", "0001"), service);
+        var presence = new Exam.Infrastructure.Postgres.Administration.PostgresDevicePresenceService(fixture.DataSource, clock);
+        var lease = await presence.OpenAsync(login.Device.DeviceId, new("open-direct", "connection-direct"));
+        await presence.UpdateAsync(login.Device.DeviceId,
+            new(lease.ConnectionId, lease.Generation, 1, login.Session.SessionId, null, "选择考试", null, 0, "未下载", false, false));
+        var visible = Assert.Single((await new Exam.Infrastructure.Postgres.Administration.PostgresDeviceDirectory(fixture.DataSource, clock)
+            .ListAsync(query: login.Device.ClientNumber)).Items);
+        Assert.Equal("合成考生", visible.CandidateName);
+        Assert.Equal("01", visible.ClassText);
+        Assert.Equal("0001", visible.AdmissionNo);
+        Assert.Equal(Exam.Contracts.Administration.DeviceConnectionState.Online, visible.ConnectionState);
     }
 
     private ActivationService CreateService(TimeProvider clock, IDeviceCredentialProtector protector) =>

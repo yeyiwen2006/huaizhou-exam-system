@@ -165,6 +165,8 @@ public sealed class PostgresActivationPersistence(NpgsqlDataSource dataSource) :
                      @room_group_id, @protected_credential, @credential_version,
                      @created_at, @last_seen_at, @version)
                 ON CONFLICT (device_id) DO UPDATE SET
+                    client_number = EXCLUDED.client_number,
+                    activation_date = EXCLUDED.activation_date,
                     activation_status = EXCLUDED.activation_status,
                     room_group_id = EXCLUDED.room_group_id,
                     protected_credential = EXCLUDED.protected_credential,

@@ -114,6 +114,26 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         retired?.Dispose();
     }
 
+    public void ConfigureLoginConnection(DeviceRecord device, string host, int port)
+    {
+        var endpoint = new UriBuilder(Uri.UriSchemeHttps, DeviceStore.NormalizeHost(host), port).Uri;
+        var node = device.Topology?.Nodes.SingleOrDefault(item => item.Address == endpoint);
+        if (device.Topology is not null && node is null)
+            throw new StudentIdentityException("输入的地址不在本机保存的可信服务器列表中。");
+        ConfigureConnection(device);
+        lock (_connectionGate)
+        {
+            _server = endpoint;
+            _nodeId = node?.NodeId;
+            _device = _device! with { ActiveNodeId = node?.NodeId };
+            _connectionGeneration++;
+        }
+    }
+
+    public Task<ApiEnvelope<ConnectedStudentSessionResult>> ConnectAndLoginAsync(
+        LoginStudentRequest request, CancellationToken ct = default) =>
+        SendAsync<ConnectedStudentSessionResult>(HttpMethod.Post, "/api/v1/student/login", request, false, ct);
+
     public Task<ApiEnvelope<ActivationRequestResult>> SubmitActivationAsync(
         SubmitActivationRequest request, CancellationToken ct = default) =>
         SendAsync<ActivationRequestResult>(HttpMethod.Post, "/api/v1/activation/requests", request, false, ct);

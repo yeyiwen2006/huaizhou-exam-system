@@ -59,7 +59,7 @@ public sealed class ServerEndpointConfigTests : IDisposable
     [InlineData("""{ "formatVersion": 2, "host": "192.168.1.10", "port": 5001 }""", "只支持")]
     [InlineData("""{ "host": "192.168.1.10", "port": 5001 }""", "formatVersion")]
     [InlineData("""{ "formatVersion": 1, "port": 5001 }""", "host")]
-    [InlineData("""{ "formatVersion": 1, "host": "exam.example", "port": 5001 }""", "IP 地址")]
+    [InlineData("""{ "formatVersion": 1, "host": "https://exam.example/path", "port": 5001 }""", "IP 地址")]
     [InlineData("""{ "formatVersion": 1, "host": "192.168.1.10" }""", "port")]
     [InlineData("""{ "formatVersion": 1, "host": "192.168.1.10", "port": 0 }""", "1–65535")]
     [InlineData("""{ "formatVersion": 1, "host": "192.168.1.10", "port": 65536 }""", "1–65535")]
