@@ -217,14 +217,15 @@ public sealed class MainViewModel : BindableBase, IDisposable
 }
 
 /// <summary>
-/// 顶部登录条：未登录时填写服务器地址、用户名和口令登录，或注册新的考务账号；
+/// 登录页：未登录时填写服务器名称、端口号、用户名和口令登录，或注册新的考务账号；
 /// 登录后显示当前账号并可退出登录。口令只在本进程内存中短暂保存，登录或注册后即清空。
 /// </summary>
 public sealed class ConnectionViewModel : BindableBase
 {
     private readonly AdminApiClient _api;
-    private string _serverAddress = Environment.GetEnvironmentVariable("EXAM_ADMIN_SERVER_URL") is { Length: > 0 } address
-        ? address : "https://localhost:5001/";
+    private string _serverAddress = "localhost";
+    private string _serverPort = "5001";
+    private readonly int? _localHttpPort;
     private string _username = string.Empty;
     private string _displayName = string.Empty;
     private string _password = string.Empty;
@@ -234,9 +235,24 @@ public sealed class ConnectionViewModel : BindableBase
     private bool _isRegistering;
     private bool _showRegistrationSuccess;
 
-    public ConnectionViewModel(AdminApiClient api)
+    public ConnectionViewModel(AdminApiClient api, string? configuredServerUrl = null)
     {
         _api = api;
+        var configured = configuredServerUrl ?? Environment.GetEnvironmentVariable("EXAM_ADMIN_SERVER_URL");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            if (Uri.TryCreate(configured.Trim(), UriKind.Absolute, out var endpoint)
+                && (endpoint.Scheme == Uri.UriSchemeHttps || endpoint.Scheme == Uri.UriSchemeHttp)
+                && endpoint.UserInfo.Length == 0 && endpoint.Query.Length == 0 && endpoint.Fragment.Length == 0
+                && endpoint.AbsolutePath == "/")
+            {
+                _serverAddress = endpoint.Host;
+                _serverPort = endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback)
+                    _localHttpPort = endpoint.Port;
+            }
+            else _serverAddress = configured;
+        }
         ConnectCommand = new AsyncRelayCommand(LoginAsync, onError: error => SetError("登录", error));
         RegisterCommand = new AsyncRelayCommand(RegisterAsync, onError: error => SetError("注册", error));
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsConnected);
@@ -246,6 +262,7 @@ public sealed class ConnectionViewModel : BindableBase
     }
 
     public string ServerAddress { get => _serverAddress; set => SetProperty(ref _serverAddress, value); }
+    public string ServerPort { get => _serverPort; set => SetProperty(ref _serverPort, value); }
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value); }
 
@@ -330,13 +347,13 @@ public sealed class ConnectionViewModel : BindableBase
         _api.Disconnect();
         try
         {
-            await _api.LoginAsync(ServerAddress, Username, Password);
+            await _api.LoginAsync(BuildServerAddress(), Username, Password);
             await _api.CheckConnectionAsync();
         }
         finally { ClearPasswords(); }
         IsRegistering = false;
         IsConnected = true;
-        Status = $"已登录服务器 {ServerAddress.Trim()}。";
+        Status = $"已登录服务器 {ServerAddress.Trim()}，端口 {ServerPort.Trim()}。";
     }
 
     private async Task RegisterAsync()
@@ -349,7 +366,7 @@ public sealed class ConnectionViewModel : BindableBase
         }
         Status = "正在提交注册…";
         Exam.Contracts.Operators.RegisterOperatorResult result;
-        try { result = await _api.RegisterAsync(ServerAddress, Username, DisplayName, Password); }
+        try { result = await _api.RegisterAsync(BuildServerAddress(), Username, DisplayName, Password); }
         finally { ClearPasswords(); }
         IsRegistering = false;
         Status = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Active
@@ -363,6 +380,22 @@ public sealed class ConnectionViewModel : BindableBase
         await _api.LogoutAsync();
         IsConnected = false;
         Status = "已退出登录。";
+    }
+
+    private string BuildServerAddress()
+    {
+        var host = ServerAddress.Trim();
+        if (Uri.CheckHostName(host) == UriHostNameType.Unknown)
+            throw new ArgumentException("服务器名称请只填写 IP 地址或域名，不要填写协议前缀、端口或路径。");
+        if (!int.TryParse(ServerPort.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
+            throw new ArgumentException("端口号必须是 1–65535 之间的整数。");
+        var endpoint = new UriBuilder(Uri.UriSchemeHttps, host, port);
+        // The local debug launcher has a separate loopback HTTP endpoint; keep its
+        // configured transport internal while ordinary server connections use HTTPS.
+        if (_localHttpPort == port && endpoint.Uri.IsLoopback)
+            endpoint.Scheme = Uri.UriSchemeHttp;
+        return endpoint.Uri.AbsoluteUri;
     }
 
     private void ClearPasswords()

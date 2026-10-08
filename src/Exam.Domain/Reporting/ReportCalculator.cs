@@ -58,7 +58,7 @@ public static class ReportCalculator
             var questions = grade.Questions.ToDictionary(question => question.QuestionId, StringComparer.Ordinal);
             return new SubjectAnswerRow(row.Student.Participant, row.Rank,
                 Freeze(subject.Questions.Select(question => new AnswerCell(question.QuestionId,
-                    questions[question.QuestionId].AnswerText,
+                    ReportAnswerText.Format(questions[question.QuestionId].AnswerText),
                     questions[question.QuestionId].Outcome == AnswerOutcome.Correct))), grade.FinalScore);
         });
         var questionScores = ranking.Select(row =>

@@ -609,7 +609,7 @@ public partial class ExamInProgressPage : UserControl
         var scheduledEnd = _runtime.Manager.OverriddenScheduledEnd ?? _exam.ScheduledEnd;
         var remain = scheduledEnd - now;
         ClockPillContent.Text = remain > TimeSpan.Zero
-            ? $"{clock} · 剩余 {remain:hh\\:mm}"
+            ? $"{clock} · 剩余 {ExamCountdown.FormatRemaining(remain)}"
             : $"{clock} · 考试时间已到";
     }
 

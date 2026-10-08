@@ -8,6 +8,30 @@ namespace Exam.AdminUnitTests.Reporting;
 /// <summary>All identifiers and scores are synthetic examples, not real candidate data.</summary>
 public sealed partial class ReportTableProjectionTests
 {
+    [Theory]
+    [InlineData("A.", "A")]
+    [InlineData("A.C.D.", "ACD")]
+    [InlineData("A．B．", "AB")]
+    [InlineData("AB", "AB")]
+    [InlineData("不作答", "不作答")]
+    [InlineData("未作答", "未作答")]
+    [InlineData("1.5", "1.5")]
+    public void ExistingAnswers_DisplayLettersWithoutPrintedDots(string answer, string expected)
+    {
+        var result = CreateResult();
+        var subject = result.Subjects[0];
+        var row = subject.Answers[0];
+        result = result with { Subjects = [subject with { Answers = [row with
+        {
+            Answers = [row.Answers[0] with { Text = answer }, row.Answers[1]]
+        }] }] };
+
+        var table = ReportTableProjection.Build(result)[2];
+
+        Assert.Equal(expected, table.Rows[0].Cells[5].Text);
+        Assert.True(table.Rows[0].Cells[5].IsRed);
+    }
+
     [Fact]
     public void Projection_UsesServerOrderRanksMeansAndTwoIndependentColorFlags()
     {

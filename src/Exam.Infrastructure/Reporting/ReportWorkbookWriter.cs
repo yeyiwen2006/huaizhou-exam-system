@@ -99,7 +99,7 @@ public sealed class ReportWorkbookWriter
             for (var questionIndex = 0; questionIndex < source.Answers.Count; questionIndex++)
             {
                 var cell = sheet.Cell(row, questionIndex + 6);
-                Text(cell, source.Answers[questionIndex].Text);
+                Text(cell, ReportAnswerText.Format(source.Answers[questionIndex].Text));
                 cell.Style.Font.FontColor = source.Answers[questionIndex].IsCompletelyCorrect
                     ? XLColor.Black : XLColor.Red;
             }

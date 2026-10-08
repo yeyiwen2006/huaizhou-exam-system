@@ -276,7 +276,7 @@ def execute(args) -> int:
             shutil.copyfile(directory / 'student-server.json', apps['student'] / 'server.json')
             dump(directory / 'connection.json', {'adminUrl': admin_url, 'studentHost': '127.0.0.1',
                  'studentPort': settings['httpsPort'], 'serverId': settings['serverId'], 'localDebug': True})
-            print(f'\n后台已就绪。考务地址：{admin_url}', flush=True)
+            print(f'\n后台已就绪。考务端地址：127.0.0.1，端口 {settings["adminPort"]}（已自动配置）', flush=True)
             print(f'学生端地址：127.0.0.1，端口 {settings["httpsPort"]}（已自动配置）', flush=True)
             print(f'测试数据目录：{directory}', flush=True)
             print('两个回环节点共用一个测试数据库，供本机业务调试；不代表主备部署。', flush=True)

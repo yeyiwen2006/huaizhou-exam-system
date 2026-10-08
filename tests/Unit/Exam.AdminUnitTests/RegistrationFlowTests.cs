@@ -10,6 +10,62 @@ namespace Exam.AdminUnitTests;
 
 public sealed class RegistrationFlowTests
 {
+    [Theory]
+    [InlineData("http://127.0.0.1:5089/", "127.0.0.1", "5089")]
+    [InlineData("https://exam.example.com:5001/", "exam.example.com", "5001")]
+    [InlineData("https://[::1]:5001/", "[::1]", "5001")]
+    public async Task ConfiguredAddress_ShowsHostAndPort_AndConnectsToOriginalEndpoint(
+        string configured, string host, string port)
+    {
+        using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
+        using var api = new AdminApiClient(handler);
+        var viewModel = ReadyToRegister(api, configured);
+        Assert.Equal(host, viewModel.ServerAddress);
+        Assert.Equal(port, viewModel.ServerPort);
+
+        await SubmitAsync(viewModel);
+
+        Assert.True(viewModel.ShowRegistrationSuccess, viewModel.Status);
+        Assert.Equal(new Uri(new Uri(configured), "api/v1/operators/register"), handler.LastRequestUri);
+    }
+
+    [Fact]
+    public async Task ChangingDebugHost_UsesHttpsForRemoteServer()
+    {
+        using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
+        using var api = new AdminApiClient(handler);
+        var viewModel = ReadyToRegister(api, "http://127.0.0.1:5089/");
+        viewModel.ServerAddress = "exam.example.com";
+        viewModel.ServerPort = "5443";
+
+        await SubmitAsync(viewModel);
+
+        Assert.True(viewModel.ShowRegistrationSuccess, viewModel.Status);
+        Assert.Equal(new Uri("https://exam.example.com:5443/api/v1/operators/register"), handler.LastRequestUri);
+    }
+
+    [Theory]
+    [InlineData("https://exam.example.com", "5001", "服务器名称")]
+    [InlineData("exam.example.com:5001", "5001", "服务器名称")]
+    [InlineData("exam.example.com/path", "5001", "服务器名称")]
+    [InlineData("exam.example.com", "0", "端口号")]
+    [InlineData("exam.example.com", "65536", "端口号")]
+    [InlineData("exam.example.com", "", "端口号")]
+    public async Task InvalidHostOrPort_ShowsClearErrorBeforeConnecting(string host, string port, string error)
+    {
+        using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
+        using var api = new AdminApiClient(handler);
+        var viewModel = ReadyToRegister(api);
+        viewModel.ServerAddress = host;
+        viewModel.ServerPort = port;
+
+        await SubmitAsync(viewModel);
+
+        Assert.Equal(0, handler.RequestCount);
+        Assert.StartsWith("注册失败：", viewModel.Status);
+        Assert.Contains(error, viewModel.Status);
+    }
+
     [Fact]
     public async Task PendingAccount_ShowsSuccessUntilAcknowledged_ThenKeepsLoginNotice()
     {
@@ -70,7 +126,7 @@ public sealed class RegistrationFlowTests
         Assert.Equal(string.Empty, viewModel.Password);
     }
 
-    private static ConnectionViewModel ReadyToRegister(AdminApiClient api) => new(api)
+    private static ConnectionViewModel ReadyToRegister(AdminApiClient api, string? configured = null) => new(api, configured)
     {
         Username = "staff-demo",
         DisplayName = "合成考务账号",
@@ -89,10 +145,12 @@ public sealed class RegistrationFlowTests
     private sealed class RegistrationHandler(OperatorStatus status, bool isAdministrator, bool reject = false) : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
+        public Uri? LastRequestUri { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestCount++;
+            LastRequestUri = request.RequestUri;
             Assert.Equal("/api/v1/operators/register", request.RequestUri!.AbsolutePath);
             var account = new OperatorAccount("staff-demo", "合成考务账号", status, isAdministrator,
                 new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.FromHours(8)), null);

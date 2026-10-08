@@ -54,6 +54,21 @@ public sealed partial class ReportViewReviewTests
             var last = Descendants<DataGridCell>(grid).First(c => c.Column == grid.Columns[^1]);
             var lastRight = last.TransformToAncestor(grid).Transform(new Point(last.ActualWidth, 0)).X;
             var barLeft = bar.TransformToAncestor(grid).Transform(new Point(0, 0)).X;
+            foreach (var header in Descendants<DataGridColumnHeader>(grid).Where(h => h.Column is not null))
+            {
+                var label = Assert.Single(Descendants<TextBlock>(header));
+                var unwrapped = new TextBlock
+                {
+                    Text = label.Text, FontFamily = label.FontFamily, FontSize = label.FontSize,
+                    FontWeight = label.FontWeight, TextWrapping = TextWrapping.NoWrap
+                };
+                unwrapped.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                Assert.Equal(TextWrapping.NoWrap, label.TextWrapping);
+                Assert.True(label.ActualWidth >= unwrapped.DesiredSize.Width - 0.5,
+                    $"Header '{label.Text}' needs {unwrapped.DesiredSize.Width}, has {label.ActualWidth}.");
+                Assert.Equal(grid.Columns[header.Column.DisplayIndex].ActualWidth,
+                    footer.ColumnDefinitions[header.Column.DisplayIndex].ActualWidth, 2);
+            }
             Assert.True(lastRight <= barLeft + 0.5, $"Last column ends at {lastRight}, but scrollbar starts at {barLeft}; scores are clipped.");
             Assert.True(outer.ScrollableWidth > 0);
             var before = footer.TransformToAncestor(view).Transform(new Point(0, 0)).Y;
@@ -85,18 +100,26 @@ public sealed partial class ReportViewReviewTests
 
     private static ReportTable SyntheticTable()
     {
-        var columns = Enumerable.Range(0, 40).Select(i => new ReportTableColumn(i < 4 ? new[] { "排名", "准考证号", "姓名", "班级" }[i] : $"第 {i - 3} 题", 120)).ToArray();
+        var columns = Enumerable.Range(0, 40).Select(i => new ReportTableColumn(i < 4 ? new[] { "排名", "准考证号", "姓名", "班级" }[i]
+            : i == 4 ? "成绩（满分 100）" : $"第 {i + 26} 题（满分 3）", 120)).ToArray();
         var rows = Enumerable.Range(0, 60).Select(row => new ReportTableRow(Enumerable.Range(0, 40)
             .Select(col => new ReportTableCell(col == 2 ? "合成答案" : col < 4 ? (row + 1).ToString() : "12.5", col >= 4 && row % 2 == 1)).ToArray())).ToArray();
         return new(ReportTableKind.QuestionScores, "合成报表（非真实考生）", "synthetic", columns, rows,
             Enumerable.Range(0, 40).Select(i => i < 4 ? string.Empty : "12.50").ToArray());
     }
 
-    private static Window WindowFor(ReportTableView view, double width, double height) => new()
+    private static Window WindowFor(ReportTableView view, double width, double height)
     {
-        Content = view, Width = width, Height = height, Left = -10000, Top = -10000,
-        ShowInTaskbar = false, ShowActivated = false, WindowStyle = WindowStyle.None
-    };
+        view.Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml")
+        });
+        return new Window
+        {
+            Content = view, Width = width, Height = height, Left = -10000, Top = -10000,
+            ShowInTaskbar = false, ShowActivated = false, WindowStyle = WindowStyle.None
+        };
+    }
 
     private static async Task OnUiThread(Action action)
     {

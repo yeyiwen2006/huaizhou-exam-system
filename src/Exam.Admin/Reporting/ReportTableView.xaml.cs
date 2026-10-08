@@ -37,6 +37,7 @@ public partial class ReportTableView : UserControl
     {
         InitializeComponent();
         HorizontalScroller.SizeChanged += (_, _) => FitColumns();
+        Loaded += (_, _) => FitColumns();
         RenderTable();
     }
 
@@ -73,7 +74,7 @@ public partial class ReportTableView : UserControl
             RowsGrid.Columns.Add(new DataGridTemplateColumn
             {
                 Header = column.Header,
-                HeaderTemplate = HeaderTemplate(i),
+                HeaderTemplate = HeaderTemplate(),
                 Width = new DataGridLength(column.Width),
                 CellTemplate = CellTemplate(i, i == EmphasisColumn(table)),
                 ClipboardContentBinding = new Binding($"Cells[{i}].Text"),
@@ -113,15 +114,31 @@ public partial class ReportTableView : UserControl
     private void FitColumns()
     {
         if (Table is not { } table || RowsGrid.Columns.Count != table.Columns.Count || table.Columns.Count == 0) return;
-        var minimum = table.Columns.Sum(column => column.Width);
+        var widths = table.Columns.Select(column => Math.Max(column.Width, MeasureHeaderWidth(column.Header))).ToArray();
+        var minimum = widths.Sum();
         var extra = Math.Max(0, HorizontalScroller.ActualWidth - SystemParameters.VerticalScrollBarWidth - minimum);
         for (var index = 0; index < table.Columns.Count; index++)
         {
-            var width = table.Columns[index].Width + extra / table.Columns.Count;
+            var width = widths[index] + extra / table.Columns.Count;
             RowsGrid.Columns[index].Width = new DataGridLength(width);
             FooterGrid.ColumnDefinitions[index].Width = new GridLength(width);
         }
         TableBody.Width = minimum + extra + SystemParameters.VerticalScrollBarWidth;
+    }
+
+    private double MeasureHeaderWidth(string title)
+    {
+        // Match Report.ColumnHeader typography and reserve its horizontal padding.
+        var text = new TextBlock
+        {
+            Text = title,
+            FontFamily = TryFindResource("Font.Family") as FontFamily ?? RowsGrid.FontFamily,
+            FontSize = TryFindResource("Font.Size.Caption") as double? ?? RowsGrid.FontSize,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.NoWrap
+        };
+        text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return Math.Ceiling(text.DesiredSize.Width) + 28;
     }
 
     private static Style CellStyle(int index)
@@ -155,12 +172,12 @@ public partial class ReportTableView : UserControl
         return new DataTemplate { VisualTree = text };
     }
 
-    private static DataTemplate HeaderTemplate(int index)
+    private static DataTemplate HeaderTemplate()
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
         text.SetBinding(TextBlock.TextProperty, new Binding());
         text.SetBinding(FrameworkElement.ToolTipProperty, new Binding());
-        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.NoWrap);
         text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
         return new DataTemplate { VisualTree = text };
     }

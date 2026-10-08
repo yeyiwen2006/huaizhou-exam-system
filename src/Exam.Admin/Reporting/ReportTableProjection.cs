@@ -90,7 +90,8 @@ public static class ReportTableProjection
         {
             var cells = BaseCells(row.Rank, row.Participant);
             cells.Add(new(Score(row.Score)));
-            cells.AddRange(row.Answers.Select(answer => new ReportTableCell(answer.Text, !answer.IsCompletelyCorrect)));
+            cells.AddRange(row.Answers.Select(answer => new ReportTableCell(
+                ReportAnswerText.Format(answer.Text), !answer.IsCompletelyCorrect)));
             return new ReportTableRow(Array.AsReadOnly(cells.ToArray()));
         }).ToArray();
         return Make(ReportTableKind.SubjectAnswers, $"{subject.Subject.DisplayName}学生答案表",

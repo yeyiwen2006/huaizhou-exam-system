@@ -9,6 +9,24 @@ namespace Exam.UnitTests.Reporting;
 public sealed partial class ReportCalculatorTests
 {
     [Fact]
+    public void CalculatedAnswers_OmitPrintedOptionDots()
+    {
+        var input = FourParticipantInput();
+        input = input with { Submissions = input.Submissions.Select(submission => submission with
+        {
+            Subjects = submission.Subjects.Select(subject => subject with
+            {
+                Questions = subject.Questions.Select(question => question with { AnswerText = "A.C." }).ToArray()
+            }).ToArray()
+        }).ToArray() };
+
+        var result = ReportCalculator.Calculate(input);
+
+        Assert.All(result.Subjects.SelectMany(subject => subject.Answers).SelectMany(row => row.Answers),
+            answer => Assert.Equal("AC", answer.Text));
+    }
+
+    [Fact]
     public void FourParticipantExample_UsesOneCommonSampleAndCompetitionRanks()
     {
         var result = ReportCalculator.Calculate(FourParticipantInput());

@@ -158,7 +158,8 @@ public sealed class UiScreenshotTests
 
     private static void Populate(MainViewModel viewModel)
     {
-        viewModel.Connection.ServerAddress = "https://synthetic-server.invalid:5001/";
+        viewModel.Connection.ServerAddress = "synthetic-server.invalid";
+        viewModel.Connection.ServerPort = "5001";
         viewModel.Connection.Username = "synthetic-admin";
 
         // The fixture has already authenticated and loaded this exam through the real API client.

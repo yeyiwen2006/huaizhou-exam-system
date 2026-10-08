@@ -112,7 +112,8 @@ internal sealed class AdminUiFixture : IDisposable
 
     public void Login()
     {
-        ViewModel.Connection.ServerAddress = "https://synthetic-server.invalid/";
+        ViewModel.Connection.ServerAddress = "synthetic-server.invalid";
+        ViewModel.Connection.ServerPort = "443";
         ViewModel.Connection.Username = Account.Username;
         ViewModel.Connection.Password = "synthetic-test-only-password";
         ViewModel.Connection.ConnectCommand.Execute(null);

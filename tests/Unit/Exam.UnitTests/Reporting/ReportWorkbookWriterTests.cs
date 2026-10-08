@@ -11,6 +11,21 @@ namespace Exam.UnitTests.Reporting;
 public sealed partial class ReportWorkbookWriterTests
 {
     [Fact]
+    public void ExistingAnswerReport_ExportsOptionLettersWithoutDots()
+    {
+        var report = ReportCalculator.Calculate(TwoParticipantInput());
+        var subject = report.Subjects[0];
+        var row = subject.Answers[0];
+        report = report with { Subjects = [subject with { Answers =
+            [row with { Answers = [row.Answers[0] with { Text = "A.C." }] }, subject.Answers[1]] }] };
+
+        using var workbook = new XLWorkbook(new MemoryStream(new ReportWorkbookWriter().Write(report)));
+
+        Assert.Equal("AC", workbook.Worksheet(3).Cell(2, 6).GetString());
+        Assert.Equal(XLColor.Red, workbook.Worksheet(3).Cell(2, 6).Style.Font.FontColor);
+    }
+
+    [Fact]
     public void Workbook_HasFiveSheetsAndPreservesRowsTypesFooterAndIndependentColors()
     {
         var report = ReportCalculator.Calculate(TwoParticipantInput());
