@@ -76,7 +76,13 @@ public sealed record ParticipationResult(
     long AuthorizationVersion,
     long Version,
     string? UnlockReference,
-    ExamLifecycle? Lifecycle = null);
+    ExamLifecycle? Lifecycle = null)
+{
+    public long ScheduleVersion { get; init; }
+    public long ReopenedAtScheduleVersion { get; init; }
+    public DateTimeOffset? ScheduledStart { get; init; }
+    public DateTimeOffset? ScheduledEnd { get; init; }
+}
 
 public sealed record WithdrawParticipationRequest(
     string RequestId,

@@ -65,8 +65,10 @@ public sealed class WpfBindingSmokeTests
                 AdminUiFixture.Until(() => !firstCard.IsVisibilitySaving);
                 Assert.True(firstCard.Exam.VisibleToStudents);
                 SaveEditorScreenshot(window, (FrameworkElement)((TabItem)tabsAtStart.Items[MainViewModel.HomePage]).Content, "exam-publication-cards");
+                VerifyExamHiding(window, viewModel, tabsAtStart);
                 fixture.OpenExam();
                 window.UpdateLayout();
+                VerifyNestedMouseWheel(window, viewModel);
                 Assert.Equal(Visibility.Visible, tabsAtStart.Visibility);
                 Assert.Null(((ContentControl)window.FindName("PageRegion")).Content);
                 Assert.Equal(MainViewModel.SettingsPage, tabsAtStart.SelectedIndex);
@@ -129,6 +131,7 @@ public sealed class WpfBindingSmokeTests
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);
                 Assert.Equal("考生名单", ((TabItem)tabs.Items[MainViewModel.RosterPage]).Header);
                 Assert.Equal("设备与试场分组", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
+                Assert.Equal("隐藏的考试", ((TabItem)tabs.Items[MainViewModel.HiddenExamsPage]).Header);
                 foreach (var tab in tabs.Items.Cast<TabItem>())
                 {
                     tabs.SelectedItem = tab;
@@ -313,6 +316,83 @@ public sealed class WpfBindingSmokeTests
         var frame = new DispatcherFrame();
         Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false));
         Dispatcher.PushFrame(frame);
+    }
+
+    private static void VerifyExamHiding(MainWindow window, MainViewModel viewModel, TabControl tabs)
+    {
+        Assert.Equal(MainViewModel.ReportsPage + 1, MainViewModel.HiddenExamsPage);
+        Assert.Equal(MainViewModel.HiddenExamsPage + 1, MainViewModel.ActivationPage);
+        var card = viewModel.Home.Exams.Single(item => item.Exam.ExamId == AdminUiFixture.ExamId);
+        var hide = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.DataContext, card) && Equals(button.Content, "隐藏该考试"));
+        var status = Assert.Single(Descendants<Exam.Desktop.Shared.Controls.StatusPill>(window),
+            pill => ReferenceEquals(pill.DataContext, card) && pill.Text == card.PublicationText);
+        Assert.True(status.TranslatePoint(new Point(status.ActualWidth, 0), window).X <= hide.TranslatePoint(new Point(), window).X);
+        hide.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, hide));
+        DrainDispatcher();
+        var menu = hide.ContextMenu;
+        Assert.True(menu.IsOpen);
+        Assert.Same(card, menu.DataContext);
+        Assert.Equal(MainViewModel.HomePage, tabs.SelectedIndex);
+        var mine = Assert.IsType<MenuItem>(menu.Items[0]);
+        var all = Assert.IsType<MenuItem>(menu.Items[1]);
+        Assert.Equal("仅当前账号", mine.Header);
+        Assert.Equal("所有考务账号", all.Header);
+        Assert.True(mine.IsEnabled); Assert.True(all.IsEnabled);
+        SaveEditorScreenshot(window, menu, "exam-hiding-scope-menu");
+        ((System.Windows.Automation.Provider.IInvokeProvider)new System.Windows.Automation.Peers.MenuItemAutomationPeer(mine)
+            .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        AdminUiFixture.Until(() => viewModel.Home.HiddenExams.Any(item => item.Exam.ExamId == AdminUiFixture.ExamId));
+        Assert.Equal(MainViewModel.HomePage, tabs.SelectedIndex);
+        Assert.False(viewModel.HasCurrentExam);
+        var entry = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.ShowHiddenExamsCommand));
+        entry.Command.Execute(null);
+        DrainDispatcher(); window.UpdateLayout();
+        Assert.Equal(MainViewModel.HiddenExamsPage, tabs.SelectedIndex);
+        Assert.False(viewModel.ShowCurrentExamBar);
+        Assert.Equal(card.Name, viewModel.DescribeExam(AdminUiFixture.ExamId));
+        card = viewModel.Home.HiddenExams.Single(item => item.Exam.ExamId == AdminUiFixture.ExamId);
+        var unhide = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.DataContext, card) && Equals(button.Content, "取消隐藏"));
+        SaveEditorScreenshot(window, (FrameworkElement)((TabItem)tabs.Items[MainViewModel.HiddenExamsPage]).Content, "exam-hidden-cards");
+        unhide.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, unhide));
+        DrainDispatcher();
+        menu = unhide.ContextMenu;
+        Assert.True(Assert.IsType<MenuItem>(menu.Items[0]).IsEnabled);
+        Assert.False(Assert.IsType<MenuItem>(menu.Items[1]).IsEnabled);
+        ((System.Windows.Automation.Provider.IInvokeProvider)new System.Windows.Automation.Peers.MenuItemAutomationPeer((MenuItem)menu.Items[0])
+            .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        AdminUiFixture.Until(() => viewModel.Home.Exams.Any(item => item.Exam.ExamId == AdminUiFixture.ExamId));
+        Assert.Equal(MainViewModel.HiddenExamsPage, tabs.SelectedIndex);
+        viewModel.BackToHomeCommand.Execute(null);
+        DrainDispatcher();
+        Assert.Equal(MainViewModel.HomePage, tabs.SelectedIndex);
+    }
+
+    private static void VerifyNestedMouseWheel(MainWindow window, MainViewModel viewModel)
+    {
+        var tabs = Assert.Single(Descendants<TabControl>(window));
+        var originalPage = viewModel.SelectedPage;
+        foreach (var index in new[] { MainViewModel.SettingsPage, MainViewModel.ImportPage })
+        {
+            viewModel.SelectedPage = index;
+            DrainDispatcher(); window.UpdateLayout();
+            var page = Assert.IsType<ScrollViewer>(((TabItem)tabs.Items[index]).Content);
+            Assert.True(Exam.Desktop.Shared.Controls.MouseWheelScrollChaining.GetIsEnabled(page));
+            var tables = Descendants<DataGrid>(page).Where(table => table.IsVisible).ToArray();
+            Assert.NotEmpty(tables);
+            foreach (var table in tables)
+            {
+                var inner = Descendants<ScrollViewer>(table).Single();
+                Assert.Equal(0, inner.ScrollableHeight);
+                var top = table.TranslatePoint(new Point(), (UIElement)page.Content).Y;
+                page.ScrollToVerticalOffset(Math.Clamp(top - 50, 50, page.ScrollableHeight - 50));
+                DrainDispatcher(); window.UpdateLayout();
+                MouseWheelRoutingTests.AssertScrollsBothWays(page, MouseWheelRoutingTests.Hit(table, 0.5, 0.8));
+                Assert.Equal(0, inner.VerticalOffset);
+            }
+            page.ScrollToTop(); DrainDispatcher();
+        }
+        viewModel.SelectedPage = originalPage;
+        DrainDispatcher(); window.UpdateLayout();
     }
 
     private static void VerifyScoreTokenEditing(MainWindow window, MainViewModel viewModel, GroupDraftViewModel group)
@@ -591,9 +671,10 @@ public sealed class WpfBindingSmokeTests
         var directory = Environment.GetEnvironmentVariable("EXAM_EDITOR_SCREENSHOT_DIRECTORY");
         if (string.IsNullOrWhiteSpace(directory)) return;
         input.BringIntoView(); DrainDispatcher(); window.UpdateLayout();
-        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth), (int)Math.Ceiling(window.ActualHeight),
+        FrameworkElement renderRoot = input is ContextMenu ? input : window;
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(renderRoot.ActualWidth), (int)Math.Ceiling(renderRoot.ActualHeight),
             96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(window);
+        bitmap.Render(renderRoot);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         Directory.CreateDirectory(directory);

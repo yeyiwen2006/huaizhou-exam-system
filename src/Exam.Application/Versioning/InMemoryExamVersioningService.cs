@@ -35,7 +35,7 @@ public sealed class InMemoryExamVersioningService : IExamVersioningService
     public VersioningResult<ExamVersionSnapshot> UpdateSchedule(UpdateScheduleRequest request) =>
         WithExam(
             request.ExamId,
-            aggregate => aggregate.UpdateSchedule(request.ExpectedVersion, request.Schedule, request.Now));
+            aggregate => aggregate.UpdateSchedule(request.ExpectedVersion, request.Schedule, request.Now, request.ReopenEndedExam));
 
     public VersioningResult<ScheduleTriggerResult> ExecuteScheduleTrigger(ExecuteScheduleTriggerRequest request) =>
         WithExam(

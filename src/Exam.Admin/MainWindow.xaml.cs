@@ -83,6 +83,16 @@ public partial class MainWindow : Window
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
 
+    private void OnExamHidingMenuOpened(object sender, RoutedEventArgs e)
+    {
+        // The scope selector is inside the clickable exam card; opening it must not open the exam.
+        e.Handled = true;
+        if (sender is not Button { ContextMenu: { } menu } button) return;
+        menu.PlacementTarget = button;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
     private void OnScoreFieldFocused(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (sender is Panel fields && e.NewFocus is TextBox input)

@@ -52,7 +52,7 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <Style x:Key="PageScroller" TargetType="ScrollViewer">
+        <Style x:Key="PageScroller" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
             <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
         </Style>
@@ -94,6 +94,62 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <DataTemplate x:Key="ExamCardTemplate">
+            <Button Command="{Binding OpenCommand}" Height="Auto" Margin="0,0,0,12" Padding="0" Cursor="Hand"
+                    HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Card" Style="{StaticResource Card}" Padding="20,18">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Primary}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Focus.Ring}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+                <!-- 一行一场考试；名称自动换行，完整显示。 -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="11" Margin="0,0,16,0" VerticalAlignment="Center">
+                        <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="22" Height="22" />
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="16,0,0,0">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
+                            <CheckBox Content="在学生端显示" IsChecked="{Binding VisibleToStudents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                IsEnabled="{Binding CanChangeVisibility}" ToolTip="{Binding VisibilityNote}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <controls:StatusPill Text="{Binding PublicationText}" Level="{Binding PublicationLevel}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Content="{Binding HidingActionText}" Style="{StaticResource Btn.Secondary}" Padding="12,0"
+                                    IsEnabled="{Binding CanChangeHiding}" Click="OnExamHidingMenuOpened"
+                                    ToolTip="选择仅当前账号或所有考务账号；不改变学生端显示。">
+                                <Button.ContextMenu>
+                                    <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                        <MenuItem Header="仅当前账号" Command="{Binding ChangePersonalHidingCommand}"/>
+                                        <MenuItem Header="所有考务账号" Command="{Binding ChangeSharedHidingCommand}"/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                        </StackPanel>
+                        <TextBlock Text="{Binding HidingScopeText}" Style="{StaticResource CaptionText}" HorizontalAlignment="Right" Margin="0,6,0,0"
+                                   Visibility="{Binding Exam.IsHidden, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+                </Grid>
+            </Button>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -165,52 +221,9 @@
                                                 Content="点击考试进入设置、监控和成绩统计，或新建考试。" />
                     </DockPanel>
                     <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
-                    <ItemsControl ItemsSource="{Binding Home.Exams}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Command="{Binding OpenCommand}" Height="Auto" Margin="0,0,0,12" Padding="0" Cursor="Hand"
-                                        HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="Card" Style="{StaticResource Card}" Padding="20,18">
-                                                <ContentPresenter />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Primary}" />
-                                                </Trigger>
-                                                <Trigger Property="IsKeyboardFocused" Value="True">
-                                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Brush.Focus.Ring}" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                    <!-- 一行一场考试；名称自动换行，完整显示。 -->
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="11" Margin="0,0,16,0" VerticalAlignment="Center">
-                                            <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="22" Height="22" />
-                                        </Border>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap"/>
-                                            <TextBlock Text="{Binding TimeText}" Style="{StaticResource BodyText}" Margin="0,6,0,0"/>
-                                            <TextBlock Text="{Binding ParticipantsText}" Style="{StaticResource CaptionText}" Margin="0,2,0,0"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="16,0,0,0">
-                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                                <controls:StatusPill Text="{Binding StateText}" Level="{Binding StateLevel}" Margin="0,0,8,0"/>
-                                                <CheckBox Content="在学生端显示" IsChecked="{Binding VisibleToStudents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                    IsEnabled="{Binding CanChangeVisibility}" ToolTip="{Binding VisibilityNote}" VerticalAlignment="Center"/>
-                                            </StackPanel>
-                                            <controls:StatusPill Text="{Binding PublicationText}" Level="{Binding PublicationLevel}" HorizontalAlignment="Right" Margin="0,8,0,0"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <ItemsControl x:Name="ExamCards" ItemsSource="{Binding Home.Exams}" ItemTemplate="{StaticResource ExamCardTemplate}"/>
+                    <Button Content="隐藏的考试" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Margin="0,12,0,0"
+                            Command="{Binding ShowHiddenExamsCommand}"/>
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
@@ -729,6 +742,30 @@
             <reporting:ReportPageView DataContext="{Binding Reports}" />
         </TabItem>
 
+        <TabItem Header="隐藏的考试" Tag="{StaticResource Icon.Layers}">
+            <ScrollViewer Style="{StaticResource PageScroller}">
+                <StackPanel Style="{StaticResource PageBody}">
+                    <DockPanel Margin="0,0,0,20">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="刷新" Style="{StaticResource ActionButton}" Margin="0,0,8,0" Command="{Binding Home.RefreshCommand}"/>
+                            <Button Content="返回全部考试" Style="{StaticResource PrimaryAction}" Margin="0" Command="{Binding BackToHomeCommand}"/>
+                        </StackPanel>
+                        <HeaderedContentControl Style="{StaticResource PageHeading}" Header="隐藏的考试" Tag="{StaticResource Icon.Layers}" Margin="0"
+                                                Content="点击卡片继续管理考试，或按隐藏范围取消隐藏。"/>
+                    </DockPanel>
+                    <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                    <TextBlock Text="暂无隐藏的考试。">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionText}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers><DataTrigger Binding="{Binding Home.HiddenExams.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ItemsControl x:Name="HiddenExamCards" ItemsSource="{Binding Home.HiddenExams}" ItemTemplate="{StaticResource ExamCardTemplate}"/>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
         <TabItem Header="设备与试场分组" Tag="{StaticResource Icon.Device}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">

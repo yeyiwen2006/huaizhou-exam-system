@@ -317,7 +317,11 @@ public sealed class ParticipationService(
                 lifecycle == ExamLifecycle.Running && current.BusinessState == ParticipationBusinessState.Answering
                     ? exam.UnlockReference : null) with
             {
-                Lifecycle = lifecycle
+                Lifecycle = lifecycle,
+                ScheduleVersion = exam.ScheduleVersion,
+                ReopenedAtScheduleVersion = exam.ReopenedAtScheduleVersion,
+                ScheduledStart = exam.ScheduledStart,
+                ScheduledEnd = exam.ScheduledEnd
             };
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -572,7 +576,14 @@ public sealed class ParticipationService(
         }
 
         var exam = await examDirectory.FindAsync(result.ExamId, cancellationToken).ConfigureAwait(false);
-        return result with { Lifecycle = exam is null ? null : CurrentLifecycle(exam, _timeProvider.GetUtcNow()) };
+        return result with
+        {
+            Lifecycle = exam is null ? null : CurrentLifecycle(exam, _timeProvider.GetUtcNow()),
+            ScheduleVersion = exam?.ScheduleVersion ?? 0,
+            ReopenedAtScheduleVersion = exam?.ReopenedAtScheduleVersion ?? 0,
+            ScheduledStart = exam?.ScheduledStart,
+            ScheduledEnd = exam?.ScheduledEnd
+        };
     }
 
     public ValueTask<IReadOnlyList<ParticipationResult>> ListActualParticipationsAsync(

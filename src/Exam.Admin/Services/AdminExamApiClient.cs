@@ -67,4 +67,9 @@ public sealed partial class AdminApiClient
     public async Task<ExamSummary> SetExamVisibilityAsync(string examId, bool visible, CancellationToken cancellationToken = default) =>
         await SendAsync<ExamSummary>(HttpMethod.Put, $"api/v1/exams/{Uri.EscapeDataString(examId)}/visibility",
             new SetExamVisibilityRequest(string.Empty, visible), cancellationToken);
+
+    public async Task<ExamHidingState> SetExamHidingAsync(string examId, bool hidden, ExamHidingScope scope,
+        CancellationToken cancellationToken = default) =>
+        await SendAsync<ExamHidingState>(HttpMethod.Put, $"api/v1/exams/{Uri.EscapeDataString(examId)}/hiding",
+            new SetExamHidingRequest(string.Empty, hidden, scope), cancellationToken);
 }

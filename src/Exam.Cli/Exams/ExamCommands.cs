@@ -19,6 +19,9 @@ internal static partial class ExamCli
         var (action, name, rest) = arguments switch
         {
             ["list", .. var tail] => ("list", (string?)null, tail),
+            ["hidden", .. var tail] => ("hidden", (string?)null, tail),
+            [var verb, var exam, var scope, .. var tail] when verb is "hide" or "unhide" && scope is "self" or "all"
+                => (verb + "-" + scope, exam, tail),
             ["create", .. var tail] => ("create", null, tail),
             ["show", var exam, .. var tail] => ("show", exam, tail),
             ["update", var exam, .. var tail] => ("update", exam, tail),
@@ -76,7 +79,18 @@ internal static partial class ExamCli
             switch (action)
             {
                 case "list":
-                    result = await Send<ExamSummary[]>(HttpMethod.Get, "/api/v1/exams", null);
+                case "hidden":
+                    result = (await Send<ExamSummary[]>(HttpMethod.Get, "/api/v1/exams", null))
+                        .Where(item => item.IsHidden == (action == "hidden")).ToArray();
+                    break;
+                case "hide-self":
+                case "hide-all":
+                case "unhide-self":
+                case "unhide-all":
+                    var hidingExam = await Find(name!);
+                    result = await Send<ExamHidingState>(HttpMethod.Put, $"/api/v1/exams/{Uri.EscapeDataString(hidingExam.ExamId)}/hiding",
+                        new SetExamHidingRequest(RequestId(), action.StartsWith("hide-", StringComparison.Ordinal),
+                            action.EndsWith("-all", StringComparison.Ordinal) ? ExamHidingScope.AllOperators : ExamHidingScope.CurrentOperator));
                     break;
                 case "show":
                     result = await Send<ExamDetail>(HttpMethod.Get, "/api/v1/exams/" + Uri.EscapeDataString((await Find(name!)).ExamId), null);

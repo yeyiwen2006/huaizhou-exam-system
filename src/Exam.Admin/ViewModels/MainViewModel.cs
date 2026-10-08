@@ -9,7 +9,7 @@ namespace Exam.Admin.ViewModels;
 
 /// <summary>
 /// 考务端主窗口。主页列出全部考试；进入某场考试后，考试设置、设备监控和成绩统计都作用于这场考试。
-/// 导航页序号：0 全部考试，1 考试设置，2 试卷导入与发布，3 考生名单，4 设备监控，5 成绩统计，6 设备与试场分组，7 考务账号（仅管理员）。
+/// 导航页序号：0 全部考试，1 考试设置，2 试卷导入与发布，3 考生名单，4 设备监控，5 成绩统计，6 隐藏的考试，7 设备与试场分组，8 考务账号（仅管理员）。
 /// </summary>
 public sealed class MainViewModel : BindableBase, IDisposable
 {
@@ -19,8 +19,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public const int RosterPage = 3;
     public const int MonitoringPage = 4;
     public const int ReportsPage = 5;
-    public const int ActivationPage = 6; // 设备与试场分组：不与具体考试挂钩，不显示当前考试条。
-    public const int AccountsPage = 7;
+    public const int HiddenExamsPage = 6;
+    public const int ActivationPage = 7; // 设备与试场分组：不与具体考试挂钩，不显示当前考试条。
+    public const int AccountsPage = 8;
     private readonly AdminApiClient _api;
     private ExamSummary? _currentExam;
     private bool _isCreatingExam;
@@ -51,12 +52,14 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Import.PaperPublicationChanged += OnPaperPublicationChanged;
         _api.ConfigurationChanged += OnConfigurationChanged;
         BackToHomeCommand = new RelayCommand(() => SelectedPage = HomePage);
+        ShowHiddenExamsCommand = new RelayCommand(() => SelectedPage = HiddenExamsPage);
         ShowImportProgressCommand = new RelayCommand(() => SelectedPage = ImportPage);
     }
 
     public ExamHomeViewModel Home { get; }
     public OperatorAccountsViewModel Accounts { get; }
     public RelayCommand BackToHomeCommand { get; }
+    public RelayCommand ShowHiddenExamsCommand { get; }
     public RelayCommand ShowImportProgressCommand { get; }
 
     public int SelectedPage
@@ -66,13 +69,15 @@ public sealed class MainViewModel : BindableBase, IDisposable
         {
             if (!SetProperty(ref _selectedPage, value)) return;
             OnPropertyChanged(nameof(ShowCurrentExamBar));
+            if (value is HomePage or HiddenExamsPage && Home.RefreshCommand.CanExecute(null))
+                Home.RefreshCommand.Execute(null);
             if (value == ImportPage && Import.RefreshPublicationCommand.CanExecute(null))
                 Import.RefreshPublicationCommand.Execute(null);
         }
     }
 
     /// <summary>进入某场考试（或新建考试）后，在除主页外的页面顶部显示当前考试。</summary>
-    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage && SelectedPage != ActivationPage;
+    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage && SelectedPage != HiddenExamsPage && SelectedPage != ActivationPage;
 
     public ExamSummary? CurrentExam
     {
@@ -185,7 +190,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         if (string.IsNullOrWhiteSpace(examId)) return null;
         if (CurrentExam is { } current && StringComparer.Ordinal.Equals(current.ExamId, examId)) return current.Name;
-        return Home.Exams
+        return Home.Exams.Concat(Home.HiddenExams)
             .FirstOrDefault(card => StringComparer.Ordinal.Equals(card.Exam.ExamId, examId))?.Exam.Name;
     }
 

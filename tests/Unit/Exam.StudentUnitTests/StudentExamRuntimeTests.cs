@@ -22,7 +22,7 @@ using Exam.Student.Core;
 
 namespace Exam.StudentUnitTests;
 
-public sealed class StudentExamRuntimeTests
+public sealed partial class StudentExamRuntimeTests
 {
     [Fact]
     public async Task DecryptedButInvalidPackageCannotCreateBlankLocalWork()

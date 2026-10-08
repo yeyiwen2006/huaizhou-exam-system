@@ -26,7 +26,7 @@ namespace Exam.IntegrationTests.Api;
 /// </summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class OperatorAccountApiTests(PostgresDatabaseFixture fixture)
+public sealed partial class OperatorAccountApiTests(PostgresDatabaseFixture fixture)
 {
     private const string AdminPassword = "synthetic-admin-password";
     private const string StaffPassword = "synthetic-staff-password";
@@ -180,6 +180,8 @@ public sealed class OperatorAccountApiTests(PostgresDatabaseFixture fixture)
         { foreach (var converter in JsonDefaults.Create().Converters) options.SerializerOptions.Converters.Add(converter); });
         builder.Services.AddSingleton(fixture.DataSource);
         builder.Services.AddPostgresOperatorAccounts();
+        builder.Services.AddSingleton(new Exam.Infrastructure.Postgres.Exams.PostgresExamCatalog(fixture.DataSource,
+            new Exam.Infrastructure.Postgres.Versioning.PostgresExamVersioningService(fixture.DataSource), TimeProvider.System));
         builder.Services.AddSingleton(new ServerNodeEnvelope("synthetic-account-server", "node-a", 1));
         builder.Services.AddSingleton<IDeviceCredentialValidator, RejectingDeviceValidator>();
         builder.Services.AddSingleton(new ActiveNodeGuard(fixture.DataSource,
@@ -188,6 +190,7 @@ public sealed class OperatorAccountApiTests(PostgresDatabaseFixture fixture)
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<ExamApiAccessMiddleware>();
         app.MapGroup("/api/v1").MapOperatorAccountApi();
+        app.MapGroup("/api/v1").MapExamCatalogApi();
         await app.StartAsync();
         return app;
     }

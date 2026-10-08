@@ -16,7 +16,7 @@ using Exam.Student.Core;
 
 namespace Exam.StudentUnitTests;
 
-public sealed class ExamPackageManagerTests
+public sealed partial class ExamPackageManagerTests
 {
     [Fact]
     public async Task WithdrawalAllowsWaitingAndReturningBeforeASecondConfirmation()
@@ -616,6 +616,10 @@ public sealed class ExamPackageManagerTests
         public long InstructionsVersion { get; set; } = 1;
         public ParticipationBusinessState BusinessState { get; set; } = ParticipationBusinessState.Waiting;
         public ExamLifecycle Lifecycle { get; set; } = ExamLifecycle.Scheduled;
+        public long ScheduleVersion { get; set; }
+        public long ReopenedAtScheduleVersion { get; set; }
+        public DateTimeOffset? ScheduledStart { get; set; }
+        public DateTimeOffset? ScheduledEnd { get; set; }
         public bool DropPrepare { get; set; }
         public bool DropConfirm { get; set; }
         public bool DropWithdraw { get; set; }
@@ -667,7 +671,11 @@ public sealed class ExamPackageManagerTests
             if (!_confirmations.TryGetValue(request.RequestId, out var result))
                 _confirmations[request.RequestId] = result = new("participation", ExamId, "candidate", BusinessState,
                     "device", 1, 1, 7, BusinessState == ParticipationBusinessState.Answering ? "resource-envelope:package" : null,
-                    Lifecycle: Lifecycle);
+                    Lifecycle: Lifecycle)
+                {
+                    ScheduleVersion = ScheduleVersion, ReopenedAtScheduleVersion = ReopenedAtScheduleVersion,
+                    ScheduledStart = ScheduledStart, ScheduledEnd = ScheduledEnd
+                };
             BeforeConfirmResponse?.Invoke();
             if (DropConfirm) { DropConfirm = false; throw new HttpRequestException("Synthetic lost confirmation response."); }
             return Task.FromResult(Ok(result));

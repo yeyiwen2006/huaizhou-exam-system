@@ -39,7 +39,10 @@ public sealed record ParticipationAccessSnapshot(
     ExamLifecycle ExamLifecycle,
     ParticipationBusinessState BusinessState,
     long PaperVersion,
-    long GradingVersion);
+    long GradingVersion)
+{
+    public long ReopenedAtScheduleVersion { get; init; }
+}
 
 public sealed record CreateCommandEventRequest(
     string RequestId,

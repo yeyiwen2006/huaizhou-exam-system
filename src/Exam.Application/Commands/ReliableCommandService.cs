@@ -451,6 +451,9 @@ public sealed class ReliableCommandService
         PersistentCommandEvent commandEvent,
         ParticipationAccessSnapshot authorization, bool manualResend = false)
     {
+        if (commandEvent.EventType is CommandEventType.Start or CommandEventType.End &&
+            commandEvent.StateVersion < authorization.ReopenedAtScheduleVersion)
+            return false;
         // 已执行 END 只说明停止答题，不能证明答卷已回收。考务可请求当前设备补传原固定答卷。
         var reupload = manualResend && commandEvent.EventType == CommandEventType.End &&
             authorization.ExamLifecycle == ExamLifecycle.Ended &&
@@ -497,7 +500,7 @@ public sealed class ReliableCommandService
 
     private static DateTimeOffset? ReadScheduleTime(PersistentCommandEvent commandEvent, string key)
     {
-        if (commandEvent.EventType != CommandEventType.ScheduleChanged ||
+        if (commandEvent.EventType is not (CommandEventType.ScheduleChanged or CommandEventType.Start) ||
             !commandEvent.Metadata.TryGetValue(key, out var value)) return null;
         if (!DateTimeOffset.TryParseExact(value, "O", System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out var time))

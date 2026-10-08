@@ -12,14 +12,16 @@ public sealed class PostgresExamEntryDirectory(NpgsqlDataSource dataSource) : IE
         CancellationToken cancellationToken = default)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT exam_id, scheduled_start, scheduled_end, lifecycle,
-                   package_ready, instructions_ready, encrypted_package_uri,
-                   package_length, paper_version, instructions_version,
-                   unlock_reference
-              FROM exam.exam_entry_access
-             WHERE exam_id = @exam_id;
+            SELECT access.exam_id, access.scheduled_start, access.scheduled_end, access.lifecycle,
+                   access.package_ready, access.instructions_ready, access.encrypted_package_uri,
+                   access.package_length, access.paper_version, access.instructions_version,
+                   access.unlock_reference, COALESCE(state.schedule_version, 0),
+                   COALESCE((state.snapshot->>'reopenedAtScheduleVersion')::bigint, 0)
+              FROM exam.exam_entry_access access
+              LEFT JOIN exam.version_state state ON state.exam_id = access.exam_id
+             WHERE access.exam_id = $1;
             """);
-        command.Parameters.AddWithValue("exam_id", examId);
+        command.Parameters.AddWithValue(examId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -37,7 +39,11 @@ public sealed class PostgresExamEntryDirectory(NpgsqlDataSource dataSource) : IE
             reader.GetInt64(7),
             reader.GetInt64(8),
             reader.GetInt64(9),
-            reader.IsDBNull(10) ? null : reader.GetString(10));
+            reader.IsDBNull(10) ? null : reader.GetString(10))
+        {
+            ScheduleVersion = reader.GetInt64(11),
+            ReopenedAtScheduleVersion = reader.GetInt64(12)
+        };
     }
 
     private static ExamLifecycle ParseLifecycle(string value) =>

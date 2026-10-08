@@ -79,8 +79,11 @@ public sealed partial class ReviewRegressionTests
         using var api = Configured(handler);
         var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1", ScheduleChangeReason = "合成并发测试" };
         viewModel.Subjects[0].Groups[0].QuestionCount = 10;
+        viewModel.Subjects[0].Groups[0].MaxScore = "10";
+        viewModel.Subjects[0].MaxScore = "10";
         await viewModel.LoadScheduleAsync();
         viewModel.ScheduledEndText = "2026-10-01 12:00:00 +00:00";
+        Assert.Empty(viewModel.Validate());
         await Assert.ThrowsAsync<AdminApiException>(() => viewModel.SaveScheduleAsync());
         await Assert.ThrowsAsync<AdminApiException>(() => viewModel.SaveScheduleAsync());
         Assert.Equal(new long[] { 7, 7 }, expectedVersions);
@@ -103,7 +106,10 @@ public sealed partial class ReviewRegressionTests
         using var api = Configured(handler);
         var viewModel = new ExamConfigurationViewModel(api) { ExamId = "exam-1", ScheduleChangeReason = "合成并发测试" };
         viewModel.Subjects[0].Groups[0].QuestionCount = 10;
+        viewModel.Subjects[0].Groups[0].MaxScore = "10";
+        viewModel.Subjects[0].MaxScore = "10";
         await viewModel.LoadScheduleAsync();
+        Assert.Empty(viewModel.Validate());
         await viewModel.SaveScheduleAsync();
         await viewModel.SaveScheduleAsync();
         Assert.Equal(new long[] { 7, 8 }, expected);

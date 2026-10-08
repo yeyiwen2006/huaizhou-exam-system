@@ -127,7 +127,10 @@ public sealed record ExamVersionSnapshot(
     DateTimeOffset? ActualEndedAt,
     PaperPublicationInfo? Paper,
     GradingPublicationInfo? Grading,
-    IReadOnlyDictionary<string, ParticipantVersionStatus> Participants);
+    IReadOnlyDictionary<string, ParticipantVersionStatus> Participants)
+{
+    public long ReopenedAtScheduleVersion { get; init; }
+}
 
 public sealed record CreateVersionedExamRequest(
     string ExamId,
@@ -148,6 +151,9 @@ public sealed record UpdateScheduleRequest(
     // The operator may leave the time-change reason blank.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Reason { get; init; }
+    // Persist the policy on new requests so replay never reinterprets historical time corrections.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReopenEndedExam { get; init; }
 }
 
 public sealed record ExecuteScheduleTriggerRequest(

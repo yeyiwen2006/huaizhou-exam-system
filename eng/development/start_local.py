@@ -156,7 +156,13 @@ def wait_server(process, url: str, certificate: Path | None = None) -> dict:
     last_status = None
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
-        if process.poll() is not None:
+        exit_code = process.poll()
+        if exit_code == 3:
+            # Exam.LocalHost reserves this status for the maintenance-window guard.
+            raise RuntimeError('现有测试数据库需要升级，但仍有进行中或等待、作答中的考试，升级已被阻止。'
+                               '\n请先使用升级前的调试程序完成考试及收卷，再启动新版。'
+                               '\n现有测试数据已保留，请勿删除 .artifacts/local-debug；详情见 logs/server-a.log。')
+        if exit_code is not None:
             raise RuntimeError('调试后台提前退出，请查看 logs/server-a.log 或 server-b.log。')
         try:
             with opener.open(url + '/health/ready', timeout=2) as response:

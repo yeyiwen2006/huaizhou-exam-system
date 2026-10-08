@@ -15,7 +15,7 @@ namespace Exam.IntegrationTests.Exams;
 /// <summary>考务端考试目录：名称唯一、设置持久化、学生端显示开关与考试期间锁定。全部为合成数据。</summary>
 [Collection(PostgresCollection.Name)]
 [Trait("Category", "Postgres")]
-public sealed class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
+public sealed partial class PostgresExamCatalogTests(PostgresDatabaseFixture fixture)
 {
     [Fact]
     public async Task Create_PersistsSettingsAndInstructions_HiddenByDefault_AndRetryIsIdempotent()

@@ -61,7 +61,7 @@ public sealed partial class StudentExamRuntime(
             }
         }
     }
-    public StudentPaperManifest? Paper => !_disposed && !Manager.ExamEnded &&
+    public StudentPaperManifest? Paper => !_disposed && !Manager.ExamEnded && !HasFixedSubmission &&
         Manager.CurrentPhase == ExamPackageManager.Phase.Unlocked &&
         _paper?.PaperVersion == Manager.Descriptor?.PaperVersion &&
         (Answers is null || Answers.PaperVersion == _paper?.PaperVersion) ? _paper : null;
@@ -547,7 +547,8 @@ public sealed partial class StudentExamRuntime(
             var answerStop = Answers is { } answers
                 ? Manager.CurrentPhase == ExamPackageManager.Phase.Revoked
                     ? answers.InvalidateAuthorizationAsync(CancellationToken.None)
-                    : Manager.ExamEnded ? FreezeEndedAnswersAsync(answers, CancellationToken.None) : Task.CompletedTask
+                    : delivery.EventType == CommandEventType.End && Manager.ExamEnded
+                        ? FreezeEndedAnswersAsync(answers, CancellationToken.None) : Task.CompletedTask
                 : Task.CompletedTask;
             NotifyStateChanged();
             try { await Task.WhenAll(packageCommand, answerStop); }

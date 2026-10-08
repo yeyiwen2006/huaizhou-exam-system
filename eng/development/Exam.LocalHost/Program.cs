@@ -14,6 +14,7 @@ using Exam.Server.Runtime;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 // Separate development executable. Exam.Server keeps its production deployment requirements.
+Console.OutputEncoding = new System.Text.UTF8Encoding(false);
 return await LocalEntry.RunAsync(args);
 
 internal static class LocalEntry
@@ -100,7 +101,18 @@ internal static class LocalEntry
         await using var app = builder.Build();
         // The launcher starts a before b, avoiding concurrent schema migrations.
         if (indexOfNode == 0)
-            await app.Services.GetRequiredService<PostgresMigrationRunner>().MigrateAsync();
+        {
+            try
+            {
+                await app.Services.GetRequiredService<PostgresMigrationRunner>().MigrateAsync();
+            }
+            catch (PostgresMigrationBlockedException exception)
+            {
+                Console.Error.WriteLine(exception.Message);
+                // Reserved startup status consumed by eng/development/start_local.py.
+                return 3;
+            }
+        }
         app.UseMiddleware<ApiExceptionMiddleware>();
         app.UseMiddleware<ExamApiAccessMiddleware>();
         app.UseMiddleware<BusinessConfirmationMiddleware>();

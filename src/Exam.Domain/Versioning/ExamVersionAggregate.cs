@@ -17,6 +17,7 @@ public sealed class ExamVersionAggregate
     private ExamLifecycle _lifecycleState;
     private DateTimeOffset? _actualStartedAt;
     private DateTimeOffset? _actualEndedAt;
+    private long _reopenedAtScheduleVersion;
     private PaperPublicationInfo? _paper;
     private GradingPublicationInfo? _grading;
 
@@ -39,7 +40,8 @@ public sealed class ExamVersionAggregate
         }
     }
 
-    public ExamVersionSnapshot UpdateSchedule(long expectedVersion, ScheduleWindow schedule, DateTimeOffset now)
+    public ExamVersionSnapshot UpdateSchedule(long expectedVersion, ScheduleWindow schedule, DateTimeOffset now,
+        bool reopenEndedExam = false)
     {
         lock (_gate)
         {
@@ -48,6 +50,20 @@ public sealed class ExamVersionAggregate
 
             _schedule = schedule;
             _scheduleVersion = checked(_scheduleVersion + 1);
+            if (reopenEndedExam && _lifecycleState == ExamLifecycle.Ended && schedule.EndsAt > now)
+            {
+                _lifecycleState = _actualStartedAt is not null || schedule.StartsAt <= now
+                    ? ExamLifecycle.Running : ExamLifecycle.Scheduled;
+                _actualEndedAt = null;
+                _reopenedAtScheduleVersion = _scheduleVersion;
+                if (_lifecycleState == ExamLifecycle.Running)
+                {
+                    _actualStartedAt ??= now;
+                    foreach (var participant in _participants.Values.Where(
+                                 participant => participant.ExamState == ParticipationBusinessState.Waiting))
+                        participant.ExamState = ParticipationBusinessState.Answering;
+                }
+            }
             ReconcileLifecycle(now);
             return CreateSnapshot();
         }
@@ -424,7 +440,8 @@ public sealed class ExamVersionAggregate
             _actualEndedAt,
             CopyPaper(_paper),
             _grading,
-            new ReadOnlyDictionary<string, ParticipantVersionStatus>(participants));
+            new ReadOnlyDictionary<string, ParticipantVersionStatus>(participants))
+        { ReopenedAtScheduleVersion = _reopenedAtScheduleVersion };
     }
 
     private ParticipantState GetParticipant(string participantId)

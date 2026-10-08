@@ -21,18 +21,9 @@ public sealed class ScrollBarInteractionTests
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = new Border { Height = 20000, Width = 20000, Background = Brushes.White }
         };
-        var window = new Window
+        using (var surface = new WpfTestSurface(scroll, 500, 350))
         {
-            Content = scroll, Width = 500, Height = 350, Left = -5000, Top = -5000,
-            ShowInTaskbar = false, ShowActivated = false, WindowStyle = WindowStyle.None
-        };
-        window.Resources.MergedDictionaries.Add(new ResourceDictionary
-        {
-            Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml")
-        });
-        try
-        {
-            window.Show(); Drain(); window.UpdateLayout();
+            Drain(); surface.UpdateLayout();
             var bar = Descendants<ScrollBar>(scroll).Single(item => item.Orientation == orientation && item.IsVisible);
             var track = Assert.IsType<Track>(bar.Template.FindName("PART_Track", bar));
             var thumb = track.Thumb;
@@ -55,17 +46,16 @@ public sealed class ScrollBarInteractionTests
             thumb.RaiseEvent(new DragStartedEventArgs(0, 0));
             thumb.RaiseEvent(new DragDeltaEventArgs(orientation == Orientation.Horizontal ? 40 : 0,
                 orientation == Orientation.Vertical ? 40 : 0));
-            Drain(); window.UpdateLayout();
+            Drain(); surface.UpdateLayout();
             var forward = orientation == Orientation.Vertical ? scroll.VerticalOffset : scroll.HorizontalOffset;
             Assert.True(forward > 0);
             Assert.Same(thumb, track.Thumb);
             thumb.RaiseEvent(new DragDeltaEventArgs(orientation == Orientation.Horizontal ? -20 : 0,
                 orientation == Orientation.Vertical ? -20 : 0));
-            Drain(); window.UpdateLayout();
+            Drain(); surface.UpdateLayout();
             Assert.True((orientation == Orientation.Vertical ? scroll.VerticalOffset : scroll.HorizontalOffset) < forward);
             thumb.RaiseEvent(new DragCompletedEventArgs(0, 0, false));
         }
-        finally { window.Close(); }
     });
 
     private static async Task Sta(Action action)
