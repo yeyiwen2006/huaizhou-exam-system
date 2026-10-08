@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows.Threading;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
@@ -86,12 +87,16 @@ public sealed partial class ReportPageViewModel : BindableBase, IDisposable
     }
     public async Task ExportAsync()
     {
-        if (_busy || _snapshot is null || !_connected || _disposed) return;
+        if (_busy || _snapshot is null || !_connected || _disposed || Session.SelectedTable is not { } table) return;
         var generation = _generation; var exam = ExamId; var snapshot = _snapshot; var token = _context.Token;
         _busy = true; Commands();
         try
         {
-            var destination = _files.SaveExcelFile("考试报表.xlsx");
+            var examName = string.IsNullOrWhiteSpace(ExamName) ? "考试" : ExamName.Trim();
+            var invalidCharacters = Path.GetInvalidFileNameChars();
+            var fileName = new string($"{examName}_{table.Title}".Select(character =>
+                invalidCharacters.Contains(character) ? '_' : character).ToArray()) + ".xlsx";
+            var destination = _files.SaveExcelFile(fileName);
             if (generation != _generation || _snapshot != snapshot) return;
             if (destination is null) { Status = "已取消选择导出文件。"; return; }
             Status = "正在生成并下载完整 Excel…";
