@@ -13,8 +13,10 @@ namespace Exam.AdminUnitTests;
 /// <summary>主页考试卡片、新建考试、按名称进入考试与学生端显示开关。全部为合成数据。</summary>
 public sealed class ExamCatalogViewModelTests
 {
-    [Fact]
-    public Task SingleChoiceMaximumMismatch_PreventsSavingBeforeAnApiRequest() => OnStaAsync(async () =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task MaximumMismatch_PreventsSavingBeforeAnApiRequest(bool subjectMismatch) => OnStaAsync(async () =>
     {
         var requests = 0;
         using var api = Configured(new Handler(_ =>
@@ -25,19 +27,25 @@ public sealed class ExamCatalogViewModelTests
         var draft = new ExamConfigurationViewModel(api);
         draft.ResetForNew();
         draft.Name = "合成满分校验考试";
-        var group = draft.Subjects[0].Groups[0];
+        var subject = draft.Subjects[0];
+        var group = subject.Groups[0];
         group.QuestionCount = 10;
         group.Correct = "2";
-        group.MaxScore = "19";
+        group.MaxScore = subjectMismatch ? "20" : "19";
+        subject.MaxScore = subjectMismatch ? "19" : "20";
 
         await draft.SaveAsync();
 
         Assert.Equal(0, requests);
-        Assert.Contains("单项选择题满分不一致", draft.ValidationSummary);
-        Assert.Contains("10 × 每小题选对得分 2 = 20", draft.ValidationSummary);
+        if (subjectMismatch)
+            Assert.Contains("题组满分之和为 20，与科目满分 19 不一致", draft.ValidationSummary);
+        else
+            Assert.Contains("10 × 每小题选对得分 2 = 20", draft.ValidationSummary);
         Assert.Contains("填写内容有误", draft.Status);
-        group.MaxScore = "20";
+        group.MaxScore = subject.MaxScore = "20";
         Assert.Empty(draft.Validate());
+        draft.RefreshInstructionsCommand.Execute(null);
+        Assert.Equal("校验成功。", draft.ValidationSummary);
     });
 
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();

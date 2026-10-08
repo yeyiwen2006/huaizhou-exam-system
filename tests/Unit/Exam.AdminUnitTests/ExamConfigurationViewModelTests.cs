@@ -141,6 +141,7 @@ public sealed class ExamConfigurationViewModelTests
             draft.QuestionCount = 10;
             draft.MaxScore = "10";
         }
+        foreach (var item in viewModel.Subjects) item.MaxScore = (item.Groups.Count * 10).ToString();
         Assert.Empty(viewModel.Validate());
     }
 
@@ -162,7 +163,7 @@ public sealed class ExamConfigurationViewModelTests
         indeterminate.Type = "indeterminate";
         indeterminate.Name = "不定项组";
         foreach (var group in subject.Groups) group.QuestionCount = 10;
-        single.MaxScore = "10";
+        single.MaxScore = subject.MaxScore = "10";
 
         viewModel.RefreshInstructionsCommand.Execute(null);
 
@@ -285,7 +286,7 @@ public sealed class ExamConfigurationViewModelTests
             ScheduleChangeReason = "合成回执校验"
         };
         draft.Subjects[0].Groups[0].QuestionCount = 10;
-        draft.Subjects[0].Groups[0].MaxScore = "10";
+        draft.Subjects[0].Groups[0].MaxScore = draft.Subjects[0].MaxScore = "10";
         return draft;
     }
 

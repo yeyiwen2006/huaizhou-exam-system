@@ -51,8 +51,23 @@ public static class ExamSettingsRules
             var orders = new HashSet<int>();
             foreach (var group in subject.Groups)
                 ValidateGroup(subject, group, groupIds, orders, errors);
+            ValidateSubjectMaximum(subject, errors);
         }
         return errors;
+    }
+
+    private static void ValidateSubjectMaximum(ExamSubjectSettings subject, ICollection<string> errors)
+    {
+        if (!ScoreConstantRules.TryParse(subject.MaxScore?.Trim(), out var declaredMaximum)) return;
+        var total = ExactRational.Zero;
+        foreach (var group in subject.Groups)
+        {
+            // Invalid or missing scores are reported separately; do not sum an incomplete subject.
+            if (group is null || !ScoreConstantRules.TryParse(group.MaxScore?.Trim(), out var groupMaximum)) return;
+            total += groupMaximum;
+        }
+        if (total != declaredMaximum)
+            errors.Add($"科目“{subject.Name}”的题组满分之和为 {total}，与科目满分 {declaredMaximum} 不一致。");
     }
 
     private static void ValidateGroup(ExamSubjectSettings subject, ExamGroupSettings? group,

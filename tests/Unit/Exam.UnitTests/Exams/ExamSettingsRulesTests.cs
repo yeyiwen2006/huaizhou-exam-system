@@ -7,6 +7,66 @@ namespace Exam.UnitTests.Exams;
 public sealed class ExamSettingsRulesTests
 {
     [Theory]
+    [InlineData("100", true)]
+    [InlineData("99", false)]
+    public void SubjectMaximum_IncludesEveryQuestionType(string maximum, bool valid)
+    {
+        var subject = Settings().Subjects[0];
+        subject = subject with { MaxScore = maximum, Groups =
+        [
+            subject.Groups[0],
+            new("multiple", "多项组", "multiple", 2, 3, "25", false,
+                null, new("3*{正确选项总数}", "{选择的正确选项数}", "0", "0")),
+            subject.Groups[1] with { Order = 3, MaxScore = "15" }
+        ] };
+
+        var errors = ExamSettingsRules.Validate("考试", new([subject]));
+
+        if (valid) Assert.Empty(errors);
+        else Assert.Equal("科目“数学”的题组满分之和为 100，与科目满分 99 不一致。", Assert.Single(errors));
+    }
+
+    [Fact]
+    public void SubjectMaximum_UsesExactDecimalAddition()
+    {
+        var subject = Settings().Subjects[0];
+        var groups = new[]
+        {
+            subject.Groups[0] with { QuestionCount = 1, MaxScore = " 0.1 ", OneCorrect = new("0.1", "0", "0") },
+            subject.Groups[1] with { MaxScore = "0.2" }
+        };
+        Assert.Empty(ExamSettingsRules.Validate("考试", new([subject with { MaxScore = "0.3", Groups = groups }])));
+        Assert.Contains(ExamSettingsRules.Validate("考试", new([subject with { MaxScore = "0.300000000000000001", Groups = groups }])),
+            error => error.Contains("题组满分之和为 0.3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SubjectMaximum_ChecksEachSubjectEvenWhenExamWideTotalsAgree()
+    {
+        var first = Settings().Subjects[0] with { MaxScore = "90" };
+        var second = first with
+        {
+            SubjectId = "physics", Name = "物理", MaxScore = "110",
+            Groups = first.Groups.Select(group => group with { GroupId = "physics-" + group.GroupId }).ToArray()
+        };
+        var errors = ExamSettingsRules.Validate("考试", new([first, second]));
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, error => error.Contains("科目“数学”", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("科目“物理”", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InvalidGroupMaximum_IsNotSilentlyCountedAsZero()
+    {
+        var subject = Settings().Subjects[0];
+        var errors = ExamSettingsRules.Validate("考试", new([subject with
+        {
+            MaxScore = "60", Groups = [subject.Groups[0], subject.Groups[1] with { MaxScore = "abc" }]
+        }]));
+        Assert.Contains("满分必须是数字", Assert.Single(errors));
+    }
+
+    [Theory]
     [InlineData(20, "3", "60", true)]
     [InlineData(20, "3", "59", false)]
     [InlineData(3, "0.1", "0.3", true)]
@@ -20,7 +80,7 @@ public sealed class ExamSettingsRulesTests
         {
             QuestionCount = count, MaxScore = maximum, OneCorrect = new(correct, "0", "0")
         };
-        var errors = ExamSettingsRules.Validate("考试", new([subject with { Groups = [group] }]));
+        var errors = ExamSettingsRules.Validate("考试", new([subject with { MaxScore = maximum, Groups = [group] }]));
         if (valid) Assert.Empty(errors);
         else Assert.Contains(errors, error => error.Contains("单项选择题满分不一致", StringComparison.Ordinal)
             && error.Contains(group.Name, StringComparison.Ordinal));
