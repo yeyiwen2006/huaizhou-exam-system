@@ -22,7 +22,9 @@ public sealed class ManagementRuntime(
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecoveryActivation = null,
     Func<int, CancellationToken, Task<IReadOnlyList<ManagementAuditEntry>>>? readAudit = null,
     Func<int, CancellationToken, Task<IReadOnlyList<ProtectedRuntimeLogEntry>>>? readRuntimeLogs = null,
-    Func<DurableFailoverCoordinator>? failover = null)
+    Func<DurableFailoverCoordinator>? failover = null,
+    bool checkReadinessOnStatus = false,
+    bool requireCurrentRecoveryState = true)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
@@ -107,7 +109,14 @@ public sealed class ManagementRuntime(
         try { configuration = await GetConfigurationAsync(cancellationToken); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception) { checks = [new("service-configuration", false, "业务配置缺失、损坏或与管理节点不一致。", true)]; }
-        return new(process.Status, BusinessReadiness.Unknown, configuration, checks);
+        var readiness = BusinessReadiness.Unknown;
+        if (checkReadinessOnStatus && configuration is not null && process.Status == BusinessServiceStatus.Running && observeBusinessReady is not null)
+        {
+            try { readiness = await observeBusinessReady(configuration, cancellationToken) ? BusinessReadiness.Ready : BusinessReadiness.NotReady; }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception) { readiness = BusinessReadiness.Unknown; }
+        }
+        return new(process.Status, readiness, configuration, checks);
     }
 
     public async Task<ServiceConfiguration> GetConfigurationAsync(CancellationToken cancellationToken)
@@ -230,7 +239,7 @@ public sealed class ManagementRuntime(
                     verified.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != verified.Count)
                     throw new IOException("恢复目标探针结果无效。");
                 checks.AddRange(verified);
-                if (activateRecovery is not null && !checks.Any(c => c.Name == "recovery-confirmed-state"))
+                if (activateRecovery is not null && requireCurrentRecoveryState && !checks.Any(c => c.Name == "recovery-confirmed-state"))
                     checks.Add(new("recovery-confirmed-state", false,
                         "恢复激活缺少最新已确认状态证明，禁止开放业务。", true));
                 if (checks.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != checks.Count)

@@ -68,17 +68,21 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exam.Admin", "Management");
         var localDebug = false;
+        Func<ManagementTarget, IManagementConnection> factory = target => new ManagementConnection(target);
 #if DEBUG
         if (Environment.GetEnvironmentVariable("EXAM_ADMIN_DATA_DIRECTORY") is { Length: > 0 } localDirectory)
         {
             directory = System.IO.Path.Combine(System.IO.Path.GetFullPath(localDirectory), "Management");
             localDebug = true;
+            factory = target => new ManagementConnection(target, LocalDebugManagementTransport.Create);
         }
 #endif
-        return new(target => new ManagementConnection(target), new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
+        var model = new ServiceManagementViewModel(factory, new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
             new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json"), localDebug ? null :
                 System.IO.Path.Combine(AppContext.BaseDirectory, "management-connection.json")),
             new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")), localDebug: localDebug);
+        if (localDebug) model.BackupDestination = System.IO.Path.GetFullPath(System.IO.Path.Combine(directory, "..", "..", "backups"));
+        return model;
     }
 
     public Func<ManagementConfirmation, Task<bool>> ConfirmAsync { get; set; } = _ => Task.FromResult(false);
@@ -86,6 +90,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string ServerId { get => _server; set { if (SetProperty(ref _server, value)) ConnectionSettingsChanged(); } }
     public string NodeId { get => _node; set { if (SetProperty(ref _node, value)) ConnectionSettingsChanged(); } }
     public bool IsLocalDebugEnvironment { get; }
+    public bool ShowHighAvailability => !IsLocalDebugEnvironment;
+    public string RestoreGuidance => IsLocalDebugEnvironment
+        ? "须先停止业务。测试恢复会回到所选备份时的状态，并自动启动业务；恢复前的数据库保留。"
+        : "须先停止业务。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。";
     public bool HasConnectionConfiguration
     {
         get
@@ -95,10 +103,11 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             catch (ArgumentException) { return false; }
         }
     }
-    public bool CanConfigureConnection => IsSignedOut && !IsBusy && !IsLocalDebugEnvironment;
+    public bool CanConfigureConnection => IsSignedOut && !IsBusy;
     public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
     public string ConnectionStatus => IsLocalDebugEnvironment
-        ? "当前为本机调试环境，未部署独立管理服务。请返回考务；后台启停请使用本机调试启动窗口。"
+        ? HasConnectionConfiguration ? "本机测试管理已配置，请使用已启用的考务账号和密码登录。"
+            : "本机测试管理尚未配置，请重新通过 start-local.cmd 启动。"
         : HasConnectionConfiguration ? "连接已配置，请使用已启用的考务账号和密码登录。"
         : "本机管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
@@ -123,7 +132,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public bool IsSignedOut => !IsSignedIn;
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
-    public string TargetText => IsLocalDebugEnvironment ? "本机调试 · 管理服务未部署" :
+    public string TargetText => IsLocalDebugEnvironment ? "本机测试 · 服务管理" :
         _connection is not null || HasConnectionConfiguration ? "当前管理服务器：本机" : "本机管理连接待配置";
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
@@ -208,10 +217,13 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null)
                 throw new System.IO.InvalidDataException();
             ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch);
-            var availability = await connection.HighAvailabilityAsync(reads.Token);
-            if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
-            if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
-            else MarkProtectionUnknown();
+            if (!IsLocalDebugEnvironment)
+            {
+                var availability = await connection.HighAvailabilityAsync(reads.Token);
+                if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
+                if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
+                else MarkProtectionUnknown();
+            }
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);
@@ -348,6 +360,11 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (operation.HighAvailability is { } availability) ApplyHighAvailability(availability);
         if (operation.Checks is not null) SetChecks(operation.Checks);
         if (operation.Restore is { } restore) RestoreText = $"隔离暂存：{YesNo(restore.IsolationStaged)}；恢复核对：{YesNo(restore.RecoveryVerified)}；业务就绪：{YesNo(restore.BusinessReady)}";
+        if (operation.Phase == ManagementOperationPhase.Completed && operation.Backup is { } backup)
+        {
+            RestoreBackupId = backup.BackupId;
+            RestoreSource = backup.DestinationDirectory;
+        }
         Message = operation.Phase switch
         {
             ManagementOperationPhase.Completed when operation.Kind == ManagementOperationKind.Checks && operation.Checks!.Any(c => !c.Passed && c.BlocksWrites) => "自检已完成，存在阻止业务写入的失败项。",
@@ -389,7 +406,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     private static string RequirePath(string path) => !string.IsNullOrWhiteSpace(path) && System.IO.Path.IsPathFullyQualified(path.Trim())
         ? path.Trim() : throw new ArgumentException("请输入本机绝对目录路径。");
-    private static string ConfirmationBody(ManagementOperationKind kind, PendingManagementRequest request)
+    private string ConfirmationBody(ManagementOperationKind kind, PendingManagementRequest request)
     {
         using var document = JsonDocument.Parse(request.Body);
         var fields = document.RootElement;
@@ -408,7 +425,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Stop => "停止会中断业务服务。",
             ManagementOperationKind.Configure => "后端核对已停止状态与当前配置版本；冲突时不覆盖。",
             ManagementOperationKind.Backup => "须先停止业务；备份结果必须包含三项完整性证据。",
-            ManagementOperationKind.Restore => "须先停止业务。先隔离暂存，再核对最新持久确认；暂存不表示业务恢复。",
+            ManagementOperationKind.Restore => RestoreGuidance,
             ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升本机备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
             ManagementOperationKind.Emergency => "停止本机业务并切换为单机持久确认。完成后请自检并启动业务；应急期间保护降低，请尽快恢复备用节点。",
             ManagementOperationKind.Rebuild => "停止本机服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
@@ -444,6 +461,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private static string CheckName(string name) => name.StartsWith("activation-", StringComparison.Ordinal)
         ? "启动前：" + CheckName(name[11..]) : name switch {
             "database" => "数据库连接", "database-migrations" => "数据库版本", "database-role" => "数据库角色",
+            "certificate" => "测试证书", "storage" => "业务目录", "backup-tools" => "备份恢复工具", "local-snapshot" => "所选测试备份",
             "database-node-epoch" => "活动节点与服务代次", "node-certificate-private-key" => "节点证书与私钥",
             "backup-integrity" => "备份完整性", "recovery-snapshot" => "恢复数据核对", "recovery-target" => "恢复目标",
             "recovery-working-copy" => "隔离恢复副本", "recovery-confirmed-state" => "最新持久确认",

@@ -34,7 +34,7 @@
         </Border>
         <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
             <StackPanel>
-                <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
+                <controls:Banner Level="Warning" IsOpen="{Binding ShowHighAvailability}" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding Message}" Style="{StaticResource Management.Message}"/>
                 <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}" Margin="0,0,0,12">
                     <TextBlock x:Name="PersistentPendingText" Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
@@ -117,7 +117,7 @@
                             </ItemsControl>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="HighAvailabilityCard" Style="{StaticResource Management.Section}">
+                    <Border x:Name="HighAvailabilityCard" Style="{StaticResource Management.Section}" Visibility="{Binding ShowHighAvailability, Converter={StaticResource BoolToVis}}">
                         <Expander Header="主备状态与手动接管" IsExpanded="True">
                             <StackPanel Margin="0,16,0,0">
                                 <TextBlock Text="{Binding HighAvailabilityVersionText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
@@ -173,7 +173,7 @@
                                         <TextBox Style="{StaticResource Management.Field}" Text="{Binding DataDirectory, UpdateSourceTrigger=PropertyChanged}"/>
                                     </StackPanel>
                                 </Grid>
-                                <CheckBox Content="配置声明启用主备（实际保护以权威状态为准）" IsChecked="{Binding HighAvailabilityEnabled}" Margin="0,0,0,16"/>
+                                <CheckBox Content="配置声明启用主备（实际保护以权威状态为准）" IsChecked="{Binding HighAvailabilityEnabled}" Margin="0,0,0,16" Visibility="{Binding ShowHighAvailability, Converter={StaticResource BoolToVis}}"/>
                                 <WrapPanel>
                                     <Button Content="保存配置" Style="{StaticResource Management.Action}" Command="{Binding ConfigureCommand}"/>
                                     <Button Content="重新载入配置" Style="{StaticResource Management.Action}" Click="OnReload"/>
@@ -184,7 +184,7 @@
                     <Border Style="{StaticResource Management.Section}">
                         <Expander Header="备份与隔离恢复" IsExpanded="True">
                             <StackPanel Margin="0,16,0,0">
-                                <TextBlock Text="须先停止业务。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <TextBlock Text="{Binding RestoreGuidance}" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
                                 <TextBlock Text="备份目标绝对目录" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding BackupDestination, UpdateSourceTrigger=PropertyChanged}"/>
                                 <Button Content="创建备份" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding BackupCommand}"/>

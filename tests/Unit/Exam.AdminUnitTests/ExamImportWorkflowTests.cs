@@ -238,6 +238,28 @@ public sealed class ExamImportWorkflowTests
     }
 
     [Fact]
+    public async Task SavingSettingsDuringCompilationPreservesTheSourceAndFinishesTheImport()
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory) { PrepareRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var vm = new ExamImportViewModel(api, service: service);
+        var exam = Summary("synthetic-exam-1");
+        vm.SetCurrentExam(exam);
+        vm.SourcePath = fixture.Directory;
+        var importing = vm.CheckAsync();
+        vm.SetCurrentExam(exam with { Name = "已改名的考试", SettingsVersion = 2 });
+        Assert.True(vm.IsChecking);
+        Assert.False(service.PrepareCancellation.IsCancellationRequested);
+        Assert.Equal(fixture.Directory, vm.SourcePath);
+        service.PrepareRelease.SetResult();
+        await importing;
+        Assert.True(vm.HasPreview);
+        Assert.Single(vm.Questions);
+        Assert.Contains("已改名的考试", vm.Status);
+    }
+
+    [Fact]
     public async Task SameExamNewSettingsInvalidateTheOldPreview()
     {
         using var fixture = new SourceFixture();
@@ -251,6 +273,7 @@ public sealed class ExamImportWorkflowTests
         vm.SetCurrentExam(exam with { SettingsVersion = 2 });
         Assert.False(vm.CanPublish);
         Assert.Empty(vm.Questions);
+        Assert.Equal(fixture.Directory, vm.SourcePath);
     }
 
     [Fact]

@@ -177,8 +177,18 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public void SetCurrentExam(ExamSummary? exam)
     {
         ApplyPaperVersion(exam?.PaperVersion, notify: false);
-        if (StringComparer.Ordinal.Equals(_examId, exam?.ExamId) && StringComparer.Ordinal.Equals(_examName, exam?.Name) &&
-            _settingsVersion == (exam?.SettingsVersion ?? -1)) return;
+        if (exam is not null && StringComparer.Ordinal.Equals(_examId, exam.ExamId))
+        {
+            var settingsChanged = _settingsVersion != exam.SettingsVersion;
+            var nameChanged = !StringComparer.Ordinal.Equals(_examName, exam.Name);
+            _settingsVersion = exam.SettingsVersion;
+            ExamName = exam.Name;
+            // Saving this exam is not a context switch. Compilation finishes against the
+            // latest settings; an in-flight publication retains its original request.
+            if ((settingsChanged || nameChanged) && !IsBusy && _preview?.PublicationAttempted != true)
+                ClearPreview("考试设置已更新，请重新检查材料；已保留导入源。");
+            return;
+        }
         ClearPreview("考试已切换；旧检查结果已清除。");
         _settingsVersion = exam?.SettingsVersion ?? -1;
         _examId = exam?.ExamId ?? string.Empty;

@@ -47,5 +47,9 @@ public sealed record InstructionSegment(string Text, string FontFamily);
 /// <summary>预览中的一行说明。</summary>
 public sealed record InstructionLineViewModel(string Text, IReadOnlyList<InstructionSegment> Segments)
 {
-    public static InstructionLineViewModel From(string line) => new(line, InstructionText.Segment(line));
+    public static InstructionLineViewModel From(string line)
+    {
+        line = line.Replace("本组允许选择“不作答”", "本题允许选择“不作答”", StringComparison.Ordinal);
+        return new(line, InstructionText.Segment(line));
+    }
 }

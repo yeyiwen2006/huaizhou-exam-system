@@ -6,11 +6,12 @@ using System.Windows.Media;
 
 namespace Exam.Student.Core;
 
-/// <summary>仅改变考试说明的字体，不从说明文字反推计分规则。</summary>
+/// <summary>统一考试说明的显示文案和字体，不从说明文字反推计分规则。</summary>
 public static partial class InstructionTextRenderer
 {
     public static TextBlock Create(string line, Style? style = null)
     {
+        line = line.Replace("本组允许选择“不作答”", "本题允许选择“不作答”", StringComparison.Ordinal);
         var block = new TextBlock
         {
             Style = style,

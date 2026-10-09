@@ -24,6 +24,8 @@ internal static class LocalEntry
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args is ["--management", var managementConfiguration, "--postgres-bin", var postgresBin])
+            return await LocalManagementHost.RunAsync(managementConfiguration, postgresBin);
         if (args is ["--prepare", var prepare])
         {
             var (directory, settings) = ReadSettings(prepare);
@@ -64,7 +66,7 @@ internal static class LocalEntry
             ["ExamServer:ServerId"] = identity.ServerId,
             ["ExamServer:NodeId"] = identity.NodeId,
             ["ExamServer:ServerEpoch"] = "1",
-            ["ConnectionStrings:Exam"] = $"Host=127.0.0.1;Port={local.DatabasePort};Database=exam_local_debug;Username=postgres;Password={local.DatabasePassword};SSL Mode=Disable",
+            ["ConnectionStrings:Exam"] = ConnectionString(local),
             ["Database:MaximumPoolSize"] = "16", ["Database:MinimumPoolSize"] = "0",
             ["Database:MaxConcurrentWrites"] = "8",
             ["Logging:LogLevel:Default"] = "Warning"
@@ -133,7 +135,7 @@ internal static class LocalEntry
         return 0;
     }
 
-    private static (string Directory, LocalSettings Settings) ReadSettings(string path)
+    internal static (string Directory, LocalSettings Settings) ReadSettings(string path)
     {
         path = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(path)!;
@@ -149,8 +151,29 @@ internal static class LocalEntry
             settings.DatabasePassword.Length < 16 || settings.CertificatePassword.Length < 16 ||
             !settings.ServerId.StartsWith("local-debug-", StringComparison.Ordinal))
             throw new InvalidOperationException("本机调试端口或身份配置无效。");
+        var servicePath = Path.Combine(directory, "management", "service.json");
+        if (File.Exists(servicePath))
+        {
+            var service = JsonSerializer.Deserialize<Exam.Contracts.ServiceManagement.ServiceConfiguration>(File.ReadAllText(servicePath), Json)!;
+            settings = settings with { HttpsPort = service.HttpsPort };
+        }
+        var selection = Path.Combine(directory, "management", "active-database.json");
+        if (File.Exists(selection))
+        {
+            using var selected = JsonDocument.Parse(File.ReadAllText(selection));
+            var name = selected.RootElement.GetProperty("databaseName").GetString()!;
+            if (name != "exam_local_debug" && !(name.StartsWith("exam_local_restore_", StringComparison.Ordinal) &&
+                name.Length <= 63 && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_')))
+                throw new InvalidDataException("本机恢复数据库标识无效。");
+            settings = settings with { DatabaseName = name };
+        }
         return (directory, settings);
     }
+
+    internal static string ConnectionString(LocalSettings settings, string? database = null) =>
+        new Npgsql.NpgsqlConnectionStringBuilder { Host = "127.0.0.1", Port = settings.DatabasePort,
+            Database = database ?? settings.DatabaseName, Username = "postgres", Password = settings.DatabasePassword,
+            SslMode = Npgsql.SslMode.Disable, Timeout = 5 }.ConnectionString;
 
     private static void EnsureCertificate(string root, LocalSettings local, int index)
     {
@@ -172,7 +195,7 @@ internal static class LocalEntry
         File.WriteAllBytes(file, certificate.Export(X509ContentType.Pfx, local.CertificatePassword));
     }
 
-    private static X509Certificate2 LoadCertificate(string root, LocalSettings local, int index) =>
+    internal static X509Certificate2 LoadCertificate(string root, LocalSettings local, int index) =>
         X509CertificateLoader.LoadPkcs12FromFile(Path.Combine(root, Nodes[index] + ".pfx"),
             // Windows Schannel needs a user key container for the HTTPS server credential.
             // No certificate is installed in a trust store; the PFX remains in the local data directory.
@@ -189,6 +212,7 @@ internal static class LocalEntry
         public byte[] Unwrap(EncryptedPackageEnvelope envelope) => PackageEncryptionService.UnwrapDataKey(envelope, node, certificate);
     }
 
-    private sealed record LocalSettings(string ServerId, int DatabasePort, string DatabasePassword,
-        int HttpsPort, int AdminPort, string CertificatePassword);
+    internal sealed record LocalSettings(string ServerId, int DatabasePort, string DatabasePassword,
+        int HttpsPort, int AdminPort, string CertificatePassword, int ManagementPort = 0,
+        string DatabaseName = "exam_local_debug");
 }

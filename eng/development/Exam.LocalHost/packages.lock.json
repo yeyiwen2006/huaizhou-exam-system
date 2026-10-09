@@ -111,6 +111,13 @@
           "System.Security.Cryptography.ProtectedData": "[10.0.0, )"
         }
       },
+      "exam.management": {
+        "type": "Project",
+        "dependencies": {
+          "Exam.Infrastructure": "[1.0.0, )",
+          "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.12, )"
+        }
+      },
       "exam.server": {
         "type": "Project",
         "dependencies": {

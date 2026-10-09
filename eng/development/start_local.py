@@ -148,22 +148,22 @@ def wait_database(process, binary: Path, environment: dict) -> None:
     raise RuntimeError('调试数据库启动超时，请查看 logs/database.log。')
 
 
-def wait_server(process, url: str, certificate: Path | None = None) -> dict:
+def wait_server(process, url: str, certificate: Path | None = None, timeout: int = 45) -> dict:
     handlers = [urllib.request.ProxyHandler({})]
     if certificate:
         handlers.append(urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=str(certificate))))
     opener = urllib.request.build_opener(*handlers)
     last_status = None
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         exit_code = process.poll()
         if exit_code == 3:
             # Exam.LocalHost reserves this status for the maintenance-window guard.
             raise RuntimeError('现有测试数据库需要升级，但仍有进行中或等待、作答中的考试，升级已被阻止。'
                                '\n请先使用升级前的调试程序完成考试及收卷，再启动新版。'
-                               '\n现有测试数据已保留，请勿删除 .artifacts/local-debug；详情见 logs/server-a.log。')
+                               '\n现有测试数据已保留，请勿删除 .artifacts/local-debug；详情见 logs/management.log。')
         if exit_code is not None:
-            raise RuntimeError('调试后台提前退出，请查看 logs/server-a.log 或 server-b.log。')
+            raise RuntimeError('调试后台提前退出，请查看 logs/management.log。')
         try:
             with opener.open(url + '/health/ready', timeout=2) as response:
                 result = json.load(response)
@@ -177,7 +177,7 @@ def wait_server(process, url: str, certificate: Path | None = None) -> dict:
         except (OSError, urllib.error.URLError, ValueError) as error:
             last_status = {'connection': str(error)}
         time.sleep(.25)
-    raise RuntimeError(f'调试后台尚未就绪：{last_status}；请查看 logs/server-a.log 或 server-b.log。')
+    raise RuntimeError(f'调试后台尚未就绪：{last_status}；请查看 logs/management.log。')
 
 
 def prepare(directory: Path, args) -> dict:
@@ -201,6 +201,14 @@ def prepare(directory: Path, args) -> dict:
     settings_path = directory / 'local-settings.json'
     if settings_path.exists():
         settings = json.loads(settings_path.read_text(encoding='utf-8'))
+        service_path = directory / 'management' / 'service.json'
+        if service_path.exists():
+            settings['httpsPort'] = json.loads(service_path.read_text(encoding='utf-8'))['httpsPort']
+        if 'managementPort' not in settings:
+            settings['managementPort'] = free_port(9443)
+            while settings['managementPort'] in (settings['httpsPort'], settings['adminPort'], settings['databasePort']):
+                settings['managementPort'] = free_port(0)
+            dump(settings_path, settings)
         for argument, name in ((args.https_port, 'httpsPort'), (args.admin_port, 'adminPort')):
             if argument is not None and argument != settings[name]:
                 raise ValueError('已有调试环境保留原地址；使用另一个 --data-dir 创建不同端口的环境。')
@@ -208,8 +216,9 @@ def prepare(directory: Path, args) -> dict:
     settings = {'serverId': 'local-debug-' + uuid.uuid4().hex,
                 'databasePort': free_port(5448), 'databasePassword': secrets.token_urlsafe(32),
                 'httpsPort': free_port(args.https_port or 5001),
-                'adminPort': free_port(args.admin_port or 5089), 'certificatePassword': secrets.token_urlsafe(32)}
-    if len({settings['databasePort'], settings['httpsPort'], settings['adminPort']}) != 3:
+                'adminPort': free_port(args.admin_port or 5089), 'managementPort': free_port(9443),
+                'certificatePassword': secrets.token_urlsafe(32)}
+    if len({settings['databasePort'], settings['httpsPort'], settings['adminPort'], settings['managementPort']}) != 4:
         raise ValueError('调试端口重复，请指定不同端口。')
     dump(settings_path, settings)
     return settings
@@ -272,28 +281,37 @@ def execute(args) -> int:
             run([dotnet, host, '--prepare', config], directory / 'logs' / 'certificates.log', private_environment())
             # Each endpoint has its own node identity/certificate, but both use one local database.
             # This satisfies the desktop trust protocol without claiming replicated persistence.
-            first = app_session.start([dotnet, host, '--config', config, '--node', 'a'], 'server-a', private_environment())
+            management = app_session.start([dotnet, host, '--management', config, '--postgres-bin', str(binary)],
+                                           'management', private_environment())
+            management_url = f'https://127.0.0.1:{settings["managementPort"]}'
+            wait_server(management, management_url, directory / 'local-node-a.cer', timeout=120)
             admin_url = f'http://127.0.0.1:{settings["adminPort"]}'
-            wait_server(first, admin_url)
+            wait_server(management, admin_url)
             first_https = f'https://127.0.0.1:{settings["httpsPort"]}'
-            wait_server(first, first_https, directory / 'local-node-a.cer')
-            second = app_session.start([dotnet, host, '--config', config, '--node', 'b'], 'server-b', private_environment())
-            wait_server(second, f'https://127.0.0.2:{settings["httpsPort"]}', directory / 'local-node-b.cer')
+            wait_server(management, first_https, directory / 'local-node-a.cer')
+            wait_server(management, f'https://127.0.0.2:{settings["httpsPort"]}', directory / 'local-node-b.cer')
             shutil.copyfile(directory / 'student-server.json', apps['student'] / 'server.json')
+            management_settings = directory / 'admin-data' / 'Management'
+            management_settings.mkdir(parents=True, exist_ok=True)
+            dump(management_settings / 'endpoint.json', {'address': management_url + '/',
+                 'serverId': settings['serverId'], 'nodeId': 'local-node-a'})
             dump(directory / 'connection.json', {'adminUrl': admin_url, 'studentHost': '127.0.0.1',
-                 'studentPort': settings['httpsPort'], 'serverId': settings['serverId'], 'localDebug': True})
+                 'studentPort': settings['httpsPort'], 'managementUrl': management_url,
+                 'serverId': settings['serverId'], 'localDebug': True})
             print(f'\n后台已就绪。考务端地址：127.0.0.1，端口 {settings["adminPort"]}（已自动配置）', flush=True)
             print(f'学生端地址：127.0.0.1，端口 {settings["httpsPort"]}（已自动配置）', flush=True)
             print(f'测试数据目录：{directory}', flush=True)
+            print('考务端“本机服务管理”已配置，可用已启用的考务账号登录。', flush=True)
             print('两个回环节点共用一个测试数据库，供本机业务调试；不代表主备部署。', flush=True)
             if args.check:
-                print('HTTP、两个 HTTPS 端点和数据库启动检查通过。', flush=True)
+                print('HTTP、两个业务 HTTPS 端点、管理 HTTPS 和数据库启动检查通过。', flush=True)
                 return 0
             client_environment = private_environment()
             exports = directory / 'exports'
             exports.mkdir(exist_ok=True)
             client_environment.update(EXAM_ADMIN_SERVER_URL=admin_url,
                                       EXAM_ADMIN_DATA_DIRECTORY=str(directory / 'admin-data'),
+                                      EXAM_ADMIN_MANAGEMENT_CERTIFICATE=str(directory / 'local-node-a.cer'),
                                       EXAM_LOCAL_EXPORT_DIRECTORY=str(exports),
                                       EXAM_STUDENT_DATA_DIRECTORY=str(directory / 'student-data'))
             clients = {}
@@ -304,6 +322,7 @@ def execute(args) -> int:
                     return
                 command = [str(apps[name] / ('Exam.Admin.exe' if name == 'admin' else 'Exam.Student.exe'))]
                 if name == 'student':
+                    shutil.copyfile(directory / 'student-server.json', apps['student'] / 'server.json')
                     command.append('--local-debug')
                 clients[name] = app_session.start(command, name, client_environment)
 
@@ -319,7 +338,7 @@ def execute(args) -> int:
                     open_client('admin' if command == 'a' else 'student')
                 else:
                     print('请输入 A、S 或 Q。')
-                if first.poll() is not None or second.poll() is not None or database.poll() is not None:
+                if management.poll() is not None or database.poll() is not None:
                     raise RuntimeError('有后台进程退出，请查看本次调试日志。')
             return 0
         finally:

@@ -162,9 +162,9 @@ public sealed class ManagementViewTests
         {
             window.Show(); Drain(); window.UpdateLayout();
             Assert.False(((Button)view.FindName("LoginButton")).IsEnabled);
-            Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains(localDebug ? "未部署独立管理服务" : "联系系统部署人员"));
+            Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains(localDebug ? "start-local.cmd" : "联系系统部署人员"));
             var import = Assert.Single(Descendants<Button>(view), button => Equals(button.Content, "导入连接配置"));
-            Assert.Equal(!localDebug, import.IsEnabled);
+            Assert.True(import.IsEnabled);
             Save(view, 1, 1120, 720, localDebug ? "debug-unavailable" : "missing-connection");
         }
         finally { window.Close(); }

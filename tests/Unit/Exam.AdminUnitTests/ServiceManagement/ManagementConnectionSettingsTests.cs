@@ -65,7 +65,7 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingConfigurationAndLocalDebugExplainWhyLoginIsUnavailableWithoutContactingAService()
+    public async Task MissingConfigurationExplainsTheProblemAndConfiguredLocalDebugAllowsLogin()
     {
         var settings = new ManagementEndpointSettings(FilePath("user.json"));
         using (var missing = Model(settings))
@@ -77,11 +77,10 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
         }
         settings.Save(_target);
         using var debug = Model(settings, localDebug: true);
-        Assert.False(debug.CanLogin);
-        Assert.False(debug.CanConfigureConnection);
-        Assert.Contains("未部署独立管理服务", debug.ConnectionStatus);
-        await debug.LoginAsync("synthetic");
-        Assert.Equal(debug.ConnectionStatus, debug.Message);
+        Assert.True(debug.CanLogin);
+        Assert.True(debug.CanConfigureConnection);
+        Assert.Contains("本机测试管理已配置", debug.ConnectionStatus);
+        Assert.False(debug.ShowHighAvailability);
     }
 
     [Fact]

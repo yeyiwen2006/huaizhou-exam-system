@@ -328,7 +328,7 @@ public sealed partial class ExamConfigurationViewModel : BindableBase
                     "indeterminate" => $"若有一个正确答案，选对得{group.Correct}分，不选得{group.OneBlank}分，选错得{group.OneWrong}分；若有多个正确答案，全部选对得{group.AllCorrect}分，选对但不全得{group.PartialCorrect}分，不选得{group.MultipleBlank}分，选错得{group.MultipleWrong}分。",
                     _ => "题型无效，无法生成计分说明。"
                 };
-                var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
+                var abstain = group.AllowAbstain ? "本题允许选择“不作答”。" : string.Empty;
                 // 与域层生成器同口径：名称与满分先 Trim，避免因服务端存了补齐空格的设置而误报“与服务器上的说明不同”。
                 builder.AppendLine($"{group.Name.Trim()}：本题共{group.QuestionCount}小题，每小题{pointsPerQuestion}分，共计{group.MaxScore.Trim()}分。{scoring}{abstain}");
             }

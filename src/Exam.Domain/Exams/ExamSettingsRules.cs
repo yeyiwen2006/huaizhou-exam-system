@@ -153,7 +153,7 @@ public static class ExamSettingsRules
                     "indeterminate" => $"若有一个正确答案，选对得{one?.Correct}分，不选得{one?.Blank}分，选错得{one?.Wrong}分；若有多个正确答案，全部选对得{many?.AllCorrect}分，选对但不全得{many?.PartialCorrect}分，不选得{many?.Blank}分，选错得{many?.Wrong}分。",
                     _ => string.Empty,
                 };
-                var abstain = group.AllowAbstain ? "本组允许选择“不作答”。" : string.Empty;
+                var abstain = group.AllowAbstain ? "本题允许选择“不作答”。" : string.Empty;
                 var builder = new StringBuilder();
                 builder.Append($"{group.Name.Trim()}：本题共{group.QuestionCount}小题，");
                 builder.Append($"每小题{perQuestion}分，共计{group.MaxScore.Trim()}分。{scoring}{abstain}");

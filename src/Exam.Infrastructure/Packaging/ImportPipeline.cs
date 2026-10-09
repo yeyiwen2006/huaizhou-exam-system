@@ -160,6 +160,44 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                             (issue.File is null ? "" : "（" + issue.File + (issue.Line is null ? "" : $"，第 {issue.Line} 行") + "）"))));
                 compiled.Add(question.QuestionId, result);
             }
+            // Compilation is the expensive part. Saving the same exam must not cancel it.
+            // Rebind the compiled material to the latest compatible settings before previewing.
+            var latest = await api.GetExamDetailAsync(examId, ct);
+            var latestVersion = await api.GetExamAsync(examId, ct);
+            EnsureConnection(generation, api.ServerId);
+            if (latest.Summary.ExamId != examId || latestVersion.ExamId != examId ||
+                latestVersion.Versions.PaperVersion != expected.Versions.PaperVersion ||
+                latestVersion.Versions.GradingVersion != expected.Versions.GradingVersion)
+                throw new InvalidOperationException("检查期间试卷或计分规则已被发布，请重新读取当前版本。");
+            if (!revision)
+            {
+                RequireFirstPublication(latestVersion);
+                var refreshed = manifest with { ExamName = latest.Summary.Name };
+                if (!StringComparer.Ordinal.Equals(manifest.ExamName, refreshed.ExamName))
+                {
+                    refreshed = refreshed with { Questions = manifest.Questions.Select(question => question with
+                    { Source = (Path.GetDirectoryName(question.Source)?.Replace('\\', '/') + "/" + refreshed.ExamName + "_" + question.QuestionNo + ".tex").TrimStart('/') }).ToArray() };
+                    // Validate filenames before moving only this import's private source copies.
+                    ImportedGradingRules.Create(JsonSerializer.Serialize(refreshed, ImportJson.Create()), answerJson);
+                    foreach (var (oldQuestion, newQuestion) in manifest.Questions.Zip(refreshed.Questions))
+                    {
+                        File.Move(Path.Combine(workspace.PackageRoot, oldQuestion.Source), Path.Combine(workspace.PackageRoot, newQuestion.Source));
+                        var result = compiled[oldQuestion.QuestionId];
+                        var pdfName = Path.GetFileNameWithoutExtension(newQuestion.Source) + ".pdf";
+                        var pdfPath = Path.Combine(Path.GetDirectoryName(result.OutputPdfPath!)!, pdfName);
+                        File.Move(result.OutputPdfPath!, pdfPath);
+                        compiled[oldQuestion.QuestionId] = result with { OutputPdfPath = pdfPath,
+                            Report = result.Report with { OutputFileName = pdfName } };
+                    }
+                }
+                manifestJson = JsonSerializer.Serialize(refreshed, ImportJson.Create());
+                manifestJson = ImportCatalogBinding.Bind(manifestJson, answerJson, latest.Settings);
+                await File.WriteAllTextAsync(manifestPath, manifestJson, ct);
+                await File.WriteAllTextAsync(answerPath, answerJson, ct);
+                manifest = JsonSerializer.Deserialize<ExamManifest>(manifestJson, ImportJson.Create())!;
+            }
+            expected = latestVersion;
+            selectedExam = latest;
             var regions = await Task.Run(() => new OptionRegionExtractor().Extract(new OptionRegionRequest(examId,
                 expected.Versions.PaperVersion + 1, manifest.Questions.Select(q =>
                     new OptionRegionSourceQuestion(q.QuestionId, compiled[q.QuestionId].OutputPdfPath!, q.Options!)).ToArray())), ct);
@@ -180,10 +218,6 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                 string.Join("、", answers[q.QuestionId].CorrectOptionIds!),
                 compiled[q.QuestionId].Report.PageCount, regionPages[q.QuestionId])).ToArray();
             EnsureConnection(generation, api.ServerId);
-            var latest = await api.GetExamDetailAsync(examId, ct);
-            EnsureConnection(generation, api.ServerId);
-            if (latest.Summary.SettingsVersion != selectedExam.Summary.SettingsVersion)
-                throw new InvalidOperationException("检查期间考试设置发生变化，请重新检查。");
             var hint = revision
                 ? await ChangedQuestionsHintAsync(examId, expected.Versions.PaperVersion, manifest, workspace, generation, ct)
                 : [];

@@ -30,6 +30,9 @@ public sealed class LocalDebugIsolationTests
                 Assert.Equal(target.Address, configured.Address);
                 Assert.Equal(target.ServerId, configured.ServerId);
                 Assert.Equal(target.NodeId, configured.NodeId);
+                Assert.True(configured.CanLogin);
+                Assert.False(configured.ShowHighAvailability);
+                Assert.Contains("恢复前的数据库保留", configured.RestoreGuidance);
             }
 
             Environment.SetEnvironmentVariable(variable, Path.Combine(temporary.FullName, "second"));

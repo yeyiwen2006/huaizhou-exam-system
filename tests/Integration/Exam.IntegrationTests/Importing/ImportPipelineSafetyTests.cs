@@ -18,6 +18,42 @@ public sealed class ImportPipelineSafetyTests
     { CompileOverride = SyntheticImportFixture.CompileFixtureAsync };
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SavingCompatibleSettingsDuringCompilationUsesTheLatestSettingsWithoutRecompiling(bool incompatible)
+    {
+        using var source = new SyntheticImportFixture();
+        using var api = new SyntheticPublicationClient(source);
+        var compilations = 0;
+        var pipeline = new ImportPipeline(api)
+        {
+            CompileOverride = async (request, token) =>
+            {
+                compilations++;
+                api.Detail = api.Detail with { Summary = api.Detail.Summary with { Name = "更新后的考试", SettingsVersion = 2 } };
+                api.Current = api.Current with { Versions = api.Current.Versions with { ScheduleVersion = 2 } };
+                if (incompatible)
+                {
+                    var subject = api.Detail.Settings.Subjects.Single();
+                    api.Detail = api.Detail with { Settings = new([subject with { Groups = [subject.Groups.Single() with { QuestionCount = 2 }] }]) };
+                }
+                return await SyntheticImportFixture.CompileFixtureAsync(request, token);
+            }
+        };
+        if (incompatible)
+            await Assert.ThrowsAsync<ArgumentException>(() => pipeline.PrepareAsync(source.Source, api.Current.ExamId));
+        else
+        {
+            using var prepared = await pipeline.PrepareAsync(source.Source, api.Current.ExamId);
+            Assert.Equal("更新后的考试", prepared.ExamName);
+            Assert.Equal(2, prepared.ExpectedSettingsVersion);
+            var published = await pipeline.PublishAsync(prepared);
+            Assert.True(prepared.MatchesPublication(published));
+        }
+        Assert.Equal(1, compilations);
+    }
+
+    [Theory]
     [InlineData("subject-name")]
     [InlineData("subject-score")]
     [InlineData("group-order")]
