@@ -4,21 +4,21 @@
 
 ## 使用入口
 
-学生使用 `Exam.Student` 填写服务器地址、端口和考生信息后直接登录，完成等待、作答和交卷。考务端 `Exam.Admin` 登录只需填写服务器 IP 或域名，默认连接 HTTPS 443，无须填写端口。登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理，考务端可从另一台电脑访问。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成，考务界面保留状态检测、配置、日志、备份恢复及请求处理状态查询。
+学生使用 `Exam.Student` 填写服务器地址、端口和考生信息后直接登录，完成等待、作答和交卷。考务端 `Exam.Admin` 登录只需填写服务器 IP 或域名，默认连接 HTTPS 443。登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成，考务界面保留状态检测、配置、日志、备份恢复及请求处理状态查询。
 
 [系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[服务器部署](deploy/server/README.md)、[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[服务器管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
 
-“全部考试”可导出单场考试的完整数据，并通过“添加考试”从目录导入。归档可复制到另一台考务电脑和服务器使用，原服务器上的考试和考生作答不受影响。同场考试可选择覆盖、导入新副本或跳过，操作方式见[考试归档](docs/exam-archives.md)。
+## 运行依赖
 
-## 测试与运行边界
+| 设备 | 需要准备的依赖 |
+| --- | --- |
+| 考务电脑 | Windows。编译或重新编译 TeX 试题时，需要预先安装带 XeLaTeX 的 TeX 发行版（TeX Live 或 MiKTeX），并将其可执行文件目录加入 `PATH`，使程序能找到 `xelatex`。题目使用的字体、宏包和图片也须齐备。仅管理考试、查看成绩或导入完整考试归档时不调用 XeLaTeX。 |
+| 服务器 | 可访问的 PostgreSQL 18 数据库，并完成数据库、HTTPS 证书、题包证书及服务配置。执行备份、恢复或主备运维的服务器还需安装对应 PostgreSQL 18 工具，例如 `pg_basebackup`、`pg_verifybackup`、`pg_ctl`，并在部署配置中填写工具目录。服务器处理已编译的题包，无须安装 XeLaTeX。 |
+| 学生电脑 | Windows 10 19041 及以上或 Windows 11，使用与系统架构匹配的学生端发布包。无需安装 XeLaTeX、PostgreSQL 或 Office。 |
 
-单机手动测试阶段已结束。旧的一键调试启动器、调试宿主及客户端专用连接已移除，后续使用正式业务服务和独立管理服务部署联调。已有 `.artifacts/local-debug` 数据保留，不会自动导入正式数据库。
+**.NET 是否需要另装取决于发布方式。** 自包含发布包自带 .NET 运行时；仓库的服务器和学生端发布脚本采用这种方式。使用普通构建产物或非自包含发布包时，考务端、学生端需要 .NET 10 Desktop Runtime，业务服务和独立管理服务需要 ASP.NET Core Runtime 10 及其所需的 .NET Runtime 10。Windows 安装包的区别见[微软运行时安装说明](https://learn.microsoft.com/en-us/dotnet/core/install/windows)。Linux 服务器即使使用自包含包，也需要相应发行版的系统库，例如 ICU 和 OpenSSL，具体包名见[微软 Linux 安装说明](https://learn.microsoft.com/en-us/dotnet/core/install/linux)。发布方式说明见[微软 .NET 部署文档](https://learn.microsoft.com/en-us/dotnet/core/deploying/)。
 
-原开发目录 `exam-system` 与测试副本 `exam-system-test` 可通过 `sync-code.cmd` 手动双向同步代码，试题与运行数据不参与。范围、数据隔离及冲突处理见[代码同步说明](docs/local-debug.md)。
-
-当前进入真实部署与跨设备测试准备阶段。[测试安排](docs/testing-plan.md)和[验收标准](docs/acceptance-criteria.md)区分代码回归、真实双机和现场设备验收。真实服务器、域名和证书就位后，在目标设备执行连接、启停和完整考试测试。
-
-运行包使用受保护的部署配置。正式业务服务缺少数据库或确认保护时拒绝启动，不提供测试专用状态修改接口。学生端不需要安装 SDK 或 TeX；考试材料编译在考务侧使用 XeLaTeX。
+考务端的名册和成绩 Excel 文件由程序自带库读写，无须预先安装 Microsoft Excel。仅构建或发布源码的电脑需要安装 `global.json` 指定的 .NET SDK；使用 `pwsh` 执行部署脚本时，还需要 PowerShell 7。
 
 ## 构建与检查
 
