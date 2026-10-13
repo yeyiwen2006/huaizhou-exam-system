@@ -22,10 +22,10 @@ public static class ManagementApi
                 var sessions = context.RequestServices.GetRequiredService<ManagementOperatorSessions>();
                 if (!context.Request.IsHttps)
                 {
-                    await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "服务管理只接受本机 HTTPS 连接。"), 401);
+                    await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "服务器管理只接受 HTTPS 连接。"), 401);
                     return;
                 }
-                // 登录接口本身不需要会话：凭考务账号用户名和口令换取本机管理会话。
+                // 登录接口本身不需要会话：凭考务账号用户名和口令换取服务器管理会话。
                 if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/login")
                 {
                     await BufferRequestAsync(context);
@@ -79,7 +79,7 @@ public static class ManagementApi
             { await WriteAsync(context, runtime, null, new ApiError(ErrorCodes.InvalidInput, "管理请求格式或字段无效。"), 400); }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
             catch (Exception)
-            { await WriteAsync(context, runtime, null, new ApiError(ErrorCodes.PersistenceFailed, "本机管理依赖不可用，请核对受保护配置与操作记录。", Retryable: true), 503); }
+            { await WriteAsync(context, runtime, null, new ApiError(ErrorCodes.PersistenceFailed, "服务器管理依赖不可用，请核对受保护配置与操作记录。", Retryable: true), 503); }
         });
 
         app.MapGet("/management/v1/service/status", async (HttpContext context, ManagementRuntime runtime) =>
@@ -157,6 +157,7 @@ public static class ManagementApi
         ErrorCodes.NotFound => 404,
         ErrorCodes.VersionConflict => 409,
         ErrorCodes.StaleServerEpoch => 409,
+        "PLATFORM_NOT_SUPPORTED" => 501,
         _ => 503
     };
 

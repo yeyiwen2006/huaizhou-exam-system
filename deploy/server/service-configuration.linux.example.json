@@ -1,0 +1,9 @@
+{
+  "serverId": "synthetic-server",
+  "nodeId": "synthetic-node",
+  "bindAddress": "0.0.0.0",
+  "httpsPort": 443,
+  "dataDirectory": "/srv/exam/data",
+  "highAvailabilityEnabled": true,
+  "version": 1
+}

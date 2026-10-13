@@ -1,20 +1,20 @@
 # 怀籀传承在线考试系统
 
-面向学生和考务人员的 Windows 考试系统，支持考试配置、名册与试场管理、逐题导入、原版试题显示、答卷保存和回收、精确计分、五类成绩表及主备恢复。
+面向学生和考务人员的考试系统，支持考试配置、名册与试场管理、逐题导入、原版试题显示、答卷保存和回收、精确计分、五类成绩表及主备恢复。学生端和考务端运行于 Windows，服务器以 Windows 部署为主，并提供 Linux 基础运行配置。
 
 ## 使用入口
 
-学生使用 `Exam.Student` 填写服务器地址、端口和考生信息后直接登录，完成等待、作答和交卷。考务人员使用 `Exam.Admin` 管理考试与成绩；`Exam.Cli` 提供对应命令。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立本机管理，业务服务停止时仍可查询和启停。
+学生使用 `Exam.Student` 填写服务器地址、端口和考生信息后直接登录，完成等待、作答和交卷。考务端 `Exam.Admin` 登录只需填写服务器 IP 或域名，默认连接 HTTPS 443，无须填写端口。`Exam.Cli` 提供对应命令。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理，考务端可从另一台电脑访问，业务服务停止时仍可查询和启停。
 
-[系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[本机服务管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
+[系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[服务器部署](deploy/server/README.md)、[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[服务器管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
 
 ## 测试与运行边界
 
-本机手动调试可双击根目录的 `start-local.cmd`，自动准备独立测试数据库、启动调试后台并打开考务端；启动窗口输入 `S` 打开学生端、`Q` 停止调试。测试数据保存在当前目录的 `.artifacts/local-debug`。
+单机手动测试阶段已结束。旧的一键调试启动器、调试宿主及客户端专用连接已移除，后续使用正式业务服务和独立管理服务部署联调。已有 `.artifacts/local-debug` 数据保留，不会自动导入正式数据库。
 
-原开发目录 `exam-system` 与测试副本 `exam-system-test` 可通过 `sync-code.cmd` 手动双向同步代码，试题与运行数据不参与。运行准备、数据隔离及冲突处理见 [本机调试说明](docs/local-debug.md)。
+原开发目录 `exam-system` 与测试副本 `exam-system-test` 可通过 `sync-code.cmd` 手动双向同步代码，试题与运行数据不参与。范围、数据隔离及冲突处理见[代码同步说明](docs/local-debug.md)。
 
-当前进入测试阶段。[测试安排](docs/testing-plan.md)和[验收标准](docs/acceptance-criteria.md)区分本机回归、真实双机和现场设备验收。测试通过范围以对应提交的实际报告为准，不把构建成功或合成负载当成正式考试已经验收。
+当前进入真实部署与跨设备测试准备阶段。[测试安排](docs/testing-plan.md)和[验收标准](docs/acceptance-criteria.md)区分代码回归、真实双机和现场设备验收。真实服务器、域名和证书就位后，在目标设备执行连接、启停和完整考试测试。
 
 运行包使用受保护的部署配置。正式业务服务缺少数据库或确认保护时拒绝启动，不提供测试专用状态修改接口。学生端不需要安装 SDK 或 TeX；考试材料编译在考务侧使用 XeLaTeX。
 

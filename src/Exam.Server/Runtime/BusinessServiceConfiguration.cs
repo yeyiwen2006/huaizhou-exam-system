@@ -18,6 +18,15 @@ public sealed class BusinessServiceConfiguration
     private BusinessServiceConfiguration(ServiceConfiguration value, long serverEpoch, string? selectionPath, string? confirmationRoot)
     { Value = value; _serverEpoch = serverEpoch; _selectionPath = selectionPath; _confirmationRoot = confirmationRoot; }
 
+    public static void ApplyDefaultHttpsListener(WebApplicationBuilder builder)
+    {
+        if (new[] { "urls", "http_ports", "https_ports" }.Any(key => !string.IsNullOrWhiteSpace(builder.Configuration[key])) ||
+            builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any()) return;
+        // Both remote clients and operators can use a bare domain with the standard HTTPS port.
+        // Certificate material stays in the normal protected Kestrel certificate configuration.
+        builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(443, endpoint => endpoint.UseHttps()));
+    }
+
     public static async Task<BusinessServiceConfiguration?> LoadAndApplyAsync(WebApplicationBuilder builder,
         CancellationToken cancellationToken = default)
     {

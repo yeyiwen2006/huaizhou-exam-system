@@ -50,7 +50,7 @@ public sealed partial class ServiceManagementViewModel
         if (kind == ManagementOperationKind.Takeover && isolation is not { IsSufficient: true })
             throw new ArgumentException("必须确认原主机断电或业务网络隔离；心跳丢失不足以接管。");
         if (kind == ManagementOperationKind.Rebuild && !ConfirmDestructiveRebuild)
-            throw new ArgumentException("须先确认重建本机旧数据并保持隔离。");
+            throw new ArgumentException("须先确认重建目标服务器旧数据并保持隔离。");
         return new(id, target.ServerId, target.NodeId, actor, state.ServerEpoch, state.Version,
             HighAvailabilityTarget.Trim(), HighAvailabilityReason.Trim(), isolation, ConfirmDestructiveRebuild);
     }

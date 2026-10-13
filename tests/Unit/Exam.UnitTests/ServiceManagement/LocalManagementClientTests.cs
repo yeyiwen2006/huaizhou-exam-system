@@ -28,7 +28,7 @@ public sealed class LocalManagementClientTests
     }
     [Theory]
     [InlineData("http://localhost:9443")]
-    [InlineData("https://example.com:9443")]
+    [InlineData("https://example.com:0")]
     [InlineData("https://127.0.0.1:9443/business")]
     [InlineData("https://user@localhost:9443")]
     [InlineData("https://localhost:9443?token=x")]
@@ -154,7 +154,7 @@ public sealed class LocalManagementClientTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    private static LocalManagementClient Client(HttpMessageHandler handler) => new(new Uri("https://localhost:9443"), "server", "node", () => "synthetic-token", handler);
+    private static LocalManagementClient Client(HttpMessageHandler handler) => new(new Uri("https://management.example.test:9443"), "server", "node", () => "synthetic-token", handler);
     private static HttpResponseMessage Json<T>(HttpStatusCode status, T value) => new(status)
     { Content = new StringContent(JsonSerializer.Serialize(value, JsonDefaults.Create()), Encoding.UTF8, "application/json") };
     private sealed class ResponseTransport(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

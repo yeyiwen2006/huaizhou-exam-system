@@ -19,6 +19,8 @@ if (serviceMode)
 }
 HighAvailabilityDeployment.Apply(builder);
 var managedServiceConfiguration = await BusinessServiceConfiguration.LoadAndApplyAsync(builder);
+if (managedServiceConfiguration is null)
+    BusinessServiceConfiguration.ApplyDefaultHttpsListener(builder);
 builder.Services.Configure<ServerIdentityOptions>(builder.Configuration.GetSection(ServerIdentityOptions.SectionName));
 builder.Services.AddExamServerTransport();
 

@@ -35,6 +35,7 @@ public sealed class ManagementViewTests
         {
             window.Show(); SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
             business.Connection.Username = "synthetic-operator"; business.Connection.DisplayName = "合成考务账号";
+            business.Connection.ServerAddress = "exam.example.test";
             business.Connection.Password = "synthetic"; business.Connection.ConfirmPassword = "synthetic";
             business.Connection.RegisterCommand.Execute(null);
             for (var i = 0; i < 200 && !business.Connection.RegisterCommand.CanExecute(null); i++)
@@ -70,7 +71,7 @@ public sealed class ManagementViewTests
         {
             window.Show(); Drain();
             Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
-            Assert.Contains(Descendants<Button>(window), b => Equals(b.Content, "本机服务管理"));
+            Assert.Contains(Descendants<Button>(window), b => Equals(b.Content, "服务器管理"));
             var business = (MainViewModel)window.DataContext;
             var registerLink = Descendants<TextBlock>(window).SelectMany(b => b.Inlines.OfType<System.Windows.Documents.Hyperlink>()).Single();
             Assert.Same(business.Connection.ShowRegisterCommand, registerLink.Command);
@@ -148,12 +149,10 @@ public sealed class ManagementViewTests
         finally { trace.Listeners.Remove(listener); trace.Switch.Level = previous; window.Close(); }
     });
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task MissingAndDebugConnectionsShowGuidanceAndDisableLogin(bool localDebug) => Sta(() =>
+    [Fact]
+    public Task MissingConnectionShowsGuidanceAndDisablesLogin() => Sta(() =>
     {
-        using var model = new ServiceManagementViewModel(_ => new SyntheticConnection(), new EmptyStore(), localDebug: localDebug);
+        using var model = new ServiceManagementViewModel(_ => new SyntheticConnection(), new EmptyStore());
         var view = new ServiceManagementView(model);
         var window = new Window { Content = view, Width = 1120, Height = 720,
             ShowInTaskbar = false, ShowActivated = false, Left = -5000, Top = -5000 };
@@ -162,10 +161,10 @@ public sealed class ManagementViewTests
         {
             window.Show(); Drain(); window.UpdateLayout();
             Assert.False(((Button)view.FindName("LoginButton")).IsEnabled);
-            Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains(localDebug ? "start-local.cmd" : "联系系统部署人员"));
+            Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains("联系系统部署人员"));
             var import = Assert.Single(Descendants<Button>(view), button => Equals(button.Content, "导入连接配置"));
             Assert.True(import.IsEnabled);
-            Save(view, 1, 1120, 720, localDebug ? "debug-unavailable" : "missing-connection");
+            Save(view, 1, 1120, 720, "missing-connection");
         }
         finally { window.Close(); }
     });

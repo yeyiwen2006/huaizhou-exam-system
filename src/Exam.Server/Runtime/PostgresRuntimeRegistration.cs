@@ -177,16 +177,22 @@ public static class PostgresRuntimeRegistration
             requiredNodeIds.ToHashSet(StringComparer.Ordinal));
         services.AddSingleton(encryptionPolicy);
         services.AddSingleton<Exam.Server.Api.PublicationUploadGate>();
+        var nodeCertificate = new ServerCertificateSource(configuration["PackageSecurity:CertificateThumbprint"],
+            configuration["PackageSecurity:CertificatePath"], configuration["PackageSecurity:CertificatePassword"]);
         services.AddSingleton<IPublicationCertificateProvider>(new CertificateStorePublicationProvider(
-            requiredNodeIds.ToDictionary(node=>node,node=>configuration[$"PackageSecurity:RecipientCertificates:{node}"]
-                ??(node==identity.NodeId?configuration["PackageSecurity:CertificateThumbprint"]:null)??string.Empty,StringComparer.Ordinal),encryptionPolicy));
+            requiredNodeIds.ToDictionary(node => node, node =>
+            {
+                var thumbprint = configuration[$"PackageSecurity:RecipientCertificates:{node}"];
+                var path = configuration[$"PackageSecurity:RecipientCertificatePaths:{node}"];
+                return node == identity.NodeId && string.IsNullOrWhiteSpace(path)
+                    ? nodeCertificate with { Thumbprint = string.IsNullOrWhiteSpace(thumbprint) ? nodeCertificate.Thumbprint : thumbprint }
+                    : new ServerCertificateSource(thumbprint, path);
+            }, StringComparer.Ordinal), encryptionPolicy));
         services.AddSingleton<PackageEncryptionService>();
         services.AddSingleton<PostgresVersionedResourceStore>();
         services.AddSingleton(new PackageUnlockIdentity(identity.ServerId, identity.NodeId, identity.ServerEpoch));
         services.AddSingleton<IPackageKeyUnwrapper>(new CertificateStorePackageKeyUnwrapper(
-            identity.NodeId,
-            configuration["PackageSecurity:CertificateThumbprint"] ?? string.Empty,
-            System.Security.Cryptography.X509Certificates.StoreLocation.LocalMachine));
+            identity.NodeId, nodeCertificate));
         services.AddSingleton(provider => new PostgresPackageUnlockService(
             provider.GetRequiredService<NpgsqlDataSource>(), provider.GetRequiredService<PackageUnlockIdentity>(),
             provider.GetRequiredService<IPackageKeyUnwrapper>(), allowUninitializedFailoverState));

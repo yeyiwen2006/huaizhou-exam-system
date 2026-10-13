@@ -17,12 +17,11 @@ public sealed record ManagementTarget(string Address, string ServerId, string No
     public Uri Validate()
     {
         if (!Uri.TryCreate(Address.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
-            !(uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-              IPAddress.TryParse(uri.Host.Trim('[', ']'), out var ip) && IPAddress.IsLoopback(ip)) ||
+            uri.Host.Length == 0 || uri.Port is < 1 or > 65535 ||
             uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0 ||
             string.IsNullOrWhiteSpace(ServerId) || ServerId.Length > 200 ||
             string.IsNullOrWhiteSpace(NodeId) || NodeId.Length > 200)
-            throw new ArgumentException("请输入独立的本机 HTTPS 根地址和预期服务器、节点标识。");
+            throw new ArgumentException("请输入服务器管理 HTTPS 根地址和预期服务器、节点标识。");
         return uri;
     }
 
@@ -52,7 +51,7 @@ public interface IManagementConnection : IDisposable
     Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token);
 }
 
-/// <summary>The GUI reuses the local management transport; only independent session exchange is added here.</summary>
+/// <summary>The GUI reuses the management transport and maintains an independent management session.</summary>
 public sealed class ManagementConnection : IManagementConnection
 {
     private readonly HttpClient _session;
@@ -91,7 +90,7 @@ public sealed class ManagementConnection : IManagementConnection
         using var request = new HttpRequestMessage(HttpMethod.Post, "/management/v1/login")
         { Content = new StringContent(JsonSerializer.Serialize(new LoginOperatorRequest(username.Trim(), password), _json), Encoding.UTF8, "application/json") };
         var reply = await SessionAsync<LoginReply>(request, token);
-        if (reply.Error is not null) throw new UnauthorizedAccessException("管理登录失败，请核对已启用的考务账号与本机缓存。");
+        if (reply.Error is not null) throw new UnauthorizedAccessException("管理登录失败，请核对已启用的考务账号及目标服务器。");
         var result = reply.Result;
         if (result is null || string.IsNullOrWhiteSpace(result.Token) || result.Token.Length > 4096 ||
             !string.Equals(result.Username, username.Trim(), StringComparison.OrdinalIgnoreCase))

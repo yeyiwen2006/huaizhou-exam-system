@@ -11,7 +11,7 @@ namespace Exam.AdminUnitTests.ServiceManagement;
 /// <summary>All identifiers and session values are synthetic protocol fixtures.</summary>
 public sealed class ManagementTransportTests
 {
-    private static readonly ManagementTarget Target = new("https://localhost:9443/", "synthetic-server", "synthetic-node");
+    private static readonly ManagementTarget Target = new("https://management.example.test:9443/", "synthetic-server", "synthetic-node");
     [Theory]
     [InlineData("redirect")]
     [InlineData("oversize")]

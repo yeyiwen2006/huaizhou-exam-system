@@ -11,7 +11,8 @@ namespace Exam.Infrastructure.ServiceManagement;
 /// <summary>
 /// 服务管理程序的考务账号登录。数据库可用时以数据库中的考务账号为准，并刷新本机缓存；
 /// 业务服务或数据库停止时，按本机缓存核对（只缓存已启用账号的口令哈希与管理员标记，
-/// 以 Windows 本机加密保存）。会话只在本进程内存中，退出登录或程序重启后失效。
+/// 以 Windows 本机加密保存）。Linux 仅使用数据库认证，不写入离线口令缓存。
+/// 会话只在本进程内存中，退出登录或程序重启后失效。
 /// </summary>
 public sealed class ManagementOperatorSessions(
     Func<string?> connectionString,
@@ -80,6 +81,7 @@ public sealed class ManagementOperatorSessions(
 
     private async Task<IReadOnlyList<CachedOperatorCredential>> ReadCacheAsync(CancellationToken cancellationToken)
     {
+        if (!OperatingSystem.IsWindows()) return [];
         await _cacheGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -97,6 +99,7 @@ public sealed class ManagementOperatorSessions(
 
     private async Task WriteCacheAsync(IReadOnlyList<CachedOperatorCredential> credentials, CancellationToken cancellationToken)
     {
+        if (!OperatingSystem.IsWindows()) return;
         await _cacheGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

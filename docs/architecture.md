@@ -1,12 +1,12 @@
 # 系统架构
 
 ```text
-Exam.Student ──HTTP / SignalR──┐
-Exam.Admin   ──HTTP────────────┼── Exam.Server ── PostgreSQL
-Exam.Cli     ──HTTP────────────┘        │              │
+Exam.Student ──HTTPS / SignalR─┐
+Exam.Admin   ──HTTPS───────────┼── Exam.Server ── PostgreSQL
+Exam.Cli     ──HTTPS───────────┘        │              │
                                      │         主备同步复制
 Exam.Admin / Exam.Cli                 │              │
-        └──本机 HTTPS── Exam.Management ──受控服务、资源、备份与恢复
+        └──网络 HTTPS── Exam.Management ──受控服务、资源、备份与恢复
 ```
 
 ## 组件边界
@@ -29,6 +29,6 @@ HTTP 入口使用与路由一致的权限分类：学生设备凭据不能访问
 
 正常模式下，成功确认要求同步数据库和对应资源、身份、密钥的持久证据；备用不可用时不静默降级。`DurableFailoverCoordinator` 管理持久请求、隔离与代次，接管要求旧主明确隔离并核实副本。单机应急需明确授权，旧主回归必须重建，不能双写。
 
-`Exam.Management` 只提供本机受保护的管理入口，管理登录、会话、限定服务及审计独立于业务服务生命周期。数据库可用时核对已启用的考务账号并刷新本机加密缓存；停库时可依据已核验的缓存完成本机管理，但业务权限仍由数据库核对。
+`Exam.Management` 提供经部署配置开放的独立 HTTPS 管理入口，管理登录、会话、限定服务及审计独立于业务服务生命周期。数据库可用时核对已启用的考务账号。Windows 会刷新受保护的离线缓存，停库时可用已核验的缓存登录；Linux 管理登录需要数据库可达。管理请求在服务器上执行，考务电脑不直接访问服务器文件或系统服务。
 
 [系统契约](system-contracts.md)说明数据兼容和恢复边界；[验收标准](acceptance-criteria.md)规定真实设备、双机、断电及容量要求。内存实现与回环合成测试宿主仅用于隔离验证，不是可部署业务服务。

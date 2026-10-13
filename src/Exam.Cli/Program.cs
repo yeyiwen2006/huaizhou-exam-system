@@ -153,7 +153,7 @@ internal static partial class ExamCli
         Console.WriteLine("                                        确认同一预览后加密上传，原请求可安全重试");
         Console.WriteLine("  import materials 考试名称 --output 新目录 [--server URL]");
         Console.WriteLine("                                        取回当前已发布版本的源材料（含独立答案），用于继续修题");
-        Console.WriteLine("  management COMMAND [选项]             调用独立本机管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
+        Console.WriteLine("  management COMMAND [选项]             调用独立服务器管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");
@@ -166,7 +166,7 @@ internal static partial class ExamCli
         Console.WriteLine("  --timeout-seconds 1..3900              本次命令的总超时；不改变业务命令原有较短时限");
         Console.WriteLine();
         Console.WriteLine("管理选项：--management-url HTTPS_URL --server-id ID --node-id ID；写操作用 --input FILE|-，operation 用 --request-id ID。");
-        Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；先执行 management login 用考务账号登录本机服务管理。");
+        Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；先执行 management login 用考务账号登录服务器管理。");
         Console.WriteLine();
         Console.WriteLine("考务身份来自 login 保存的会话（也可用 EXAM_OPERATOR_TOKEN 指定会话令牌）；设备身份只从 EXAM_DEVICE_ID 和");
         Console.WriteLine("EXAM_DEVICE_CREDENTIAL 读取，不接受命令行明文，以免进入命令历史和进程列表。");

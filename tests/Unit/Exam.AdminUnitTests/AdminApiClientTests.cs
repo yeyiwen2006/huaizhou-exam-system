@@ -15,13 +15,15 @@ public sealed class AdminApiClientTests
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
 
     [Fact]
-    public void Configure_RejectsPlainHttpOutsideLoopback()
+    public void Configure_RejectsPlainHttpIncludingLoopback()
     {
         using var api = new AdminApiClient();
 
         Assert.Throws<ArgumentException>(() => api.Configure(
             "http://192.0.2.1:5001/", "synthetic-token", "operator-1"));
-        api.Configure("http://127.0.0.1:5001/", "synthetic-token", "operator-1");
+        Assert.Throws<ArgumentException>(() => api.Configure(
+            "http://127.0.0.1:5001/", "synthetic-token", "operator-1"));
+        api.Configure("https://exam.example.com/", "synthetic-token", "operator-1");
         Assert.True(api.IsConfigured);
     }
 

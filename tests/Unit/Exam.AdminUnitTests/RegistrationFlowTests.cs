@@ -11,59 +11,60 @@ namespace Exam.AdminUnitTests;
 public sealed class RegistrationFlowTests
 {
     [Theory]
-    [InlineData("http://127.0.0.1:5089/", "127.0.0.1", "5089")]
-    [InlineData("https://exam.example.com:5001/", "exam.example.com", "5001")]
-    [InlineData("https://[::1]:5001/", "[::1]", "5001")]
-    public async Task ConfiguredAddress_ShowsHostAndPort_AndConnectsToOriginalEndpoint(
-        string configured, string host, string port)
+    [InlineData("exam.example.com", "https://exam.example.com/")]
+    [InlineData("192.0.2.10", "https://192.0.2.10/")]
+    [InlineData("2001:db8::1", "https://[2001:db8::1]/")]
+    [InlineData("https://exam.example.com:5001/", "https://exam.example.com:5001/")]
+    [InlineData("https://[::1]:5001/", "https://[::1]:5001/")]
+    public async Task ConfiguredAddress_UsesHttpsByDefault_AndPreservesExplicitHttpsPorts(
+        string configured, string endpoint)
     {
         using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
         using var api = new AdminApiClient(handler);
         var viewModel = ReadyToRegister(api, configured);
-        Assert.Equal(host, viewModel.ServerAddress);
-        Assert.Equal(port, viewModel.ServerPort);
+        Assert.Equal(configured, viewModel.ServerAddress);
 
         await SubmitAsync(viewModel);
 
         Assert.True(viewModel.ShowRegistrationSuccess, viewModel.Status);
-        Assert.Equal(new Uri(new Uri(configured), "api/v1/operators/register"), handler.LastRequestUri);
+        Assert.Equal(new Uri(new Uri(endpoint), "api/v1/operators/register"), handler.LastRequestUri);
     }
 
     [Fact]
-    public async Task ChangingDebugHost_UsesHttpsForRemoteServer()
+    public async Task ChangingServerAddress_UsesStandardHttpsPort()
     {
         using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
         using var api = new AdminApiClient(handler);
-        var viewModel = ReadyToRegister(api, "http://127.0.0.1:5089/");
+        var viewModel = ReadyToRegister(api, "https://old.example.com:5443/");
         viewModel.ServerAddress = "exam.example.com";
-        viewModel.ServerPort = "5443";
 
         await SubmitAsync(viewModel);
 
         Assert.True(viewModel.ShowRegistrationSuccess, viewModel.Status);
-        Assert.Equal(new Uri("https://exam.example.com:5443/api/v1/operators/register"), handler.LastRequestUri);
+        Assert.Equal(new Uri("https://exam.example.com/api/v1/operators/register"), handler.LastRequestUri);
     }
 
     [Theory]
-    [InlineData("https://exam.example.com", "5001", "服务器名称")]
-    [InlineData("exam.example.com:5001", "5001", "服务器名称")]
-    [InlineData("exam.example.com/path", "5001", "服务器名称")]
-    [InlineData("exam.example.com", "0", "端口号")]
-    [InlineData("exam.example.com", "65536", "端口号")]
-    [InlineData("exam.example.com", "", "端口号")]
-    public async Task InvalidHostOrPort_ShowsClearErrorBeforeConnecting(string host, string port, string error)
+    [InlineData("http://127.0.0.1:5089/")]
+    [InlineData("http://exam.example.com/")]
+    [InlineData("exam.example.com:5001")]
+    [InlineData("exam.example.com/path")]
+    [InlineData("https://exam.example.com:0/")]
+    [InlineData("https://exam.example.com:65536/")]
+    [InlineData("https://exam.example.com/path")]
+    [InlineData("https://user@exam.example.com/")]
+    [InlineData("")]
+    public async Task InvalidAddress_ShowsClearErrorBeforeConnecting(string address)
     {
         using var handler = new RegistrationHandler(OperatorStatus.Pending, false);
         using var api = new AdminApiClient(handler);
         var viewModel = ReadyToRegister(api);
-        viewModel.ServerAddress = host;
-        viewModel.ServerPort = port;
+        viewModel.ServerAddress = address;
 
         await SubmitAsync(viewModel);
 
         Assert.Equal(0, handler.RequestCount);
-        Assert.StartsWith("注册失败：", viewModel.Status);
-        Assert.Contains(error, viewModel.Status);
+        Assert.Equal("注册失败：请填写服务器 IP、域名或 HTTPS 根地址，例如 exam.example.com；默认使用 HTTPS 443 端口。", viewModel.Status);
     }
 
     [Fact]
@@ -126,7 +127,7 @@ public sealed class RegistrationFlowTests
         Assert.Equal(string.Empty, viewModel.Password);
     }
 
-    private static ConnectionViewModel ReadyToRegister(AdminApiClient api, string? configured = null) => new(api, configured)
+    private static ConnectionViewModel ReadyToRegister(AdminApiClient api, string? configured = null) => new(api, configured ?? "exam.example.com")
     {
         Username = "staff-demo",
         DisplayName = "合成考务账号",

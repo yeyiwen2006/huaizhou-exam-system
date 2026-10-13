@@ -24,11 +24,10 @@ public sealed class LocalManagementClient : IDisposable
         HttpMessageHandler? transport = null, TimeSpan? requestTimeout = null)
     {
         if (!endpoint.IsAbsoluteUri || endpoint.Scheme != Uri.UriSchemeHttps ||
-            !(endpoint.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-              IPAddress.TryParse(endpoint.Host.Trim('[', ']'), out var address) && IPAddress.IsLoopback(address)) ||
+            endpoint.Host.Length == 0 || endpoint.Port is < 1 or > 65535 ||
             endpoint.AbsolutePath != "/" || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0 || endpoint.UserInfo.Length != 0 ||
             string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId))
-            throw new ArgumentException("管理连接必须是独立的本机 HTTPS 根地址并指定预期服务器和节点。");
+            throw new ArgumentException("管理连接必须是独立的服务器 HTTPS 根地址并指定预期服务器和节点。");
         _serverId = serverId;
         _nodeId = nodeId;
         _token = token ?? throw new ArgumentNullException(nameof(token));

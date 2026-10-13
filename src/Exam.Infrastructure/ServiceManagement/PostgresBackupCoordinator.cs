@@ -200,7 +200,7 @@ public sealed class PostgresBackupCoordinator(
 
         var connection = new NpgsqlConnectionStringBuilder(options.ConnectionString);
         var backup = await processRunner.RunAsync(
-            Path.Combine(options.PostgresBinDirectory, "pg_basebackup.exe"),
+            Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),
             [
                 "--pgdata", databaseDirectory,
                 "--format=plain",
@@ -453,7 +453,7 @@ public sealed class PostgresBackupCoordinator(
         }
 
         var verification = await processRunner.RunAsync(
-            Path.Combine(options.PostgresBinDirectory, "pg_verifybackup.exe"),
+            Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_verifybackup.exe" : "pg_verifybackup"),
             [databaseDirectory],
             new Dictionary<string, string>(),
             options.ToolTimeout,

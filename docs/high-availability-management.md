@@ -3,7 +3,7 @@
 
 ## HTTP 与 CLI
 
-复用 本机管理 HTTPS 回环监听、考务账号/加密离线缓存及独立管理会话。请求绑定逻辑服务器、本机节点和已认证操作者；权限继续由管理后端执行。
+复用独立服务器管理 HTTPS 监听、考务账号及管理会话。考务端可远程连接目标节点，Windows 管理宿主支持加密离线缓存。请求绑定逻辑服务器、本机节点和已认证操作者；权限继续由管理后端执行。
 
 | 方法与路径（前缀 `/management/v1`） | 输入 | 输出 |
 | --- | --- | --- |
@@ -20,7 +20,7 @@
 
 枚举增加 `Takeover, Emergency, Rebuild, Reprotect`；操作附带实际主备结果。内部 `FailoverExecutionPlan` 只存受保护操作日志，HTTP 响应移除，不含连接串或证书。过时代次/版本为 409，身份不符为 403，未知依赖为 503，仍按原号核对。
 
-CLI 沿用 `management` 命令组、共享客户端和部署会话，增加 `ha-status, takeover, emergency, rebuild, reprotect`；写操作通过既有 `--input` JSON 文件输入。未知状态或未证实同步保护的状态读取退出码 6，代次/版本冲突退出码 4。没有默认凭据、远程管理或证书绕过。
+CLI 沿用 `management` 命令组、共享客户端和部署会话，增加 `ha-status, takeover, emergency, rebuild, reprotect`；写操作通过既有 `--input` JSON 文件输入。未知状态或未证实同步保护的状态读取退出码 6，代次/版本冲突退出码 4。远程管理使用 HTTPS 和考务账号，不提供默认凭据或证书绕过。
 
 ## 持久协调与外部副作用
 

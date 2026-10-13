@@ -12,18 +12,35 @@ public sealed class ManagementWorkspaceTests
 
     [Theory]
     [InlineData("http://localhost:9443/")]
-    [InlineData("https://exam.example.test/")]
+    [InlineData("https://exam.example.test:0/")]
     [InlineData("https://localhost:9443/management/v1")]
     [InlineData("https://localhost:9443/?secret=x")]
     [InlineData("https://localhost:9443/#fragment")]
     [InlineData("https://synthetic:synthetic@localhost:9443/")]
-    public void TargetRejectsNonLocalHttpsRoots(string address) => Assert.Throws<ArgumentException>(() => (Target with { Address = address }).Validate());
+    public void TargetRejectsInvalidHttpsRoots(string address) => Assert.Throws<ArgumentException>(() => (Target with { Address = address }).Validate());
 
     [Theory]
     [InlineData("https://localhost:9443/")]
     [InlineData("https://127.0.0.1:9443/")]
     [InlineData("https://[::1]:9443/")]
-    public void TargetAcceptsIndependentLocalEndpoint(string address) => Assert.Equal("https", (Target with { Address = address }).Validate().Scheme);
+    [InlineData("https://management.example.test/")]
+    [InlineData("https://192.0.2.10:9443/")]
+    public void TargetAcceptsIndependentHttpsEndpoint(string address) => Assert.Equal("https", (Target with { Address = address }).Validate().Scheme);
+
+    [Theory]
+    [InlineData("/srv/exam/backups/snapshot")]
+    [InlineData("D:\\Exam\\backups\\snapshot")]
+    [InlineData("\\\\backup-server\\exam\\snapshot")]
+    public async Task BackupPathsAreSentUnchangedToTheTargetServer(string path)
+    {
+        var connection = new Connection(); var store = new Store();
+        using var vm = ViewModel(connection, store); await vm.LoginAsync("synthetic");
+        vm.BackupDestination = path;
+        await vm.RequestAsync(ManagementOperationKind.Backup);
+        Assert.Equal(1, connection.Writes);
+        using var document = JsonDocument.Parse(connection.LastBody!);
+        Assert.Equal(path, document.RootElement.GetProperty("destinationDirectory").GetString());
+    }
 
     [Fact]
     public void ManagementRouteSurvivesBusinessDisconnectAndCannotUnlockBusiness()

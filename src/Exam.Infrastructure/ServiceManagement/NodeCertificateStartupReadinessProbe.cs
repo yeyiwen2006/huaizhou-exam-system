@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Security;
 using Exam.Application.ServiceManagement;
 using Exam.Contracts.ServiceManagement;
+using Exam.Infrastructure.Security;
 
 namespace Exam.Infrastructure.ServiceManagement;
 
@@ -13,6 +14,13 @@ public sealed class NodeCertificateStartupReadinessProbe : IStartupReadinessProb
     private readonly string _thumbprint;
     private readonly Func<X509Certificate2Collection> _loadCertificates;
     private readonly TimeProvider _timeProvider;
+    private readonly bool _usesCertificateFile;
+
+    public NodeCertificateStartupReadinessProbe(ServerCertificateSource source, TimeProvider? timeProvider = null)
+        : this(source.Thumbprint ?? string.Empty, () => [source.Load()], timeProvider)
+    {
+        _usesCertificateFile = !string.IsNullOrWhiteSpace(source.CertificatePath);
+    }
 
     public NodeCertificateStartupReadinessProbe(
         string thumbprint,
@@ -38,7 +46,7 @@ public sealed class NodeCertificateStartupReadinessProbe : IStartupReadinessProb
     {
         ArgumentNullException.ThrowIfNull(configuration);
         cancellationToken.ThrowIfCancellationRequested();
-        if (_thumbprint.Length == 0)
+        if (_thumbprint.Length == 0 && !_usesCertificateFile)
             return Task.FromResult(Block("节点解密证书指纹未配置。"));
         if (_thumbprint.Length > 128 || _thumbprint.Length % 2 != 0 ||
             !_thumbprint.All(char.IsAsciiHexDigit))
@@ -50,7 +58,8 @@ public sealed class NodeCertificateStartupReadinessProbe : IStartupReadinessProb
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var matching = certificates.Find(X509FindType.FindByThumbprint, _thumbprint, validOnly: false);
+                var matching = _thumbprint.Length == 0 ? certificates :
+                    certificates.Find(X509FindType.FindByThumbprint, _thumbprint, validOnly: false);
                 if (matching.Count != 1)
                     return Task.FromResult(Block("节点解密证书不存在或不唯一。"));
 

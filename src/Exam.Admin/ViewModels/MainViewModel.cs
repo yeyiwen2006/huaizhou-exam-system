@@ -222,15 +222,14 @@ public sealed class MainViewModel : BindableBase, IDisposable
 }
 
 /// <summary>
-/// 登录页：未登录时填写服务器名称、端口号、用户名和口令登录，或注册新的考务账号；
+/// 登录页：填写服务器地址、用户名和口令，默认使用标准 HTTPS 端口；也可注册新的考务账号。
 /// 登录后显示当前账号并可退出登录。口令只在本进程内存中短暂保存，登录或注册后即清空。
 /// </summary>
 public sealed class ConnectionViewModel : BindableBase
 {
+    private const string ServerAddressGuidance = "请填写服务器 IP、域名或 HTTPS 根地址，例如 exam.example.com；默认使用 HTTPS 443 端口。";
     private readonly AdminApiClient _api;
-    private string _serverAddress = "localhost";
-    private string _serverPort = "5001";
-    private readonly int? _localHttpPort;
+    private string _serverAddress = string.Empty;
     private string _username = string.Empty;
     private string _displayName = string.Empty;
     private string _password = string.Empty;
@@ -244,20 +243,7 @@ public sealed class ConnectionViewModel : BindableBase
     {
         _api = api;
         var configured = configuredServerUrl ?? Environment.GetEnvironmentVariable("EXAM_ADMIN_SERVER_URL");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            if (Uri.TryCreate(configured.Trim(), UriKind.Absolute, out var endpoint)
-                && (endpoint.Scheme == Uri.UriSchemeHttps || endpoint.Scheme == Uri.UriSchemeHttp)
-                && endpoint.UserInfo.Length == 0 && endpoint.Query.Length == 0 && endpoint.Fragment.Length == 0
-                && endpoint.AbsolutePath == "/")
-            {
-                _serverAddress = endpoint.Host;
-                _serverPort = endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                if (endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback)
-                    _localHttpPort = endpoint.Port;
-            }
-            else _serverAddress = configured;
-        }
+        if (!string.IsNullOrWhiteSpace(configured)) _serverAddress = configured.Trim();
         ConnectCommand = new AsyncRelayCommand(LoginAsync, onError: error => SetError("登录", error));
         RegisterCommand = new AsyncRelayCommand(RegisterAsync, onError: error => SetError("注册", error));
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsConnected);
@@ -267,7 +253,6 @@ public sealed class ConnectionViewModel : BindableBase
     }
 
     public string ServerAddress { get => _serverAddress; set => SetProperty(ref _serverAddress, value); }
-    public string ServerPort { get => _serverPort; set => SetProperty(ref _serverPort, value); }
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value); }
 
@@ -358,7 +343,7 @@ public sealed class ConnectionViewModel : BindableBase
         finally { ClearPasswords(); }
         IsRegistering = false;
         IsConnected = true;
-        Status = $"已登录服务器 {ServerAddress.Trim()}，端口 {ServerPort.Trim()}。";
+        Status = $"已登录服务器 {BuildServerAddress()}。";
     }
 
     private async Task RegisterAsync()
@@ -389,18 +374,14 @@ public sealed class ConnectionViewModel : BindableBase
 
     private string BuildServerAddress()
     {
-        var host = ServerAddress.Trim();
-        if (Uri.CheckHostName(host) == UriHostNameType.Unknown)
-            throw new ArgumentException("服务器名称请只填写 IP 地址或域名，不要填写协议前缀、端口或路径。");
-        if (!int.TryParse(ServerPort.Trim(), System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
-            throw new ArgumentException("端口号必须是 1–65535 之间的整数。");
-        var endpoint = new UriBuilder(Uri.UriSchemeHttps, host, port);
-        // The local debug launcher has a separate loopback HTTP endpoint; keep its
-        // configured transport internal while ordinary server connections use HTTPS.
-        if (_localHttpPort == port && endpoint.Uri.IsLoopback)
-            endpoint.Scheme = Uri.UriSchemeHttp;
-        return endpoint.Uri.AbsoluteUri;
+        var address = ServerAddress.Trim();
+        if (Uri.CheckHostName(address) != UriHostNameType.Unknown)
+            return new UriBuilder(Uri.UriSchemeHttps, address).Uri.AbsoluteUri;
+        if (!Uri.TryCreate(address, UriKind.Absolute, out var endpoint) || endpoint.Scheme != Uri.UriSchemeHttps ||
+            endpoint.Host.Length == 0 || endpoint.Port is < 1 or > 65535 || endpoint.AbsolutePath != "/" ||
+            endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0)
+            throw new ArgumentException(ServerAddressGuidance, nameof(ServerAddress));
+        return endpoint.AbsoluteUri;
     }
 
     private void ClearPasswords()
@@ -413,6 +394,8 @@ public sealed class ConnectionViewModel : BindableBase
     private void SetError(string action, Exception exception)
     {
         if (!IsConnected) _api.Disconnect();
-        Status = $"{action}失败：{FriendlyErrors.Describe(exception)}";
+        var description = exception is ArgumentException { ParamName: nameof(ServerAddress) }
+            ? ServerAddressGuidance : FriendlyErrors.Describe(exception);
+        Status = $"{action}失败：{description}";
     }
 }

@@ -20,21 +20,16 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource BrandBand.Title}" Text="考务端登录" Margin="0,14,0,0" />
                         <TextBlock Style="{StaticResource BrandBand.Caption}"
-                                   Text="请输入服务器名称、端口号、用户名和密码登录考务账号。"
+                                   Text="请输入服务器地址、用户名和密码。默认通过 HTTPS 安全连接。"
                                    Margin="0,6,0,0" />
                     </StackPanel>
                 </Border>
 
                 <StackPanel Margin="28,24,28,20">
-                    <!-- 连接信息与学生端使用相同的填写格式 -->
-                    <TextBlock Text="服务器名称（IP 或域名）" Style="{StaticResource FieldLabel}" />
+                    <TextBlock Text="服务器地址（IP 或域名）" Style="{StaticResource FieldLabel}" />
                     <TextBox x:Name="ServerAddressBox" Margin="0,4,0,14"
                              Text="{Binding ServerAddress, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="请输入服务器 IP 地址或域名，例如 192.168.1.10 或 exam.example.com" />
-                    <TextBlock Text="端口号" Style="{StaticResource FieldLabel}" />
-                    <TextBox x:Name="ServerPortBox" Margin="0,4,0,14"
-                             Text="{Binding ServerPort, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="请输入端口号，例如 5001" />
+                             ToolTip="例如 exam.example.com，默认使用 HTTPS 443；也可填写部署人员提供的完整 HTTPS 地址" />
 
                     <!-- 用户名 -->
                     <TextBlock Text="用户名" Style="{StaticResource FieldLabel}" />
@@ -94,7 +89,7 @@
                             <Run Text="{Binding ToggleRegisterText, Mode=OneWay}" />
                         </Hyperlink>
                     </TextBlock>
-                    <Button Content="本机服务管理" Style="{StaticResource Btn.Secondary}" Margin="0,12,0,0"
+                    <Button Content="服务器管理" Style="{StaticResource Btn.Secondary}" Margin="0,12,0,0"
                             Click="OnManagementRequested" />
                 </StackPanel>
             </StackPanel>

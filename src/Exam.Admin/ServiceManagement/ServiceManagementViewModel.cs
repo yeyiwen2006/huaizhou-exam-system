@@ -39,9 +39,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public ServiceManagementViewModel(Func<ManagementTarget, IManagementConnection> factory,
         IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null,
-        TimeProvider? time = null, bool localDebug = false)
+        TimeProvider? time = null)
     {
-        IsLocalDebugEnvironment = localDebug;
         _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory; _time = time ?? TimeProvider.System;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsSignedIn, OnError);
@@ -67,33 +66,18 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public static ServiceManagementViewModel CreateDefault()
     {
         var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exam.Admin", "Management");
-        var localDebug = false;
-        Func<ManagementTarget, IManagementConnection> factory = target => new ManagementConnection(target);
-#if DEBUG
-        if (Environment.GetEnvironmentVariable("EXAM_ADMIN_DATA_DIRECTORY") is { Length: > 0 } localDirectory)
-        {
-            directory = System.IO.Path.Combine(System.IO.Path.GetFullPath(localDirectory), "Management");
-            localDebug = true;
-            factory = target => new ManagementConnection(target, LocalDebugManagementTransport.Create);
-        }
-#endif
-        var model = new ServiceManagementViewModel(factory, new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
-            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json"), localDebug ? null :
+        return new ServiceManagementViewModel(target => new ManagementConnection(target),
+            new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
+            new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json"),
                 System.IO.Path.Combine(AppContext.BaseDirectory, "management-connection.json")),
-            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")), localDebug: localDebug);
-        if (localDebug) model.BackupDestination = System.IO.Path.GetFullPath(System.IO.Path.Combine(directory, "..", "..", "backups"));
-        return model;
+            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")));
     }
 
     public Func<ManagementConfirmation, Task<bool>> ConfirmAsync { get; set; } = _ => Task.FromResult(false);
     public string Address { get => _address; set { if (SetProperty(ref _address, value)) ConnectionSettingsChanged(); } }
     public string ServerId { get => _server; set { if (SetProperty(ref _server, value)) ConnectionSettingsChanged(); } }
     public string NodeId { get => _node; set { if (SetProperty(ref _node, value)) ConnectionSettingsChanged(); } }
-    public bool IsLocalDebugEnvironment { get; }
-    public bool ShowHighAvailability => !IsLocalDebugEnvironment;
-    public string RestoreGuidance => IsLocalDebugEnvironment
-        ? "须先停止业务。测试恢复会回到所选备份时的状态，并自动启动业务；恢复前的数据库保留。"
-        : "须先停止业务。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。";
+    public string RestoreGuidance => "须先停止目标服务器的业务。目录均指目标服务器上的路径。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。";
     public bool HasConnectionConfiguration
     {
         get
@@ -105,11 +89,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     public bool CanConfigureConnection => IsSignedOut && !IsBusy;
     public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
-    public string ConnectionStatus => IsLocalDebugEnvironment
-        ? HasConnectionConfiguration ? "本机测试管理已配置，请使用已启用的考务账号和密码登录。"
-            : "本机测试管理尚未配置，请重新通过 start-local.cmd 启动。"
-        : HasConnectionConfiguration ? "连接已配置，请使用已启用的考务账号和密码登录。"
-        : "本机管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。";
+    public string ConnectionStatus => HasConnectionConfiguration ? "连接已配置，请使用已启用的考务账号和密码登录。"
+        : "服务器管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string Message { get => _message; private set => SetProperty(ref _message, value); }
     public string ProcessText { get => _process; private set => SetProperty(ref _process, value); }
@@ -132,8 +113,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public bool IsSignedOut => !IsSignedIn;
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
-    public string TargetText => IsLocalDebugEnvironment ? "本机测试 · 服务管理" :
-        _connection is not null || HasConnectionConfiguration ? "当前管理服务器：本机" : "本机管理连接待配置";
+    public string TargetText => _connection is not null || HasConnectionConfiguration
+        ? $"当前管理服务器：{_connection?.Target.Address ?? Address} · {_connection?.Target.NodeId ?? NodeId}"
+        : "服务器管理连接待配置";
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -195,7 +177,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         var old = _connection;
         ResetSession(dispose: false);
-        Message = "本机管理会话已清除。";
+        Message = "服务器管理会话已清除。";
         if (old is null) return;
         try { using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20)); await old.LogoutAsync(deadline.Token); }
         catch { Message = "本机会话已清除；服务端撤销未确认，管理宿主重启也会使旧会话失效。"; }
@@ -217,13 +199,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null)
                 throw new System.IO.InvalidDataException();
             ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch);
-            if (!IsLocalDebugEnvironment)
-            {
-                var availability = await connection.HighAvailabilityAsync(reads.Token);
-                if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
-                if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
-                else MarkProtectionUnknown();
-            }
+            var availability = await connection.HighAvailabilityAsync(reads.Token);
+            if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
+            if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
+            else MarkProtectionUnknown();
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);
@@ -248,10 +227,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                     e.Category.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '+'))))
                     throw new System.IO.InvalidDataException("限定运行日志无效。");
                 foreach (var entry in runtime) Logs.Add(new(entry.Timestamp.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
-                    entry.Source == "business" ? "业务服务" : "本机管理", "运行记录",
+                    entry.Source == "business" ? "业务服务" : "服务器管理", "运行记录",
                     entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, $"事件编号：{entry.EventId.ToString(CultureInfo.InvariantCulture)}"));
             }
-            Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "本机状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
+            Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "服务器状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
         }
         catch (OperationCanceledException) { if (Current(connection, generation)) { MarkUnknown(); Message = "已停止本次查询；当前状态需重新核实。"; } }
         catch { if (Current(connection, generation)) MarkUnknown(); throw; }
@@ -404,8 +383,16 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             throw new ArgumentException("请输入有效的业务监听地址和端口。");
         return new(target.ServerId, target.NodeId, BindAddress.Trim(), port, RequirePath(DataDirectory), HighAvailabilityEnabled, _configurationVersion!.Value);
     }
-    private static string RequirePath(string path) => !string.IsNullOrWhiteSpace(path) && System.IO.Path.IsPathFullyQualified(path.Trim())
-        ? path.Trim() : throw new ArgumentException("请输入本机绝对目录路径。");
+    private static string RequirePath(string path)
+    {
+        var value = path.Trim();
+        // These paths belong to the server, whose operating system may differ from this workstation.
+        var absolute = value.StartsWith('/') ||
+            value.Length >= 3 && char.IsAsciiLetter(value[0]) && value[1] == ':' && value[2] is '\\' or '/' ||
+            value.StartsWith("\\\\", StringComparison.Ordinal) && value[2..].Split('\\', StringSplitOptions.RemoveEmptyEntries).Length >= 2;
+        if (!absolute || value.Any(char.IsControl)) throw new ArgumentException("请输入目标服务器上的绝对目录路径。");
+        return value;
+    }
     private string ConfirmationBody(ManagementOperationKind kind, PendingManagementRequest request)
     {
         using var document = JsonDocument.Parse(request.Body);
@@ -426,9 +413,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Configure => "后端核对已停止状态与当前配置版本；冲突时不覆盖。",
             ManagementOperationKind.Backup => "须先停止业务；备份结果必须包含三项完整性证据。",
             ManagementOperationKind.Restore => RestoreGuidance,
-            ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升本机备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
-            ManagementOperationKind.Emergency => "停止本机业务并切换为单机持久确认。完成后请自检并启动业务；应急期间保护降低，请尽快恢复备用节点。",
-            ManagementOperationKind.Rebuild => "停止本机服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
+            ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升目标服务器备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
+            ManagementOperationKind.Emergency => "停止目标服务器业务并切换为单机持久确认。完成后请自检并启动业务；应急期间保护降低，请尽快恢复备用节点。",
+            ManagementOperationKind.Rebuild => "停止目标服务器服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
             ManagementOperationKind.Reprotect => "只有实际复制、材料和双侧最新持久确认全部核实后才恢复同步保护；失败保持待核对。",
             _ => "操作结果以服务器实际检查为准。"
         }) + details;
@@ -533,7 +520,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             LoadProtectionWarning();
             Message = "连接配置已导入并保存，请输入考务账号和密码。";
         }
-        catch { Message = "连接配置导入失败。请使用部署人员提供的有效本机管理连接文件；原连接配置已保留。"; }
+        catch { Message = "连接配置导入失败。请使用部署人员提供的有效服务器管理连接文件；原连接配置已保留。"; }
     }
 
     private void SaveConnectionSettings()
@@ -556,7 +543,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     public void ReportError(Exception? error = null) => OnError(error ?? new InvalidOperationException());
     private void OnError(Exception error) => Message = error is ArgumentException ? "输入无效，请核对目标身份、路径、端口及配置版本。" :
-        error is UnauthorizedAccessException ? "管理认证失败，请核对已启用的考务账号。" : "管理操作未确认，请核对连接、证书及本机部署。";
+        error is UnauthorizedAccessException ? "管理认证失败，请核对已启用的考务账号。" : "管理操作未确认，请核对连接、证书及服务器部署。";
     private void NotifyPending() { OnPropertyChanged(nameof(Pending)); OnPropertyChanged(nameof(PendingText)); UpdateCommands(); }
     private void UpdateCommands()
     {

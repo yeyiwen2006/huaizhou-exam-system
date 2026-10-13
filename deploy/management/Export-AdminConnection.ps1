@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ManagementConfigurationPath,
     [Parameter(Mandatory = $true)][string]$AdminDirectory,
-    [ValidateSet('localhost', '127.0.0.1')][string]$HostName = 'localhost'
+    [Parameter(Mandatory = $true)][string]$HostName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +21,9 @@ try {
     $configuration = [IO.File]::ReadAllText($configurationPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
 } catch { throw 'Cannot read the management configuration JSON.' }
 $management = $configuration.Management
+if ([Uri]::CheckHostName($HostName.Trim('[', ']')) -eq [UriHostNameType]::Unknown) {
+    throw 'HostName must be the server DNS name or IP address covered by its HTTPS certificate, without a scheme, path or port.'
+}
 $port = 0
 $serverId = [string]$management.ServerId
 $nodeId = [string]$management.NodeId
@@ -30,7 +33,9 @@ if (-not [int]::TryParse([string]$management.HttpsPort, [ref]$port) -or $port -l
     throw 'Management.HttpsPort, Management.ServerId and Management.NodeId must match the deployed management service.'
 }
 # Export only routing information. Do not copy database passwords, certificates or operator credentials.
-$connection = [ordered]@{ address = "https://${HostName}:$port/"; serverId = $serverId.Trim(); nodeId = $nodeId.Trim() }
+$address = [UriBuilder]::new('https', $HostName.Trim('[', ']'), $port)
+if ($port -eq 443) { $address.Port = -1 }
+$connection = [ordered]@{ address = $address.Uri.AbsoluteUri; serverId = $serverId.Trim(); nodeId = $nodeId.Trim() }
 $temporary = Join-Path $outputDirectory ('.management-connection-' + [guid]::NewGuid().ToString('N') + '.tmp')
 try {
     [IO.File]::WriteAllText($temporary, ($connection | ConvertTo-Json), [Text.UTF8Encoding]::new($false))

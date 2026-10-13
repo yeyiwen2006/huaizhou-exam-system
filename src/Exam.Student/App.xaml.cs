@@ -10,18 +10,11 @@ namespace Exam.Student;
 /// </summary>
 public partial class App : Application
 {
-    /// <summary>窗口调试开关，只在 Debug 构建中接受。</summary>
-    public static bool IsLocalDebug { get; private set; }
-
-    /// <summary>本机学生端数据目录；调试入口使用项目内独立目录。</summary>
+    /// <summary>当前 Windows 用户的学生端数据目录。</summary>
     public static string AppDataDirectory { get; } = GetAppDataDirectory();
 
     private static string GetAppDataDirectory()
     {
-#if DEBUG
-        if (Environment.GetEnvironmentVariable("EXAM_STUDENT_DATA_DIRECTORY") is { Length: > 0 } directory)
-            return Path.GetFullPath(directory);
-#endif
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "HuaizhouExam", "Student");
     }
@@ -38,9 +31,6 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-#if DEBUG
-        IsLocalDebug = e.Args.Contains("--local-debug", StringComparer.Ordinal);
-#endif
 
         // 启动即读取部署的服务器地址与信任配置；TLS 指纹 pin 在握手时生效。
         var (serverConfig, serverConfigError) = ServerEndpointConfig.Load(AppContext.BaseDirectory);
@@ -52,7 +42,6 @@ public partial class App : Application
         }
 
         var shell = new MainWindow();
-        if (IsLocalDebug) shell.Title += "（本机调试）";
         MainWindow = shell;
         shell.Show();
         try

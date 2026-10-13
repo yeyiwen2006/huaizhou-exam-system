@@ -8,7 +8,7 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
 {
     private readonly DirectoryInfo _directory = Directory.CreateTempSubdirectory("exam-management-settings-");
     private string FilePath(string name) => Path.Combine(_directory.FullName, name);
-    private readonly ManagementTarget _target = new("https://localhost:9443/", "synthetic-server", "synthetic-node");
+    private readonly ManagementTarget _target = new("https://management.example.test:9443/", "synthetic-server", "synthetic-node");
 
     [Fact]
     public void DeploymentConfigurationLoadsOnFirstUseAndSavedUserConfigurationTakesPriority()
@@ -29,7 +29,7 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
     {
         var imported = FilePath("import.json");
         File.WriteAllText(imported, """
-            {"address":"https://localhost:9443/","serverId":"synthetic-server","nodeId":"synthetic-node",
+            {"address":"https://management.example.test:9443/","serverId":"synthetic-server","nodeId":"synthetic-node",
              "password":"synthetic-discard-this-extra-field"}
             """, System.Text.Encoding.UTF8);
         var settings = new ManagementEndpointSettings(FilePath("user.json"));
@@ -49,7 +49,7 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
 
     [Theory]
     [InlineData("{\"address\":\"http://localhost:9443/\",\"serverId\":\"synthetic-server\",\"nodeId\":\"synthetic-node\"}")]
-    [InlineData("{\"address\":\"https://remote.invalid/\",\"serverId\":\"synthetic-server\",\"nodeId\":\"synthetic-node\"}")]
+    [InlineData("{\"address\":\"https://remote.invalid/path\",\"serverId\":\"synthetic-server\",\"nodeId\":\"synthetic-node\"}")]
     [InlineData("{\"address\":null}")]
     [InlineData("invalid-json")]
     public void InvalidImportPreservesTheSavedAndDisplayedConnection(string invalid)
@@ -65,7 +65,7 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingConfigurationExplainsTheProblemAndConfiguredLocalDebugAllowsLogin()
+    public async Task MissingConfigurationExplainsTheProblemAndConfiguredRemoteServerAllowsLogin()
     {
         var settings = new ManagementEndpointSettings(FilePath("user.json"));
         using (var missing = Model(settings))
@@ -76,11 +76,11 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
             Assert.Equal(missing.ConnectionStatus, missing.Message);
         }
         settings.Save(_target);
-        using var debug = Model(settings, localDebug: true);
-        Assert.True(debug.CanLogin);
-        Assert.True(debug.CanConfigureConnection);
-        Assert.Contains("本机测试管理已配置", debug.ConnectionStatus);
-        Assert.False(debug.ShowHighAvailability);
+        using var configured = Model(settings);
+        Assert.True(configured.CanLogin);
+        Assert.True(configured.CanConfigureConnection);
+        Assert.Contains("连接已配置", configured.ConnectionStatus);
+        Assert.Contains(_target.Address, configured.TargetText);
     }
 
     [Fact]
@@ -94,9 +94,9 @@ public sealed class ManagementConnectionSettingsTests : IDisposable
         Assert.Equal(_target, settings.Load());
     }
 
-    private static ServiceManagementViewModel Model(ManagementEndpointSettings settings, bool localDebug = false) =>
+    private static ServiceManagementViewModel Model(ManagementEndpointSettings settings) =>
         new(_ => throw new InvalidOperationException("This configuration test must not contact a service."),
-            new EmptyStore(), settings, localDebug: localDebug);
+            new EmptyStore(), settings);
     private sealed class EmptyStore : IPendingManagementStore
     {
         public PendingManagementRequest? Load(ManagementTarget target) => null;

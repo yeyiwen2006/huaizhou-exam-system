@@ -18,7 +18,7 @@ PRIVATE_ROOTS = {'.git', '.artifacts', 'artifacts', '.vs', 'data', 'storage', 'b
 SOURCE_ROOTS = {'src', 'tests', 'eng', 'docs', 'schemas', 'samples', 'deploy', 'packaging', '.github'}
 SOURCE_SUFFIXES = {'.cs', '.csproj', '.props', '.targets', '.xaml', '.py', '.ps1', '.md',
                    '.yml', '.yaml', '.sql', '.sh', '.cmd', '.bat', '.manifest', '.resx', '.sln'}
-ROOT_NAMES = {'start-local.cmd', 'sync-code.cmd'}
+ROOT_NAMES = {'sync-code.cmd'}
 PRIVATE_SUFFIXES = {'.pfx', '.p12', '.pem', '.key', '.db', '.sqlite', '.dump', '.backup', '.log'}
 
 

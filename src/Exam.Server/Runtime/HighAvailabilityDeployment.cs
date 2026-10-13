@@ -2,6 +2,7 @@ using Exam.Contracts.HighAvailability;
 using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
+using Exam.Infrastructure.Security;
 
 namespace Exam.Server.Runtime;
 
@@ -20,7 +21,8 @@ public static class HighAvailabilityDeployment
         var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
         var resources = FileRecoveryDeploymentSelection.ResolveResources(k => configuration[k], identity.ServerId, identity.NodeId, identity.ServerEpoch) ?? "";
         var connection = FileRecoveryDeploymentSelection.ResolveConnection(k => configuration[k], identity.ServerId, identity.NodeId, identity.ServerEpoch);
-        var cert = configuration["PackageSecurity:CertificateThumbprint"] ?? "";
+        var cert = new ServerCertificateSource(configuration["PackageSecurity:CertificateThumbprint"],
+            configuration["PackageSecurity:CertificatePath"], configuration["PackageSecurity:CertificatePassword"]);
         var service = new ServiceConfiguration(identity.ServerId, identity.NodeId, "127.0.0.1", 1, resources, true, 1);
         var certificate = await new NodeCertificateStartupReadinessProbe(cert).RunAsync(service, context.RequestAborted);
         var keys = await new ConfiguredRecoveryReadinessProbe(connection, cert).RunAsync(service, context.RequestAborted);

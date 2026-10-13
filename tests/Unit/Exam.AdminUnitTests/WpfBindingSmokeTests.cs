@@ -628,14 +628,11 @@ public sealed class WpfBindingSmokeTests
     private static void VerifyLoginInputAlignment(Window window)
     {
         var server = Assert.Single(Descendants<TextBox>(window), box => box.Name == "ServerAddressBox");
-        var port = Assert.Single(Descendants<TextBox>(window), box => box.Name == "ServerPortBox");
-        Assert.DoesNotContain("://", server.Text);
+        Assert.DoesNotContain(Descendants<TextBox>(window), box => box.Name == "ServerPortBox");
         var connection = Assert.IsType<ConnectionViewModel>(server.DataContext);
         server.Text = "synthetic-server.invalid";
-        port.Text = "5443";
         DrainDispatcher();
         Assert.Equal("synthetic-server.invalid", connection.ServerAddress);
-        Assert.Equal("5443", connection.ServerPort);
         var username = Assert.Single(Descendants<TextBox>(window), box => box.Name == "UsernameBox");
         var password = Assert.Single(Descendants<PasswordBox>(window), box => box.Name == "PasswordInput");
         foreach (var value in new[] { string.Empty, "synthetic-input" })

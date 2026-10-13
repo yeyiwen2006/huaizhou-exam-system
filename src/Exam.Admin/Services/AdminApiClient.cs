@@ -103,11 +103,10 @@ public sealed partial class AdminApiClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseAddress);
         if (!Uri.TryCreate(baseAddress.Trim(), UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-            (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback) ||
+            uri.Scheme != Uri.UriSchemeHttps || uri.Port is < 1 or > 65535 || uri.AbsolutePath != "/" ||
             uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0)
         {
-            throw new ArgumentException("服务器地址必须使用 HTTPS（仅本机测试允许 HTTP），且不能含用户信息、查询参数或片段。", nameof(baseAddress));
+            throw new ArgumentException("服务器地址必须是 HTTPS 根地址，且不能含用户信息、查询参数或片段。", nameof(baseAddress));
         }
         return uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(uri.AbsoluteUri + '/', UriKind.Absolute);
     }

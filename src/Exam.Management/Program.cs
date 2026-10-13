@@ -1,5 +1,4 @@
 using System.Net;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Exam.Application.ServiceManagement;
 using Exam.Application.HighAvailability;
@@ -8,6 +7,7 @@ using Exam.Contracts.Common;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 using Exam.Infrastructure.HighAvailability;
+using Exam.Infrastructure.Security;
 
 namespace Exam.Management;
 
@@ -19,23 +19,21 @@ public static class ManagementEntryPoint
         var configuration = builder.Configuration;
         var port = configuration.GetValue<int>("Management:HttpsPort");
         if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
-        if (configuration["Management:BindAddress"] is { } address && address != "127.0.0.1" && address != "::1" && address != "localhost")
-            throw new InvalidOperationException("本机管理只允许回环监听。");
-        if (!string.IsNullOrEmpty(configuration["Urls"]) || configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
-            throw new InvalidOperationException("管理宿主拒绝额外监听配置，使用 Management:HttpsPort。 ");
-        using var certificate = ManagementDeployment.LoadCertificate(Required("Management:CertificateThumbprint"));
+        var bindAddress = ManagementDeployment.ParseBindAddress(configuration["Management:BindAddress"]);
+        if (new[] { "urls", "http_ports", "https_ports" }.Any(key => !string.IsNullOrWhiteSpace(configuration[key])) ||
+            configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
+            throw new InvalidOperationException("管理宿主拒绝额外监听配置，使用 Management:BindAddress 和 Management:HttpsPort。");
+        using var certificate = ManagementDeployment.LoadCertificate(new ServerCertificateSource(configuration["Management:CertificateThumbprint"],
+            configuration["Management:CertificatePath"], configuration["Management:CertificatePassword"]));
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = 65536;
-            options.Listen(IPAddress.Loopback, port, endpoint => endpoint.UseHttps(certificate));
+            options.Listen(bindAddress, port, endpoint => endpoint.UseHttps(certificate));
         });
         AddManagementRuntime(builder);
         await using var app = builder.Build();
         app.MapManagementApi();
         await app.RunAsync();
-
-        string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
-            ? throw new InvalidOperationException($"缺少受保护部署配置项 {key}。") : configuration[key]!;
     }
 
     public static void AddManagementRuntime(WebApplicationBuilder builder)
@@ -81,7 +79,9 @@ public static class ManagementEntryPoint
 
         ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)
         {
-            var process = new DeferredBusinessHost(() => new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
+            var process = new DeferredBusinessHost(() => OperatingSystem.IsLinux()
+                ? new SystemdBusinessHost(Required("Management:BusinessServiceName"))
+                : new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
             var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
             string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(SelectedConfiguration, serverId, nodeId, CurrentEpoch());
@@ -108,14 +108,16 @@ public static class ManagementEntryPoint
             var backups = new DeferredBackupCoordinator(CreateBackups);
             IStartupReadinessProbe Preflight(string? target = null) => new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
-                new DeferredReadinessProbe(() => new NodeCertificateStartupReadinessProbe(SelectedConfiguration("PackageSecurity:CertificateThumbprint") ?? "")),
+                new DeferredReadinessProbe(() => new NodeCertificateStartupReadinessProbe(NodeCertificate())),
                 new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), CurrentEpoch())),
-                new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(target ?? SelectedConnection(), SelectedConfiguration("PackageSecurity:CertificateThumbprint") ?? "")),
+                new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(target ?? SelectedConnection(), NodeCertificate())),
                 new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
                     TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), new ExternalProcessRunner()),
                     configuration["Backup:StartupVerificationDirectory"], configuration["Backup:StartupVerificationBackupId"])
             ]);
+            ServerCertificateSource NodeCertificate() => new(SelectedConfiguration("PackageSecurity:CertificateThumbprint"),
+                SelectedConfiguration("PackageSecurity:CertificatePath"), SelectedConfiguration("PackageSecurity:CertificatePassword"));
             var preflight = Preflight();
             async Task<StartupCheckResult> ConfirmedState(ServiceConfiguration expected, RecoveryWorkingCopy working, CancellationToken token)
             {
@@ -221,7 +223,8 @@ public static class ManagementEntryPoint
                 readAudit: (limit, token) => new FileManagementOperationStore(Required("Management:OperationDirectory"))
                     .ReadAuditAsync(limit, token),
                 readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
-                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token), failover: failover);
+                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token), failover: failover,
+                supportsAdvancedOperations: OperatingSystem.IsWindows());
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
@@ -250,26 +253,22 @@ public static class ManagementEntryPoint
 
 public static class ManagementDeployment
 {
-    public static X509Certificate2 LoadCertificate(string thumbprint)
+    public static IPAddress ParseBindAddress(string? address)
     {
-        try
-        {
-            using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
-            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
-            var certificates = store.Certificates;
-            X509Certificate2? selected = null;
-            try
-            {
-                var matches = certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
-                if (matches.Count != 1) throw new InvalidOperationException("管理 HTTPS 证书不存在或不唯一。");
-                selected = matches[0];
-                if (!selected.HasPrivateKey || DateTime.UtcNow < selected.NotBefore.ToUniversalTime() || DateTime.UtcNow > selected.NotAfter.ToUniversalTime())
-                    throw new InvalidOperationException("管理 HTTPS 证书或私钥不可用。");
-                return selected;
-            }
-            finally { foreach (var item in certificates) if (!ReferenceEquals(item, selected)) item.Dispose(); }
-        }
-        catch (Exception error) when (error is CryptographicException or PlatformNotSupportedException or UnauthorizedAccessException)
-        { throw new InvalidOperationException("无法加载管理 HTTPS 证书及私钥。"); }
+        if (string.IsNullOrWhiteSpace(address) || string.Equals(address, "localhost", StringComparison.OrdinalIgnoreCase))
+            return IPAddress.Loopback;
+        if (IPAddress.TryParse(address, out var value)) return value;
+        throw new InvalidOperationException("管理监听地址必须是 IP 地址或 localhost；跨设备部署请填写服务器网卡地址或 0.0.0.0。");
+    }
+
+    public static X509Certificate2 LoadCertificate(string thumbprint) => LoadCertificate(new ServerCertificateSource(thumbprint));
+
+    public static X509Certificate2 LoadCertificate(ServerCertificateSource source)
+    {
+        var certificate = source.Load();
+        if (DateTime.UtcNow >= certificate.NotBefore.ToUniversalTime() && DateTime.UtcNow <= certificate.NotAfter.ToUniversalTime())
+            return certificate;
+        certificate.Dispose();
+        throw new InvalidOperationException("管理 HTTPS 证书不在有效期内。");
     }
 }

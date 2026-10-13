@@ -21,41 +21,21 @@ public interface IPackageKeyUnwrapper
     byte[] Unwrap(EncryptedPackageEnvelope envelope);
 }
 
-/// <summary>Private keys stay in the Windows certificate store owned by the server account.</summary>
+/// <summary>Loads only the current server's private key from its protected certificate source.</summary>
 public sealed class CertificateStorePackageKeyUnwrapper(
     string nodeId,
-    string certificateThumbprint,
-    StoreLocation storeLocation = StoreLocation.LocalMachine) : IPackageKeyUnwrapper
+    ServerCertificateSource certificateSource) : IPackageKeyUnwrapper
 {
+    public CertificateStorePackageKeyUnwrapper(string nodeId, string certificateThumbprint,
+        StoreLocation storeLocation = StoreLocation.LocalMachine)
+        : this(nodeId, new ServerCertificateSource(certificateThumbprint, StoreLocation: storeLocation))
+    {
+    }
+
     public byte[] Unwrap(EncryptedPackageEnvelope envelope)
     {
-        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(certificateThumbprint))
-        {
-            throw new CryptographicException("尚未配置可用的 Windows 节点解密证书。");
-        }
-
-        using var store = new X509Store(StoreName.My, storeLocation);
-        store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
-        var certificates = store.Certificates.Find(
-            X509FindType.FindByThumbprint,
-            certificateThumbprint.Replace(" ", string.Empty, StringComparison.Ordinal),
-            validOnly: false);
-        try
-        {
-            if (certificates.Count != 1 || !certificates[0].HasPrivateKey)
-            {
-                throw new CryptographicException("当前节点解密证书不存在、不唯一或缺少私钥。");
-            }
-
-            return PackageEncryptionService.UnwrapDataKey(envelope, nodeId, certificates[0]);
-        }
-        finally
-        {
-            foreach (var certificate in certificates)
-            {
-                certificate.Dispose();
-            }
-        }
+        using var certificate = certificateSource.Load();
+        return PackageEncryptionService.UnwrapDataKey(envelope, nodeId, certificate);
     }
 }
 

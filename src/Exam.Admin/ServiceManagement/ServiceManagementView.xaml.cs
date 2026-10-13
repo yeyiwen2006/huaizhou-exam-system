@@ -41,7 +41,7 @@ public partial class ServiceManagementView : UserControl
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "导入部署人员提供的本机管理连接配置",
+            Title = "导入部署人员提供的服务器管理连接配置",
             Filter = "管理连接配置 (*.json)|*.json", CheckFileExists = true, Multiselect = false
         };
         if (dialog.ShowDialog() == true)

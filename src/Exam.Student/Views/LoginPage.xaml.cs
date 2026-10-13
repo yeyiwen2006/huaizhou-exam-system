@@ -19,13 +19,6 @@ public partial class LoginPage : UserControl
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
-#if DEBUG
-        if (App.IsLocalDebug && App.ServerConfig is { } config)
-        {
-            HostInput.Text = config.Host;
-            PortInput.Text = config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-#endif
     }
 
     private async void OnExitSystem(object sender, RoutedEventArgs e)

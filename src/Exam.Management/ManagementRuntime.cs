@@ -24,12 +24,18 @@ public sealed class ManagementRuntime(
     Func<int, CancellationToken, Task<IReadOnlyList<ProtectedRuntimeLogEntry>>>? readRuntimeLogs = null,
     Func<DurableFailoverCoordinator>? failover = null,
     bool checkReadinessOnStatus = false,
-    bool requireCurrentRecoveryState = true)
+    bool requireCurrentRecoveryState = true,
+    bool supportsAdvancedOperations = true)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
+    public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
     private DurableFailoverCoordinator Failover => failover?.Invoke() ?? throw new InvalidOperationException("正式主备管理未配置。");
-    public Task<HighAvailabilityStatus> GetHighAvailabilityAsync(CancellationToken token) => Failover.GetStatusAsync(token);
+    public Task<HighAvailabilityStatus> GetHighAvailabilityAsync(CancellationToken token)
+    {
+        RequireAdvancedOperations();
+        return Failover.GetStatusAsync(token);
+    }
     public Task<ManagementOperation> ExecuteHighAvailabilityAsync(HighAvailabilityRequest request, string actor,
         ManagementOperationKind kind, CancellationToken token)
     {
@@ -37,7 +43,18 @@ public sealed class ManagementRuntime(
         if (request.ActorId != actor || !DurableFailoverCoordinator.IsFailover(kind))
             throw new DomainRuleException(ErrorCodes.Forbidden, "主备操作者必须来自当前已认证的考务会话。");
         return Operations.ExecuteAsync(request.RequestId, actor, kind, request,
-            (operation, cancellation) => Failover.ExecuteAsync(operation, request, cancellation), token);
+            (operation, cancellation) =>
+            {
+                RequireAdvancedOperations();
+                return Failover.ExecuteAsync(operation, request, cancellation);
+            }, token);
+    }
+
+    private void RequireAdvancedOperations()
+    {
+        if (!SupportsAdvancedOperations)
+            throw new DomainRuleException("PLATFORM_NOT_SUPPORTED",
+                "Linux 当前支持业务服务启停、配置、状态、日志和备份；主备切换及隔离恢复需要 Windows 管理宿主。");
     }
     public Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token) =>
         readAudit is null ? throw new InvalidOperationException("受保护操作日志未配置。") : readAudit(limit, token);
@@ -138,7 +155,7 @@ public sealed class ManagementRuntime(
     public void RequireTarget(string requestedServer, string requestedNode)
     {
         if (requestedServer != ServerId || requestedNode != NodeId)
-            throw new DomainRuleException(ErrorCodes.InvalidInput, "请求目标不是本机管理节点。");
+            throw new DomainRuleException(ErrorCodes.InvalidInput, "请求目标与此服务器管理节点不一致。");
     }
 
     public Task<ManagementOperation> ExecuteServiceAsync(ManagementServiceRequest request, string actor,
@@ -202,7 +219,7 @@ public sealed class ManagementRuntime(
         Operations.ExecuteAsync(request.RequestId, actor, ManagementOperationKind.Backup, request with { ActorId = actor }, async (operation, token) =>
         {
             if (process.Status != BusinessServiceStatus.Stopped)
-                throw new DomainRuleException(ErrorCodes.VersionConflict, "本机管理备份前须停止业务服务，避免与业务入口的备份操作并发。");
+                throw new DomainRuleException(ErrorCodes.VersionConflict, "服务器管理备份前须停止业务服务，避免与业务入口的备份操作并发。");
             var result = await backups().CreateAsync(request with { ActorId = actor }, token);
             if (!result.IncludesDatabase || !result.IncludesProtectedConfiguration || !result.IncludesVersionedResources)
                 throw new IOException("备份不完整。");
@@ -212,6 +229,7 @@ public sealed class ManagementRuntime(
     public Task<ManagementOperation> RestoreAsync(RestoreRequest request, string actor, CancellationToken cancellationToken) =>
         Operations.ExecuteAsync(request.RequestId, actor, ManagementOperationKind.Restore, request with { ActorId = actor }, async (operation, token) =>
         {
+            RequireAdvancedOperations();
             if (process.Status != BusinessServiceStatus.Stopped)
                 throw new DomainRuleException(ErrorCodes.VersionConflict, "隔离恢复前必须停止业务服务。");
             var targetDirectory = recoveryWorkingDirectory?.Invoke();

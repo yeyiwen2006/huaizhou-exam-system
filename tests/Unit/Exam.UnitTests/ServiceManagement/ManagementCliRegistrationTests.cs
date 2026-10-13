@@ -41,7 +41,7 @@ public sealed class ManagementCliRegistrationTests
         }
         finally { File.Delete(path); }
     }
-    private static readonly string[] Target = ["--management-url", "https://localhost:9443", "--server-id", "server", "--node-id", "node"];
+    private static readonly string[] Target = ["--management-url", "https://management.example.test:9443", "--server-id", "server", "--node-id", "node"];
 
     [Theory]
     [InlineData("missing-checks", 5)]
@@ -73,6 +73,7 @@ public sealed class ManagementCliRegistrationTests
     {
         using var transport = new ResponseTransport(request =>
         {
+            Assert.Equal("management.example.test", request.RequestUri!.Host);
             Assert.Equal("/management/v1/service/status", request.RequestUri!.AbsolutePath);
             Assert.Equal("server", Assert.Single(request.Headers.GetValues(ManagementHeaders.ServerId)));
             Assert.Equal("node", Assert.Single(request.Headers.GetValues(ManagementHeaders.NodeId)));
@@ -157,7 +158,8 @@ public sealed class ManagementCliRegistrationTests
 
     [Theory]
     [InlineData("http://localhost:9443")]
-    [InlineData("https://example.com:9443")]
+    [InlineData("https://management.example.test:9443/path")]
+    [InlineData("https://user@management.example.test:9443")]
     public async Task UnsafeAddressIsRejectedBeforeSendingCredential(string endpoint)
     {
         using var output = new StringWriter();

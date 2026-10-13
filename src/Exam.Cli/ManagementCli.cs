@@ -35,9 +35,9 @@ public static class ManagementCli
             nodeId ??= Environment.GetEnvironmentVariable("EXAM_NODE_ID");
             if (string.IsNullOrWhiteSpace(endpoint) || !Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||
                 string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId))
-                throw new ArgumentException("须指定本机 HTTPS 管理地址、预期服务器和节点。");
+                throw new ArgumentException("须指定服务器 HTTPS 管理地址、预期服务器和节点。");
             if (command is "login" or "logout")
-                return await LoginAsync(command, uri, serverId, output, errors, token);
+                return await LoginAsync(command, uri, serverId, nodeId, output, errors, token);
             var reads = command is "status" or "ha-status" or "configuration" or "logs" or "runtime-logs" or "operation";
             var writes = command is "start" or "stop" or "checks" or "configure" or "backup" or "restore" or "takeover" or "emergency" or "rebuild" or "reprotect";
             if (!reads && !writes || reads && inputPath is not null || writes && (inputPath is null || requestId is not null) ||
@@ -65,17 +65,17 @@ public static class ManagementCli
         }
     }
 
-    /// <summary>用考务账号登录本机服务管理；会话加密保存在本机，供后续 management 命令使用。</summary>
-    private static async Task<int> LoginAsync(string command, Uri endpoint, string serverId, TextWriter output, TextWriter errors,
+    /// <summary>用考务账号登录服务器管理；会话加密保存在本机，供后续 management 命令使用。</summary>
+    private static async Task<int> LoginAsync(string command, Uri endpoint, string serverId, string nodeId, TextWriter output, TextWriter errors,
         CancellationToken token)
     {
-        if (endpoint.Scheme != Uri.UriSchemeHttps || !(endpoint.IsLoopback ||
-            System.Net.IPAddress.TryParse(endpoint.Host.Trim('[', ']'), out var address) && System.Net.IPAddress.IsLoopback(address)))
+        if (endpoint.Scheme != Uri.UriSchemeHttps || endpoint.AbsolutePath != "/" ||
+            endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0)
         {
-            errors.WriteLine("INVALID_INPUT: 服务管理只能通过本机 HTTPS 地址登录。");
+            errors.WriteLine("INVALID_INPUT: 服务器管理需要 HTTPS 根地址。");
             return 2;
         }
-        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = endpoint, Timeout = TimeSpan.FromSeconds(30) };
+        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { BaseAddress = endpoint, Timeout = TimeSpan.FromSeconds(30) };
         if (command == "logout")
         {
             var saved = CliSessionStore.Load(ExamCli.ManagementSessionKind);
@@ -97,7 +97,10 @@ public static class ManagementCli
             using var response = await client.PostAsJsonAsync("/management/v1/login",
                 new Exam.Contracts.Operators.LoginOperatorRequest(username, password), token);
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(token), cancellationToken: token);
-            if (!response.IsSuccessStatusCode || !document.RootElement.TryGetProperty("result", out var result) ||
+            if (!response.IsSuccessStatusCode ||
+                !document.RootElement.TryGetProperty("serverId", out var returnedServer) || returnedServer.GetString() != serverId ||
+                !document.RootElement.TryGetProperty("nodeId", out var returnedNode) || returnedNode.GetString() != nodeId ||
+                !document.RootElement.TryGetProperty("result", out var result) ||
                 result.ValueKind != JsonValueKind.Object || !result.TryGetProperty("token", out var session) ||
                 session.ValueKind != JsonValueKind.String)
             {
@@ -111,7 +114,7 @@ public static class ManagementCli
         catch (Exception error) when (error is HttpRequestException or JsonException or TaskCanceledException && !token.IsCancellationRequested)
         {
             // 不输出异常正文，避免带出地址或证书细节以外的信息。
-            errors.WriteLine("无法连接本机服务管理，或其响应无效；请确认服务管理程序正在运行且证书受信任。");
+            errors.WriteLine("无法连接服务器管理，或其响应无效；请确认管理程序正在运行、网络可达且证书受信任。");
             return 5;
         }
     }

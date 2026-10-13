@@ -95,6 +95,52 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     [Fact]
+    public async Task UnsupportedRestoreHasDurableFailureAndDoesNotBlockLaterServiceOperations()
+    {
+        await using var app = await AppAsync(supportsAdvancedOperations: false);
+        var request = new RestoreRequest("unsupported-restore", "synthetic-backup", "/synthetic-backup", "operator");
+        using (var anonymous = Client(app, null))
+        using (var denied = await anonymous.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options))
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+
+        using var client = Client(app);
+        using var response = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
+        var failed = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Failed, failed.Phase);
+        Assert.Equal(request.RequestId, failed.RequestId);
+        Assert.Equal("operator", failed.ActorId);
+        Assert.Equal("server", failed.ServerId);
+        Assert.Equal("node", failed.NodeId);
+        Assert.Equal(ManagementOperationKind.Restore, failed.Kind);
+        Assert.Equal("PLATFORM_NOT_SUPPORTED", failed.Error!.Code);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(request, _json.Options), failed.RequestJson);
+        Assert.Equal(0, _backups.RestoreCalls);
+
+        using var query = await client.GetAsync("/management/v1/operations/" + request.RequestId);
+        Assert.Equal(HttpStatusCode.OK, query.StatusCode);
+        var recorded = (await query.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Failed, recorded.Phase);
+        Assert.Equal(failed.RequestJson, recorded.RequestJson);
+        using var replay = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.NotImplemented, replay.StatusCode);
+        Assert.Equal(ManagementOperationPhase.Failed,
+            (await replay.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!.Phase);
+
+        foreach (var action in new[] { "start", "stop" })
+        {
+            using var next = await client.PostAsJsonAsync("/management/v1/service/" + action,
+                new ManagementServiceRequest("after-unsupported-" + action, "server", "node"), _json.Options);
+            Assert.Equal(HttpStatusCode.OK, next.StatusCode);
+            Assert.Equal(ManagementOperationPhase.Completed,
+                (await next.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!.Phase);
+        }
+        Assert.Equal(1, _host.StartCalls);
+        Assert.Equal(1, _host.StopCalls);
+        Assert.Equal(0, _backups.RestoreCalls);
+    }
+
+    [Fact]
     public async Task LoginRejectsWrongPassword_AndLogoutRevokesSession()
     {
         await using var app = await AppAsync();
@@ -466,7 +512,8 @@ public sealed class LocalManagementApiTests : IDisposable
         bool deploymentBuilder = false, Func<RestoreRequest, CancellationToken, Task>? prepareWorkingCopy = null,
         Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyTarget = null,
         Func<string>? workingDirectory = null, bool activateRecovery = false,
-        Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecovery = null, bool failOnlyTerminal = false)
+        Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecovery = null, bool failOnlyTerminal = false,
+        bool supportsAdvancedOperations = true)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
@@ -484,7 +531,8 @@ public sealed class LocalManagementApiTests : IDisposable
             readAudit: (limit, token) => new FileManagementOperationStore(Path.Combine(_directory, "operations"))
                 .ReadAuditAsync(limit, token),
             readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
-                Path.Combine(_directory, "business-events.jsonl"), "business", limit, token)));
+                Path.Combine(_directory, "business-events.jsonl"), "business", limit, token),
+            supportsAdvancedOperations: supportsAdvancedOperations));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
