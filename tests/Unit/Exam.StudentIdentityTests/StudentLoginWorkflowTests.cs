@@ -13,26 +13,35 @@ public sealed class StudentLoginWorkflowTests : IDisposable
 {
     private readonly string _directory = Directory.CreateTempSubdirectory("exam-direct-login-").FullName;
 
-    [Fact]
-    public async Task EachLoginContactsSelectedServer_ReusesProtectedIdentity_AndAcceptsNextDayNumber()
+    [Theory]
+    [InlineData(" EXAM.example ", "https://exam.example/")]
+    [InlineData("192.0.2.10", "https://192.0.2.10/")]
+    [InlineData("::1", "https://[::1]/")]
+    [InlineData("https://EXAM.example/", "https://exam.example/")]
+    [InlineData("https://exam.example:443/", "https://exam.example/")]
+    [InlineData("https://exam.example:5443/", "https://exam.example:5443/")]
+    [InlineData("https://localhost:5443", "https://localhost:5443/")]
+    public async Task EachLoginContactsSelectedServer_ReusesProtectedIdentity_AndAcceptsNextDayNumber(
+        string address, string expectedAddress)
     {
         var day = new DateOnly(2026, 10, 8);
         var requests = new List<LoginStudentRequest>();
         using var api = new HttpStudentApi(new Handler(async message =>
         {
-            Assert.Equal("https://exam.example:5443/api/v1/student/login", message.RequestUri!.AbsoluteUri);
+            Assert.Equal(new Uri(new Uri(expectedAddress), "api/v1/student/login"), message.RequestUri);
             var request = (await message.Content!.ReadFromJsonAsync<LoginStudentRequest>(JsonDefaults.Create()))!;
             requests.Add(request);
             return Reply(request, day);
         }));
         var store = new DeviceStore(_directory);
         var workflow = new StudentLoginWorkflow(store, api);
-        var first = await workflow.LoginAsync("EXAM.example", 5443, "合成考生", "01", "0001");
+        var first = await workflow.LoginAsync(address, "合成考生", "01", "0001");
+        Assert.Equal(new Uri(expectedAddress).Port, first.Device.Port);
         var second = await new StudentLoginWorkflow(new DeviceStore(_directory), api)
-            .LoginAsync("exam.example", 5443, "合成考生", "01", "0001");
+            .LoginAsync(expectedAddress, "合成考生", "01", "0001");
         Assert.Equal(first.Device.ClientNumber, second.Device.ClientNumber);
         day = day.AddDays(1);
-        var next = await workflow.LoginAsync("exam.example", 5443, "合成考生", "01", "0001");
+        var next = await workflow.LoginAsync(address, "合成考生", "01", "0001");
         Assert.Equal("202610090001", next.Device.ClientNumber);
         Assert.Equal(first.Device.DeviceId, next.Device.DeviceId);
         Assert.Equal(first.Device.Credential, next.Device.Credential);
@@ -58,7 +67,7 @@ public sealed class StudentLoginWorkflowTests : IDisposable
             return Reply(request, new DateOnly(2026, 10, 8), "0008");
         }));
 
-        var result = await new StudentLoginWorkflow(store, api).LoginAsync("exam.example", 5443, "合成考生", "01", "0001");
+        var result = await new StudentLoginWorkflow(store, api).LoginAsync("https://exam.example:5443", "合成考生", "01", "0001");
 
         Assert.Equal("202610080008", result.Device.ClientNumber);
         Assert.Equal(legacy.DeviceId, result.Device.DeviceId);
@@ -81,21 +90,41 @@ public sealed class StudentLoginWorkflowTests : IDisposable
         }));
         var store = new DeviceStore(_directory);
         var workflow = new StudentLoginWorkflow(store, api);
-        await Assert.ThrowsAsync<HttpRequestException>(() => workflow.LoginAsync("127.0.0.1", 5443, "合成考生", "01", "0001"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => workflow.LoginAsync("https://127.0.0.1:5443", "合成考生", "01", "0001"));
         var saved = store.Load()!;
         Assert.Equal(originalDevice, saved.DeviceId);
-        var first = await workflow.LoginAsync("127.0.0.1", 5443, "合成考生", "01", "0001");
+        var first = await workflow.LoginAsync("https://127.0.0.1:5443", "合成考生", "01", "0001");
         Assert.Equal(saved.Credential, first.Device.Credential);
-        await Assert.ThrowsAsync<DeviceStoreException>(() => workflow.LoginAsync("127.0.0.1", 5443, "合成考生", "01", "0001"));
+        await Assert.ThrowsAsync<DeviceStoreException>(() => workflow.LoginAsync("https://127.0.0.1:5443", "合成考生", "01", "0001"));
         Assert.Equal(first.Device, store.Load());
     }
 
     [Theory]
-    [InlineData("https://exam.example")]
+    [InlineData("")]
+    [InlineData("http://exam.example")]
     [InlineData("exam.example:5443")]
     [InlineData("exam.example/path")]
-    public void HostInputRejectsProtocolPortAndPath(string host) =>
-        Assert.Throws<ArgumentException>(() => DeviceStore.NormalizeHost(host));
+    [InlineData("https://exam.example:0")]
+    [InlineData("https://exam.example:65536")]
+    [InlineData("https://exam.example/path")]
+    [InlineData("https://user@exam.example")]
+    [InlineData("https://exam.example/?query=value")]
+    [InlineData("https://exam.example/#fragment")]
+    public async Task InvalidAddressDoesNotConnectOrCreateIdentity(string address)
+    {
+        var requests = 0;
+        using var api = new HttpStudentApi(new Handler(_ =>
+        {
+            requests++;
+            throw new InvalidOperationException("Invalid addresses must not send a request.");
+        }));
+        var workflow = new StudentLoginWorkflow(new DeviceStore(_directory), api);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => workflow.LoginAsync(address, "合成考生", "01", "0001"));
+
+        Assert.Equal(0, requests);
+        Assert.Empty(Directory.EnumerateFiles(_directory));
+    }
 
     private static HttpResponseMessage Reply(LoginStudentRequest request, DateOnly day, string sequence = "0001") =>
         new(HttpStatusCode.OK)

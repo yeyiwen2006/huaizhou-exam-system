@@ -88,7 +88,7 @@ public partial class App : Application
 }
 
 /// <summary>
-/// 正式入口始终使用 HTTPS 客户端；每次启动由考生填写服务器地址和端口。
+/// 正式入口始终使用 HTTPS 客户端；每次启动由考生填写服务器地址，默认使用 443 端口。
 /// </summary>
 public sealed class AppServices
 {

@@ -32,12 +32,12 @@ public partial class LoginPage : UserControl
 
     private void OnInputChanged(object? sender, EventArgs e)
     {
-        if (LoginButton is null || HostInput is null || PortInput is null || NameInput is null || ClassInput is null || AdmissionInput is null)
+        if (LoginButton is null || HostInput is null || NameInput is null || ClassInput is null || AdmissionInput is null)
         {
             return;
         }
 
-        LoginButton.IsEnabled = !_requesting && HostInput.Text.Trim().Length > 0 && PortInput.Text.Trim().Length > 0
+        LoginButton.IsEnabled = !_requesting && HostInput.Text.Trim().Length > 0
             && NameInput.Text.Trim().Length > 0
             && ClassInput.Text.Trim().Length > 0
             && AdmissionInput.Text.Trim().Length > 0;
@@ -50,14 +50,9 @@ public partial class LoginPage : UserControl
             return;
         }
 
-        string host;
-        try { host = DeviceStore.NormalizeHost(HostInput.Text); }
+        Uri address;
+        try { address = StudentLoginWorkflow.ParseServerAddress(HostInput.Text); }
         catch (ArgumentException error) { ErrorBanner.Show(error.Message); return; }
-        if (!int.TryParse(PortInput.Text.Trim(), out var port) || port is < 1 or > 65535)
-        {
-            ErrorBanner.Show("端口号必须在 1 到 65535 之间。");
-            return;
-        }
 
         var name = NameInput.Text.Trim();
         var classText = ClassInput.Text.Trim();
@@ -80,7 +75,7 @@ public partial class LoginPage : UserControl
             await App.Services.StopPresenceAsync();
             App.Services.StopClock();
             var workflow = new StudentLoginWorkflow(App.Services.DeviceStore, App.Services.Api);
-            var (device, result) = await workflow.LoginAsync(host, port, name, classText, admissionNo);
+            var (device, result) = await workflow.LoginAsync(address.AbsoluteUri, name, classText, admissionNo);
             App.Services.ConfigureDevice(device);
             App.Services.Session.OnLoggedIn(result);
             App.Services.StartClock();

@@ -66,10 +66,11 @@ public sealed class UiScreenshotTests
                 var login = new LoginPage(navigation);
                 await ShowAsync(window, host, login);
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("HostInput"), "192.0.2.10");
-                await CheckAlignmentAsync((ValidatedInput)login.FindName("PortInput"), "9");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("NameInput"), "合成考生01");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("ClassInput"), "01");
                 await CheckAlignmentAsync((ValidatedInput)login.FindName("AdmissionInput"), "2027017");
+                Assert.Null(login.FindName("PortInput"));
+                Assert.True(((Button)login.FindName("LoginButton")).IsEnabled);
                 await CaptureAsync(window, directory, "login-input-alignment");
                 var checkedDialog = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)(() =>
@@ -78,7 +79,7 @@ public sealed class UiScreenshotTests
                     catch (Exception error) { checkedDialog.SetException(error); }
                     finally { foreach (var dialog in window.OwnedWindows.OfType<ConfirmDialog>().ToArray()) dialog.Close(); }
                 }));
-                ((ValidatedInput)login.FindName("PortInput")).Text = "0";
+                ((ValidatedInput)login.FindName("HostInput")).Text = "http://192.0.2.10";
                 ((Button)login.FindName("LoginButton")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await checkedDialog.Task;
                 // 合成设备未写入应用登记：直接进入登录校验，并保留既有的本机身份核对。
@@ -300,7 +301,6 @@ public sealed class UiScreenshotTests
             var login = new LoginPage(navigation);
             await ShowAsync(window, host, login);
             ((ValidatedInput)login.FindName("HostInput")).Text = "192.0.2.10";
-            ((ValidatedInput)login.FindName("PortInput")).Text = "5443";
             ((ValidatedInput)login.FindName("NameInput")).Text = "合成考生01";
             ((ValidatedInput)login.FindName("ClassInput")).Text = "01";
             ((ValidatedInput)login.FindName("AdmissionInput")).Text = "2027017";

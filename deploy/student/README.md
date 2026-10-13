@@ -40,16 +40,16 @@ powershell -ExecutionPolicy Bypass -File deploy\student\publish-student.ps1
    {
      "formatVersion": 1,
      "host": "服务器IP",
-     "port": 5001,
+     "port": 443,
      "certificateSha256": "服务器HTTPS证书SHA-256指纹（可选）"
    }
    ```
 
-3. 双击 `Exam.Student.exe` 运行。
+3. 双击 `Exam.Student.exe` 运行，填写服务器 IP 或域名及考生信息。默认连接 HTTPS 443，无需单独填写端口；非标准端口使用完整地址，例如 `https://exam.example.com:5443`。
 
 `server.json` 必须放在 exe 同目录。应用启动时读取：
 
-- 文件有效时读取证书信任配置，登录页仍须手动填写服务器地址和端口。
+- 文件有效时读取证书信任配置，登录页仍须手动填写服务器地址，未指定端口时使用 HTTPS 443。
 - 文件缺失时按 Windows 标准证书链验证服务器，登录页手动填写连接信息。
 - 文件无效时不应用其中的证书信任配置，需修正文件后重新启动。
 - 手动输入在三种情况下都保留，作为部署遗漏时的应急通道。

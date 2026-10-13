@@ -8,11 +8,24 @@ namespace Exam.Student.Core;
 /// <summary>每次由用户指定地址连接；只复用受保护的设备身份，不自动登录。</summary>
 public sealed class StudentLoginWorkflow(DeviceStore store, IStudentApi api)
 {
-    public async Task<(DeviceRecord Device, StudentSessionResult Session)> LoginAsync(
-        string host, int port, string name, string classText, string admissionNo, CancellationToken ct = default)
+    public static Uri ParseServerAddress(string serverAddress)
     {
-        host = DeviceStore.NormalizeHost(host);
-        if (port is < 1 or > 65535) throw new StudentIdentityException("端口号必须在 1 到 65535 之间。");
+        var address = serverAddress.Trim();
+        if (Uri.CheckHostName(address) != UriHostNameType.Unknown)
+            return new UriBuilder(Uri.UriSchemeHttps, DeviceStore.NormalizeHost(address)).Uri;
+        if (!Uri.TryCreate(address, UriKind.Absolute, out var endpoint) || endpoint.Scheme != Uri.UriSchemeHttps ||
+            endpoint.Host.Length == 0 || endpoint.Port is < 1 or > 65535 || endpoint.AbsolutePath != "/" ||
+            endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0)
+            throw new ArgumentException("请填写服务器 IP、域名或 HTTPS 根地址，例如 exam.example.com；默认使用 HTTPS 443 端口。", nameof(serverAddress));
+        return endpoint;
+    }
+
+    public async Task<(DeviceRecord Device, StudentSessionResult Session)> LoginAsync(
+        string serverAddress, string name, string classText, string admissionNo, CancellationToken ct = default)
+    {
+        var endpoint = ParseServerAddress(serverAddress);
+        var host = DeviceStore.NormalizeHost(endpoint.Host);
+        var port = endpoint.Port;
         var record = await Task.Run(() => store.Load(host, port), ct);
         if (record is null)
         {

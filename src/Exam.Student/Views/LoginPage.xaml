@@ -35,21 +35,16 @@
                             </StackPanel>
                             <TextBlock Style="{StaticResource BrandBand.Title}" Text="考生登录" Margin="0,14,0,0" />
                             <TextBlock Style="{StaticResource BrandBand.Caption}"
-                                       Text="填写服务器连接信息和考生信息后登录。"
+                                       Text="填写服务器地址和考生信息后登录，默认使用 HTTPS 安全连接。"
                                        Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
 
                     <StackPanel Margin="28,24,28,20">
                         <controls:ValidatedInput x:Name="HostInput"
-                                                 Label="服务器名称（IP 或域名）"
+                                                 Label="服务器地址（IP 或域名）"
                                                  Watermark="请输入服务器 IP 地址或域名"
-                                                 InputChanged="OnInputChanged" />
-                        <controls:ValidatedInput x:Name="PortInput"
-                                                 Label="端口号"
-                                                 Watermark="请输入端口号"
-                                                 IsNumericOnly="True"
-                                                 Margin="0,14,0,0"
+                                                 ToolTip="例如 exam.example.com，默认使用 HTTPS 443；也可填写部署人员提供的完整 HTTPS 地址"
                                                  InputChanged="OnInputChanged" />
                         <controls:ValidatedInput x:Name="NameInput"
                                                  Label="姓名"
