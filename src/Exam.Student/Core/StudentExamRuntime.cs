@@ -228,6 +228,13 @@ public sealed partial class StudentExamRuntime(
                 return;
             }
             if (HasFixedSubmission) { return; }
+            if (Manager.Participation?.Lifecycle == ExamLifecycle.Scheduled ||
+                Manager.CurrentPhase == ExamPackageManager.Phase.ConfirmedWaiting)
+            {
+                _paper = null;
+                Answers?.PauseForSchedule();
+                return;
+            }
             if (Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked || Manager.UnlockedPayload is null ||
                 Manager.Participation is not { BusinessState: ParticipationBusinessState.Answering } participation ||
                 participation.Lifecycle == ExamLifecycle.Ended || Manager.Descriptor is not { } descriptor ||
@@ -264,6 +271,7 @@ public sealed partial class StudentExamRuntime(
                 participation.AuthorizationVersion, descriptor.PaperVersion, device.DeviceId, IsServerAuthorized: true);
             if (Answers is not null)
             {
+                if (_answerContext == context) Answers.ResumeAfterSchedule(context);
                 if (_answerContext != context)
                 {
                     if (_answerContext is { } previous &&
@@ -542,6 +550,8 @@ public sealed partial class StudentExamRuntime(
         try
         {
             var packageCommand = Manager.HandleCommandAsync(delivery, ct);
+            if (Manager.CurrentPhase == ExamPackageManager.Phase.ConfirmedWaiting)
+                Answers?.PauseForSchedule();
             // The manager validates END's full identity before synchronously marking Ended.
             // Merely receiving an END-shaped message is not sufficient to suspend this exam.
             var answerStop = Answers is { } answers

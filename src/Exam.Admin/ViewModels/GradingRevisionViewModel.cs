@@ -198,6 +198,13 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
         RaiseCommandStates();
     }
     private void ConnectionChanged(object? sender, EventArgs e) => ResetContext();
+    internal void InvalidateForArchiveReplacement(string examId)
+    {
+        if (_pending?.Request.ExamId == examId) { _pending.Dispose(); _pending = null; }
+        if (ExamId != examId) return;
+        ResetContext();
+        Status = "本场考试已被归档覆盖，请重新读取答案和计分规则。";
+    }
     private bool Current(long context) => !_disposed && context == _context;
     private CancellationTokenSource StartOperation() { var c = new CancellationTokenSource(); _cancellation = c; return c; }
     private void EndOperation(CancellationTokenSource c) { if (ReferenceEquals(_cancellation, c)) _cancellation = null; }

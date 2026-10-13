@@ -37,7 +37,7 @@ public sealed partial class PostgresExamCatalog(NpgsqlDataSource dataSource, IEx
         await using var command = dataSource.CreateCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
                    e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
-                   v.paper_version AS published_paper_version, {HidingSql}
+                   v.paper_version AS published_paper_version, v.actual_started_at, {HidingSql}
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
@@ -271,15 +271,16 @@ public sealed partial class PostgresExamCatalog(NpgsqlDataSource dataSource, IEx
         NpgsqlTransaction transaction, string examId, ExamSettings settings, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            SELECT e.lifecycle, c.settings::text FROM exam.exam_entry_access e
-              JOIN exam.exam_catalog c USING (exam_id) WHERE e.exam_id=@exam_id FOR UPDATE OF e;
+            SELECT e.lifecycle, c.settings::text, v.actual_started_at FROM exam.exam_entry_access e
+              JOIN exam.exam_catalog c USING (exam_id)
+              LEFT JOIN exam.version_state v USING (exam_id) WHERE e.exam_id=@exam_id FOR UPDATE OF e;
             """, connection, transaction);
         command.Parameters.AddWithValue("exam_id", examId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw Rule(ParticipationErrorCodes.ExamNotFound, "找不到这场考试。");
         var changed = !JsonNode.DeepEquals(JsonNode.Parse(reader.GetString(1)), JsonSerializer.SerializeToNode(settings, Json));
-        if (changed && reader.GetString(0) != "scheduled")
+        if (changed && (reader.GetString(0) != "scheduled" || !reader.IsDBNull(2)))
             throw Rule(ExamCatalogErrorCodes.SettingsLocked, "考试已开始或已结束，科目题组设置不能修改；考试名称仍可修改。");
         return changed;
     }
@@ -336,7 +337,8 @@ public sealed partial class PostgresExamCatalog(NpgsqlDataSource dataSource, IEx
         await using (var command = new NpgsqlCommand($"""
             SELECT e.exam_id, COALESCE(c.exam_name, m.display_name, e.exam_id), e.scheduled_start, e.scheduled_end,
                    e.lifecycle, COALESCE(c.visible_to_students, true), COALESCE(c.version, 0), {CountsSql},
-                   c.settings::text, v.schedule_version, v.paper_version AS published_paper_version, {HidingSql}
+                   c.settings::text, v.schedule_version, v.paper_version AS published_paper_version,
+                   v.actual_started_at, {HidingSql}
               FROM exam.exam_entry_access e
               LEFT JOIN exam.exam_catalog c ON c.exam_id = e.exam_id
               LEFT JOIN exam.student_exam_metadata m ON m.exam_id = e.exam_id
@@ -386,6 +388,8 @@ public sealed partial class PostgresExamCatalog(NpgsqlDataSource dataSource, IEx
         {
             PaperVersion = reader.IsDBNull(reader.GetOrdinal("published_paper_version"))
                 ? null : reader.GetInt64(reader.GetOrdinal("published_paper_version")),
+            ActualStartedAt = reader.IsDBNull(reader.GetOrdinal("actual_started_at"))
+                ? null : reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("actual_started_at")),
             HiddenForCurrentOperator = reader.GetBoolean(reader.GetOrdinal("hidden_for_current")),
             HiddenForAllOperators = reader.GetBoolean(reader.GetOrdinal("hidden_for_all"))
         };

@@ -52,6 +52,12 @@ public sealed class LocalManagementClient : IDisposable
     public Task<ManagementClientResponse<ServiceConfiguration>> GetConfigurationAsync(CancellationToken token = default) =>
         SendAsync<ServiceConfiguration>(HttpMethod.Get, "service/configuration", null, token);
 
+    public Task<ManagementClientResponse<BackupInfo>> GetBackupInfoAsync(string sourceDirectory, CancellationToken token = default)
+    {
+        if (string.IsNullOrWhiteSpace(sourceDirectory)) throw new ArgumentException("请填写服务器上的备份来源目录。");
+        return SendAsync<BackupInfo>(HttpMethod.Get, "service/backup-info?sourceDirectory=" + Uri.EscapeDataString(sourceDirectory), null, token);
+    }
+
     public Task<ManagementClientResponse<IReadOnlyList<ManagementAuditEntry>>> GetLogsAsync(int limit,
         CancellationToken token = default)
     {

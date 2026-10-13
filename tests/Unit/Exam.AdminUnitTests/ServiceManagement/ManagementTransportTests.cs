@@ -12,6 +12,33 @@ namespace Exam.AdminUnitTests.ServiceManagement;
 public sealed class ManagementTransportTests
 {
     private static readonly ManagementTarget Target = new("https://management.example.test:9443/", "synthetic-server", "synthetic-node");
+
+    [Fact]
+    public async Task BusinessSessionExchangeUsesBearerWithoutResendingPassword()
+    {
+        var session = await BusinessSessionFixture.CaptureAsync();
+        using var connection = new ManagementConnection(Target, () => new Handler(request =>
+        {
+            Assert.Equal("/management/v1/session", request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
+            Assert.Equal(BusinessSessionFixture.Credential, request.Headers.Authorization.Parameter);
+            Assert.Null(request.Content);
+            return Task.FromResult(Login());
+        }));
+        await connection.UseBusinessSessionAsync(session, default);
+        Assert.Equal("synthetic-operator", connection.Actor);
+        Assert.DoesNotContain(BusinessSessionFixture.Credential, session.ToString());
+    }
+
+    [Fact]
+    public async Task UnavailableSessionExchangeIsNotReportedAsInvalidBusinessLogin()
+    {
+        var session = await BusinessSessionFixture.CaptureAsync();
+        using var connection = new ManagementConnection(Target, () => new Handler(_ => Task.FromResult(
+            Reply<object>(null!, status: HttpStatusCode.ServiceUnavailable, error: new(ErrorCodes.PersistenceFailed, "synthetic")))));
+        await Assert.ThrowsAsync<HttpRequestException>(() => connection.UseBusinessSessionAsync(session, default));
+        Assert.Null(connection.Actor);
+    }
     [Theory]
     [InlineData("redirect")]
     [InlineData("oversize")]

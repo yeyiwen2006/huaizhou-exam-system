@@ -25,7 +25,7 @@ namespace Exam.AdminUnitTests.ServiceManagement;
 public sealed class ManagementViewTests
 {
     [Fact]
-    public Task ReturningFromManagementPreservesAnUnacknowledgedRegistrationResult() => Sta(() =>
+    public Task ManagementCannotInterruptRegistrationBeforeBusinessLogin() => Sta(() =>
     {
         using var model = Synthetic();
         var business = new MainViewModel(new AdminApiClient(new SyntheticRegistration()));
@@ -62,36 +62,34 @@ public sealed class ManagementViewTests
     }
 
     [Fact]
-    public async Task RealMainWindowProvidesManagementBeforeBusinessLoginAndReturnsToProtectedLogin() => await Sta(() =>
+    public async Task MainWindowUsesBusinessIdentityForManagementAndClearsItOnLogout() => await Sta(() =>
     {
         using var model = Synthetic();
-        var window = new MainWindow(new MainViewModel(), model); Theme(window);
+        var business = new MainViewModel(new AdminApiClient(new BusinessSessionFixture()));
+        var window = new MainWindow(business, model); Theme(window);
         window.ShowInTaskbar = false; window.ShowActivated = false; window.Left = -4000;
         try
         {
-            window.Show(); Drain();
+            window.Show(); SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher)); Drain();
             Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
-            Assert.Contains(Descendants<Button>(window), b => Equals(b.Content, "服务器管理"));
-            var business = (MainViewModel)window.DataContext;
-            var registerLink = Descendants<TextBlock>(window).SelectMany(b => b.Inlines.OfType<System.Windows.Documents.Hyperlink>()).Single();
-            Assert.Same(business.Connection.ShowRegisterCommand, registerLink.Command);
-            registerLink.Command!.Execute(null); Drain();
-            Assert.True(business.Connection.IsRegistering);
-            foreach (var password in Descendants<PasswordBox>(window)) password.Password = "synthetic-business-password";
-            Assert.NotEmpty(business.Connection.Password); Assert.NotEmpty(business.Connection.ConfirmPassword);
+            Assert.DoesNotContain(Descendants<Button>(window), b => b.IsVisible && Equals(b.Content, "服务器管理"));
+            window.OpenManagement(); Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
+            business.Connection.ServerAddress = "exam.example.test";
+            business.Connection.Username = "synthetic-operator"; business.Connection.Password = "synthetic-password";
+            business.Connection.ConnectCommand.Execute(null);
+            for (var i = 0; i < 200 && !business.Connection.IsConnected; i++) { Drain(); Thread.Sleep(10); }
+            Assert.True(business.Connection.IsConnected, business.Connection.Status);
             window.OpenManagement(); Drain();
-            Assert.Empty(business.Connection.Password); Assert.Empty(business.Connection.ConfirmPassword);
             Assert.Equal(AdminWorkspaceRoute.LocalManagement, window.WorkspaceRoute);
-            Assert.True(model.IsPageActive); Assert.IsType<ServiceManagementView>(((ContentControl)window.FindName("PageRegion")).Content);
+            Assert.True(model.IsPageActive); Assert.True(model.IsSignedIn);
+            var view = Assert.IsType<ServiceManagementView>(((ContentControl)window.FindName("PageRegion")).Content);
+            Assert.Empty(Descendants<PasswordBox>(view));
             Assert.Equal(Visibility.Collapsed, ((TabControl)window.FindName("MainTabArea")).Visibility);
-            Assert.False(((MainViewModel)window.DataContext).Connection.IsConnected);
-            window.ReturnToBusiness(); Drain();
-            Assert.False(model.IsPageActive); Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
-            Assert.IsType<Exam.Admin.Views.AdminLoginPage>(((ContentControl)window.FindName("PageRegion")).Content);
-            registerLink = Descendants<TextBlock>(window).SelectMany(b => b.Inlines.OfType<System.Windows.Documents.Hyperlink>()).Single();
-            Assert.Same(business.Connection.CancelRegisterCommand, registerLink.Command);
-            registerLink.Command!.Execute(null); Drain(); Assert.False(business.Connection.IsRegistering);
-            window.OpenManagement(); Drain(); Assert.True(model.IsPageActive);
+            business.Connection.LogoutCommand.Execute(null);
+            for (var i = 0; i < 200 && business.Connection.IsConnected; i++) { Drain(); Thread.Sleep(10); }
+            Drain(); Assert.False(model.IsSignedIn); Assert.False(model.IsPageActive);
+            Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
+            Assert.IsType<AdminLoginPage>(((ContentControl)window.FindName("PageRegion")).Content);
         }
         finally { window.Close(); }
     });
@@ -116,35 +114,35 @@ public sealed class ManagementViewTests
         try
         {
             window.Show(); Drain(); window.UpdateLayout();
-            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "登录管理"));
-            Assert.True(Descendants<PasswordBox>(view).Single().IsVisible);
+            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "重新连接"));
+            Assert.Empty(Descendants<PasswordBox>(view));
             var connectionSettings = (Expander)view.FindName("ConnectionSettingsExpander");
             Assert.False(connectionSettings.IsExpanded);
-            Assert.Single(Descendants<TextBox>(view), b => b.IsVisible);
-            Assert.True(((Button)view.FindName("LoginButton")).IsEnabled);
+            Assert.DoesNotContain(Descendants<TextBox>(view), b => b.IsVisible);
+            Assert.False(model.ReconnectCommand.CanExecute(null));
             connectionSettings.IsExpanded = true; Drain();
-            Assert.Equal(4, Descendants<TextBox>(view).Count(b => b.IsVisible));
+            Assert.Equal(3, Descendants<TextBox>(view).Count(b => b.IsVisible));
             connectionSettings.IsExpanded = false; Drain();
             Assert.All(Descendants<TextBox>(view).Where(b => b.IsVisible), b => Assert.True(b.ActualWidth >= 120));
             Save(view, scale, width, height, "login");
-            model.LoginAsync("synthetic").GetAwaiter().GetResult(); // The synthetic connection completes synchronously.
+            model.SetBusinessSession(BusinessSessionFixture.CaptureAsync().GetAwaiter().GetResult());
             Drain(); window.UpdateLayout();
-            Assert.False(Descendants<PasswordBox>(view).Single().IsVisible);
-            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "查询原请求") && b.Command is not null);
-            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "隔离恢复") && b.Command is not null);
+            Assert.True(model.IsSignedIn);
+            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "查询请求处理状态") && b.Command is not null);
+            Assert.DoesNotContain(Descendants<Button>(view), b => Equals(b.Content, "启动业务") || Equals(b.Content, "停止业务") || Equals(b.Content, "按原内容重试") || Equals(b.Content, "续办原恢复"));
+            Assert.Contains(Descendants<Button>(view), b => Equals(b.Content, "按此备份恢复") && b.Command is not null);
             var scroller = (ScrollViewer)view.FindName("PageScroller");
             Assert.True(scroller.ScrollableHeight > 0); Assert.Equal(0, scroller.ScrollableWidth);
             Save(view, scale, width, height, "service");
             scroller.ScrollToEnd(); Drain(); window.UpdateLayout(); Save(view, scale, width, height, "recovery");
-            var pending = (TextBlock)view.FindName("PersistentPendingText");
             var operation = (TextBlock)view.FindName("PersistentOperationText");
-            Assert.True(pending.IsVisible && operation.IsVisible);
-            Assert.DoesNotContain(scroller, Ancestors(pending));
+            Assert.Null(view.FindName("PersistentPendingText")); Assert.False(operation.IsVisible);
+            model.RequestIdToQuery = "synthetic-history"; model.QueryAsync().GetAwaiter().GetResult(); Drain();
+            Assert.True(operation.IsVisible);
             Assert.DoesNotContain(scroller, Ancestors(operation));
-            Assert.True(pending.TranslatePoint(new Point(), view).Y < scroller.TranslatePoint(new Point(), view).Y);
+            Assert.True(operation.TranslatePoint(new Point(), view).Y < scroller.TranslatePoint(new Point(), view).Y);
             listener.Flush(); Assert.DoesNotContain("Error:", output.ToString());
             window.Content = null; Drain(); Assert.False(model.IsPageActive);
-            Assert.Equal(string.Empty, ((PasswordBox)view.FindName("LoginPassword")).Password);
         }
         finally { trace.Listeners.Remove(listener); trace.Switch.Level = previous; window.Close(); }
     });
@@ -160,7 +158,7 @@ public sealed class ManagementViewTests
         try
         {
             window.Show(); Drain(); window.UpdateLayout();
-            Assert.False(((Button)view.FindName("LoginButton")).IsEnabled);
+            Assert.False(model.ReconnectCommand.CanExecute(null));
             Assert.Contains(Descendants<TextBlock>(view), text => text.Text.Contains("联系系统部署人员"));
             var import = Assert.Single(Descendants<Button>(view), button => Equals(button.Content, "导入连接配置"));
             Assert.True(import.IsEnabled);
@@ -208,6 +206,7 @@ public sealed class ManagementViewTests
         public ManagementTarget Target => new("https://localhost:9443/", "synthetic-server", "synthetic-node");
         public string? Actor => "synthetic-operator";
         public Task LoginAsync(string username, string password, CancellationToken token) => Task.CompletedTask;
+        public Task UseBusinessSessionAsync(AdminSessionSnapshot session, CancellationToken token) => Task.CompletedTask;
         public Task LogoutAsync(CancellationToken token) => Task.CompletedTask;
         public Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) => Task.FromResult(Reply(new ManagementStatus(
             BusinessServiceStatus.Stopped, BusinessReadiness.NotReady,
@@ -216,7 +215,9 @@ public sealed class ManagementViewTests
         public Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ManagementAuditEntry>>([]));
         public Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ProtectedRuntimeLogEntry>>([]));
         public Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token) => throw new NotSupportedException();
-        public Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token) => throw new NotSupportedException();
+        public Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token) => Task.FromResult(Reply(new ManagementOperation(
+            id, Target.ServerId, Target.NodeId, Actor!, ManagementOperationKind.Checks, "synthetic-hash", ManagementOperationPhase.Completed,
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)));
         private ManagementReply<T> Reply<T>(T result) => new(HttpStatusCode.OK, new(Target.ServerId, Target.NodeId, null, false, null, "synthetic-correlation", result, null));
         public void Dispose() { }
     }

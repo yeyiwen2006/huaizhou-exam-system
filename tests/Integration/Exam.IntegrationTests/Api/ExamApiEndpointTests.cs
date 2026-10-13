@@ -257,6 +257,26 @@ public sealed class ExamApiEndpointTests
     }
 
     [Theory]
+    [InlineData(1, 2, ExamLifecycle.Scheduled)]
+    [InlineData(0, 1, ExamLifecycle.Running)]
+    [InlineData(-1, 0, ExamLifecycle.Ended)]
+    public async Task HttpTimeSaveImmediatelyRecalculatesLifecycle(int startOffset, int endOffset, ExamLifecycle expected)
+    {
+        await using var app = await CreateApplicationAsync();
+        var service = app.Services.GetRequiredService<IExamVersioningService>();
+        Assert.True(service.CreateExam(new("synthetic-time-api", new(Now.AddHours(-2), Now.AddHours(1)), Now.AddHours(-1))).Succeeded);
+        using var client = app.GetTestClient();
+        using var response = await client.PutAsJsonAsync("/api/v1/versioning/exams/synthetic-time-api/schedule",
+            new UpdateScheduleApiRequest("synthetic-time-save", 1, new(Now.AddHours(startOffset), Now.AddHours(endOffset)), ""),
+            JsonDefaults.Create());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<ApiEnvelope<ExamVersionSnapshot>>(JsonDefaults.Create()))!.Result!;
+        Assert.Equal(expected, result.LifecycleState);
+        Assert.Equal(expected, service.GetExam("synthetic-time-api").Value!.LifecycleState);
+        Assert.Equal(2, result.Versions.ScheduleVersion);
+    }
+
+    [Theory]
     [InlineData("paper-transfer")]
     [InlineData("paper-review")]
     public async Task StudentPaperReceiptsNeverContainOtherParticipants(string operation)

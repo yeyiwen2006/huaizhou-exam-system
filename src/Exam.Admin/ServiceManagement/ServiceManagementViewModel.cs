@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Exam.Admin.Infrastructure;
+using Exam.Admin.Services;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 
@@ -10,7 +11,7 @@ namespace Exam.Admin.ServiceManagement;
 
 public sealed record ManagementConfirmation(string Title, string Body, bool Dangerous);
 public sealed record ManagementCheckRow(string Name, string Result, string WriteGate);
-public sealed record ManagementLogRow(string Time, string Source, string Kind, string Phase, string Code);
+public sealed record ManagementLogRow(string Time, string Source, string Kind, string Phase, string Code, string Identifier);
 
 public sealed partial class ServiceManagementViewModel : BindableBase, IDisposable
 {
@@ -19,21 +20,24 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private readonly ManagementEndpointSettings? _settings;
     private readonly TimeProvider _time;
     private IManagementConnection? _connection;
+    private AdminSessionSnapshot? _businessSession;
     private CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _reads;
     private CancellationTokenSource? _polling;
+    private CancellationTokenSource? _restoreProgress;
+    private string? _restoreWriteInFlight;
     private long _generation;
     private bool _disposed, _busy, _readBusy, _active, _signedIn;
     private PendingManagementRequest? _pending;
     private ManagementOperation? _operation;
     private string _address = string.Empty, _server = string.Empty, _node = string.Empty, _username = string.Empty;
     private string _message = string.Empty;
-    private string _process = "尚未查询", _readiness = "未核实", _epoch = "当前代次未核实";
+    private string _serverStatus = "服务器程序状态未确认", _requestIdToQuery = string.Empty, _lastRequestId = string.Empty;
     private string _bind = string.Empty, _port = string.Empty, _data = string.Empty;
     private bool _ha;
     private long? _configurationVersion;
     private string _destination = string.Empty, _backupId = string.Empty, _source = string.Empty;
-    private string _operationText = "暂无操作", _restoreText = "隔离暂存：未核实；恢复核对：未核实；业务就绪：未核实";
+    private string _operationText = string.Empty, _restoreText = string.Empty;
     private bool _canResume;
     private bool _missingOriginal;
 
@@ -43,6 +47,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory; _time = time ?? TimeProvider.System;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
+        ReconnectCommand = new AsyncRelayCommand(ReconnectAsync,
+            () => _businessSession is not null && HasConnectionConfiguration && !IsBusy, OnError);
         LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsSignedIn, OnError);
         StartCommand = OperationCommand(ManagementOperationKind.Start);
         StopCommand = OperationCommand(ManagementOperationKind.Stop);
@@ -54,7 +60,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         EmergencyCommand = OperationCommand(ManagementOperationKind.Emergency);
         RebuildCommand = OperationCommand(ManagementOperationKind.Rebuild);
         ReprotectCommand = OperationCommand(ManagementOperationKind.Reprotect);
-        QueryCommand = new AsyncRelayCommand(QueryAsync, () => IsSignedIn && _pending is not null && !_readBusy, OnError);
+        QueryCommand = new AsyncRelayCommand(QueryAsync, () => IsSignedIn && !_readBusy &&
+            (!string.IsNullOrWhiteSpace(RequestIdToQuery) || _lastRequestId.Length > 0 || _pending is not null), OnError);
         ResumeRestoreCommand = new AsyncRelayCommand(ResumeRestoreAsync, () => IsSignedIn && CanResumeRestore && !IsBusy, OnError);
         RetryOriginalCommand = new AsyncRelayCommand(RetryOriginalAsync, () => IsSignedIn && _pending is not null && _missingOriginal && !IsBusy && !_readBusy, OnError);
         CancelWaitCommand = new RelayCommand(CancelWaiting, () => IsBusy || _readBusy);
@@ -77,7 +84,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string Address { get => _address; set { if (SetProperty(ref _address, value)) ConnectionSettingsChanged(); } }
     public string ServerId { get => _server; set { if (SetProperty(ref _server, value)) ConnectionSettingsChanged(); } }
     public string NodeId { get => _node; set { if (SetProperty(ref _node, value)) ConnectionSettingsChanged(); } }
-    public string RestoreGuidance => "须先停止目标服务器的业务。目录均指目标服务器上的路径。恢复先隔离暂存，再核对持久确认及业务就绪；缺少最新确认时保持阻断。";
+    public string RestoreGuidance => "须先停止目标服务器。填写服务器上的备份来源目录后，系统会读取备份信息并请你确认。旧备份缺少后续已确认的数据时，恢复条件核对会阻止服务器开放。";
     public bool HasConnectionConfiguration
     {
         get
@@ -89,13 +96,15 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     public bool CanConfigureConnection => IsSignedOut && !IsBusy;
     public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
-    public string ConnectionStatus => HasConnectionConfiguration ? "连接已配置，请使用已启用的考务账号和密码登录。"
-        : "服务器管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。";
+    public string ConnectionStatus => !HasConnectionConfiguration
+        ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。"
+        : _businessSession is null ? "连接已配置，请先登录考务端，再访问服务器管理。"
+        : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
+        : "连接已配置，将使用当前考务账号连接服务器管理。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string Message { get => _message; private set => SetProperty(ref _message, value); }
-    public string ProcessText { get => _process; private set => SetProperty(ref _process, value); }
-    public string ReadinessText { get => _readiness; private set => SetProperty(ref _readiness, value); }
-    public string EpochText { get => _epoch; private set => SetProperty(ref _epoch, value); }
+    public string ServerStatusText { get => _serverStatus; private set => SetProperty(ref _serverStatus, value); }
+    public string RequestIdToQuery { get => _requestIdToQuery; set { if (SetProperty(ref _requestIdToQuery, value)) QueryCommand.RaiseCanExecuteChanged(); } }
     public string BindAddress { get => _bind; set => SetProperty(ref _bind, value); }
     public string HttpsPort { get => _port; set => SetProperty(ref _port, value); }
     public string DataDirectory { get => _data; set => SetProperty(ref _data, value); }
@@ -104,9 +113,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string BackupDestination { get => _destination; set => SetProperty(ref _destination, value); }
     public string RestoreBackupId { get => _backupId; set => SetProperty(ref _backupId, value); }
     public string RestoreSource { get => _source; set => SetProperty(ref _source, value); }
-    public string OperationText { get => _operationText; private set => SetProperty(ref _operationText, value); }
+    public string OperationText { get => _operationText; private set { if (SetProperty(ref _operationText, value)) OnPropertyChanged(nameof(HasOperationText)); } }
+    public bool HasOperationText => !string.IsNullOrWhiteSpace(OperationText);
     public string RestoreText { get => _restoreText; private set => SetProperty(ref _restoreText, value); }
-    public string PendingText => _pending is null ? "无待核对请求" : $"原请求：{_pending.RequestId} · {KindText(_pending.Kind)} · 待查询原结果";
+    public string PendingText => _pending is null ? string.Empty : $"请求：{_pending.RequestId} · {KindText(_pending.Kind)} · 待查询处理状态";
     public PendingManagementRequest? Pending => _pending;
     public ManagementOperation? Operation => _operation;
     public bool IsSignedIn { get => _signedIn; private set { if (SetProperty(ref _signedIn, value)) { OnPropertyChanged(nameof(IsSignedOut)); UpdateCommands(); } } }
@@ -119,6 +129,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
+    public AsyncRelayCommand ReconnectCommand { get; }
     public AsyncRelayCommand LogoutCommand { get; }
     public AsyncRelayCommand StartCommand { get; }
     public AsyncRelayCommand StopCommand { get; }
@@ -134,7 +145,49 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private AsyncRelayCommand OperationCommand(ManagementOperationKind kind) =>
         new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && _pending is null && CanIssueHighAvailability(kind), OnError);
 
-    public void Activate() { if (_disposed) return; _active = true; StartPolling(); }
+    public void Activate()
+    {
+        if (_disposed) return;
+        _active = true;
+        if (!IsSignedIn && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
+        StartPolling();
+    }
+
+    public void SetBusinessSession(AdminSessionSnapshot? session)
+    {
+        if (session is not null && _businessSession?.Matches(session) == true) return;
+        ResetSession();
+        _businessSession = session;
+        _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty;
+        Username = session?.Username ?? string.Empty;
+        Message = session is null ? "考务会话已退出，请重新登录考务端。" : string.Empty;
+        OnPropertyChanged(nameof(ConnectionStatus)); UpdateCommands();
+        if (_active && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
+    }
+
+    public async Task ReconnectAsync()
+    {
+        if (_disposed || IsBusy || _businessSession is not { } session || !HasConnectionConfiguration) return;
+        ResetSession();
+        if (session.ServerId != ServerId.Trim())
+        { Message = "管理连接与当前考务会话不属于同一考试系统，请导入对应服务器的连接配置。"; return; }
+        var target = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
+        var connection = _factory(target); var generation = _generation;
+        _connection = connection; IsBusy = true;
+        try
+        {
+            await connection.UseBusinessSessionAsync(session, _lifetime.Token);
+            if (!Current(connection, generation) || _businessSession?.Matches(session) != true) return;
+            _pending = _store.Load(target); LoadProtectionWarning(target); _settings?.Save(target);
+            IsSignedIn = true; Message = "已使用当前考务账号连接服务器管理。";
+            if (_pending is { } pending) { _lastRequestId = pending.RequestId; RequestIdToQuery = pending.RequestId; }
+            NotifyPending(); OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConnectionStatus));
+        }
+        catch { if (Current(connection, generation)) ResetSession(); throw; }
+        finally { if (generation == _generation) IsBusy = false; }
+        if (IsSignedIn) await RefreshAsync();
+        StartPolling();
+    }
     public void Deactivate()
     {
         if (!_active) return;
@@ -161,6 +214,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             if (!Current(connection, generation)) return;
             // Read before allowing writes. A damaged pending file blocks this node instead of silently losing its request.
             _pending = _store.Load(target);
+            if (_pending is { } pending) { _lastRequestId = pending.RequestId; RequestIdToQuery = pending.RequestId; }
             LoadProtectionWarning(target);
             _settings?.Save(target);
             IsSignedIn = true;
@@ -217,7 +271,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             {
                 if (entries.Count > 50 || entries.Any(e => !Enum.IsDefined(e.Kind) || !Enum.IsDefined(e.Phase) || e.UpdatedAt == default))
                     throw new System.IO.InvalidDataException("限定操作日志无效。");
-                foreach (var entry in entries) Logs.Add(new(entry.UpdatedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"), "操作", KindText(entry.Kind), PhaseText(entry.Phase), entry.ErrorCode is null ? "—" : "操作未完成"));
+                foreach (var entry in entries) Logs.Add(new(entry.UpdatedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"), "操作", KindText(entry.Kind), PhaseText(entry.Phase),
+                    entry.ErrorCode is not null || entry.Phase == ManagementOperationPhase.Failed ? "未完成" : entry.Phase == ManagementOperationPhase.Completed ? "成功" : "—", entry.RequestId));
             }
             if (logs.Envelope.Result is { } runtime && logs.Envelope.Error is null)
             {
@@ -228,7 +283,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                     throw new System.IO.InvalidDataException("限定运行日志无效。");
                 foreach (var entry in runtime) Logs.Add(new(entry.Timestamp.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
                     entry.Source == "business" ? "业务服务" : "服务器管理", "运行记录",
-                    entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, $"事件编号：{entry.EventId.ToString(CultureInfo.InvariantCulture)}"));
+                    entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, "—", entry.EventId.ToString(CultureInfo.InvariantCulture)));
             }
             Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "服务器状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
         }
@@ -250,19 +305,32 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (!IsSignedIn || _connection?.Actor is not { } actor || IsBusy || _pending is not null) return;
         var connection = _connection; var generation = _generation;
         var id = Guid.NewGuid().ToString("N");
-        var body = BuildBody(kind, connection.Target, actor, id);
-        var request = PendingManagementRequest.Create(connection.Target, actor, kind, id, body);
         IsBusy = true; // One gate covers all writes, including a confirmation dialog.
         try
         {
-            if (!await ConfirmAsync(new("确认" + KindText(kind), ConfirmationBody(kind, request), kind is not ManagementOperationKind.Checks))) return;
+            BackupInfo? backup = null;
+            if (kind == ManagementOperationKind.Restore)
+            {
+                backup = await ReadRestoreBackupAsync(connection, generation);
+                if (backup is null) return;
+            }
+            var body = BuildBody(kind, connection.Target, actor, id, backup);
+            var request = PendingManagementRequest.Create(connection.Target, actor, kind, id, body);
+            var confirmation = kind == ManagementOperationKind.Restore
+                ? new ManagementConfirmation("确认按此备份恢复", RestoreConfirmationBody(request, backup!), true)
+                : new ManagementConfirmation("确认" + KindText(kind), ConfirmationBody(kind, request), kind is not ManagementOperationKind.Checks);
+            if (!await ConfirmAsync(confirmation)) return;
             if (!Current(connection, generation) || !IsSignedIn) return;
             _store.Save(request); // Failure here must prevent network side effects.
-            _pending = request; NotifyPending();
-            using var wait = BeginRead();
-            try { var reply = await connection.ExecuteAsync(kind, body, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, request, connection, generation); }
-            catch (Exception) { if (Current(connection, generation)) Message = "操作结果尚未确认。原请求已保留，请查询原结果；取消等待不会撤销服务器操作。"; }
-            finally { EndRead(wait); }
+            _pending = request; _lastRequestId = request.RequestId; RequestIdToQuery = request.RequestId; NotifyPending();
+            if (kind == ManagementOperationKind.Restore) await ExecuteRestoreAsync(request, connection, generation);
+            else
+            {
+                using var wait = BeginRead();
+                try { var reply = await connection.ExecuteAsync(kind, body, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, request, connection, generation); }
+                catch (Exception) { if (Current(connection, generation)) Message = "操作结果尚未确认。原请求已保留，请查询请求处理状态；取消等待不会撤销服务器操作。"; }
+                finally { EndRead(wait); }
+            }
         }
         finally { if (Current(connection, generation)) IsBusy = false; }
         StartPolling();
@@ -270,12 +338,48 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public async Task QueryAsync()
     {
-        if (!IsSignedIn || _connection is null || _pending is null || _readBusy) return;
-        var connection = _connection; var generation = _generation; var pending = _pending;
-        if (connection.Actor != pending.Actor) { Message = "该请求属于原管理账号。请用原账号登录后查询。"; return; }
+        var id = string.IsNullOrWhiteSpace(RequestIdToQuery) ? _lastRequestId : RequestIdToQuery.Trim();
+        if (id.Length == 0) id = _pending?.RequestId ?? string.Empty;
+        await QueryRequestAsync(id);
+    }
+
+    private async Task QueryRequestAsync(string id)
+    {
+        if (!IsSignedIn || _connection is null || id.Length == 0 || _readBusy) return;
+        var connection = _connection; var generation = _generation;
+        var pending = _pending?.RequestId == id ? _pending : null;
+        if (pending is not null && connection.Actor != pending.Actor)
+        { Message = "该请求属于原管理账号。请用原账号登录考务端后查询。"; return; }
         using var wait = BeginRead();
-        try { var reply = await connection.FindAsync(pending.RequestId, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, pending, connection, generation); }
-        catch (Exception) { if (Current(connection, generation)) Message = "查询未确认，保留原请求。请恢复连接后再次查询。"; }
+        try
+        {
+            var reply = await connection.FindAsync(id, wait.Token);
+            if (wait.IsCancellationRequested || !Accept(connection, generation, reply.IsUnauthorized)) return;
+            if (pending is not null)
+            {
+                Apply(reply, pending, connection, generation,
+                    restoreInProgress: _restoreWriteInFlight == pending.RequestId && _restoreProgress is { IsCancellationRequested: false });
+                if (pending.Kind == ManagementOperationKind.Restore && RestoreCompleted(_restoreOperation))
+                {
+                    EndRead(wait);
+                    await RefreshRestoredServerAsync(connection, generation);
+                }
+                return;
+            }
+            if (reply.StatusCode == HttpStatusCode.NotFound)
+            { Message = $"未找到请求 {id}，请核对请求编号。"; return; }
+            if (reply.Envelope.Result is not { } operation)
+            { Message = SafeError(reply.StatusCode); return; }
+            if (operation.RequestId != id || operation.ActorId != connection.Actor ||
+                operation.ServerId != connection.Target.ServerId || operation.NodeId != connection.Target.NodeId ||
+                !Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase))
+                throw new System.IO.InvalidDataException("请求处理记录与当前身份不一致。");
+            // Historical results describe that request only; never settle another pending request or overwrite current server status.
+            _operation = operation; OnPropertyChanged(nameof(Operation));
+            OperationText = $"{KindText(operation.Kind)}：{PhaseText(operation.Phase)} · {operation.RequestId}";
+            Message = $"请求 {id} 的处理状态：{PhaseText(operation.Phase)}。";
+        }
+        catch (Exception) { if (Current(connection, generation)) Message = "请求处理状态尚未确认，请核对编号和连接后再次查询。"; }
         finally { EndRead(wait); }
     }
 
@@ -289,10 +393,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         {
             if (!await ConfirmAsync(new("续办原恢复请求", "仅在管理员已补齐最新持久确认和恢复材料后续办。沿用原备份、原路径与原请求号，不创建新恢复。", true)) ||
                 !Current(connection, generation)) return;
-            using var wait = BeginRead();
-            try { var reply = await connection.ExecuteAsync(request.Kind, request.Body, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, request, connection, generation); }
-            catch { if (Current(connection, generation)) Message = "恢复续办结果未确认，继续查询原请求。"; }
-            finally { EndRead(wait); }
+            await ExecuteRestoreAsync(request, connection, generation);
         }
         finally { if (Current(connection, generation)) IsBusy = false; }
     }
@@ -307,26 +408,45 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         {
             if (!await ConfirmAsync(new("按原内容重试", "尚未找到原操作不证明它未执行。此次只重新发送完全相同的请求号与原内容，由服务器执行幂等核对。\n" +
                 ConfirmationBody(request.Kind, request), true)) || !Current(connection, generation)) return;
-            using var wait = BeginRead();
-            try { var reply = await connection.ExecuteAsync(request.Kind, request.Body, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, request, connection, generation); }
-            catch { if (Current(connection, generation)) Message = "原请求重试结果仍未确认，继续查询原请求。"; }
-            finally { EndRead(wait); }
+            if (request.Kind == ManagementOperationKind.Restore) await ExecuteRestoreAsync(request, connection, generation);
+            else
+            {
+                using var wait = BeginRead();
+                try { var reply = await connection.ExecuteAsync(request.Kind, request.Body, wait.Token); if (!wait.IsCancellationRequested) Apply(reply, request, connection, generation); }
+                catch { if (Current(connection, generation)) Message = "原请求重试结果仍未确认，继续查询请求处理状态。"; }
+                finally { EndRead(wait); }
+            }
         }
         finally { if (Current(connection, generation)) IsBusy = false; }
         StartPolling();
     }
 
-    private void Apply(ManagementReply<ManagementOperation> reply, PendingManagementRequest request, IManagementConnection connection, long generation)
+    private void Apply(ManagementReply<ManagementOperation> reply, PendingManagementRequest request, IManagementConnection connection, long generation,
+        bool restoreInProgress = false)
     {
         if (!Accept(connection, generation, reply.IsUnauthorized)) return;
         if (reply.Envelope.Result is not { } operation)
-        { _missingOriginal = reply.StatusCode == HttpStatusCode.NotFound; UpdateCommands(); Message = SafeError(reply.StatusCode) + "；原请求保留，请查询原结果。"; return; }
+        { _missingOriginal = reply.StatusCode == HttpStatusCode.NotFound; UpdateCommands();
+            Message = _missingOriginal ? $"未找到请求 {request.RequestId}，原请求保留，请核对编号后再次查询处理状态。"
+                : SafeError(reply.StatusCode) + "；原请求保留，请查询处理状态。"; return; }
         if (operation.ActorId != request.Actor || operation.RequestId != request.RequestId || operation.Kind != request.Kind ||
             operation.ServerId != request.Target.ServerId || operation.NodeId != request.Target.NodeId || operation.ContentHash != request.BodyHash)
             throw new System.IO.InvalidDataException("操作身份与原请求不一致。");
         if (!Enum.IsDefined(operation.Phase) || operation.Phase == ManagementOperationPhase.Failed && operation.Error is null ||
             operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.Completed or ManagementOperationPhase.Staged && operation.Error is not null)
             throw new System.IO.InvalidDataException("操作阶段证据无效。");
+        if (operation.Kind == ManagementOperationKind.Restore)
+        {
+            // A delayed checkpoint must not move the current restore backwards after its final response.
+            if (_restoreOperation is { } previous && previous.RequestId == operation.RequestId &&
+                (operation.UpdatedAt < previous.UpdatedAt ||
+                 previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed &&
+                 operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed))) return;
+            if (operation.Phase == ManagementOperationPhase.Completed && !RestoreCompleted(operation))
+                throw new System.IO.InvalidDataException("恢复完成证据不完整。");
+            _restoreOperation = operation;
+            RestoreText = RestoreStatus(operation, restoreInProgress);
+        }
         _missingOriginal = false;
         _operation = operation;
         OnPropertyChanged(nameof(Operation));
@@ -338,7 +458,6 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (operation.Status is { } status) ApplyStatus(status, reply.Envelope.EpochVerified, reply.Envelope.ServerEpoch);
         if (operation.HighAvailability is { } availability) ApplyHighAvailability(availability);
         if (operation.Checks is not null) SetChecks(operation.Checks);
-        if (operation.Restore is { } restore) RestoreText = $"隔离暂存：{YesNo(restore.IsolationStaged)}；恢复核对：{YesNo(restore.RecoveryVerified)}；业务就绪：{YesNo(restore.BusinessReady)}";
         if (operation.Phase == ManagementOperationPhase.Completed && operation.Backup is { } backup)
         {
             RestoreBackupId = backup.BackupId;
@@ -346,13 +465,13 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         }
         Message = operation.Phase switch
         {
-            ManagementOperationPhase.Completed when operation.Kind == ManagementOperationKind.Checks && operation.Checks!.Any(c => !c.Passed && c.BlocksWrites) => "自检已完成，存在阻止业务写入的失败项。",
+            ManagementOperationPhase.Completed when operation.Kind == ManagementOperationKind.Checks && operation.Checks!.Any(c => !c.Passed && c.BlocksWrites) => "状态检测已完成，存在阻止业务写入的失败项。",
             ManagementOperationPhase.Completed when operation.Backup is { } => "备份已完成：数据库、受保护配置和版本资源均已包含。",
             ManagementOperationPhase.Completed => "操作已完成，并已核对后端完成证据。",
             ManagementOperationPhase.Staged => "恢复仅完成隔离暂存，业务尚未就绪。",
             ManagementOperationPhase.NeedsVerification => "操作仍待核对；不能创建新请求代替原请求。",
             ManagementOperationPhase.Failed => SafeError(reply.StatusCode),
-            _ => "操作已受理，继续查询原结果。"
+            _ => "操作已受理，继续查询请求处理状态。"
         };
         if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)
         {
@@ -362,7 +481,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         }
     }
 
-    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id)
+    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null)
     {
         object body = kind switch
         {
@@ -370,7 +489,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 _configurationVersion ?? throw new ArgumentException("先读取当前配置版本。"), BuildConfiguration(target)),
             ManagementOperationKind.Backup => new BackupRequest(id, RequirePath(BackupDestination), actor),
             ManagementOperationKind.Restore => new RestoreRequest(id,
-                string.IsNullOrWhiteSpace(RestoreBackupId) ? throw new ArgumentException("请输入备份标识。") : RestoreBackupId.Trim(), RequirePath(RestoreSource), actor),
+                backup?.BackupId ?? throw new InvalidOperationException("备份信息尚未读取。"), backup.SourceDirectory, actor),
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
                 BuildHighAvailabilityRequest(kind, target, actor, id),
             _ => new ManagementServiceRequest(id, target.ServerId, target.NodeId)
@@ -403,7 +522,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Backup => $"\n备份目录：{fields.GetProperty("destinationDirectory")}",
             ManagementOperationKind.Restore => $"\n备份：{fields.GetProperty("backupId")}\n来源：{fields.GetProperty("sourceDirectory")}",
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
-                $"\n目标节点：{fields.GetProperty("targetNodeId")}\n预期代次：{fields.GetProperty("expectedEpoch")}；状态版本：{fields.GetProperty("expectedVersion")}\n原因：{fields.GetProperty("reason")}" +
+                $"\n目标节点：{fields.GetProperty("targetNodeId")}\n原因：{fields.GetProperty("reason")}" +
                 (kind == ManagementOperationKind.Takeover ? $"\n原主机：{fields.GetProperty("isolation").GetProperty("isolatedNodeId")}；断电确认：{YesNo(fields.GetProperty("isolation").GetProperty("hostPoweredOff").GetBoolean())}；业务网络隔离确认：{YesNo(fields.GetProperty("isolation").GetProperty("businessNetworkIsolated").GetBoolean())}" : ""),
             _ => string.Empty
         };
@@ -411,10 +530,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         {
             ManagementOperationKind.Stop => "停止会中断业务服务。",
             ManagementOperationKind.Configure => "后端核对已停止状态与当前配置版本；冲突时不覆盖。",
-            ManagementOperationKind.Backup => "须先停止业务；备份结果必须包含三项完整性证据。",
+            ManagementOperationKind.Backup => "须先停止服务器；备份结果必须包含三项完整性证据。",
             ManagementOperationKind.Restore => RestoreGuidance,
             ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升目标服务器备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
-            ManagementOperationKind.Emergency => "停止目标服务器业务并切换为单机持久确认。完成后请自检并启动业务；应急期间保护降低，请尽快恢复备用节点。",
+            ManagementOperationKind.Emergency => "停止目标服务器并切换为单机持久确认。完成后请运行状态检测，并联系部署人员启动服务器；应急期间保护降低，请尽快恢复备用节点。",
             ManagementOperationKind.Rebuild => "停止目标服务器服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
             ManagementOperationKind.Reprotect => "只有实际复制、材料和双侧最新持久确认全部核实后才恢复同步保护；失败保持待核对。",
             _ => "操作结果以服务器实际检查为准。"
@@ -433,10 +552,14 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             value.Readiness == BusinessReadiness.Ready && (value.ProcessStatus != BusinessServiceStatus.Running ||
                 value.Checks.Count == 0 || value.Checks.Any(c => c.BlocksWrites && !c.Passed)))
             throw new System.IO.InvalidDataException("业务就绪证据不一致。");
-        ProcessText = value.ProcessStatus switch { BusinessServiceStatus.Stopped => "已停止", BusinessServiceStatus.Starting => "正在启动",
-            BusinessServiceStatus.Recovering => "恢复中", BusinessServiceStatus.Running => "正在运行", BusinessServiceStatus.Stopping => "正在停止", _ => "故障" };
-        ReadinessText = value.Readiness switch { BusinessReadiness.Ready => "业务就绪", BusinessReadiness.NotReady => "业务未就绪", _ => "业务就绪未核实" };
-        EpochText = verified ? $"已核实代次：{epoch}" : "当前代次未核实";
+        ServerStatusText = value.ProcessStatus switch
+        {
+            BusinessServiceStatus.Stopped => "服务器已停止",
+            BusinessServiceStatus.Faulted => "服务器程序运行异常",
+            BusinessServiceStatus.Running when value.Readiness == BusinessReadiness.Ready => "服务器程序正常运行",
+            BusinessServiceStatus.Running when value.Readiness == BusinessReadiness.NotReady => "服务器程序运行异常",
+            _ => "服务器程序状态未确认"
+        };
         SetChecks(value.Checks);
     }
     private void SetChecks(IReadOnlyList<StartupCheckResult> checks)
@@ -448,8 +571,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private static string CheckName(string name) => name.StartsWith("activation-", StringComparison.Ordinal)
         ? "启动前：" + CheckName(name[11..]) : name switch {
             "database" => "数据库连接", "database-migrations" => "数据库版本", "database-role" => "数据库角色",
-            "certificate" => "测试证书", "storage" => "业务目录", "backup-tools" => "备份恢复工具", "local-snapshot" => "所选测试备份",
-            "database-node-epoch" => "活动节点与服务代次", "node-certificate-private-key" => "节点证书与私钥",
+            "business-readiness" => "业务运行状态",
+            "certificate" => "服务证书", "storage" => "业务目录", "backup-tools" => "备份恢复工具", "local-snapshot" => "所选备份",
+            "database-node-epoch" => "活动节点状态", "node-certificate-private-key" => "节点证书与私钥",
             "backup-integrity" => "备份完整性", "recovery-snapshot" => "恢复数据核对", "recovery-target" => "恢复目标",
             "recovery-working-copy" => "隔离恢复副本", "recovery-confirmed-state" => "最新持久确认",
             "failover-state" => "主备状态", "synchronous-protection" => "双机同步保护", "service-configuration" => "业务配置",
@@ -462,7 +586,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         if (!Current(connection, generation)) return false;
         if (!unauthorized) return true;
-        ResetSession(); Message = "管理会话已失效。原请求保留，重新登录后查询。"; return false;
+        ResetSession(); Message = "管理会话已失效。原请求保留，请重新连接后查询处理状态。"; return false;
     }
     private CancellationTokenSource BeginRead()
     {
@@ -471,17 +595,22 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     private void EndRead(CancellationTokenSource source)
     { if (!ReferenceEquals(_reads, source)) return; _reads = null; _readBusy = false; UpdateCommands(); }
-    public void CancelWaiting() { _reads?.Cancel(); Message = _pending is null ? "已取消本次等待。" : "已取消等待；原请求保留，服务器操作不会因此撤销。"; }
+    public void CancelWaiting()
+    {
+        _reads?.Cancel(); _restoreProgress?.Cancel();
+        if (_restoreWriteInFlight is not null) RestoreText = RestoreStatus(_restoreOperation, false);
+        Message = _pending is null ? "已取消本次等待。" : "已取消等待；原请求保留，服务器操作不会因此撤销。";
+    }
     private void ResetSession(bool dispose = true)
     {
         _generation++; _lifetime.Cancel(); _lifetime.Dispose(); _lifetime = new(); _reads?.Cancel();
-        _polling?.Cancel();
+        _polling?.Cancel(); _restoreProgress?.Cancel(); _restoreWriteInFlight = null; _restoreOperation = null; RestoreText = string.Empty;
         if (dispose) _connection?.Dispose(); _connection = null; IsSignedIn = false; IsBusy = false;
         _readBusy = false; _pending = null; _operation = null; _missingOriginal = false; CanResumeRestore = false;
         _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));
     }
-    private void MarkUnknown() { ProcessText = "当前进程状态未核实"; ReadinessText = "业务就绪未核实"; EpochText = "当前代次未核实"; MarkProtectionUnknown(); }
+    private void MarkUnknown() { ServerStatusText = "服务器程序状态未确认"; MarkProtectionUnknown(); }
     private void StartPolling()
     {
         if (!_active || !IsSignedIn || _pending is null || _polling is { IsCancellationRequested: false }) return;
@@ -496,7 +625,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             for (var attempt = 0; attempt < 10 && _active && IsSignedIn && _pending is not null; attempt++)
             {
                 await Task.Delay(TimeSpan.FromSeconds(2), polling.Token);
-                if (!_readBusy && !IsBusy && !polling.IsCancellationRequested) await QueryAsync();
+                if (!_readBusy && !IsBusy && !polling.IsCancellationRequested && _pending is { } pending)
+                    await QueryRequestAsync(pending.RequestId);
             }
         }
         catch (OperationCanceledException) { }
@@ -518,7 +648,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _settings.Save(target);
             Address = target.Address; ServerId = target.ServerId; NodeId = target.NodeId;
             LoadProtectionWarning();
-            Message = "连接配置已导入并保存，请输入考务账号和密码。";
+            Message = "连接配置已导入并保存。";
+            if (_businessSession is not null && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
         }
         catch { Message = "连接配置导入失败。请使用部署人员提供的有效服务器管理连接文件；原连接配置已保留。"; }
     }
@@ -531,14 +662,17 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _settings.Save(new(Address.Trim(), ServerId.Trim(), NodeId.Trim()));
             LoadProtectionWarning();
             Message = "连接设置已保存，下次打开时自动使用。";
+            if (_businessSession is not null && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
         }
         catch { Message = "连接设置未能保存，请联系系统部署人员检查本机配置目录。"; }
     }
 
     private void ConnectionSettingsChanged()
     {
+        if (!IsSignedIn) { _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty; }
         OnPropertyChanged(nameof(HasConnectionConfiguration)); OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(CanLogin));
+        ReconnectCommand?.RaiseCanExecuteChanged();
         SaveConnectionCommand?.RaiseCanExecuteChanged();
     }
     public void ReportError(Exception? error = null) => OnError(error ?? new InvalidOperationException());
@@ -547,12 +681,12 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void NotifyPending() { OnPropertyChanged(nameof(Pending)); OnPropertyChanged(nameof(PendingText)); UpdateCommands(); }
     private void UpdateCommands()
     {
-        foreach (var command in new[] { RefreshCommand, LogoutCommand, StartCommand, StopCommand, ChecksCommand, ConfigureCommand,
+        foreach (var command in new[] { RefreshCommand, ReconnectCommand, LogoutCommand, StartCommand, StopCommand, ChecksCommand, ConfigureCommand,
                      BackupCommand, RestoreCommand, TakeoverCommand, EmergencyCommand, RebuildCommand, ReprotectCommand,
                      QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
         CancelWaitCommand?.RaiseCanExecuteChanged();
         SaveConnectionCommand?.RaiseCanExecuteChanged();
-        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanConfigureConnection));
+        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanConfigureConnection)); OnPropertyChanged(nameof(ConnectionStatus));
     }
     private static string SafeError(HttpStatusCode status) => status switch
     { HttpStatusCode.Conflict => "配置版本或请求内容冲突。表单已保留，请核对并重新确认", HttpStatusCode.Forbidden => "操作权限或操作者不一致",
@@ -560,7 +694,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         _ => "后端依赖不可用或操作失败，不能判定成功" };
     private static string YesNo(bool value) => value ? "已确认" : "未完成";
     private static string KindText(ManagementOperationKind kind) => kind switch { ManagementOperationKind.Start => "启动", ManagementOperationKind.Stop => "停止",
-        ManagementOperationKind.Configure => "保存配置", ManagementOperationKind.Checks => "自检", ManagementOperationKind.Backup => "备份", ManagementOperationKind.Restore => "恢复",
+        ManagementOperationKind.Configure => "保存配置", ManagementOperationKind.Checks => "状态检测", ManagementOperationKind.Backup => "备份", ManagementOperationKind.Restore => "恢复",
         ManagementOperationKind.Takeover => "接管", ManagementOperationKind.Emergency => "进入单机应急", ManagementOperationKind.Rebuild => "重建旧节点", ManagementOperationKind.Reprotect => "恢复同步保护", _ => "未知操作" };
     private static string PhaseText(ManagementOperationPhase phase) => phase switch { ManagementOperationPhase.Completed => "完成", ManagementOperationPhase.Failed => "失败",
         ManagementOperationPhase.Accepted => "已受理", ManagementOperationPhase.Staged => "仅隔离暂存", _ => "待核对" };

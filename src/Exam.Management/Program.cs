@@ -224,7 +224,10 @@ public static class ManagementEntryPoint
                     .ReadAuditAsync(limit, token),
                 readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
                     Required("Management:ProtectedBusinessLogPath"), "business", limit, token), failover: failover,
-                supportsAdvancedOperations: OperatingSystem.IsWindows());
+                supportsAdvancedOperations: OperatingSystem.IsWindows(), checkReadinessOnStatus: true,
+                readBackupInfo: (directory, token) => new PostgresBackupCoordinator(new PostgresBackupOptions(
+                    "", "", Required("Backup:AllowedBackupRoot"), "", "", "", TimeSpan.FromSeconds(5)),
+                    new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token));
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])

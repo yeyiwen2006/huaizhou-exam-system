@@ -41,7 +41,7 @@ public sealed class ExamVersionAggregate
     }
 
     public ExamVersionSnapshot UpdateSchedule(long expectedVersion, ScheduleWindow schedule, DateTimeOffset now,
-        bool reopenEndedExam = false)
+        bool reopenEndedExam = false, bool reevaluateLifecycle = false)
     {
         lock (_gate)
         {
@@ -50,7 +50,24 @@ public sealed class ExamVersionAggregate
 
             _schedule = schedule;
             _scheduleVersion = checked(_scheduleVersion + 1);
-            if (reopenEndedExam && _lifecycleState == ExamLifecycle.Ended && schedule.EndsAt > now)
+            if (reevaluateLifecycle)
+            {
+                var lifecycle = now < schedule.StartsAt ? ExamLifecycle.Scheduled
+                    : now < schedule.EndsAt ? ExamLifecycle.Running : ExamLifecycle.Ended;
+                if (_lifecycleState != lifecycle && lifecycle != ExamLifecycle.Ended)
+                    _reopenedAtScheduleVersion = _scheduleVersion;
+                _lifecycleState = lifecycle;
+                _actualEndedAt = lifecycle == ExamLifecycle.Ended ? _actualEndedAt ?? now : null;
+                if (lifecycle == ExamLifecycle.Running)
+                {
+                    _actualStartedAt ??= now;
+                    foreach (var participant in _participants.Values.Where(
+                                 participant => participant.ExamState == ParticipationBusinessState.Waiting))
+                        participant.ExamState = ParticipationBusinessState.Answering;
+                }
+                // A postponed window pauses access, but does not erase participation or submitted answers.
+            }
+            else if (reopenEndedExam && _lifecycleState == ExamLifecycle.Ended && schedule.EndsAt > now)
             {
                 _lifecycleState = _actualStartedAt is not null || schedule.StartsAt <= now
                     ? ExamLifecycle.Running : ExamLifecycle.Scheduled;
@@ -114,7 +131,7 @@ public sealed class ExamVersionAggregate
 
             var normalizedStructure = NormalizeStructure(request.Structure);
             if (_paper is not null &&
-                _lifecycleState != ExamLifecycle.Scheduled &&
+                (_lifecycleState != ExamLifecycle.Scheduled || _actualStartedAt is not null) &&
                 !StructuresEqual(_paper.Structure, normalizedStructure))
             {
                 throw new VersioningRuleException(

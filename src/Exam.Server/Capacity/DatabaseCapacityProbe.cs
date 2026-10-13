@@ -21,7 +21,7 @@ public sealed class DatabaseCapacityProbe(NpgsqlDataSource dataSource, DatabaseC
         catch (Exception error) when (error is NpgsqlException or TimeoutException)
         {
             // Connection exceptions can contain host/user configuration; return only an operational category.
-            return "PostgreSQL 连接容量自检未完成，数据库不可用或连接等待超时。";
+            return "PostgreSQL 连接容量状态检测未完成，数据库不可用或连接等待超时。";
         }
     }
 }

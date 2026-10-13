@@ -14,15 +14,15 @@
 | COV-008 | 启用 | src/Exam.Admin/ViewModels/OperatorAccountsViewModel.cs | operators enable | 入口已实现；模块验证由对应 profile 报告核对 |
 | COV-009 | 状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management status | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-010 | 配置读取 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management configuration | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
-| COV-011 | 启动 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management start | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
-| COV-012 | 停止 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management stop | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
-| COV-013 | 自检 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management checks | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
+| COV-011 | 启动 | GUI不提供入口 | management start | 正式管理API与CLI保留启停，权限、固定目标及原请求核对继续生效 |
+| COV-012 | 停止 | GUI不提供入口 | management stop | 正式管理API与CLI保留启停，权限、固定目标及原请求核对继续生效 |
+| COV-013 | 状态检测 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management checks | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-014 | 配置写入 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management configure | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-015 | 管理日志 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management logs | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-016 | 运行日志 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management runtime-logs | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-017 | 备份 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management backup | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-018 | 隔离恢复 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management restore | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
-| COV-019 | 操作进度 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management operation | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
+| COV-019 | 查询请求处理状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management operation | GUI默认查询最近操作，允许输入历史请求编号；不再单列待核对请求，处理情况由操作结果展示，不提供原内容重试或恢复续行按钮 |
 | COV-020 | 同步状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management ha-status | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-021 | 应急确认 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management emergency | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-022 | 接管 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management takeover | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |

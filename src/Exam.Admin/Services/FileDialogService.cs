@@ -24,9 +24,21 @@ public interface IExamImportSourceDialog
     string? OpenNewMaterialDirectory();
 }
 
-public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService, IExamImportSourceDialog
+public sealed class FileDialogService : IFileDialogService, IManifestFileDialogService, IExamImportSourceDialog, IExamArchiveDirectoryDialog
 {
     private const string ExcelFilter = "Excel 工作簿 (*.xlsx)|*.xlsx";
+
+    public string? ChooseExportDirectory()
+    {
+        var dialog = new OpenFolderDialog { Title = "选择本机保存考试全部数据的目录" };
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
+
+    public string? ChooseImportDirectory()
+    {
+        var dialog = new OpenFolderDialog { Title = "选择包含考试全部数据归档的目录" };
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
 
     public string? OpenDirectory()
     {

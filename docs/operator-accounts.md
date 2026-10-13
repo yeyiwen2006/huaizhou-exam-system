@@ -1,6 +1,6 @@
 # 考务账号
 
-考务端业务功能、服务管理页及 CLI 统一使用考务账号（用户名和口令）登录，不再使用共享访问令牌（原 `ExamSecurity:OperatorToken` / `ExamSecurity:OperatorId` 配置已删除，配置了也不再生效）。
+考务端和CLI使用考务账号登录。考务GUI只输入一次用户名和口令，服务器管理使用当前业务令牌安全换取管理会话，退出或切换账号时清除旧管理权限。CLI保留独立的管理登录。原共享令牌配置 `ExamSecurity:OperatorToken` 和 `ExamSecurity:OperatorId` 已删除，配置后不再生效。
 
 ## 规则
 
@@ -15,7 +15,7 @@
 
 数据库迁移 `202610011300_A01_operator_accounts.sql` 新增 `exam.operator_accounts` 与 `exam.operator_sessions`。
 
-服务管理程序登录时以数据库为准，并把全部已启用账号的口令哈希与管理员标记写入本机缓存 `Management:OperatorCachePath`（默认 `Management:OperationDirectory\operators.cache`，Windows 本机加密）。数据库或业务服务停止时按该缓存核对，因此服务停止时仍可登录服务管理并启动服务；缓存只在数据库可用的那次登录后刷新。管理会话只在管理进程内存中，退出登录或管理程序重启后失效。
+管理CLI的账号登录以数据库为准，在Windows上将已启用账号的口令哈希与管理员标记写入加密缓存 `Management:OperatorCachePath`，默认路径为 `Management:OperationDirectory\operators.cache`。数据库暂不可达时可使用已核验缓存进行CLI运维认证，缓存只在数据库可用时刷新。Linux不保存离线缓存，认证需要数据库可达。GUI的业务令牌交换直接核对业务会话，不能使用缓存代替这项认证。管理会话保存在管理进程内存中，退出、账号切换或进程重启后不能沿用旧权限。
 
 ## 接口
 
@@ -27,7 +27,7 @@
 | GET | `/api/v1/operators/me` | 当前账号 |
 | GET | `/api/v1/operators` | 全部账号（管理员） |
 | PUT | `/api/v1/operators/status` | 批准、停用或重新启用（管理员） |
-| POST | `/management/v1/login`、`/management/v1/logout` | 服务管理登录、退出 |
+| POST | `/management/v1/login`、`/management/v1/logout` | 管理CLI账号登录及管理会话退出；GUI使用业务会话交换 |
 
 其他考务接口在 `Authorization: Bearer <会话令牌>` 中携带登录会话。
 

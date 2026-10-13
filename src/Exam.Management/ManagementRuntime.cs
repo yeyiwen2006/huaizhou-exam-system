@@ -25,11 +25,23 @@ public sealed class ManagementRuntime(
     Func<DurableFailoverCoordinator>? failover = null,
     bool checkReadinessOnStatus = false,
     bool requireCurrentRecoveryState = true,
-    bool supportsAdvancedOperations = true)
+    bool supportsAdvancedOperations = true,
+    Func<string, CancellationToken, Task<BackupInfo>>? readBackupInfo = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
     public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
+    public async Task<BackupInfo> GetBackupInfoAsync(string sourceDirectory, CancellationToken token)
+    {
+        if (readBackupInfo is null) throw new InvalidOperationException("备份信息读取未配置。");
+        try { return await readBackupInfo(sourceDirectory, token); }
+        catch (UnauthorizedAccessException)
+        { throw new DomainRuleException(ErrorCodes.Forbidden, "备份来源不在服务器允许的目录内，或服务账户没有读取权限。"); }
+        catch (InvalidDataException)
+        { throw new DomainRuleException(ErrorCodes.InvalidInput, "该来源目录缺少有效的备份清单，请选择一次完整备份的目录。"); }
+        catch (DirectoryNotFoundException)
+        { throw new DomainRuleException(ErrorCodes.NotFound, "服务器上的备份来源目录不存在。"); }
+    }
     private DurableFailoverCoordinator Failover => failover?.Invoke() ?? throw new InvalidOperationException("正式主备管理未配置。");
     public Task<HighAvailabilityStatus> GetHighAvailabilityAsync(CancellationToken token)
     {
@@ -129,7 +141,12 @@ public sealed class ManagementRuntime(
         var readiness = BusinessReadiness.Unknown;
         if (checkReadinessOnStatus && configuration is not null && process.Status == BusinessServiceStatus.Running && observeBusinessReady is not null)
         {
-            try { readiness = await observeBusinessReady(configuration, cancellationToken) ? BusinessReadiness.Ready : BusinessReadiness.NotReady; }
+            try
+            {
+                readiness = await observeBusinessReady(configuration, cancellationToken) ? BusinessReadiness.Ready : BusinessReadiness.NotReady;
+                checks = [new("business-readiness", readiness == BusinessReadiness.Ready,
+                    readiness == BusinessReadiness.Ready ? "业务就绪接口已确认服务器程序正常运行。" : "业务就绪接口报告服务器程序尚未就绪。", true)];
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception) { readiness = BusinessReadiness.Unknown; }
         }
@@ -174,7 +191,7 @@ public sealed class ManagementRuntime(
             if (kind == ManagementOperationKind.Checks)
             {
                 var checks = await preflight.RunAsync(configuration, token);
-                if (checks.Count == 0) throw new IOException("自检未返回结果。");
+                if (checks.Count == 0) throw new IOException("状态检测未返回结果。");
                 return operation with { Phase = ManagementOperationPhase.Completed, Checks = checks };
             }
             if (kind != ManagementOperationKind.Start) throw new ArgumentException("操作类型无效。");
@@ -250,6 +267,8 @@ public sealed class ManagementRuntime(
             // Preparing a copy proves neither restored-domain correctness nor business readiness.
             var checks = new List<StartupCheckResult> { new("recovery-working-copy", true,
                 "独立恢复工作副本已准备，尚未开放业务。", true) };
+            staged = staged with { Checks = checks.AsReadOnly(), UpdatedAt = clock.UtcNow };
+            await journal.SaveAsync(staged, token); // Queries can observe the prepared copy while target verification is running.
             if (verifyRecoveryTarget is not null)
             {
                 var verified = await verifyRecoveryTarget(request with { ActorId = actor }, await GetConfigurationAsync(token), token);

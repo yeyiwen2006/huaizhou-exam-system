@@ -229,6 +229,12 @@ public sealed partial class ExamPackageManagerTests
         Assert.True(await restored.PrepareAndDownloadAsync());
         Assert.Equal(fixture.Api.Confirms[0], fixture.Api.Confirms[1]);
         Assert.False(restored.HasPendingConfirmation);
+        Assert.Equal(ParticipationBusinessState.Waiting, restored.Participation?.BusinessState);
+        Assert.False(restored.ExamStarted);
+        Assert.Null(restored.UnlockedPayload);
+        Assert.Equal(0, fixture.Api.UnlockCalls);
+        Assert.True(await restored.HandleCommandAsync(fixture.Api.Start()));
+        Assert.Equal(fixture.Api.Plaintext, restored.UnlockedPayload);
     }
 
     [Fact]
@@ -300,6 +306,7 @@ public sealed partial class ExamPackageManagerTests
         Assert.Empty(fixture.Api.Acks);
         fixture.Api.DownloadBytes = fixture.Api.Ciphertext;
         fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
         Assert.True(await manager.PrepareAndDownloadAsync());
         await manager.ConfirmParticipationAsync();
         Assert.Equal(2, fixture.Api.DownloadCalls);
@@ -324,6 +331,7 @@ public sealed partial class ExamPackageManagerTests
             else Assert.True(await manager.HandleCommandAsync(start));
         }
         fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
         using var restored = new ExamPackageManager(fixture.Api, fixture.Root, fixture.Device,
             fixture.Session with { SessionId = "new-login-session" }, FakePackageApi.ExamId);
         Assert.Null(restored.UnlockedPayload);
@@ -344,6 +352,7 @@ public sealed partial class ExamPackageManagerTests
     {
         using var fixture = await Fixture.CreateAsync();
         fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
         using (var first = fixture.Manager())
         {
             await first.PrepareAndDownloadAsync();
@@ -365,6 +374,7 @@ public sealed partial class ExamPackageManagerTests
     {
         using var fixture = await Fixture.CreateAsync();
         fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
         using var manager = fixture.Manager();
         await manager.PrepareAndDownloadAsync();
         await manager.ConfirmParticipationAsync();
@@ -485,6 +495,7 @@ public sealed partial class ExamPackageManagerTests
     {
         using var fixture = await Fixture.CreateAsync();
         fixture.Api.BusinessState = ParticipationBusinessState.Answering;
+        fixture.Api.Lifecycle = ExamLifecycle.Running;
         using var manager = fixture.Manager();
         await manager.PrepareAndDownloadAsync();
         await manager.ConfirmParticipationAsync();

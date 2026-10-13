@@ -104,6 +104,19 @@ public sealed partial class ExamCatalogViewModelTests
         Assert.Equal(expected, import.PublicationText);
     }
 
+    [Fact]
+    public Task PostponedExamKeepsStructureLockedWhileShowingScheduledState() => OnStaAsync(async () =>
+    {
+        var summary = Summary("exam", "推迟后的考试", visible: true) with
+        { Lifecycle = ExamLifecycle.Scheduled, ActualStartedAt = Start.AddHours(-1) };
+        using var api = Configured(new Handler(_ => Success(Detail(summary))));
+        var editor = new ExamConfigurationViewModel(api);
+        await editor.OpenAsync(summary.ExamId);
+        Assert.False(editor.IsSettingsEditable);
+        Assert.True(editor.IsNameEditable);
+        Assert.Equal("未开始", new ExamCardViewModel(summary, () => { }).StateText);
+    });
+
     [Theory]
     [InlineData(ExamLifecycle.Scheduled)]
     [InlineData(ExamLifecycle.Running)]

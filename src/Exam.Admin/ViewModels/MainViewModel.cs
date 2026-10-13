@@ -32,7 +32,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     /// <summary>使用指定的服务器客户端（测试用合成服务器）；客户端随本对象一同释放。</summary>
-    public MainViewModel(AdminApiClient api, IExamImportService? importService = null)
+    public MainViewModel(AdminApiClient api, IExamImportService? importService = null,
+        IExamArchiveService? archiveService = null, IExamArchiveDirectoryDialog? archiveDirectories = null)
     {
         _api = api;
         Connection = new ConnectionViewModel(_api);
@@ -44,10 +45,11 @@ public sealed class MainViewModel : BindableBase, IDisposable
         GradingRevision = new GradingRevisionViewModel(_api);
         Connection.PropertyChanged += OnConnectionPropertyChanged;
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
-        Home = new ExamHomeViewModel(_api);
+        Home = new ExamHomeViewModel(_api, archiveService, archiveDirectories);
         Accounts = new OperatorAccountsViewModel(_api);
         Home.ExamOpened += OpenExam;
         Home.NewExamRequested += NewExam;
+        Home.ExamReplacedFromArchive += OnExamReplacedFromArchive;
         Exam.ExamSaved += OnExamSaved;
         Import.PaperPublicationChanged += OnPaperPublicationChanged;
         _api.ConfigurationChanged += OnConfigurationChanged;
@@ -128,6 +130,18 @@ public sealed class MainViewModel : BindableBase, IDisposable
         SelectedPage = SettingsPage;
     }
 
+    private void OnExamReplacedFromArchive(string examId)
+    {
+        GradingRevision.InvalidateForArchiveReplacement(examId);
+        if (CurrentExam?.ExamId != examId) return;
+        SetCreating(false); CurrentExam = null;
+        Exam.InvalidateForArchiveReplacement();
+        Roster.Reset(); Monitoring.ExamId = string.Empty;
+        Import.SetCurrentExam(null); GradingRevision.ExamId = string.Empty;
+        Reports.ExamId = string.Empty; Reports.ExamName = string.Empty;
+        SelectedPage = HomePage;
+    }
+
     private void OnExamSaved(ExamDetail detail)
     {
         SetCreating(false);
@@ -144,6 +158,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
 
     private void OnConfigurationChanged(object? sender, EventArgs e)
     {
+        BusinessSessionChanged?.Invoke();
         SetCreating(false);
         CurrentExam = null;
         Roster.Reset();
@@ -172,6 +187,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     public ConnectionViewModel Connection { get; }
+    public event Action? BusinessSessionChanged;
+    public AdminSessionSnapshot? CaptureBusinessSession() => Connection.IsConnected ? _api.CaptureSession() : null;
     public ExamConfigurationViewModel Exam { get; }
     public RosterViewModel Roster { get; }
     public ActivationRoomViewModel Activation { get; }
@@ -211,6 +228,8 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _api.ConfigurationChanged -= OnConfigurationChanged;
         Import.PaperPublicationChanged -= OnPaperPublicationChanged;
+        Home.ExamReplacedFromArchive -= OnExamReplacedFromArchive;
+        Home.Dispose();
         Monitoring.Dispose();
         Import.Dispose();
         GradingRevision.Dispose();

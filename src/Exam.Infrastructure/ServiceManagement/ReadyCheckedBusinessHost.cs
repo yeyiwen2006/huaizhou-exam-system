@@ -133,11 +133,11 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
     public async Task<bool> ObserveReadyAsync(CancellationToken cancellationToken)
     {
         if (_processHost.Status != BusinessServiceStatus.Running) return false;
-        var ready = await CheckReadyAsync(cancellationToken);
+        var ready = await CheckReadyAsync(cancellationToken, failOnConnectionError: true);
         return ready && _processHost.Status == BusinessServiceStatus.Running;
     }
 
-    private async Task<bool> CheckReadyAsync(CancellationToken cancellationToken)
+    private async Task<bool> CheckReadyAsync(CancellationToken cancellationToken, bool failOnConnectionError = false)
     {
         try
         {
@@ -176,7 +176,7 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
 
             return true;
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException) when (!failOnConnectionError)
         {
             return false;
         }

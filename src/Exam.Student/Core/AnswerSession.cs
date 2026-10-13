@@ -65,6 +65,7 @@ public sealed class AnswerSession
     private int _authorizationInvalid;
     private int _freezeRequested;
     private int _suspendRequested;
+    private int _schedulePauseRequested;
 
     private sealed record PendingWrite(AnswerStateRecord State, PendingSnapshot Snapshot);
 
@@ -80,7 +81,9 @@ public sealed class AnswerSession
         Volatile.Read(ref _authorizationInvalid) != 0 ? AnswerSessionStatus.PermissionDenied :
         _fixed is not null ? AnswerSessionStatus.Fixed :
         Volatile.Read(ref _freezeRequested) != 0 ? AnswerSessionStatus.FixPending :
-        _status == AnswerSessionStatus.Active && Volatile.Read(ref _suspendRequested) != 0 ? AnswerSessionStatus.Suspended :
+        _status == AnswerSessionStatus.Active &&
+            (Volatile.Read(ref _suspendRequested) != 0 || Volatile.Read(ref _schedulePauseRequested) != 0)
+            ? AnswerSessionStatus.Suspended :
         _status;
 
     public long AnswerVersion => _reliable?.AnswerVersion ?? 0;
@@ -342,6 +345,16 @@ public sealed class AnswerSession
             LastError = string.IsNullOrWhiteSpace(reason) ? "当前作答已停止，原本地记录继续保留。" : reason;
             return Task.FromResult(true);
         }, ct);
+    }
+
+    // Schedule pauses preserve the live session, including unsaved work. Only the same
+    // authenticated context may resume them; other suspension and submission flags stay set.
+    internal void PauseForSchedule() => Interlocked.Exchange(ref _schedulePauseRequested, 1);
+
+    internal void ResumeAfterSchedule(AnswerSessionContext context)
+    {
+        if (_context == context && context.IsServerAuthorized)
+            Interlocked.Exchange(ref _schedulePauseRequested, 0);
     }
 
     public Task<FixSubmissionResult> FixSubmissionAsync(string submissionId, CancellationToken ct = default)

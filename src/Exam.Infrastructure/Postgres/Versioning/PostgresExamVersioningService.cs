@@ -837,6 +837,7 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
                 .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
             metadata["scheduledEnd"] = snapshot.Schedule.EndsAt.ToOffset(TimeSpan.FromHours(8))
                 .ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+            metadata["lifecycleState"] = snapshot.LifecycleState.ToString().ToLowerInvariant();
         }
         if (snapshot.ReopenedAtScheduleVersion > 0)
             metadata["reopenedAtScheduleVersion"] = snapshot.ReopenedAtScheduleVersion
@@ -975,13 +976,13 @@ public sealed partial class PostgresExamVersioningService : IExamVersioningServi
         var original = JsonSerializer.Deserialize<UpdateScheduleRequest>(reader.GetString(0), _json);
         if (reader.Read() || original is null) return false;
         var historical = schedule with { Now = original.Now };
+        // These policies are supplied by the server. A pre-upgrade retry returns its old
+        // receipt and never executes the historical request under a newer lifecycle policy.
         if (!original.ReopenEndedExam && schedule.ReopenEndedExam)
-        {
-            // New HTTP arrivals opt into reopening. A retry of a pre-upgrade request must
-            // still return its original receipt, without executing it under the new policy.
             historical = historical with { ReopenEndedExam = false };
-            if (string.Equals(storedHash, HashPayload(historical), StringComparison.Ordinal)) return true;
-        }
+        if (!original.ReevaluateLifecycle && schedule.ReevaluateLifecycle)
+            historical = historical with { ReevaluateLifecycle = false };
+        if (string.Equals(storedHash, HashPayload(historical), StringComparison.Ordinal)) return true;
         return string.Equals(storedHash, HashExactPayload(historical), StringComparison.Ordinal);
     }
 

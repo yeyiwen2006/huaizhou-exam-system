@@ -20,6 +20,7 @@ public sealed partial class ExamConfigurationViewModel
     private bool _isNewExam;
     private long _settingsVersion;
     private ExamLifecycle _lifecycle = ExamLifecycle.Scheduled;
+    private bool _hasActuallyStarted;
     private bool _visibleToStudents;
     private bool _visibilityBusy;
     private string _loadedName = string.Empty;
@@ -62,6 +63,12 @@ public sealed partial class ExamConfigurationViewModel
         Status = "连接已更换，请重新选择考试。";
     }
 
+    internal void InvalidateForArchiveReplacement()
+    {
+        ClearLoadedExam();
+        Status = "本场考试已被归档覆盖，请重新读取考试设置。";
+    }
+
     /// <summary>新建或保存成功后通知主窗口切换到这场考试。</summary>
     public event Action<ExamDetail>? ExamSaved;
 
@@ -72,7 +79,7 @@ public sealed partial class ExamConfigurationViewModel
     public long SettingsVersion => _settingsVersion;
 
     /// <summary>科目题组只在开考前可改；名称在所有阶段可改，起止时间按计划规则另行处理。</summary>
-    public bool IsSettingsEditable => _lifecycle == ExamLifecycle.Scheduled && !_catalogBusy &&
+    public bool IsSettingsEditable => _lifecycle == ExamLifecycle.Scheduled && !_hasActuallyStarted && !_catalogBusy &&
         (_catalogReady || _requestedExamId is null);
 
     public bool IsNameEditable => CanSave;
@@ -111,6 +118,7 @@ public sealed partial class ExamConfigurationViewModel
         Name = string.Empty;
         _settingsVersion = 0;
         _lifecycle = ExamLifecycle.Scheduled;
+        _hasActuallyStarted = false;
         _visibleToStudents = false;
         ScheduledStartText = DateTimeOffset.Now.Date.AddDays(1).AddHours(9).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         ScheduledEndText = DateTimeOffset.Now.Date.AddDays(1).AddHours(12).ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
@@ -197,6 +205,7 @@ public sealed partial class ExamConfigurationViewModel
         Name = _loadedName = detail.Summary.Name;
         _settingsVersion = detail.Summary.SettingsVersion;
         _lifecycle = detail.Summary.Lifecycle;
+        _hasActuallyStarted = detail.Summary.ActualStartedAt is not null;
         _visibleToStudents = detail.Summary.VisibleToStudents;
         ScheduledStartText = _loadedStartText = detail.Summary.StartsAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
         ScheduledEndText = _loadedEndText = detail.Summary.EndsAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
@@ -250,7 +259,7 @@ public sealed partial class ExamConfigurationViewModel
         var context = _contextVersion;
         var examId = ExamId;
         var isNew = IsNewExam;
-        var editStructure = _lifecycle == ExamLifecycle.Scheduled;
+        var editStructure = _lifecycle == ExamLifecycle.Scheduled && !_hasActuallyStarted;
         var settingsVersion = _settingsVersion;
         var scheduleVersion = _expectedScheduleVersion;
         var name = Name.Trim();

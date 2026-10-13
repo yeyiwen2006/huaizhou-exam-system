@@ -9,7 +9,7 @@ using Exam.Desktop.Shared.Controls;
 namespace Exam.Admin.ViewModels;
 
 /// <summary>考务端主页：以卡片列出服务器上的全部考试（按名称区分），可进入某场考试或新建考试。</summary>
-public sealed class ExamHomeViewModel : BindableBase
+public sealed partial class ExamHomeViewModel : BindableBase, IDisposable
 {
     private readonly AdminApiClient _api;
     private string _status = "连接服务器后显示全部考试。";
@@ -24,26 +24,33 @@ public sealed class ExamHomeViewModel : BindableBase
     private readonly Dictionary<string, (long Revision, ExamHidingState State)> _hidingUpdates = [];
     private readonly HashSet<string> _pendingHiding = [];
 
-    public ExamHomeViewModel(AdminApiClient api)
+    public ExamHomeViewModel(AdminApiClient api, IExamArchiveService? archives = null, IExamArchiveDirectoryDialog? archiveDirectories = null)
     {
         _api = api;
+        _archives = archives ?? new ExamArchiveService(api);
+        _archiveDirectories = archiveDirectories ?? new FileDialogService();
+        AddExamCommand = new AsyncRelayCommand(AddExamAsync, CanStartArchive);
+        CancelArchiveCommand = new RelayCommand(() => _archiveCancellation?.Cancel(), () => IsArchiveBusy && _archiveCancellation is not null);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => _api.IsConfigured, SetError);
         NewExamCommand = new RelayCommand(() => NewExamRequested?.Invoke(), () => _api.IsConfigured);
-        _api.ConfigurationChanged += (_, _) =>
-        {
-            _generation++;
-            Exams.Clear();
-            HiddenExams.Clear();
-            _cards.Clear();
-            _hidingUpdates.Clear();
-            _pendingHiding.Clear();
-            _publicationUpdates.Clear();
-            _visibilityUpdates.Clear();
-            _pendingVisibility.Clear();
-            Status = "连接服务器后显示全部考试。";
-            RefreshCommand.RaiseCanExecuteChanged();
-            NewExamCommand.RaiseCanExecuteChanged();
-        };
+        _api.ConfigurationChanged += OnApiConfigurationChanged;
+    }
+
+    private void OnApiConfigurationChanged(object? sender, EventArgs args)
+    {
+        ResetArchiveSession();
+        _generation++;
+        Exams.Clear();
+        HiddenExams.Clear();
+        _cards.Clear();
+        _hidingUpdates.Clear();
+        _pendingHiding.Clear();
+        _publicationUpdates.Clear();
+        _visibilityUpdates.Clear();
+        _pendingVisibility.Clear();
+        Status = "连接服务器后显示全部考试。";
+        RefreshCommand.RaiseCanExecuteChanged();
+        NewExamCommand.RaiseCanExecuteChanged();
     }
 
     public ObservableCollection<ExamCardViewModel> Exams { get; } = [];
@@ -75,13 +82,14 @@ public sealed class ExamHomeViewModel : BindableBase
             if (_hidingUpdates.TryGetValue(loaded.ExamId, out var hiding) && hiding.Revision > hidingRevision)
                 exam = WithHiding(exam, hiding.State);
             ExamCardViewModel? card = null;
-            card = new ExamCardViewModel(exam, () => ExamOpened?.Invoke(card!.Exam), ChangeVisibilityAsync, ChangeHidingAsync);
+            card = new ExamCardViewModel(exam, () => ExamOpened?.Invoke(card!.Exam), ChangeVisibilityAsync, ChangeHidingAsync,
+                ExportArchiveAsync, () => !_archiveDisposed && _api.IsConfigured && !IsArchiveBusy);
             if (_pendingVisibility.TryGetValue(exam.ExamId, out var requested)) card.SetVisibilitySaving(true, requested);
             if (_pendingHiding.Contains(exam.ExamId)) card.SetHidingSaving(true);
             _cards.Add(card);
         }
         RebuildLists();
-        Status = _cards.Count == 0 ? "服务器上还没有考试，请点击“新建考试”。" : $"共 {Exams.Count} 场显示的考试，{HiddenExams.Count} 场隐藏的考试，点击卡片进入。";
+        Status = _cards.Count == 0 ? "服务器上还没有考试，请点击“添加考试”。" : $"共 {Exams.Count} 场显示的考试，{HiddenExams.Count} 场隐藏的考试，点击卡片进入。";
     }
 
     public void UpdatePaperVersion(string examId, long? paperVersion)
@@ -202,13 +210,15 @@ public sealed class ExamCardViewModel : BindableBase
     private readonly Func<ExamCardViewModel, ExamHidingScope, Task>? _changeHiding;
     private bool _visibleToStudents, _visibilitySaving, _hidingSaving;
     public ExamCardViewModel(ExamSummary exam, Action open, Func<ExamCardViewModel, bool, Task>? changeVisibility = null,
-        Func<ExamCardViewModel, ExamHidingScope, Task>? changeHiding = null)
+        Func<ExamCardViewModel, ExamHidingScope, Task>? changeHiding = null,
+        Func<ExamCardViewModel, Task>? export = null, Func<bool>? canExport = null)
     {
         Exam = exam;
         _visibleToStudents = exam.VisibleToStudents;
         _changeVisibility = changeVisibility;
         _changeHiding = changeHiding;
         OpenCommand = new RelayCommand(open);
+        ExportArchiveCommand = new AsyncRelayCommand(() => export!(this), () => export is not null && (canExport?.Invoke() ?? true));
         ChangePersonalHidingCommand = new AsyncRelayCommand(() => _changeHiding!(this, ExamHidingScope.CurrentOperator),
             () => CanChangeHiding && (!Exam.IsHidden || Exam.HiddenForCurrentOperator));
         ChangeSharedHidingCommand = new AsyncRelayCommand(() => _changeHiding!(this, ExamHidingScope.AllOperators),
@@ -240,6 +250,7 @@ public sealed class ExamCardViewModel : BindableBase
     };
     public AsyncRelayCommand ChangePersonalHidingCommand { get; }
     public AsyncRelayCommand ChangeSharedHidingCommand { get; }
+    public AsyncRelayCommand ExportArchiveCommand { get; }
     internal void SetHidingSaving(bool saving)
     {
         _hidingSaving = saving;

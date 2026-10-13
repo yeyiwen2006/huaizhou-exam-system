@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Exam.Application.ServiceManagement;
+using Exam.Application.Security;
 using Exam.Contracts.Common;
 using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
@@ -138,6 +139,123 @@ public sealed class LocalManagementApiTests : IDisposable
         Assert.Equal(1, _host.StartCalls);
         Assert.Equal(1, _host.StopCalls);
         Assert.Equal(0, _backups.RestoreCalls);
+    }
+
+    [Fact]
+    public async Task BackupInfoIsAnAuthenticatedReadAndDoesNotCreateAnOperation()
+    {
+        var source = Path.Combine(_directory, "服务器备份 & 1");
+        var info = new BackupInfo("selected-backup", source, DateTimeOffset.UtcNow);
+        var reads = 0;
+        await using var app = await AppAsync(readBackupInfo: (directory, _) =>
+        {
+            Assert.Equal(source, directory);
+            reads++;
+            return Task.FromResult(info);
+        });
+        using var anonymous = Client(app, null);
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await anonymous.GetAsync("/management/v1/service/backup-info?sourceDirectory=" + Uri.EscapeDataString(source))).StatusCode);
+        Assert.Equal(0, reads);
+        using var client = new LocalManagementClient(new Uri("https://localhost:9443"), "server", "node", () => Token,
+            app.GetTestServer().CreateHandler());
+        var response = await client.GetBackupInfoAsync(source);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(info, response.Envelope.Result);
+        Assert.Equal(1, reads);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(_directory, "operations")));
+    }
+
+    [Fact]
+    public async Task PreparedRecoveryCopyIsObservableBeforeTargetVerification()
+    {
+        var request = new RestoreRequest("observed-copy", "selected-backup", "/selected-backup", "operator");
+        var store = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
+        var observed = false;
+        await using var app = await AppAsync(prepareWorkingCopy: (_, _) => Task.CompletedTask,
+            verifyTarget: async (_, _, token) =>
+            {
+                var checkpoint = await store.FindAsync(request.RequestId, token);
+                Assert.Equal(ManagementOperationPhase.Staged, checkpoint!.Phase);
+                Assert.True(checkpoint.Restore!.IsolationStaged);
+                Assert.False(checkpoint.Restore.RecoveryVerified);
+                Assert.False(checkpoint.Restore.BusinessReady);
+                Assert.Contains(checkpoint.Checks!, check => check.Name == "recovery-working-copy" && check.Passed);
+                observed = true;
+                return [new("recovery-target", true, "合成目标检查", true),
+                    new("recovery-confirmed-state", true, "合成已确认状态", true)];
+            });
+        using var client = Client(app);
+        using var response = await client.PostAsJsonAsync("/management/v1/service/restores", request, _json.Options);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(observed);
+        var result = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<ManagementOperation>>(_json.Options))!.Result!;
+        Assert.Equal(ManagementOperationPhase.Staged, result.Phase);
+        Assert.True(result.Restore!.RecoveryVerified);
+        Assert.False(result.Restore.BusinessReady); // This fixture has no activation; a prepared and checked copy is not completed recovery.
+    }
+
+    [Fact]
+    public async Task BusinessSessionCreatesIndependentManagementSessionWithoutPassword()
+    {
+        var active = true;
+        await using var app = await AppAsync(credentials: false, authenticateBusinessSession: (token, _) =>
+            Task.FromResult<AuthenticatedOperator?>(active && token == "current-business-session" ? new("operator", true) : null));
+        using var business = Client(app, "current-business-session");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await business.GetAsync("/management/v1/service/status")).StatusCode);
+        using var response = await business.PostAsync("/management/v1/session", null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var envelope = (await response.Content.ReadFromJsonAsync<ManagementEnvelope<System.Text.Json.JsonElement>>(_json.Options))!;
+        Assert.Equal("server", envelope.ServerId);
+        Assert.Equal("node", envelope.NodeId);
+        Assert.Equal("operator", envelope.Result.GetProperty("username").GetString());
+        Assert.True(envelope.Result.GetProperty("isAdministrator").GetBoolean());
+        var managementToken = envelope.Result.GetProperty("token").GetString()!;
+        Assert.NotEqual("current-business-session", managementToken);
+        Assert.False(File.Exists(Path.Combine(_directory, "operators.cache")));
+
+        // New exchanges must still check current business authentication; an issued management session is independent.
+        active = false;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await business.PostAsync("/management/v1/session", null)).StatusCode);
+        using var management = Client(app, managementToken);
+        Assert.Equal(HttpStatusCode.OK, (await management.GetAsync("/management/v1/service/status")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await management.PostAsync("/management/v1/logout", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await management.GetAsync("/management/v1/service/status")).StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, false, HttpStatusCode.Unauthorized)]
+    [InlineData("invalid-session", false, HttpStatusCode.Unauthorized)]
+    [InlineData("current-business-session", true, HttpStatusCode.ServiceUnavailable)]
+    public async Task BusinessSessionExchangeDoesNotFallbackWhenAuthenticationFails(string? token, bool databaseUnavailable, HttpStatusCode expected)
+    {
+        await using var app = await AppAsync(credentials: false, authenticateBusinessSession: (_, _) => databaseUnavailable
+            ? throw new Npgsql.NpgsqlException("synthetic database unavailable") : Task.FromResult<AuthenticatedOperator?>(null));
+        using var client = Client(app, token);
+        using var response = await client.PostAsync("/management/v1/session", null);
+        Assert.Equal(expected, response.StatusCode);
+        Assert.False(File.Exists(Path.Combine(_directory, "operators.cache")));
+    }
+
+    [Theory]
+    [InlineData(true, false, BusinessReadiness.Ready)]
+    [InlineData(false, false, BusinessReadiness.NotReady)]
+    [InlineData(false, true, BusinessReadiness.Unknown)]
+    public async Task RunningServiceStatusUsesObservedBusinessReadiness(bool ready, bool unavailable, BusinessReadiness expected)
+    {
+        _host.Status = BusinessServiceStatus.Running;
+        await using var app = await AppAsync(checkReadinessOnStatus: true, statusObservation: _ => unavailable
+            ? throw new HttpRequestException("synthetic unreachable endpoint") : Task.FromResult(ready));
+        using var client = Client(app);
+        var result = await client.GetFromJsonAsync<ManagementEnvelope<ManagementStatus>>("/management/v1/service/status", _json.Options);
+        Assert.Equal(BusinessServiceStatus.Running, result!.Result!.ProcessStatus);
+        Assert.Equal(expected, result.Result.Readiness);
+        if (expected != BusinessReadiness.Unknown)
+        {
+            var check = Assert.Single(result.Result.Checks);
+            Assert.Equal("business-readiness", check.Name);
+            Assert.Equal(expected == BusinessReadiness.Ready, check.Passed);
+        }
     }
 
     [Fact]
@@ -513,17 +631,21 @@ public sealed class LocalManagementApiTests : IDisposable
         Func<RestoreRequest, ServiceConfiguration, CancellationToken, Task<IReadOnlyList<StartupCheckResult>>>? verifyTarget = null,
         Func<string>? workingDirectory = null, bool activateRecovery = false,
         Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? observeRecovery = null, bool failOnlyTerminal = false,
-        bool supportsAdvancedOperations = true)
+        bool supportsAdvancedOperations = true,
+        Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null,
+        bool checkReadinessOnStatus = false, Func<CancellationToken, Task<bool>>? statusObservation = null,
+        Func<string, CancellationToken, Task<BackupInfo>>? readBackupInfo = null)
     {
         var configurationStore = new FileServiceConfigurationStore(Path.Combine(_directory, "configuration.json"));
         if (!File.Exists(Path.Combine(_directory, "configuration.json"))) await configurationStore.SaveAsync(Configuration, 0);
         var builder = deploymentBuilder ? ManagementEntryPoint.CreateHostBuilder([]) : WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(Sessions(credentials));
+        builder.Services.AddSingleton(Sessions(credentials, authenticateBusinessSession));
         IManagementOperationStore journal = new FileManagementOperationStore(Path.Combine(_directory, "operations"));
         if (failCompletion) journal = new FailCompletionStore(journal, failOnlyTerminal);
         builder.Services.AddSingleton(new ManagementRuntime("server", "node", configurationStore, _host, _ => _host,
-            new Probe(blockStartup), () => _backups, journal, new SystemClock(), observeBusinessReady: (_, _) => Task.FromResult(observedReady),
+            new Probe(blockStartup), () => _backups, journal, new SystemClock(),
+            observeBusinessReady: (_, token) => statusObservation?.Invoke(token) ?? Task.FromResult(observedReady),
             prepareRecoveryWorkingCopy: prepareWorkingCopy, verifyRecoveryTarget: verifyTarget, recoveryWorkingDirectory: workingDirectory,
             activateRecovery: activateRecovery ? (op, token) => new RecoveryActivationRunner(_host, () => _host,
                 new FileRecoveryDeploymentSwitch(new FileRecoveryDeploymentSelection(Path.Combine(_directory, "deployment.json")), 1), journal)
@@ -532,7 +654,8 @@ public sealed class LocalManagementApiTests : IDisposable
                 .ReadAuditAsync(limit, token),
             readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
                 Path.Combine(_directory, "business-events.jsonl"), "business", limit, token),
-            supportsAdvancedOperations: supportsAdvancedOperations));
+            supportsAdvancedOperations: supportsAdvancedOperations, checkReadinessOnStatus: checkReadinessOnStatus,
+            readBackupInfo: readBackupInfo));
         var app = builder.Build();
         app.MapManagementApi();
         await app.StartAsync();
@@ -541,10 +664,11 @@ public sealed class LocalManagementApiTests : IDisposable
     }
 
     /// <summary>服务管理登录：数据库部分由合成账号代替；缓存写在本测试的临时目录。</summary>
-    private ManagementOperatorSessions Sessions(bool credentials) => new(() => null, Path.Combine(_directory, "operators.cache"),
+    private ManagementOperatorSessions Sessions(bool credentials,
+        Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null) => new(() => null, Path.Combine(_directory, "operators.cache"),
         loadFromDatabase: _ => Task.FromResult<IReadOnlyList<Exam.Infrastructure.Postgres.Operators.CachedOperatorCredential>>(credentials
             ? [new("operator", Exam.Application.Security.OperatorPasswordHasher.Hash(Password), true)]
-            : []));
+            : []), authenticateBusinessSession: authenticateBusinessSession);
 
     private async Task<string> LoginAsync(WebApplication app, string password = Password)
     {

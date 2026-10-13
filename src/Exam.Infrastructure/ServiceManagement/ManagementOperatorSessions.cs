@@ -18,7 +18,8 @@ public sealed class ManagementOperatorSessions(
     Func<string?> connectionString,
     string cachePath,
     TimeSpan? databaseTimeout = null,
-    Func<CancellationToken, Task<IReadOnlyList<CachedOperatorCredential>>>? loadFromDatabase = null)
+    Func<CancellationToken, Task<IReadOnlyList<CachedOperatorCredential>>>? loadFromDatabase = null,
+    Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null)
 {
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Huaizhou.Exam.Management.OperatorCache.v1");
     private readonly ConcurrentDictionary<string, AuthenticatedOperator> _sessions = new(StringComparer.Ordinal);
@@ -34,10 +35,27 @@ public sealed class ManagementOperatorSessions(
         var key = Exam.Contracts.Operators.OperatorRules.Key(username);
         var match = credentials.FirstOrDefault(item => Exam.Contracts.Operators.OperatorRules.Key(item.Username) == key);
         if (match is null || !OperatorPasswordHasher.Verify(password, match.PasswordHash)) return null;
-        var token = OperatorPasswordHasher.NewSessionToken();
         var session = new AuthenticatedOperator(match.Username, match.IsAdministrator);
-        _sessions[OperatorPasswordHasher.TokenDigest(token)] = session;
-        return (token, session);
+        return CreateSession(session);
+    }
+
+    /// <summary>Exchanges a currently valid business session for an independent management session, without a password or offline fallback.</summary>
+    public async Task<(string Token, AuthenticatedOperator Operator)?> ExchangeBusinessSessionAsync(string? token,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(token) || token.Length > 256) return null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(databaseTimeout ?? TimeSpan.FromSeconds(5));
+        var account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token)
+            .ConfigureAwait(false);
+        return account is null ? null : CreateSession(account);
+    }
+
+    private (string Token, AuthenticatedOperator Operator) CreateSession(AuthenticatedOperator account)
+    {
+        var token = OperatorPasswordHasher.NewSessionToken();
+        _sessions[OperatorPasswordHasher.TokenDigest(token)] = account;
+        return (token, account);
     }
 
     public AuthenticatedOperator? Authenticate(string? token) =>
@@ -77,6 +95,15 @@ public sealed class ManagementOperatorSessions(
         var builder = new NpgsqlConnectionStringBuilder(connection) { Timeout = 5 };
         await using var dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
         return await new PostgresOperatorAccounts(dataSource).ListActiveCredentialsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AuthenticatedOperator?> AuthenticateBusinessSessionFromPostgresAsync(string token, CancellationToken cancellationToken)
+    {
+        var connection = connectionString();
+        if (string.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("未配置数据库连接。");
+        var builder = new NpgsqlConnectionStringBuilder(connection) { Timeout = 5 };
+        await using var dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
+        return await new PostgresOperatorAccounts(dataSource).AuthenticateAsync(token, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<CachedOperatorCredential>> ReadCacheAsync(CancellationToken cancellationToken)

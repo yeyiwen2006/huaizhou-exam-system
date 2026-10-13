@@ -19,8 +19,8 @@ public sealed partial class ServiceManagementViewModel
     public string ProtectionText { get => _protection; private set { if (SetProperty(ref _protection, value)) OnPropertyChanged(nameof(ShowProtectionWarning)); } }
     public bool ShowProtectionWarning => _lastDegraded || _availability?.State is { ProtectionMode: not ProtectionMode.SynchronousDualNode };
     public string HighAvailabilityVersionText => _availability is { State: { } state, VerifiedAt: { } time }
-        ? $"活动节点：{state.ActiveNodeId}；代次 {state.ServerEpoch}；状态版本 {state.Version}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
-        : "当前活动节点、代次和状态版本未核实";
+        ? $"活动节点：{state.ActiveNodeId}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
+        : "当前活动节点未核实";
     public string HighAvailabilityReason { get => _haReason; set => SetProperty(ref _haReason, value); }
     public string HighAvailabilityTarget { get => _haTarget; set => SetProperty(ref _haTarget, value); }
     public bool OldPrimaryPoweredOff { get => _hostOff; set => SetProperty(ref _hostOff, value); }
@@ -41,7 +41,7 @@ public sealed partial class ServiceManagementViewModel
     {
         if (_availability is not { State: { } state, VerifiedAt: { } time } ||
             _time.GetUtcNow() - time >= TimeSpan.FromSeconds(10) || time > _time.GetUtcNow().AddSeconds(5))
-            throw new ArgumentException("先重新查询当前主备状态与代次，再确认操作。");
+            throw new ArgumentException("先重新查询当前主备状态，再确认操作。");
         if (string.IsNullOrWhiteSpace(HighAvailabilityReason) || HighAvailabilityReason.Length > 500 ||
             string.IsNullOrWhiteSpace(HighAvailabilityTarget) || !state.Nodes.ContainsKey(HighAvailabilityTarget.Trim()))
             throw new ArgumentException("请输入本次操作的已配置目标节点与原因。");
@@ -91,7 +91,6 @@ public sealed partial class ServiceManagementViewModel
             ProtectionMode.Recovering => "恢复中：旧节点保持隔离，尚未完成双侧持久确认，不能判定同步保护已恢复。",
             _ when status.SynchronousProtectionVerified => "同步双机保护已核实：实际复制、材料及双侧最新持久确认均通过。",
             _ => _lastDegraded ? "此前保护已降低；当前同步保护仍未核实，不能据在线或延迟为零解除警示。" : "当前同步保护未核实；节点在线或延迟为零不能替代双侧确认。" };
-        EpochText = $"已核实代次：{state.ServerEpoch}";
         if (string.IsNullOrWhiteSpace(HighAvailabilityTarget)) HighAvailabilityTarget = target.NodeId;
         Nodes.Clear();
         foreach (var node in state.Nodes.Values.OrderBy(n => n.NodeId, StringComparer.Ordinal))

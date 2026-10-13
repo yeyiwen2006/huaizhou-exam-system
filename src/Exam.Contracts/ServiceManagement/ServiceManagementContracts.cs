@@ -44,4 +44,7 @@ public sealed record BackupResult(
 
 public sealed record RestoreRequest(string RequestId, string BackupId, string SourceDirectory, string ActorId);
 
+/// <summary>Server-read backup metadata; content verification remains part of restoration.</summary>
+public sealed record BackupInfo(string BackupId, string SourceDirectory, DateTimeOffset CreatedAt);
+
 public sealed record RestoreResult(string BackupId, DateTimeOffset CompletedAt, IReadOnlyList<StartupCheckResult> Checks);

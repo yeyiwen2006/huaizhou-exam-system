@@ -9,6 +9,41 @@ public sealed class PostgresBackupCoordinatorTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"exam-backup-test-{Guid.NewGuid():N}");
 
     [Theory]
+    [InlineData("valid")]
+    [InlineData("outside-root")]
+    [InlineData("invalid-manifest")]
+    public async Task BackupInfoReadsOnlyMetadataWithinTheAllowedRoot(string scenario)
+    {
+        var root = Path.Combine(_root, "backups");
+        var selected = Path.Combine(root, "selected");
+        var completed = new DateTimeOffset(2026, 10, 13, 8, 0, 0, TimeSpan.FromHours(8));
+        var manifest = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            formatVersion = 2, backupId = "known-backup", requestId = "original-request", completedAt = completed,
+            actorId = "operator", databaseDirectory = "database", resourcesDirectory = "resources",
+            protectedConfigurationDirectory = "protected-configuration",
+            resourceFiles = new[] { new { relativePath = "paper.pkg", length = 1, sha256 = "metadata-only" } },
+            protectedConfigurationFiles = new[] { new { relativePath = "configuration.json", length = 1, sha256 = "metadata-only" } }
+        });
+        WriteFixture(selected, "exam-backup.json", scenario == "invalid-manifest" ? "{}" : manifest);
+        var runner = new FakePostgresTools();
+        var reader = new PostgresBackupCoordinator(new PostgresBackupOptions("", "", root, "", "", "", TimeSpan.FromSeconds(5)), runner);
+        if (scenario == "outside-root")
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => reader.ReadBackupInfoAsync(Path.Combine(_root, "other"), default));
+        else if (scenario == "invalid-manifest")
+            await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadBackupInfoAsync(selected, default));
+        else
+        {
+            var info = await reader.ReadBackupInfoAsync(Path.Combine(root, "unused", "..", "selected"), default);
+            Assert.Equal(new BackupInfo("known-backup", Path.GetFullPath(selected), completed), info);
+            Assert.Equal(manifest, await File.ReadAllTextAsync(Path.Combine(selected, "exam-backup.json")));
+        }
+        Assert.Empty(runner.Calls);
+        Assert.Single(Directory.EnumerateFiles(selected));
+        Assert.Empty(Directory.EnumerateDirectories(selected));
+    }
+
+    [Theory]
     [InlineData("replay")]
     [InlineData("different-actor")]
     [InlineData("different-request")]

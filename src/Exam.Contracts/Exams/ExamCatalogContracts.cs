@@ -43,6 +43,8 @@ public sealed record ExamSummary(
 {
     /// <summary>服务器当前试卷版本；0 表示未发布，null 表示未提供发布状态。</summary>
     public long? PaperVersion { get; init; }
+    /// <summary>曾实际开考后，即使时间调整为未开始，也不能改动科目题组结构。</summary>
+    public DateTimeOffset? ActualStartedAt { get; init; }
 
     /// <summary>考务端列表整理状态，与学生端显示开关无关。</summary>
     public bool HiddenForCurrentOperator { get; init; }

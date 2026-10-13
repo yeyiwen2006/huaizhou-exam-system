@@ -96,7 +96,7 @@ public sealed partial class PostgresExamVersioningServiceTests
         var historical = new UpdateScheduleRequest(exam, 1, new(now.AddHours(-2), now.AddHours(1)), now, exam + "-correct");
         Assert.Equal(ExamLifecycle.Ended, service.UpdateSchedule(historical).Value!.LifecycleState);
         var retry = new PostgresExamVersioningService(fixture.DataSource).UpdateSchedule(historical with
-        { Now = now.AddMinutes(1), ReopenEndedExam = true });
+        { Now = now.AddMinutes(1), ReopenEndedExam = true, ReevaluateLifecycle = true });
         Assert.True(retry.Succeeded, retry.Error);
         Assert.Equal(ExamLifecycle.Ended, retry.Value!.LifecycleState);
         Assert.Equal(0, retry.Value.ReopenedAtScheduleVersion);

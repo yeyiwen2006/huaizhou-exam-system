@@ -194,6 +194,7 @@ internal sealed class HaGuiConnection : IManagementConnection
     public bool Unavailable, StaleState, StaleNode, CorruptCertificate, FullProof = true;
     public int Writes; public string? LastBody, LastQuery;
     public Task LoginAsync(string user, string password, CancellationToken token) => Task.CompletedTask;
+    public Task UseBusinessSessionAsync(Exam.Admin.Services.AdminSessionSnapshot session, CancellationToken token) => Task.CompletedTask;
     public Task LogoutAsync(CancellationToken token) => Task.CompletedTask;
     public Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) => Task.FromResult(Reply(new ManagementStatus(BusinessServiceStatus.Stopped, BusinessReadiness.Unknown,
         new(Target.ServerId, Target.NodeId, "127.0.0.1", 8443, "C:\\synthetic-data", true, 1), [])));

@@ -154,6 +154,9 @@ public sealed record UpdateScheduleRequest(
     // Persist the policy on new requests so replay never reinterprets historical time corrections.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool ReopenEndedExam { get; init; }
+    // New saves derive lifecycle from the complete window; omitted historical commands keep their original policy.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReevaluateLifecycle { get; init; }
 }
 
 public sealed record ExecuteScheduleTriggerRequest(

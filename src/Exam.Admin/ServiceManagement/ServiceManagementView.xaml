@@ -37,8 +37,7 @@
                 <controls:Banner Level="Warning" IsOpen="True" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding Message}" Style="{StaticResource Management.Message}"/>
                 <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}" Margin="0,0,0,12">
-                    <TextBlock x:Name="PersistentPendingText" Text="{Binding PendingText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}" Style="{StaticResource Management.Message}"/>
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -46,21 +45,14 @@
             <StackPanel Margin="{StaticResource Padding.Page}">
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding IsSignedOut, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
-                        <TextBlock Text="独立管理登录" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="管理连接" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{Binding ConnectionStatus}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,8,0,12"/>
-                        <TextBlock Text="可从考务电脑远程管理服务器。连接信息由部署人员提供；即使业务服务停止，仍可在此登录并启动业务。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,16"/>
-                        <Grid IsEnabled="{Binding CanLogin}">
-                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <StackPanel><TextBlock Text="考务账号" Style="{StaticResource FieldLabel}"/>
-                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1"><TextBlock Text="密码" Style="{StaticResource FieldLabel}"/>
-                                <PasswordBox x:Name="LoginPassword" Margin="0,4,12,12"/>
-                            </StackPanel>
-                            <Button x:Name="LoginButton" Grid.Column="2" Content="登录管理" Style="{StaticResource Btn.Primary}" Margin="0,0,0,12" VerticalAlignment="Bottom" Click="OnLogin"/>
-                        </Grid>
-                        <Button Content="导入连接配置" Style="{StaticResource Management.Action}" HorizontalAlignment="Left"
-                                IsEnabled="{Binding CanConfigureConnection}" Click="OnImportConnection"/>
+                        <TextBlock Text="使用当前考务账号连接服务器管理。连接信息由部署人员提供。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+                        <WrapPanel>
+                            <Button Content="重新连接" Style="{StaticResource Management.Action}" Command="{Binding ReconnectCommand}"/>
+                            <Button Content="导入连接配置" Style="{StaticResource Management.Action}"
+                                    IsEnabled="{Binding CanConfigureConnection}" Click="OnImportConnection"/>
+                        </WrapPanel>
                         <Expander x:Name="ConnectionSettingsExpander" Header="连接设置（部署人员）" IsExpanded="False" Margin="0,8,0,0"
                                   IsEnabled="{Binding CanConfigureConnection}">
                             <StackPanel Margin="0,12,0,0">
@@ -85,27 +77,22 @@
                 <StackPanel Visibility="{Binding IsSignedIn, Converter={StaticResource BoolToVis}}">
                     <Border Style="{StaticResource Management.Section}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,12">
-                                <Button DockPanel.Dock="Right" Content="退出管理登录" Style="{StaticResource Btn.Secondary}" Command="{Binding LogoutCommand}"/>
-                                <TextBlock Text="服务与检查" Style="{StaticResource SectionTitle}"/>
-                            </DockPanel>
-                            <WrapPanel Margin="0,0,0,14">
-                                <controls:StatusPill Text="{Binding ProcessText}" Level="Info" Margin="0,0,12,8"/>
-                                <controls:StatusPill Text="{Binding ReadinessText}" Level="Warning" Margin="0,0,12,8"/>
-                                <TextBlock Text="{Binding EpochText}" Style="{StaticResource CaptionText}" Margin="0,4,0,8"/>
-                            </WrapPanel>
+                            <TextBlock Text="服务器状态" Style="{StaticResource SectionTitle}" Margin="0,0,0,12"/>
+                            <controls:StatusPill x:Name="ServerStatusBar" Text="{Binding ServerStatusText}" Level="Info" HorizontalAlignment="Left" Margin="0,0,0,14"/>
                             <WrapPanel>
                                 <Button Content="刷新状态与日志" Style="{StaticResource Management.Action}" Command="{Binding RefreshCommand}"/>
-                                <Button Content="启动业务" Style="{StaticResource Management.Action}" Command="{Binding StartCommand}"/>
-                                <Button Content="停止业务" Style="{StaticResource Management.Action}" Command="{Binding StopCommand}"/>
-                                <Button Content="运行自检" Style="{StaticResource Management.Action}" Command="{Binding ChecksCommand}"/>
+                                <Button Content="运行状态检测" Style="{StaticResource Management.Action}" Command="{Binding ChecksCommand}"/>
                                 <Button Content="取消等待" Style="{StaticResource Management.Action}" Command="{Binding CancelWaitCommand}"/>
                             </WrapPanel>
-                            <WrapPanel>
-                                <Button Content="查询原请求" Style="{StaticResource Management.Action}" Command="{Binding QueryCommand}"/>
-                                <Button Content="按原内容重试" Style="{StaticResource Management.Action}" Command="{Binding RetryOriginalCommand}"/>
-                                <Button Content="续办原恢复" Style="{StaticResource Management.Action}" Command="{Binding ResumeRestoreCommand}"/>
-                            </WrapPanel>
+                            <TextBlock Text="请求编号" Style="{StaticResource FieldLabel}" Margin="0,8,0,0"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="RequestIdInput" Style="{StaticResource Management.Field}"
+                                         Text="{Binding RequestIdToQuery, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="默认显示最近一次操作的请求编号，也可输入历史编号查询"/>
+                                <Button Grid.Column="1" Content="查询请求处理状态" Style="{StaticResource Management.Action}"
+                                        VerticalAlignment="Center" Command="{Binding QueryCommand}"/>
+                            </Grid>
                             <ItemsControl ItemsSource="{Binding Checks}">
                                 <ItemsControl.ItemTemplate><DataTemplate>
                                     <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
@@ -159,17 +146,16 @@
                         </Expander>
                     </Border>
                     <Border Style="{StaticResource Management.Section}">
-                        <Expander Header="服务器业务配置" IsExpanded="True">
+                        <Expander Header="服务器配置" IsExpanded="True">
                             <StackPanel Margin="0,16,0,0">
-                                <TextBlock Text="{Binding ConfigurationVersionText}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
-                                    <StackPanel><TextBlock Text="业务监听地址" Style="{StaticResource FieldLabel}"/>
+                                    <StackPanel><TextBlock Text="服务器地址" Style="{StaticResource FieldLabel}"/>
                                         <TextBox Style="{StaticResource Management.Field}" Text="{Binding BindAddress, UpdateSourceTrigger=PropertyChanged}"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1"><TextBlock Text="业务 HTTPS 端口" Style="{StaticResource FieldLabel}"/>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="服务器业务HTTPS端口" Style="{StaticResource FieldLabel}"/>
                                         <TextBox Style="{StaticResource Management.Field}" Text="{Binding HttpsPort, UpdateSourceTrigger=PropertyChanged}"/>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2"><TextBlock Text="服务器业务数据目录" Style="{StaticResource FieldLabel}"/>
+                                    <StackPanel Grid.Column="2"><TextBlock Text="数据存储目录" Style="{StaticResource FieldLabel}"/>
                                         <TextBox Style="{StaticResource Management.Field}" Text="{Binding DataDirectory, UpdateSourceTrigger=PropertyChanged}"/>
                                     </StackPanel>
                                 </Grid>
@@ -182,36 +168,31 @@
                         </Expander>
                     </Border>
                     <Border Style="{StaticResource Management.Section}">
-                        <Expander Header="备份与隔离恢复" IsExpanded="True">
+                        <Expander Header="备份与恢复" IsExpanded="True">
                             <StackPanel Margin="0,16,0,0">
                                 <TextBlock Text="{Binding RestoreGuidance}" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,0,0,12"/>
                                 <TextBlock Text="服务器上的备份目标绝对目录" Style="{StaticResource FieldLabel}"/>
                                 <TextBox Style="{StaticResource Management.Field}" Text="{Binding BackupDestination, UpdateSourceTrigger=PropertyChanged}"/>
                                 <Button Content="创建备份" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding BackupCommand}"/>
-                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
-                                    <StackPanel><TextBlock Text="备份标识" Style="{StaticResource FieldLabel}"/>
-                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding RestoreBackupId, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1"><TextBlock Text="服务器上的备份来源绝对目录" Style="{StaticResource FieldLabel}"/>
-                                        <TextBox Style="{StaticResource Management.Field}" Text="{Binding RestoreSource, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </StackPanel>
-                                </Grid>
-                                <Button Content="隔离恢复" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding RestoreCommand}"/>
-                                <TextBlock Text="{Binding RestoreText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <TextBlock Text="服务器上的备份来源绝对目录" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Style="{StaticResource Management.Field}" Text="{Binding RestoreSource, UpdateSourceTrigger=PropertyChanged}"/>
+                                <Button Content="按此备份恢复" HorizontalAlignment="Left" Style="{StaticResource Management.Action}" Command="{Binding RestoreCommand}"/>
+                                <controls:StatusPill x:Name="RestoreStatusBar" Text="{Binding RestoreText}" Level="Info" HorizontalAlignment="Left" Margin="0,8,0,0"/>
                             </StackPanel>
                         </Expander>
                     </Border>
                     <Border Style="{StaticResource Management.Section}">
-                        <Expander Header="限定操作与运行日志" IsExpanded="False">
+                        <Expander Header="操作与事件日志" IsExpanded="False">
                             <StackPanel Margin="0,16,0,0">
-                                <TextBlock Text="只读取操作和事件元数据，每类最多50条。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                                <TextBlock Text="显示最近的操作和事件，每类最多50条。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                                 <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="320">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="140"/>
                                         <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="100"/>
-                                        <DataGridTextColumn Header="操作 / 类别" Binding="{Binding Kind}" Width="*"/>
-                                        <DataGridTextColumn Header="阶段 / 级别" Binding="{Binding Phase}" Width="140"/>
-                                        <DataGridTextColumn Header="结果 / 事件" Binding="{Binding Code}" Width="140"/>
+                                        <DataGridTextColumn Header="请求编号或事件编号" Binding="{Binding Identifier}" Width="*" MinWidth="160"/>
+                                        <DataGridTextColumn Header="类别" Binding="{Binding Kind}" Width="120"/>
+                                        <DataGridTextColumn Header="阶段或事件级别" Binding="{Binding Phase}" Width="140"/>
+                                        <DataGridTextColumn Header="结果" Binding="{Binding Code}" Width="120"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </StackPanel>

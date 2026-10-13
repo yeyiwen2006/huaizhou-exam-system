@@ -60,7 +60,7 @@ public sealed partial class ExamVersioningServiceTests
     }
 
     [Fact]
-    public void Moving_start_later_does_not_return_a_running_exam_to_waiting()
+    public void Legacy_time_correction_replay_does_not_return_a_running_exam_to_waiting()
     {
         var service = CreateService(now: BaseTime.AddHours(1));
         var started = service.GetExam("exam-1").Value!;

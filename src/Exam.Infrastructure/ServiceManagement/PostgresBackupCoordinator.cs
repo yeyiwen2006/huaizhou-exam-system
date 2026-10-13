@@ -110,6 +110,19 @@ public sealed class PostgresBackupCoordinator(
         return result;
     }
 
+    /// <summary>Reads only the selected backup's metadata inside the allowed root; does not run tools or mutate state.</summary>
+    public async Task<BackupInfo> ReadBackupInfoAsync(string directory, CancellationToken cancellationToken)
+    {
+        if (!Path.IsPathFullyQualified(options.AllowedBackupRoot))
+            throw new InvalidOperationException("允许的备份根目录必须是绝对路径。");
+        if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+            throw new ArgumentException("备份来源必须是服务器上的绝对目录。");
+        var source = ResolveWithinRoot(options.AllowedBackupRoot, directory);
+        var manifest = await ReadManifestAsync(source, cancellationToken);
+        if (manifest.CompletedAt == default) throw new InvalidDataException("备份清单缺少创建时间。");
+        return new(manifest.BackupId, source, manifest.CompletedAt);
+    }
+
     /// <summary>Read-only integrity check of an explicitly selected backup; no live database access.</summary>
     public async Task<BackupResult> VerifyAvailableBackupAsync(string directory, string expectedBackupId, CancellationToken cancellationToken)
     {

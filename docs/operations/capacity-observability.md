@@ -12,7 +12,7 @@
 | `Database:Capacity:MaximumServerProcesses` | 可能同时连接同一数据库的服务进程最大数，包含部署重叠、维护实例和恢复期间的额外进程 |
 | `Database:Capacity:PostgresMaxConnections` | 实际 PostgreSQL 的 `max_connections` |
 | `Database:Capacity:PostgresReservedConnections` | `superuser_reserved_connections + reserved_connections` 的实际总数 |
-| `Database:Capacity:OtherConnections` | 其他应用、备份工具、CLI、自检或独立数据源需要的连接预算 |
+| `Database:Capacity:OtherConnections` | 其他应用、备份工具、CLI、状态检测或独立数据源需要的连接预算 |
 | `Database:Capacity:OperationsReserveConnections` | 在 PostgreSQL 保留槽之外额外留给运维的余量，至少 3 |
 
 检查公式为：

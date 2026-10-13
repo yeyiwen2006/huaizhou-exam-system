@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Exam.Admin;
 using Exam.Admin.ServiceManagement;
+using Exam.Admin.Services;
 using Exam.Admin.ViewModels;
 using Exam.Contracts.HighAvailability;
 using Exam.Desktop.Shared.Controls;
@@ -57,16 +58,25 @@ public sealed class HighAvailabilityViewTests
     {
         var connection = new HaGuiConnection { Mode = ProtectionMode.EmergencySingleNode };
         using var model = HighAvailabilityWorkspaceTests.Model(connection);
-        var window = new MainWindow(new MainViewModel(), model) { ShowInTaskbar = false, ShowActivated = false, Left = -5000, Top = -5000,
+        var business = new MainViewModel(new AdminApiClient(new BusinessSessionFixture()));
+        var window = new MainWindow(business, model) { ShowInTaskbar = false, ShowActivated = false, Left = -5000, Top = -5000,
             Width = 1120, Height = 720, WindowStyle = WindowStyle.None };
         Theme(window);
         try
         {
-            window.Show(); window.OpenManagement(); model.LoginAsync("synthetic").GetAwaiter().GetResult(); Drain();
-            window.ReturnToBusiness(); Drain(); Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute);
+            window.Show(); SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            business.Connection.ServerAddress = "exam.example.test";
+            business.Connection.Username = "synthetic-operator"; business.Connection.Password = "synthetic-password";
+            business.Connection.ConnectCommand.Execute(null);
+            for (var i = 0; i < 200 && !business.Connection.IsConnected; i++) { Drain(); Thread.Sleep(10); }
+            Assert.True(business.Connection.IsConnected, business.Connection.Status);
+            window.OpenManagement(); Drain(); Assert.True(model.IsSignedIn);
+            window.ReturnToBusiness(); Drain(); Assert.Equal(AdminWorkspaceRoute.BusinessWorkspace, window.WorkspaceRoute);
             Assert.Contains(Descendants<Banner>(window), banner => banner.IsOpen && banner.Message.Contains("此前", StringComparison.Ordinal));
             Save(window, "shell-warning", 1d, 1120d, 720d);
-            model.LogoutAsync().GetAwaiter().GetResult(); Drain();
+            business.Connection.LogoutCommand.Execute(null);
+            for (var i = 0; i < 200 && business.Connection.IsConnected; i++) { Drain(); Thread.Sleep(10); }
+            Drain(); Assert.Equal(AdminWorkspaceRoute.BusinessLogin, window.WorkspaceRoute); Assert.False(model.IsSignedIn);
             Assert.Contains(Descendants<Banner>(window), banner => banner.IsOpen && banner.Message.Contains("未核实", StringComparison.Ordinal));
         }
         finally { window.Close(); }

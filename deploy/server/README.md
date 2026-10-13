@@ -1,6 +1,6 @@
 # 服务器部署与跨设备连接
 
-考务端运行在 Windows 办公电脑上，通过 HTTPS 连接服务器。业务服务默认使用 443 端口，考务登录页填写 IP 或域名即可。服务器管理使用独立的 `Exam.Management` 进程，即使考试业务停止，也可以从考务端登录管理、查询状态和启动业务。
+考务端运行在 Windows 办公电脑上，通过 HTTPS 连接服务器。业务服务默认使用 443 端口，考务登录页填写 IP 或域名即可。登录后直接进入“服务器管理”，当前业务令牌用于安全换取管理会话，无须再次输入账号和密码。服务器管理仍由独立的 `Exam.Management` 进程提供，业务停止时由部署人员通过正式管理 API、CLI 或服务器运维工具处理启停。
 
 这份说明用于准备真实服务器部署。示例中的域名、节点标识和路径都需要替换。安装脚本注册服务后不会启动服务，也不会创建数据库、初始化主备权威状态或导入旧单机测试数据。
 
@@ -9,8 +9,8 @@
 | 项目 | Windows 服务器 | Linux 服务器 |
 | --- | --- | --- |
 | 考试业务 HTTPS | 支持 | 支持 |
-| 独立管理登录、状态、自检、配置、日志 | 支持 | 支持，登录需要 PostgreSQL 可达 |
-| 业务服务启停 | Windows 服务 | systemd 服务 |
+| 状态、状态检测、配置、日志 | 支持，GUI跟随考务登录 | 支持，认证需要 PostgreSQL 可达 |
+| 业务服务启停，使用管理API或CLI | Windows 服务 | systemd 服务 |
 | 备份 | PostgreSQL Windows 工具 | PostgreSQL Linux 工具 |
 | 管理账号离线缓存 | Windows 本机加密缓存 | 不保存离线缓存 |
 | 隔离恢复、接管、应急、重建、恢复保护 | 使用现有 Windows 部署流程 | 当前管理宿主不提供这些操作 |
@@ -48,7 +48,7 @@ Linux 对应使用本目录的 [业务配置](appsettings.business.linux.example
 | `Database`、`RequestCapacity` | 参考[容量配置](../server-capacity.example.json)，按实际 PostgreSQL 连接预算填写 |
 | `Confirmation` | 当前节点的独立确认目录、主备节点标识、对端 HTTPS 地址及受保护的 `PeerToken` |
 | `StudentFailover:Nodes` | 使用可从学生机访问的真实地址、443 端口及实际证书信任值，参考[主备拓扑模板](../student-failover.example.json) |
-| `Backup` | 工具、资源、受保护材料和备份目录；管理自检还使用已选定备份的目录及标识 |
+| `Backup` | 工具、资源、受保护材料和备份目录；管理状态检测还使用已选定备份的目录及标识 |
 
 Windows 主备管理的详细配置继续参照[主备配置模板](../../samples/service-management/appsettings.high-availability.example.json)和[恢复运行手册](../../docs/backup-and-failover-runbook.md)。新数据库的迁移、初始节点状态和复制准备必须在业务开放前完成，不能直接复用旧调试宿主生成的状态。
 
@@ -58,7 +58,7 @@ Windows 主备管理的详细配置继续参照[主备配置模板](../../sample
 
 业务服务的 `service.json` 设置 `httpsPort` 为 `443`。`bindAddress` 填服务器网卡 IP，或用 `0.0.0.0` 监听所有 IPv4 网卡。管理服务单独设置 `Management:BindAddress` 和 `Management:HttpsPort`，例子使用 `9443`。未配置管理监听地址时仍只监听本机。
 
-业务和管理使用不同端口或不同监听 IP。同一 IP 上不要让两个独立进程同时占用 443。管理端口写入部署连接文件，考务人员进入管理页后直接输入账号和密码。考务业务登录默认 HTTPS 443；非标准业务端口仍可由部署人员提供完整地址，例如 `https://exam.example.invalid:8443/`。
+业务和管理使用不同端口或不同监听 IP。同一 IP 上不要让两个独立进程同时占用 443。管理端口写入部署连接文件，考务人员登录后进入管理页，不再重复填写账号和密码。考务业务登录默认 HTTPS 443；非标准业务端口仍可由部署人员提供完整地址，例如 `https://exam.example.invalid:8443/`。
 
 考务端和服务器都保留正常 HTTPS 证书验证。证书中的域名或 IP 要和实际访问地址相符。使用内部 CA 时，在考务电脑及需要访问对端 HTTPS 的服务器服务账户环境中部署信任链。
 
@@ -88,7 +88,7 @@ pwsh -File deploy/server/Install-WindowsServices.ps1 -DeploymentDirectory "C:\Ex
 
 脚本拒绝覆盖已有同名服务。升级已有部署时先停止相关服务，再更换程序文件并保留实际配置、证书和数据，不向现有部署目录重新发布默认配置。
 
-首次业务运行所需数据库和主备初始化由部署人员在维护窗口完成，再启动业务完成第一个管理员账号的注册。之后先启动独立管理服务、登录并配置选定备份，日常业务启停可交给考务端。已有部署继续使用原账号与数据。管理启动自检要求真实备份证据，空库首次部署也应建立初始备份后配置 `Backup:StartupVerificationDirectory` 和 `StartupVerificationBackupId`。
+首次业务运行所需数据库和主备初始化由部署人员在维护窗口完成，再启动业务完成第一个管理员账号的注册。随后启动独立管理服务并配置选定备份，业务启停继续使用管理 CLI 或服务器运维工具，考务 GUI 不提供启停按钮。已有部署继续使用原账号与数据。管理启动检查要求真实备份证据，空库首次部署也应建立初始备份后配置 `Backup:StartupVerificationDirectory` 和 `StartupVerificationBackupId`。
 
 ## Linux 服务安装
 
@@ -100,7 +100,7 @@ sudo bash deploy/server/install-systemd.sh /srv/exam/apps examservice huaizhou-b
 
 管理配置中的 `Management:BusinessServiceName` 填 `huaizhou-business.service`。脚本生成两个 unit，将管理服务设为开机启动，并为指定账户授予这一业务 unit 的启动和停止权限。业务服务不自动随系统启动。unit 允许非 root 进程绑定 HTTPS 443，工作目录设为各程序目录，配置按各自的 `appsettings.json` 加载。
 
-Linux 登录直接核对数据库，业务停机期间应保持 PostgreSQL 和管理服务运行。隔离恢复和主备变更请求会得到明确的不支持提示，不会执行 Windows 命令。
+Linux 管理认证直接核对数据库，业务停机期间应保持 PostgreSQL 和管理服务运行，运维人员使用 CLI 独立登录。GUI使用考务业务会话交换管理会话，退出或换账号时清除旧管理权限。隔离恢复和主备变更请求会得到明确的不支持提示，不会执行 Windows 命令。
 
 ## 把管理连接交给考务端
 
@@ -117,9 +117,9 @@ pwsh -File deploy/management/Export-AdminConnection.ps1 -ManagementConfiguration
 在服务器和考务电脑分开的环境中，检查以下操作即可验证本次连接改造。
 
 1. 考务端只填写业务域名或 IP，完成注册或登录，确认实际使用 HTTPS 443。
-2. 从业务登录页进入“服务器管理”，导入目标节点连接并登录，查看服务器状态。
-3. 经操作确认停止业务，保持管理服务和 PostgreSQL 运行，确认状态仍可查询，再从管理页启动业务并确认就绪。
+2. 考务登录后进入“服务器管理”，导入目标节点连接，确认无须第二次登录。核对合并后的服务器状态、状态检测，以及最近和历史请求处理状态查询。
+3. 使用管理 CLI 停止业务，保持管理服务和 PostgreSQL 运行，再通过 CLI 启动并确认就绪。考务界面不出现业务启停、按原内容重试或续办原恢复按钮；页面不再单列待核对请求，处理情况由操作结果展示。
 4. 使用测试考试完成题目导入、学生机登录和答卷回收。目录填写目标服务器路径，确认备份实际生成于服务器。
-5. 分别检查错误账号、错误证书名称和未登录管理请求被拒绝；再按[验收标准](../../docs/acceptance-criteria.md)执行现场考试及双机验收。
+5. 分别检查错误账号、错误证书名称和未登录管理请求被拒绝，退出或换账号后不能沿用旧管理权限；再按[验收标准](../../docs/acceptance-criteria.md)执行现场考试及双机验收。
 
 本次代码检查不包含目标服务器安装、证书颁发、真实网络连通或 Linux 实机运行结果。部署后应记录使用的系统、节点地址、证书信任及上述操作的实际结果。

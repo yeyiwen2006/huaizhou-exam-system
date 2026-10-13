@@ -7,10 +7,6 @@ namespace Exam.Admin.Views;
 public partial class AdminLoginPage : UserControl
 {
     private readonly ConnectionViewModel _vm;
-    public event Action? ManagementRequested;
-
-    private void OnManagementRequested(object sender, RoutedEventArgs e) => ManagementRequested?.Invoke();
-
     public AdminLoginPage(ConnectionViewModel vm)
     {
         _vm = vm;

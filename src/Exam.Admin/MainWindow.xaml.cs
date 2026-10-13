@@ -32,9 +32,12 @@ public partial class MainWindow : Window
         _viewModel.Import.ConfirmPublicationAsync = message =>
             Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "确认正式发布试卷", message,
                 confirmText: "确认发布", cancelText: "取消", isDanger: true);
+        _viewModel.Home.ChooseAddExamAsync = () => ExamArchiveDialogs.ShowAddAsync(this);
+        _viewModel.Home.ChooseArchiveConflictAsync = preview => ExamArchiveDialogs.ShowConflictAsync(this, preview);
         DataContext = _viewModel;
 
         _viewModel.Connection.PropertyChanged += OnConnectionPropertyChanged;
+        _viewModel.BusinessSessionChanged += OnBusinessSessionChanged;
         ShowLoginPage();
     }
 
@@ -42,7 +45,6 @@ public partial class MainWindow : Window
     {
         DetachLogin();
         _loginPage = new AdminLoginPage(_viewModel.Connection);
-        _loginPage.ManagementRequested += OpenManagement;
         PageRegion.Content = _loginPage;
         MainTabArea.Visibility = Visibility.Collapsed;
     }
@@ -63,6 +65,14 @@ public partial class MainWindow : Window
 
     private void OnConnectionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(ConnectionViewModel.IsConnected))
+        {
+            OnBusinessSessionChanged();
+            _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
+            if (!_viewModel.Connection.IsConnected) { Management.Deactivate(); ShowLoginPage(); }
+            else if (_router.Route != AdminWorkspaceRoute.LocalManagement) ShowMainArea();
+            return;
+        }
         if (_router.Route == AdminWorkspaceRoute.LocalManagement) return;
         if (e.PropertyName == nameof(ConnectionViewModel.ShowRegistrationSuccess))
         {
@@ -72,14 +82,9 @@ public partial class MainWindow : Window
                 ShowLoginPage();
             return;
         }
-        if (e.PropertyName != nameof(ConnectionViewModel.IsConnected)) return;
-        _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
-        if (_router.Route == AdminWorkspaceRoute.LocalManagement) return;
-        if (_viewModel.Connection.IsConnected)
-            ShowMainArea();
-        else
-            ShowLoginPage();
     }
+
+    private void OnBusinessSessionChanged() => Management.SetBusinessSession(_viewModel.CaptureBusinessSession());
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
 
@@ -91,6 +96,12 @@ public partial class MainWindow : Window
         menu.PlacementTarget = button;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.IsOpen = true;
+    }
+
+    private void OnExamArchiveClicked(object sender, RoutedEventArgs e)
+    {
+        // The export action belongs to the card but must not invoke its OpenCommand.
+        e.Handled = true;
     }
 
     private void OnScoreFieldFocused(object sender, KeyboardFocusChangedEventArgs e)
@@ -126,6 +137,8 @@ public partial class MainWindow : Window
     }
     public void OpenManagement()
     {
+        if (!_viewModel.Connection.IsConnected || _viewModel.CaptureBusinessSession() is not { } session) return;
+        Management.SetBusinessSession(session);
         if (_router.Route != AdminWorkspaceRoute.LocalManagement) _businessPage = _viewModel.SelectedPage;
         _router.OpenManagement();
         DetachLogin();
@@ -160,7 +173,6 @@ public partial class MainWindow : Window
     private void DetachLogin()
     {
         if (_loginPage is null) return;
-        _loginPage.ManagementRequested -= OpenManagement;
         _loginPage.Detach(); _loginPage = null;
     }
 
@@ -199,6 +211,7 @@ public partial class MainWindow : Window
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
         _viewModel.Connection.PropertyChanged -= OnConnectionPropertyChanged;
+        _viewModel.BusinessSessionChanged -= OnBusinessSessionChanged;
         _viewModel.Monitoring.CollectionCompleted -= OnCollectionCompleted;
         DetachLogin();
         if (_managementPage is not null) { _managementPage.BackRequested -= ReturnToBusiness; _managementPage.Detach(); }

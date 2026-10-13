@@ -9,6 +9,7 @@ using Exam.Contracts.Operators;
 using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
+using Exam.Admin.Services;
 
 namespace Exam.Admin.ServiceManagement;
 
@@ -39,6 +40,8 @@ public interface IManagementConnection : IDisposable
     ManagementTarget Target { get; }
     string? Actor { get; }
     Task LoginAsync(string username, string password, CancellationToken token);
+    Task UseBusinessSessionAsync(AdminSessionSnapshot session, CancellationToken token) =>
+        Task.FromException(new NotSupportedException("该管理连接不支持复用考务会话。"));
     Task LogoutAsync(CancellationToken token);
     Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token);
     Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token) =>
@@ -47,6 +50,8 @@ public interface IManagementConnection : IDisposable
                 new(ErrorCodes.ServiceRecovering, "正式主备管理暂不可用。"))));
     Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token);
     Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token);
+    Task<ManagementReply<BackupInfo>> BackupInfoAsync(string sourceDirectory, CancellationToken token) =>
+        Task.FromException<ManagementReply<BackupInfo>>(new NotSupportedException("该服务器不支持读取备份信息。"));
     Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token);
     Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token);
 }
@@ -95,6 +100,27 @@ public sealed class ManagementConnection : IManagementConnection
         if (result is null || string.IsNullOrWhiteSpace(result.Token) || result.Token.Length > 4096 ||
             !string.Equals(result.Username, username.Trim(), StringComparison.OrdinalIgnoreCase))
             throw new HttpRequestException("管理登录结果无效。");
+        _credential = result.Token;
+        Actor = result.Username;
+    }
+
+    public async Task UseBusinessSessionAsync(AdminSessionSnapshot session, CancellationToken token)
+    {
+        Clear();
+        if (session.ServerId != Target.ServerId)
+            throw new UnauthorizedAccessException("管理连接与当前考务会话不属于同一考试系统。");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/management/v1/session");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session.Credential);
+        var reply = await SessionAsync<LoginReply>(request, token);
+        if (reply.Error is { } error)
+        {
+            if (error.Code is "UNAUTHORIZED" or ErrorCodes.Forbidden)
+                throw new UnauthorizedAccessException("当前考务会话无法访问服务器管理，请重新登录考务端。");
+            throw new HttpRequestException("服务器管理依赖暂不可用，请稍后重新连接。");
+        }
+        if (reply.Result is not { } result || string.IsNullOrWhiteSpace(result.Token) ||
+            result.Token.Length > 4096 || !string.Equals(result.Username, session.Username, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("当前考务会话无法访问服务器管理，请重新登录考务端。");
         _credential = result.Token;
         Actor = result.Username;
     }
@@ -152,6 +178,8 @@ public sealed class ManagementConnection : IManagementConnection
     public async Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) => Wrap(await _reads.GetStatusAsync(token));
     public async Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token) => Wrap(await _reads.GetLogsAsync(limit, token));
     public async Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token) => Wrap(await _reads.GetRuntimeLogsAsync(limit, token));
+    public async Task<ManagementReply<BackupInfo>> BackupInfoAsync(string sourceDirectory, CancellationToken token) =>
+        Wrap(await _reads.GetBackupInfoAsync(sourceDirectory, token));
     public async Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token) =>
         Wrap(await _writes.ExecuteAsync(kind, body, token));
     public async Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token) => Wrap(await _reads.GetOperationAsync(id, token));

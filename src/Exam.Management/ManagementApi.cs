@@ -43,6 +43,19 @@ public static class ManagementApi
                 }
                 var authorization = context.Request.Headers.Authorization.ToString();
                 var token = authorization.StartsWith("Bearer ", StringComparison.Ordinal) ? authorization[7..] : null;
+                if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/session")
+                {
+                    var result = await sessions.ExchangeBusinessSessionAsync(token, context.RequestAborted);
+                    if (result is null)
+                    {
+                        await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED",
+                            "当前考务登录已失效或账号未启用，请重新登录考务端。"), 401);
+                        return;
+                    }
+                    await WriteAsync(context, runtime, new { token = result.Value.Token, username = result.Value.Operator.Username,
+                        isAdministrator = result.Value.Operator.IsAdministrator });
+                    return;
+                }
                 if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/logout")
                 {
                     sessions.Logout(token);
@@ -86,6 +99,13 @@ public static class ManagementApi
             await WriteAsync(context, runtime, await runtime.GetStatusAsync(context.RequestAborted)));
         app.MapGet("/management/v1/service/configuration", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetConfigurationAsync(context.RequestAborted)));
+        app.MapGet("/management/v1/service/backup-info", async (HttpContext context, ManagementRuntime runtime) =>
+        {
+            var directory = context.Request.Query["sourceDirectory"];
+            if (context.Request.Query.Count != 1 || directory.Count != 1 || string.IsNullOrWhiteSpace(directory[0]))
+                throw new ArgumentException("备份信息查询须指定一个服务器来源目录。");
+            await WriteAsync(context, runtime, await runtime.GetBackupInfoAsync(directory[0]!, context.RequestAborted));
+        });
         app.MapGet("/management/v1/service/logs", async (HttpContext context, ManagementRuntime runtime) =>
         {
             if (!int.TryParse(context.Request.Query["limit"], out var limit) || limit is < 1 or > 100 ||

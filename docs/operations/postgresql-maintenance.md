@@ -22,7 +22,7 @@
 
 旧部署须在维护窗口按新生成的受控命令更新预登记的 SCM 绑定，再重启并完成检查；代码不会擅自修改当前 Windows 服务。`ControlledRecoveryDatabase` 的临时隔离恢复库仍保持 `archive_mode=off`、固定回环端口及禁用继承恢复钩子，不能将该命令用于正式主备服务。正式服务也继续禁用未审查的恢复、清理及预加载钩子。
 
-Windows PostgreSQL 配置片段按本机原生代码页生成，并在创建输出目录前拒绝不能无损编码的路径；公开 CA 保持 PEM。跨不同代码页主机应分别生成并检查本机配置，不能盲拷文本。备用应用名须与主备管理配置的节点标识一致；初始化、生成片段及自检使用同一 `StandbyApplicationName`/`ReplicationSlot`，`pg_basebackup -R` 的自动配置也会保存应用名。
+Windows PostgreSQL 配置片段按本机原生代码页生成，并在创建输出目录前拒绝不能无损编码的路径；公开 CA 保持 PEM。跨不同代码页主机应分别生成并检查本机配置，不能盲拷文本。备用应用名须与主备管理配置的节点标识一致；初始化、生成片段及状态检测使用同一 `StandbyApplicationName`/`ReplicationSlot`，`pg_basebackup -R` 的自动配置也会保存应用名。
 
 ## 初始化、归档与重建
 

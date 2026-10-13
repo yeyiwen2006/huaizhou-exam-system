@@ -25,17 +25,8 @@ public partial class ServiceManagementView : UserControl
     }
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        LoginPassword.Clear();
         _viewModel.ConfirmAsync = _ => Task.FromResult(false);
         _viewModel.Deactivate();
-    }
-    private async void OnLogin(object sender, RoutedEventArgs e)
-    {
-        var password = LoginPassword.Password;
-        LoginPassword.Clear();
-        try { await _viewModel.LoginAsync(password); }
-        catch (Exception error) { _viewModel.ReportError(error); }
-        finally { password = string.Empty; LoginPassword.Clear(); }
     }
     private void OnImportConnection(object sender, RoutedEventArgs e)
     {
@@ -46,16 +37,15 @@ public partial class ServiceManagementView : UserControl
         };
         if (dialog.ShowDialog() == true)
         {
-            LoginPassword.Clear();
             _viewModel.ImportConnectionSettings(dialog.FileName);
         }
     }
     private async void OnReload(object sender, RoutedEventArgs e)
     { try { await _viewModel.ReloadConfigurationAsync(); } catch (Exception error) { _viewModel.ReportError(error); } }
-    private void OnBack(object sender, RoutedEventArgs e) { LoginPassword.Clear(); BackRequested?.Invoke(); }
+    private void OnBack(object sender, RoutedEventArgs e) => BackRequested?.Invoke();
     public void Detach()
     {
         Loaded -= OnLoaded; Unloaded -= OnUnloaded;
-        LoginPassword.Clear(); _viewModel.ConfirmAsync = _ => Task.FromResult(false); _viewModel.Deactivate();
+        _viewModel.ConfirmAsync = _ => Task.FromResult(false); _viewModel.Deactivate();
     }
 }

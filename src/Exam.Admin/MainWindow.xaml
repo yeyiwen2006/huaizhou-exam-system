@@ -146,6 +146,8 @@
                         </StackPanel>
                         <TextBlock Text="{Binding HidingScopeText}" Style="{StaticResource CaptionText}" HorizontalAlignment="Right" Margin="0,6,0,0"
                                    Visibility="{Binding Exam.IsHidden, Converter={StaticResource BoolToVis}}"/>
+                        <Button Content="导出本次考试的全部数据" Style="{StaticResource Btn.Secondary}" HorizontalAlignment="Right"
+                                Margin="0,10,0,0" Padding="12,0" Click="OnExamArchiveClicked" Command="{Binding ExportArchiveCommand}"/>
                     </StackPanel>
                 </Grid>
             </Button>
@@ -215,12 +217,17 @@
                     <DockPanel Margin="0,0,0,20">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Content="刷新" Style="{StaticResource ActionButton}" Margin="0,0,8,0" Command="{Binding Home.RefreshCommand}"/>
-                            <Button Content="新建考试" Style="{StaticResource PrimaryAction}" Margin="0" Command="{Binding Home.NewExamCommand}"/>
+                            <Button Content="添加考试" Style="{StaticResource PrimaryAction}" Margin="0" Command="{Binding Home.AddExamCommand}"/>
                         </StackPanel>
                         <HeaderedContentControl Style="{StaticResource PageHeading}" Header="全部考试" Tag="{StaticResource Icon.Layers}" Margin="0"
-                                                Content="点击考试进入设置、监控和成绩统计，或新建考试。" />
+                                                Content="点击考试进入设置、监控和成绩统计，或添加一场考试。" />
                     </DockPanel>
                     <TextBlock Text="{Binding Home.Status}" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
+                    <StackPanel Margin="0,0,0,12" Visibility="{Binding Home.HasArchiveStatus, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding Home.ArchiveStatus}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/>
+                        <Button Content="停止等待" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Margin="0,6,0,0"
+                                Command="{Binding Home.CancelArchiveCommand}" Visibility="{Binding Home.IsArchiveBusy, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
                     <ItemsControl x:Name="ExamCards" ItemsSource="{Binding Home.Exams}" ItemTemplate="{StaticResource ExamCardTemplate}"/>
                     <Button Content="隐藏的考试" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Margin="0,12,0,0"
                             Command="{Binding ShowHiddenExamsCommand}"/>
@@ -626,8 +633,10 @@
                                     <TextBlock Text="准考证号" Style="{StaticResource FormLabel}"/>
                                     <TextBox Width="140" Style="{StaticResource FormTextBox}" Text="{Binding Monitoring.AdmissionNoFilter, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
-                                <CheckBox Content="只看未回收" IsChecked="{Binding Monitoring.OnlyUncollected}" Margin="0,0,12,12" VerticalAlignment="Bottom"/>
-                                <Button Content="清除筛选" Style="{StaticResource ActionButton}" Margin="0,0,0,8" VerticalAlignment="Bottom" Command="{Binding Monitoring.ClearFiltersCommand}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,20" VerticalAlignment="Bottom">
+                                    <CheckBox Content="只看未回收" IsChecked="{Binding Monitoring.OnlyUncollected}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                    <Button Content="清除筛选" Style="{StaticResource ActionButton}" Margin="0" VerticalAlignment="Center" Command="{Binding Monitoring.ClearFiltersCommand}"/>
+                                </StackPanel>
                             </WrapPanel>
                             <TextBlock Text="{Binding Monitoring.CountsText}" Style="{StaticResource CardNote}" />
                             <TextBlock Text="{Binding Monitoring.AsOfText}" Style="{StaticResource CardNote}" />
@@ -762,6 +771,11 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
+                    <StackPanel Margin="0,0,0,12" Visibility="{Binding Home.HasArchiveStatus, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding Home.ArchiveStatus}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/>
+                        <Button Content="停止等待" Style="{StaticResource ActionButton}" HorizontalAlignment="Left" Margin="0,6,0,0"
+                                Command="{Binding Home.CancelArchiveCommand}" Visibility="{Binding Home.IsArchiveBusy, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
                     <ItemsControl x:Name="HiddenExamCards" ItemsSource="{Binding Home.HiddenExams}" ItemTemplate="{StaticResource ExamCardTemplate}"/>
                 </StackPanel>
             </ScrollViewer>

@@ -187,7 +187,7 @@
       "id": "COV-011",
       "requirement": "主备服务器与接管 / 运维",
       "action": "启动",
-      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "gui": "不适用，GUI不提供业务启停入口",
       "cli": "management start",
       "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
@@ -198,14 +198,14 @@
       ],
       "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "按验收标准执行真实设备、完整考试和现场交互核对",
-      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
+      "status": "正式管理API与CLI保留启停，权限、固定目标及原请求核对继续生效",
       "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "COV-012",
       "requirement": "主备服务器与接管 / 运维",
       "action": "停止",
-      "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
+      "gui": "不适用，GUI不提供业务启停入口",
       "cli": "management stop",
       "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
       "successTest": "tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
@@ -216,13 +216,13 @@
       ],
       "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "按验收标准执行真实设备、完整考试和现场交互核对",
-      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
+      "status": "正式管理API与CLI保留启停，权限、固定目标及原请求核对继续生效",
       "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {
       "id": "COV-013",
       "requirement": "主备服务器与接管 / 运维",
-      "action": "自检",
+      "action": "状态检测",
       "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management checks",
       "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
@@ -330,7 +330,7 @@
     {
       "id": "COV-019",
       "requirement": "主备服务器与接管 / 运维",
-      "action": "操作进度",
+      "action": "查询请求处理状态",
       "gui": "src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs",
       "cli": "management operation",
       "sharedApi": "独立本机管理宿主 /management/v1；LocalManagementClient 共用契约",
@@ -342,7 +342,7 @@
       ],
       "automatedEvidence": "run-report.json / tests/Integration/Exam.IntegrationTests/ServiceManagement/LocalManagementApiTests.cs",
       "manualCheck": "按验收标准执行真实设备、完整考试和现场交互核对",
-      "status": "GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务",
+      "status": "GUI默认查询最近操作，允许输入历史请求编号；处理情况由操作结果展示，不提供原内容重试或恢复续行按钮",
       "gap": "受保护部署、SCM服务账户及恢复材料需满足运行前提；真实双机、断电和现场运维验收未在本表认定通过。"
     },
     {

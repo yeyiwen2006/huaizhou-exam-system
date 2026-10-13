@@ -14,6 +14,15 @@ public sealed class ReadyCheckedBusinessHostTests
     private static readonly Uri ReadyUri = new("https://exam.local/health/ready");
 
     [Fact]
+    public async Task ReadinessObservationPreservesAnUnreachableEndpointAsUnconfirmed()
+    {
+        var process = new FakeProcessHost { Status = BusinessServiceStatus.Running };
+        using var client = Client(() => throw new HttpRequestException("synthetic unreachable endpoint"));
+        var host = new ReadyCheckedBusinessHost(process, client, ReadyUri, "server-a", "node-a", 1);
+        await Assert.ThrowsAsync<HttpRequestException>(() => host.ObserveReadyAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Start_WaitsForReadyWithMatchingIdentity()
     {
         var process = new FakeProcessHost();

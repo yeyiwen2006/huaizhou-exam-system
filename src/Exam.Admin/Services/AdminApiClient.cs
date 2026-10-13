@@ -84,6 +84,10 @@ public sealed partial class AdminApiClient : IDisposable
     public string? ServerId => _serverId;
     public string OperatorId => _operatorId;
 
+    public AdminSessionSnapshot? CaptureSession() => IsConfigured && _account is not null && _serverId is not null &&
+        _httpClient.DefaultRequestHeaders.Authorization is { Scheme: "Bearer", Parameter: { Length: > 0 } credential }
+        ? new(_httpClient.BaseAddress!, _serverId, _account.Username, credential, Generation) : null;
+
     public void Configure(string baseAddress, string operatorToken, string operatorId)
     {
         var normalized = NormalizeAddress(baseAddress);

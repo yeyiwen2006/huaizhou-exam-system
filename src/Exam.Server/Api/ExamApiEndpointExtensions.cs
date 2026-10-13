@@ -29,6 +29,7 @@ public static class ExamApiEndpointExtensions
         api.MapReportApi();
         api.MapGradingApi();
         api.MapExamCatalogApi();
+        api.MapExamArchiveApi();
         api.MapOperatorAccountApi();
         api.MapAdministrationApi();
         return endpoints;
@@ -563,7 +564,8 @@ public static class ExamApiEndpointExtensions
                     request.RequestId)
                 {
                     Operator = actor, Reason = request.Reason?.Trim() ?? string.Empty,
-                    ReopenEndedExam = true
+                    ReopenEndedExam = true,
+                    ReevaluateLifecycle = true
                 }));
         });
 

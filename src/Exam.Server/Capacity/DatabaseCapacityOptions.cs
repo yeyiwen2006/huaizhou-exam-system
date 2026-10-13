@@ -51,7 +51,7 @@ public sealed record DatabaseCapacityOptions(
             return "PostgreSQL 返回的连接容量参数无效。";
         if (RequireActualDatabaseMatch &&
             (actualMaximum != PostgresMaxConnections || actualReserved != PostgresReservedConnections))
-            return "PostgreSQL 实际 max_connections 或保留连接数与部署预算不一致，请核对配置后重新自检。";
+            return "PostgreSQL 实际 max_connections 或保留连接数与部署预算不一致，请核对配置后重新状态检测。";
         var actualRequired = (long)MaximumPoolSize * MaximumServerProcesses + OtherConnections +
             OperationsReserveConnections + actualReserved;
         return actualRequired > actualMaximum

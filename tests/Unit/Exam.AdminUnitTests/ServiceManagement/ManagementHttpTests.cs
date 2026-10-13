@@ -28,23 +28,26 @@ public sealed class ManagementHttpTests : IAsyncLifetime
     private bool _lost;
     private ManagementTarget Target => new("https://localhost:9443/", "synthetic-server", "synthetic-node");
     public async Task InitializeAsync() { Directory.CreateDirectory(Path.Combine(_root, "journal")); await StartAsync(); }
-    private async Task StartAsync(bool missingConfirmation = false)
+    private async Task StartAsync(bool missingConfirmation = false, bool businessReady = false)
     {
         var config = new FileServiceConfigurationStore(Path.Combine(_root, "config.json"));
         if (!File.Exists(Path.Combine(_root, "config.json"))) await config.SaveAsync(new(Target.ServerId, Target.NodeId, "127.0.0.1", 8443, _root, false, 1), 0);
         var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders(); builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(new ManagementOperatorSessions(() => null, Path.Combine(_root, "synthetic-operators.cache"),
             loadFromDatabase: _ => Task.FromResult<IReadOnlyList<Exam.Infrastructure.Postgres.Operators.CachedOperatorCredential>>(
-                [new("synthetic-operator", OperatorPasswordHasher.Hash("synthetic-password"), true)])));
+                [new("synthetic-operator", OperatorPasswordHasher.Hash("synthetic-password"), true)]),
+            authenticateBusinessSession: (token, _) => Task.FromResult<AuthenticatedOperator?>(
+                token == BusinessSessionFixture.Credential ? new("synthetic-operator", true) : null)));
         builder.Services.AddSingleton(new ManagementRuntime(Target.ServerId, Target.NodeId, config, _host, _ => _host,
             new Probe(), () => _backups, new FileManagementOperationStore(Path.Combine(_root, "journal")), new SystemClock(),
-            observeBusinessReady: (_, _) => Task.FromResult(false),
+            observeBusinessReady: (_, _) => Task.FromResult(businessReady), checkReadinessOnStatus: businessReady,
             prepareRecoveryWorkingCopy: (_, _) => Task.CompletedTask,
             verifyRecoveryTarget: missingConfirmation ? (_, _, _) => Task.FromResult<IReadOnlyList<StartupCheckResult>>(
                 [new("recovery-confirmed-state", false, "synthetic missing confirmation", true)]) : null,
             readAudit: (limit, token) => new FileManagementOperationStore(Path.Combine(_root, "journal")).ReadAuditAsync(limit, token),
             readRuntimeLogs: (_, _) => Task.FromResult<IReadOnlyList<ProtectedRuntimeLogEntry>>(
-                [new(DateTimeOffset.UtcNow, "business", "Warning", "Exam.Synthetic", 42)])));
+                [new(DateTimeOffset.UtcNow, "business", "Warning", "Exam.Synthetic", 42)]),
+            readBackupInfo: (directory, _) => Task.FromResult(new BackupInfo("synthetic-backup", directory, DateTimeOffset.UtcNow))));
         _app = builder.Build(); _app.MapManagementApi(); await _app.StartAsync();
     }
     private ManagementConnection Connection(bool loseResponse = false, bool wrongIdentity = false) => new(wrongIdentity ? Target with { NodeId = "different" } : Target,
@@ -52,6 +55,27 @@ public sealed class ManagementHttpTests : IAsyncLifetime
     private ServiceManagementViewModel Workspace(ManagementConnection connection) => new(_ => connection,
         new ProtectedPendingManagementStore(Path.Combine(_root, "pending")))
     { Address = Target.Address, ServerId = Target.ServerId, NodeId = Target.NodeId, Username = "synthetic-operator", ConfirmAsync = _ => Task.FromResult(true) };
+
+    [Fact]
+    public async Task BusinessSessionOpensManagementAndObservedReadinessReachesTheGui()
+    {
+        await _app.StopAsync(); await _app.DisposeAsync(); await StartAsync(businessReady: true);
+        await _host.StartAsync(default);
+        using var vm = Workspace(Connection());
+        vm.SetBusinessSession(await BusinessSessionFixture.CaptureAsync());
+        await vm.ReconnectAsync();
+        Assert.True(vm.IsSignedIn);
+        Assert.Equal("服务器程序正常运行", vm.ServerStatusText);
+        Assert.Contains(vm.Checks, check => check.Name == "业务运行状态" && check.Result == "通过");
+        await vm.RequestAsync(ManagementOperationKind.Checks);
+        var id = vm.Operation!.RequestId;
+        Assert.Null(vm.Pending);
+        Assert.Equal(id, vm.RequestIdToQuery);
+        Assert.True(vm.QueryCommand.CanExecute(null));
+        await vm.QueryAsync();
+        Assert.Contains("处理状态：完成", vm.Message);
+        Assert.Equal(id, vm.Operation.RequestId);
+    }
 
     [Fact]
     public async Task GuiLoginAndStatusWorkWithoutBusinessOrDatabaseAndLogoutRevokesToken()
@@ -89,7 +113,10 @@ public sealed class ManagementHttpTests : IAsyncLifetime
     {
         using var vm = Workspace(Connection()); await vm.LoginAsync("synthetic-password"); await vm.RequestAsync(ManagementOperationKind.Checks);
         Assert.Contains("阻止业务写入", vm.Message); Assert.Contains(vm.Checks, c => c.WriteGate == "阻止写入");
-        await vm.RefreshAsync(); Assert.InRange(vm.Logs.Count, 1, 100); Assert.Contains(vm.Logs, row => row.Code == "事件编号：42");
+        var requestId = vm.Operation!.RequestId;
+        await vm.RefreshAsync(); Assert.InRange(vm.Logs.Count, 1, 100);
+        Assert.Contains(vm.Logs, row => row.Identifier == "42" && row.Code == "—");
+        Assert.Contains(vm.Logs, row => row.Source == "操作" && row.Identifier == requestId && row.Code == "成功");
         Assert.Contains(vm.Logs, row => row.Source == "业务服务" && row.Phase == "警告");
         Assert.DoesNotContain("synthetic-private-detail", JsonSerializer.Serialize(vm.Logs));
     }
@@ -116,7 +143,7 @@ public sealed class ManagementHttpTests : IAsyncLifetime
         vm.RestoreBackupId = "synthetic-backup"; vm.RestoreSource = vm.BackupDestination;
         await vm.RequestAsync(ManagementOperationKind.Restore);
         Assert.NotNull(vm.Pending); Assert.Equal(ManagementOperationPhase.Staged, vm.Operation!.Phase);
-        Assert.Contains("业务就绪：未完成", vm.RestoreText); Assert.Equal(1, _backups.RestoreCalls);
+        Assert.Equal("恢复条件核对未确认", vm.RestoreText); Assert.Equal(1, _backups.RestoreCalls);
         await vm.QueryAsync(); Assert.NotNull(vm.Pending); Assert.Equal(1, _backups.RestoreCalls);
     }
     [Fact]
@@ -132,7 +159,7 @@ public sealed class ManagementHttpTests : IAsyncLifetime
         }
         await _app.StopAsync(); await _app.DisposeAsync(); await StartAsync(missingConfirmation: true);
         using var resumed = Workspace(Connection()); await resumed.LoginAsync("synthetic-password"); await resumed.QueryAsync();
-        Assert.Equal(id, resumed.Pending!.RequestId); Assert.Contains("业务就绪：未完成", resumed.RestoreText);
+        Assert.Equal(id, resumed.Pending!.RequestId); Assert.Equal("恢复条件核对未通过", resumed.RestoreText);
         await resumed.ResumeRestoreAsync(); Assert.Equal(id, resumed.Pending!.RequestId); Assert.Equal(1, _backups.RestoreCalls);
     }
     [Fact]

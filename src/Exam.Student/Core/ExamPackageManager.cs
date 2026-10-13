@@ -39,6 +39,7 @@ public sealed partial class ExamPackageManager : IDisposable
     private volatile bool _terminalInMemory;
     private long _observedScheduleVersion;
     private long _observedEndVersion;
+    private long _observedPauseVersion;
     private bool _disposed;
 
     public ExamPackageManager(IExamPackageApi api, string storageRoot, DeviceRecord device,
@@ -74,7 +75,7 @@ public sealed partial class ExamPackageManager : IDisposable
         // must not be mistaken for a first-time blank exam during local persistence recovery.
         // Legacy journals omit AnswersInitialized; revocation may already have erased
         // their unlock material, so absence of the new field cannot prove no answers exist.
-        RequiresLocalAnswerRecovery = _state.Started && _state.Participation is not null &&
+        RequiresLocalAnswerRecovery = (_state.Started || _state.AnswersInitialized == true) && _state.Participation is not null &&
             (_state.AnswersInitialized != false || _state.ProtectedUnlockMaterial is not null);
         CurrentPhase = _state.Ended ? Phase.Ended : _state.Revoked ? Phase.Revoked :
             _state.Participation?.BusinessState == ParticipationBusinessState.NotParticipating ? Phase.Withdrawn :
@@ -292,6 +293,7 @@ public sealed partial class ExamPackageManager : IDisposable
             {
                 ObserveSchedule(delivery);
                 if (delivery.EventType == CommandEventType.End) TryEndLocally(delivery.StateVersion);
+                if (CanPauseForSchedule(delivery)) PauseLocally(delivery.StateVersion);
             }
         }
         var decision = IsVerifiedDeviceDecision(delivery);
@@ -324,7 +326,7 @@ public sealed partial class ExamPackageManager : IDisposable
             {
                 if (!SameCommand(previous.Delivery, delivery))
                     throw new InvalidDataException("相同指令标识对应了不同内容。");
-                if (delivery.EventType == CommandEventType.Start && !ExamEnded &&
+                if (delivery.EventType == CommandEventType.Start && !ExamEnded && CanApplyStart(delivery) &&
                     previous.Acknowledgement.ProcessingResult == CommandProcessingResult.Applied &&
                     UnlockedPayload is null && !await UnlockCoreAsync(ct)) return false;
                 return await SendAcknowledgementAsync(previous, ct);
@@ -389,6 +391,19 @@ public sealed partial class ExamPackageManager : IDisposable
                 var endsAt = delivery.NewScheduledEnd ?? _state.OverriddenScheduledEnd;
                 if (startsAt is { } start && endsAt is { } end && start >= end)
                     throw new InvalidDataException("时间调整指令的结束时间必须晚于开始时间。");
+                if (CanPauseForSchedule(delivery))
+                {
+                    PauseLocally(delivery.StateVersion);
+                    Save(_state with
+                    {
+                        Started = false,
+                        Ended = false,
+                        ProtectedUnlockMaterial = null,
+                        LifecycleStateVersion = delivery.StateVersion,
+                        ReopenedAtScheduleVersion = Math.Max(_state.ReopenedAtScheduleVersion, ReopenedVersion(delivery)),
+                        Participation = Participation! with { Lifecycle = ExamLifecycle.Scheduled }
+                    });
+                }
                 Save(_state with
                 {
                     ScheduleStateVersion = delivery.StateVersion,
@@ -425,7 +440,7 @@ public sealed partial class ExamPackageManager : IDisposable
         ValidateParticipation(participation);
         if (participation.BusinessState is not (ParticipationBusinessState.Waiting or ParticipationBusinessState.Answering))
             throw new InvalidDataException("确认参加考试未返回可等待或恢复的参加考试记录。");
-        var reopened = participation.Lifecycle == ExamLifecycle.Running &&
+        var reopened = participation.Lifecycle != ExamLifecycle.Ended &&
             participation.ReopenedAtScheduleVersion > Math.Max(_observedEndVersion, _state.LifecycleStateVersion) &&
             participation.ReopenedAtScheduleVersion <= participation.ScheduleVersion;
         var ended = (!reopened && ExamEnded) || participation.Lifecycle == ExamLifecycle.Ended;
@@ -433,7 +448,8 @@ public sealed partial class ExamPackageManager : IDisposable
         {
             PendingConfirm = null,
             Participation = participation,
-            Started = _state.Started || participation.BusinessState == ParticipationBusinessState.Answering,
+            Started = participation.Lifecycle == ExamLifecycle.Running &&
+                (_state.Started || participation.BusinessState == ParticipationBusinessState.Answering),
             Ended = ended,
             LifecycleStateVersion = Math.Max(_state.LifecycleStateVersion, participation.ScheduleVersion),
             ReopenedAtScheduleVersion = Math.Max(_state.ReopenedAtScheduleVersion, participation.ReopenedAtScheduleVersion),
@@ -456,6 +472,13 @@ public sealed partial class ExamPackageManager : IDisposable
             if (reopened) _terminalInMemory = false;
             if (participation.Lifecycle == ExamLifecycle.Ended)
                 _observedEndVersion = Math.Max(_observedEndVersion, participation.ScheduleVersion);
+            if (participation.Lifecycle == ExamLifecycle.Scheduled)
+            {
+                // This response belongs to the current serialized operation. Applying it must
+                // not invalidate the outer preparation that is replaying a lost confirmation.
+                _observedPauseVersion = Math.Max(_observedPauseVersion, participation.ScheduleVersion);
+                ClearPlaintext();
+            }
         }
         LastError = null;
         if (ended)
@@ -466,7 +489,8 @@ public sealed partial class ExamPackageManager : IDisposable
         else
         {
             CurrentPhase = Phase.ConfirmedWaiting;
-            if (unlock && participation.BusinessState == ParticipationBusinessState.Answering)
+            if (unlock && participation.Lifecycle == ExamLifecycle.Running &&
+                participation.BusinessState == ParticipationBusinessState.Answering)
                 await UnlockCoreAsync(ct);
         }
         return response;
@@ -732,7 +756,7 @@ public sealed partial class ExamPackageManager : IDisposable
     {
         lock (_plaintextGate)
         {
-            if (delivery.StateVersion < _state.LifecycleStateVersion ||
+            if (delivery.StateVersion < Math.Max(_state.LifecycleStateVersion, _observedPauseVersion) ||
                 delivery.StateVersion < _state.ReopenedAtScheduleVersion) return false;
             if (!ExamEnded) return true;
             // Only a newer, explicit reopening issued by this exam's authenticated server can
@@ -771,6 +795,28 @@ public sealed partial class ExamPackageManager : IDisposable
     }
 
     private void EndLocally() => StopImmediately(ended: true);
+    private bool CanPauseForSchedule(CommandDelivery delivery)
+    {
+        lock (_plaintextGate)
+            return delivery.EventType == CommandEventType.ScheduleChanged &&
+                delivery.Metadata.TryGetValue("lifecycleState", out var lifecycle) && lifecycle == "scheduled" &&
+                delivery.NewScheduledStart is { } start && delivery.NewScheduledEnd is { } end && start < end &&
+                delivery.StateVersion > Math.Max(_state.LifecycleStateVersion, _observedEndVersion) &&
+                delivery.StateVersion >= _observedScheduleVersion;
+    }
+
+    private void PauseLocally(long version)
+    {
+        lock (_plaintextGate)
+        {
+            _controlGeneration++;
+            _observedPauseVersion = Math.Max(_observedPauseVersion, version);
+            _terminalInMemory = false;
+            ClearPlaintext();
+            CurrentPhase = Phase.ConfirmedWaiting;
+        }
+    }
+
     private void StopImmediately(bool ended)
     {
         byte[]? plaintext;
