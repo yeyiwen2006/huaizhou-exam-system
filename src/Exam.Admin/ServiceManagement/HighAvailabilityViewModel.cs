@@ -14,6 +14,7 @@ public sealed partial class ServiceManagementViewModel
     private HighAvailabilityStatus? _availability;
     private ProtectionWarningMemory? _protectionEvidence;
     private CancellationTokenSource? _protectionExpiry;
+    private CancellationTokenSource? _availabilityPolling;
     private bool _lastDegraded, _hostOff, _networkIsolated, _destructiveRebuild;
     private string _haReason = "", _haTarget = "", _protection = "主备保护状态未核实；配置勾选不表示同步保护已经生效。";
     public string ProtectionText { get => _protection; private set { if (SetProperty(ref _protection, value)) OnPropertyChanged(nameof(ShowProtectionWarning)); } }
@@ -31,6 +32,43 @@ public sealed partial class ServiceManagementViewModel
     public AsyncRelayCommand EmergencyCommand { get; }
     public AsyncRelayCommand RebuildCommand { get; }
     public AsyncRelayCommand ReprotectCommand { get; }
+
+    private void StartHighAvailabilityPolling()
+    {
+        if (!_active || !IsSignedIn || _availabilityPolling is { IsCancellationRequested: false }) return;
+        var polling = _availabilityPolling = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _ = PollHighAvailabilityAsync(polling);
+    }
+
+    private async Task PollHighAvailabilityAsync(CancellationTokenSource polling)
+    {
+        try
+        {
+            while (_active && IsSignedIn && !polling.IsCancellationRequested)
+            {
+                // Refresh before the ten-second evidence expiry, independently of pending operations.
+                await Task.Delay(TimeSpan.FromSeconds(3), _time, polling.Token);
+                if (polling.IsCancellationRequested || !_active || !IsSignedIn || _readBusy || IsBusy || _connection is null) continue;
+                var connection = _connection; var generation = _generation;
+                using var reads = BeginRead();
+                try
+                {
+                    var reply = await connection.HighAvailabilityAsync(reads.Token);
+                    if (polling.IsCancellationRequested || reads.IsCancellationRequested || !Accept(connection, generation, reply.IsUnauthorized)) continue;
+                    if (reply.Envelope.Error is null && reply.Envelope.Result is { } status) ApplyHighAvailability(status);
+                    else MarkProtectionUnknown();
+                }
+                catch
+                {
+                    // A failed observation must not leave verified controls enabled; retry on the next tick.
+                    if (!polling.IsCancellationRequested && Current(connection, generation)) MarkProtectionUnknown();
+                }
+                finally { EndRead(reads); }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally { if (ReferenceEquals(_availabilityPolling, polling)) _availabilityPolling = null; polling.Dispose(); }
+    }
 
     private bool CanIssueHighAvailability(ManagementOperationKind kind) =>
         kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect) ||

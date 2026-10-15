@@ -191,7 +191,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public void Deactivate()
     {
         if (!_active) return;
-        _active = false; _generation++; _polling?.Cancel(); CancelWaiting();
+        _active = false; _generation++; _polling?.Cancel(); _availabilityPolling?.Cancel(); CancelWaiting();
         MarkProtectionUnknown();
         _reads = null; _readBusy = false; IsBusy = false; UpdateCommands();
     }
@@ -604,7 +604,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void ResetSession(bool dispose = true)
     {
         _generation++; _lifetime.Cancel(); _lifetime.Dispose(); _lifetime = new(); _reads?.Cancel();
-        _polling?.Cancel(); _restoreProgress?.Cancel(); _restoreWriteInFlight = null; _restoreOperation = null; RestoreText = string.Empty;
+        _polling?.Cancel(); _availabilityPolling?.Cancel(); _restoreProgress?.Cancel(); _restoreWriteInFlight = null; _restoreOperation = null; RestoreText = string.Empty;
         if (dispose) _connection?.Dispose(); _connection = null; IsSignedIn = false; IsBusy = false;
         _readBusy = false; _pending = null; _operation = null; _missingOriginal = false; CanResumeRestore = false;
         _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
@@ -613,6 +613,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void MarkUnknown() { ServerStatusText = "服务器程序状态未确认"; MarkProtectionUnknown(); }
     private void StartPolling()
     {
+        StartHighAvailabilityPolling();
         if (!_active || !IsSignedIn || _pending is null || _polling is { IsCancellationRequested: false }) return;
         var polling = _polling = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _ = PollAsync(polling);

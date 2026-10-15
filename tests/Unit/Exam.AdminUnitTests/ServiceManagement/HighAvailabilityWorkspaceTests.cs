@@ -105,6 +105,83 @@ public sealed class HighAvailabilityWorkspaceTests
     }
 
     [Fact]
+    public async Task ActivePageKeepsRefreshingWithoutPendingOperationsPastThirtySeconds()
+    {
+        var clock = new ManualTime(); var connection = new HaGuiConnection { Time = clock };
+        using var model = Model(connection, time: clock);
+        model.Activate(); await model.LoginAsync("synthetic"); model.Activate();
+        var message = model.Message;
+        for (var tick = 1; tick <= 12; tick++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(3));
+            await EventuallyAsync(() => connection.AvailabilityReads == tick + 1 && clock.HasTimerIn(TimeSpan.FromSeconds(3)));
+            Assert.Equal(2, model.Nodes.Count);
+            Assert.Contains("同步双机保护已核实", model.ProtectionText);
+            Assert.True(model.TakeoverCommand.CanExecute(null));
+        }
+        Assert.Null(model.Pending);
+        Assert.Equal(message, model.Message);
+        Assert.Equal(1, connection.AuditReads); Assert.Equal(1, connection.LogReads);
+        Assert.Equal(0, connection.Writes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AutomaticRefreshMarksUnavailableEvidenceUnknownAndRecoversOnNextTick(bool networkFailure)
+    {
+        var clock = new ManualTime(); var connection = new HaGuiConnection { Time = clock };
+        using var model = Model(connection, time: clock);
+        model.Activate(); await model.LoginAsync("synthetic");
+        connection.Unavailable = true;
+        if (networkFailure) connection.BeforeAvailability = _ => throw new IOException("synthetic network failure");
+        clock.Advance(TimeSpan.FromSeconds(3));
+        await EventuallyAsync(() => connection.AvailabilityReads == 2 && clock.HasTimerIn(TimeSpan.FromSeconds(3)));
+        Assert.Empty(model.Nodes); Assert.False(model.TakeoverCommand.CanExecute(null));
+        Assert.Contains("未核实", model.ProtectionText);
+        connection.Unavailable = false; connection.BeforeAvailability = null;
+        clock.Advance(TimeSpan.FromSeconds(3));
+        await EventuallyAsync(() => connection.AvailabilityReads == 3 && clock.HasTimerIn(TimeSpan.FromSeconds(3)));
+        Assert.Equal(2, model.Nodes.Count); Assert.True(model.TakeoverCommand.CanExecute(null));
+        Assert.Equal(0, connection.Writes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LeavingPageOrLoggingOutCancelsPollingAndIgnoresItsLateResponse(bool logout)
+    {
+        var clock = new ManualTime(); var connection = new HaGuiConnection { Time = clock };
+        using var model = Model(connection, time: clock);
+        model.Activate(); await model.LoginAsync("synthetic");
+        var response = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken readToken = default;
+        connection.BeforeAvailability = token => { readToken = token; return response.Task; };
+        clock.Advance(TimeSpan.FromSeconds(3));
+        await EventuallyAsync(() => readToken.CanBeCanceled);
+        if (logout) await model.LogoutAsync(); else model.Deactivate();
+        Assert.True(readToken.IsCancellationRequested);
+        response.SetResult();
+        await EventuallyAsync(() => connection.AvailabilityCompletions == 2);
+        clock.Advance(TimeSpan.FromSeconds(30));
+        Assert.Empty(model.Nodes); Assert.False(model.TakeoverCommand.CanExecute(null));
+        Assert.Equal(2, connection.AvailabilityReads);
+        if (!logout)
+        {
+            connection.BeforeAvailability = null; model.Activate();
+            clock.Advance(TimeSpan.FromSeconds(3));
+            await EventuallyAsync(() => connection.AvailabilityReads == 3 && clock.HasTimerIn(TimeSpan.FromSeconds(3)));
+            Assert.Equal(2, model.Nodes.Count);
+        }
+    }
+
+    private static async Task EventuallyAsync(Func<bool> condition)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (!condition()) await Task.Delay(10, deadline.Token);
+    }
+
+    [Fact]
     public async Task RestartCannotClearPersistedEmergencyWarningUsingAnOlderStateVersion()
     {
         var connection = new HaGuiConnection();
@@ -122,16 +199,18 @@ public sealed class HighAvailabilityWorkspaceTests
     {
         private DateTimeOffset _now = DateTimeOffset.UtcNow;
         private readonly List<ManualTimer> _timers = [];
-        public override DateTimeOffset GetUtcNow() => _now;
+        public override DateTimeOffset GetUtcNow() { lock (_timers) return _now; }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = new ManualTimer(callback, state, _now + dueTime); _timers.Add(timer); return timer;
+            lock (_timers) { var timer = new ManualTimer(callback, state, _now + dueTime); _timers.Add(timer); return timer; }
         }
         public void Advance(TimeSpan elapsed)
         {
-            _now += elapsed;
-            foreach (var timer in _timers.ToArray()) if (!timer.Disposed && timer.Due <= _now) timer.Fire();
+            ManualTimer[] due;
+            lock (_timers) { _now += elapsed; due = _timers.Where(timer => !timer.Disposed && timer.Due <= _now).ToArray(); }
+            foreach (var timer in due) timer.Fire();
         }
+        public bool HasTimerIn(TimeSpan delay) { lock (_timers) return _timers.Any(timer => !timer.Disposed && timer.Due == _now + delay); }
         private sealed class ManualTimer(TimerCallback callback, object? state, DateTimeOffset due) : ITimer
         {
             public DateTimeOffset Due { get; } = due;
@@ -167,8 +246,8 @@ public sealed class HighAvailabilityWorkspaceTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    internal static ServiceManagementViewModel Model(HaGuiConnection connection, HaPendingStore? pending = null, IProtectionWarningStore? warning = null) =>
-        new(_ => connection, pending ?? new(), protectionMemory: warning) { Address = connection.Target.Address, ServerId = connection.Target.ServerId,
+    internal static ServiceManagementViewModel Model(HaGuiConnection connection, HaPendingStore? pending = null, IProtectionWarningStore? warning = null, TimeProvider? time = null) =>
+        new(_ => connection, pending ?? new(), protectionMemory: warning, time: time) { Address = connection.Target.Address, ServerId = connection.Target.ServerId,
             NodeId = connection.Target.NodeId, Username = connection.Actor!, HighAvailabilityReason = "synthetic verified reason", ConfirmAsync = _ => Task.FromResult(true) };
 }
 
@@ -192,18 +271,28 @@ internal sealed class HaGuiConnection : IManagementConnection
     public string? Actor => "synthetic-operator";
     public ProtectionMode Mode = ProtectionMode.SynchronousDualNode;
     public bool Unavailable, StaleState, StaleNode, CorruptCertificate, FullProof = true;
+    public TimeProvider Time = TimeProvider.System;
+    public Func<CancellationToken, Task>? BeforeAvailability;
+    public int AvailabilityReads, AvailabilityCompletions, AuditReads, LogReads;
     public int Writes; public string? LastBody, LastQuery;
     public Task LoginAsync(string user, string password, CancellationToken token) => Task.CompletedTask;
     public Task UseBusinessSessionAsync(Exam.Admin.Services.AdminSessionSnapshot session, CancellationToken token) => Task.CompletedTask;
     public Task LogoutAsync(CancellationToken token) => Task.CompletedTask;
     public Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) => Task.FromResult(Reply(new ManagementStatus(BusinessServiceStatus.Stopped, BusinessReadiness.Unknown,
         new(Target.ServerId, Target.NodeId, "127.0.0.1", 8443, "C:\\synthetic-data", true, 1), [])));
-    public Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ManagementAuditEntry>>([]));
-    public Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ProtectedRuntimeLogEntry>>([]));
-    public Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token) => Task.FromResult(Reply(Availability()));
+    public Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token)
+    { AuditReads++; return Task.FromResult(Reply<IReadOnlyList<ManagementAuditEntry>>([])); }
+    public Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token)
+    { LogReads++; return Task.FromResult(Reply<IReadOnlyList<ProtectedRuntimeLogEntry>>([])); }
+    public async Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token)
+    {
+        Interlocked.Increment(ref AvailabilityReads);
+        if (BeforeAvailability is { } before) await before(token);
+        var reply = Reply(Availability()); Interlocked.Increment(ref AvailabilityCompletions); return reply;
+    }
     public HighAvailabilityStatus Availability()
     {
-        var now = DateTimeOffset.UtcNow; var fresh = StaleState ? now.AddSeconds(-15) : now;
+        var now = Time.GetUtcNow(); var fresh = StaleState ? now.AddSeconds(-15) : now;
         var state = new ServerDeploymentState(Target.ServerId, "synthetic-node-a", 3, Mode,
             new Dictionary<string, NodeState> { ["synthetic-node-a"] = new("synthetic-node-a", DeploymentNodeRole.Primary, true, false, 0, true, true, now),
                 ["synthetic-node-b"] = new("synthetic-node-b", Mode == ProtectionMode.Recovering ? DeploymentNodeRole.Rebuilding : DeploymentNodeRole.Standby,
