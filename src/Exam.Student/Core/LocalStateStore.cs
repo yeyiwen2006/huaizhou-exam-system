@@ -180,7 +180,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
     }
     private Exception? _workerFailure;
 
-    private sealed record StoreIdentity(int SchemaVersion, string DatabaseId);
+    private sealed record StoreIdentity(int SchemaVersion, string DatabaseId, bool? InitializationComplete = null);
     private sealed record WorkItem(
         Func<SqliteConnection, object?> Work, TaskCompletionSource<object?> Tcs, CancellationToken Cancellation);
 
@@ -230,6 +230,7 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         }
         catch (Exception ex)
         {
+            StudentCrashDiagnostics.TryWrite(Path.GetDirectoryName(_databasePath)!, ex);
             lock (_lifecycleLock)
             {
                 _workerFailure = ex;
@@ -253,9 +254,18 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         try
         {
             connection.Open();
+            if (!isNew && IsIncompleteEmptyDatabase(connection, identity))
+            {
+                PreserveIncompleteInitialization();
+                isNew = true;
+            }
             if (!isNew) identity = ValidateDatabase(connection, identity);
             ConfigureDurability(connection);
-            if (isNew) CreateSchema(connection, identity);
+            if (isNew)
+            {
+                CreateSchema(connection, identity);
+                PersistIdentityUpgrade(identity with { InitializationComplete = true });
+            }
             return connection;
         }
         catch { connection.Dispose(); throw; }
@@ -304,8 +314,8 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
-        var created = new StoreIdentity(SchemaVersion, Guid.NewGuid().ToString("N"));
-        // CreateNew 不覆盖文件。初始化中途失败也保留证据，下次启动不能悄悄重建。
+        var created = new StoreIdentity(SchemaVersion, Guid.NewGuid().ToString("N"), InitializationComplete: false);
+        // CreateNew 不覆盖文件。完整建表事务提交后才记录初始化完成。
         using (var marker = new FileStream(_identityPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
                    4096, FileOptions.WriteThrough))
         {
@@ -315,6 +325,38 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         using (var database = new FileStream(_databasePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             database.Flush(flushToDisk: true);
         return (created, true);
+    }
+
+    private bool IsIncompleteEmptyDatabase(SqliteConnection connection, StoreIdentity identity)
+    {
+        // Legacy clients could leave a v3 sidecar and a blank v0 database before
+        // committing their first schema. Never apply this recovery to a completed
+        // store, a migrated identity, existing schema, or pages left by old data.
+        if (identity.SchemaVersion != SchemaVersion || identity.InitializationComplete == true ||
+            File.Exists(_identityPath + ".bak")) return false;
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0) return false;
+        command.CommandText = "SELECT count(*) FROM sqlite_schema;";
+        if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0) return false;
+        command.CommandText = "PRAGMA page_count;";
+        if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 1) return false;
+        command.CommandText = "PRAGMA freelist_count;";
+        if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0) return false;
+        command.CommandText = "PRAGMA page_size;";
+        var pageSize = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        return new FileInfo(_databasePath).Length <= pageSize;
+    }
+
+    private void PreserveIncompleteInitialization()
+    {
+        // The initialization lock is still held. Preserve every original file
+        // before changing the blank store, including any SQLite recovery files.
+        var backup = _databasePath + $".initialization-backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
+        Directory.CreateDirectory(backup);
+        foreach (var path in new[] { _databasePath, _identityPath, _databasePath + "-wal",
+                     _databasePath + "-shm", _databasePath + "-journal" })
+            if (File.Exists(path)) File.Copy(path, Path.Combine(backup, Path.GetFileName(path)));
     }
 
     private static void ConfigureDurability(SqliteConnection connection)
@@ -375,11 +417,11 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         }
         ValidateReviewTable(connection);
         ValidateOutboxTable(connection);
-        if (identity.SchemaVersion != SchemaVersion)
+        if (identity.SchemaVersion != SchemaVersion || identity.InitializationComplete != true)
         {
             // DB 结构已领先于侧文件是唯一可恢复组合（事务先提交、侧文件后替换）。
             // 已核对 database_id、完整结构及外键，不能仅凭版本号修复任意文件。
-            identity = identity with { SchemaVersion = SchemaVersion };
+            identity = identity with { SchemaVersion = SchemaVersion, InitializationComplete = true };
             PersistIdentityUpgrade(identity);
         }
         return identity;

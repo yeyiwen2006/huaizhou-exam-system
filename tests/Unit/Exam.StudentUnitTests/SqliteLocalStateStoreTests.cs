@@ -341,6 +341,67 @@ public sealed class SqliteLocalStateStoreTests : IDisposable
         Assert.Equal(12, (await recovered.LoadAnswerStateAsync(KeyA))!.AnswerVersion);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptedFirstInitialization_PreservesFilesAndCompletesEmptyStore(bool hasSqliteHeader)
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllBytes(DatabasePath, []);
+        if (hasSqliteHeader) ExecuteRaw("PRAGMA journal_mode=WAL;");
+        var databaseId = Guid.NewGuid().ToString("N");
+        File.WriteAllText(DatabasePath + ".identity", System.Text.Json.JsonSerializer.Serialize(
+            new { schemaVersion = 3, databaseId }));
+        var originalDatabase = File.ReadAllBytes(DatabasePath);
+        var originalIdentity = File.ReadAllBytes(DatabasePath + ".identity");
+
+        using (var store = new SqliteLocalStateStore(DatabasePath))
+        {
+            Assert.Null(await store.LoadAnswerStateAsync(KeyA));
+            await SaveAsync(store, State());
+        }
+        var backup = Assert.Single(Directory.GetDirectories(_directory, "state.db.initialization-backup-*"));
+        Assert.Equal(originalDatabase, File.ReadAllBytes(Path.Combine(backup, "state.db")));
+        Assert.Equal(originalIdentity, File.ReadAllBytes(Path.Combine(backup, "state.db.identity")));
+        using var identity = System.Text.Json.JsonDocument.Parse(File.ReadAllText(DatabasePath + ".identity"));
+        Assert.Equal(databaseId, identity.RootElement.GetProperty("databaseId").GetString());
+        Assert.True(identity.RootElement.GetProperty("initializationComplete").GetBoolean());
+        using var reopened = new SqliteLocalStateStore(DatabasePath);
+        var state = Assert.IsType<AnswerStateRecord>(await reopened.LoadAnswerStateAsync(KeyA));
+        AnswerAssert.Equal(AnswerValue.Selected("A"), state.Answers["q1"]);
+        Assert.Single(Directory.GetDirectories(_directory, "state.db.initialization-backup-*"));
+    }
+
+    [Fact]
+    public async Task CompletedStoreReplacedByEmptyFile_IsNotInitializedAgain()
+    {
+        using (var original = new SqliteLocalStateStore(DatabasePath)) await SaveAsync(original, State());
+        File.Move(DatabasePath, DatabasePath + ".preserved");
+        File.WriteAllBytes(DatabasePath, []);
+        var originalIdentity = File.ReadAllBytes(DatabasePath + ".identity");
+        using var recovered = new SqliteLocalStateStore(DatabasePath);
+        await Assert.ThrowsAsync<InvalidDataException>(() => recovered.LoadAnswerStateAsync(KeyA));
+        Assert.Equal(0, new FileInfo(DatabasePath).Length);
+        Assert.Equal(originalIdentity, File.ReadAllBytes(DatabasePath + ".identity"));
+        Assert.True(File.Exists(DatabasePath + ".preserved"));
+        Assert.Empty(Directory.GetDirectories(_directory, "state.db.initialization-backup-*"));
+    }
+
+    [Fact]
+    public async Task UnversionedDatabaseWithExistingTable_IsNotReinitialized()
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllBytes(DatabasePath, []);
+        File.WriteAllText(DatabasePath + ".identity", System.Text.Json.JsonSerializer.Serialize(
+            new { schemaVersion = 3, databaseId = Guid.NewGuid().ToString("N") }));
+        ExecuteRaw("CREATE TABLE existing_record(payload TEXT); INSERT INTO existing_record VALUES ('keep');");
+        var original = File.ReadAllBytes(DatabasePath);
+        using var store = new SqliteLocalStateStore(DatabasePath);
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAnswerStateAsync(KeyA));
+        Assert.Equal(original, File.ReadAllBytes(DatabasePath));
+        Assert.Empty(Directory.GetDirectories(_directory, "state.db.initialization-backup-*"));
+    }
+
     [Fact]
     public async Task InitializationFailure_CompletesPromptlyAndPreservesExistingFile()
     {

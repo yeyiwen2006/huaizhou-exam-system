@@ -41,7 +41,12 @@ public sealed partial class ExamPackageManagerTests
                     });
                     App.Services.ConfigureDevice(fixture.Device);
                     App.Services.Session.OnLoggedIn(fixture.Session);
-                    using var local = new SqliteLocalStateStore(Path.Combine(fixture.Root, "answers.db"));
+                    var localPath = Path.Combine(fixture.Root, "answers.db");
+                    Directory.CreateDirectory(fixture.Root);
+                    File.WriteAllBytes(localPath, []);
+                    File.WriteAllText(localPath + ".identity", System.Text.Json.JsonSerializer.Serialize(
+                        new { schemaVersion = 3, databaseId = Guid.NewGuid().ToString("N") }));
+                    using var local = new SqliteLocalStateStore(localPath);
                     var runtime = new StudentExamRuntime(fixture.Manager(), fixture.Device, local, "candidate");
                     App.Services.Session.RegisterExam(runtime);
                     var overview = new ExamOverview("exam", "合成候考检查", DateTimeOffset.Now.AddMinutes(10),
@@ -55,6 +60,8 @@ public sealed partial class ExamPackageManagerTests
                     {
                         var prepare = typeof(WaitingExamPage).GetMethod("PrepareAndDownloadAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                         await (Task)prepare.Invoke(page, null)!;
+                        Assert.True(runtime.LocalRecoveryChecked);
+                        Assert.Null(runtime.LocalStateError);
                         Assert.True(((Banner)page.FindName("ErrorBanner")).IsOpen);
                         Assert.Contains("当前不可进入", ((Banner)page.FindName("ErrorBanner")).Message);
                         Assert.False(((BusyOverlay)page.FindName("BusyLayer")).IsBusy);

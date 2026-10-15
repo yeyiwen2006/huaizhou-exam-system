@@ -112,7 +112,7 @@ public partial class WaitingExamPage : UserControl
 
             if (!await _runtime.InitializeLocalRecoveryAsync(_lifetime.Token))
             {
-                StudentMessages.ShowWithDetail(ErrorBanner, "本机原有答题记录无法读取，请联系监考人员，并运行客户端文件夹中的“收集错误记录.cmd”。", _runtime.LocalStateError);
+                ErrorBanner.Show("本机答题准备未完成，请联系监考人员。");
                 return;
             }
             if (_runtime.HasFixedSubmission)
@@ -452,12 +452,12 @@ public partial class WaitingExamPage : UserControl
         var localError = _runtime?.LocalStateError;
         var localNotice = !string.IsNullOrWhiteSpace(localError)
             ? _runtime?.LocalRecoveryChecked != true
-                ? "本机原有答题记录暂时无法读取，原文件已保留。请联系监考人员处理。"
+                ? "本机答题准备未完成，请联系监考人员。"
                 : "作答内容暂时无法保存到本机，已有内容仍保留。请点击“重试保存”，或联系监考人员。"
             : _runtime?.HasFixedSubmission == true ? "本机存在已提交的答卷，正在继续交卷。" : null;
         LocalStateCard.Visibility = localNotice is null ? Visibility.Collapsed : Visibility.Visible;
         LocalStateText.Text = localNotice ?? string.Empty;
-        LocalStateText.ToolTip = string.IsNullOrWhiteSpace(localError) ? null : localError;
+        LocalStateText.ToolTip = null;
         LocalStateErrorBanner.IsOpen = false;
         RetryLocalSaveButton.IsEnabled = !_busy && !_recovering && _runtime?.CanRetryLocalSave == true;
         RetryLocalSaveButton.Visibility = _runtime?.CanRetryLocalSave == true ? Visibility.Visible : Visibility.Collapsed;
