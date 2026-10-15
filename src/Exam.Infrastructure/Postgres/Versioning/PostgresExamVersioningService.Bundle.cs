@@ -73,8 +73,8 @@ public sealed partial class PostgresExamVersioningService
         if (before.Paper is null)
         {
             if (before.LifecycleState != ExamLifecycle.Scheduled || now >= before.Schedule.StartsAt)
-                return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.PublicationNotReady,
-                    "首次导入必须在开考前完成，未保存或激活任何部分试卷。");
+                return VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InitialPublicationWindowClosed,
+                    "已达到最新保存的开考时间或考试已经开始，首次试卷未发布。请调整并保存考试时间后，使用原预览重试发布。");
             if (catalog is { } configured)
             {
                 try { ImportCatalogBinding.RequireMatch(request.ManifestJson, request.AnswerKeyJson, configured.Name, configured.Settings); }

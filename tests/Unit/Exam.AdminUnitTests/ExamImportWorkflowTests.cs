@@ -20,6 +20,31 @@ public sealed class ExamImportWorkflowTests
 {
     [Fact]
     [Trait("Category", "Wpf")]
+    public Task ImportProgressUpdatesStatusWithoutOverwritingCompletedPreview() => ExamCatalogViewModelTests.OnStaAsync(async () =>
+    {
+        using var fixture = new SourceFixture();
+        using var api = new AdminApiClient();
+        var service = new FakeImportService(fixture.Directory)
+        { PrepareRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var vm = new ExamImportViewModel(api, service: service);
+        vm.SetCurrentExam(Summary("synthetic-exam-1"));
+        vm.SourcePath = fixture.Directory;
+        var checking = vm.CheckAsync();
+        service.Progress!.Report("正在编译第 105/120 题（已完成 104 题）…");
+        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+        Assert.Contains("105/120", vm.Status);
+        Assert.True(vm.IsChecking);
+        service.PrepareRelease.SetResult();
+        await checking;
+        var completed = vm.Status;
+        service.Progress.Report("延迟到达的进度");
+        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+        Assert.Equal(completed, vm.Status);
+        Assert.True(vm.HasPreview);
+    });
+
+    [Fact]
+    [Trait("Category", "Wpf")]
     public Task ImportContinuesAcrossPagesAndKeepsItsCompletedPreview() => ExamCatalogViewModelTests.OnStaAsync(async () =>
     {
         using var source = new SourceFixture();
@@ -260,7 +285,7 @@ public sealed class ExamImportWorkflowTests
     }
 
     [Fact]
-    public async Task SameExamNewSettingsInvalidateTheOldPreview()
+    public async Task ResavingSameExamRetainsPreviewForPublicationTimeValidation()
     {
         using var fixture = new SourceFixture();
         using var api = new AdminApiClient();
@@ -271,9 +296,10 @@ public sealed class ExamImportWorkflowTests
         await vm.CheckAsync();
         Assert.True(vm.CanPublish);
         vm.SetCurrentExam(exam with { SettingsVersion = 2 });
-        Assert.False(vm.CanPublish);
-        Assert.Empty(vm.Questions);
+        Assert.True(vm.CanPublish);
+        Assert.Single(vm.Questions);
         Assert.Equal(fixture.Directory, vm.SourcePath);
+        Assert.Contains("最新保存的开考时间", vm.Status);
     }
 
     [Fact]
@@ -397,6 +423,13 @@ public sealed class ExamImportWorkflowTests
         public ExamVersionSnapshot? LastResult { get; private set; }
         public PreparedExamImport? LastPrepared { get; private set; }
         public int PublishCalls { get; private set; }
+        public IProgress<string>? Progress { get; private set; }
+        public Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct,
+            string? reason, IReadOnlyList<string>? changedQuestions, IProgress<string>? progress)
+        {
+            Progress = progress;
+            return PrepareAsync(selected, examId, ct, reason, changedQuestions);
+        }
         public async Task<PreparedExamImport> PrepareAsync(string selected, string examId, CancellationToken ct = default,
             string? reason = null, IReadOnlyList<string>? changedQuestions = null)
         {

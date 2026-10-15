@@ -190,7 +190,7 @@ internal static class ApiEndpointResults
             VersioningErrorCode.ExamNotFound or VersioningErrorCode.ParticipantNotFound =>
                 StatusCodes.Status404NotFound,
             VersioningErrorCode.InvalidSchedule or VersioningErrorCode.InvalidRequest or
-                VersioningErrorCode.PublicationNotReady => StatusCodes.Status400BadRequest,
+                VersioningErrorCode.PublicationNotReady or VersioningErrorCode.InitialPublicationWindowClosed => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status409Conflict
         };
         return Error(
@@ -292,6 +292,7 @@ internal static class ApiEndpointResults
         VersioningErrorCode.InvalidStateTransition => "当前考试或参加考试状态不允许这项操作，请刷新后核对。",
         VersioningErrorCode.ExamEnded => "考试已经结束，不能继续修改这项内容。",
         VersioningErrorCode.PublicationNotReady => "试卷或计分材料尚未通过完整校验，未发布。",
+        VersioningErrorCode.InitialPublicationWindowClosed => "已达到最新保存的开考时间或考试已经开始，首次试卷未发布。请调整并保存考试时间后，使用原预览重试发布。",
         VersioningErrorCode.StructuralChangeRejected => "本次修订改变了试卷结构，未发布，请核对题目与选项。",
         VersioningErrorCode.StaleScheduleTask => "考试时间已调整，原定时任务不再生效。",
         VersioningErrorCode.ScheduleTaskNotDue => "尚未到达设定的考试时间。",
@@ -318,6 +319,7 @@ internal static class ApiEndpointResults
         VersioningErrorCode.InvalidStateTransition => "INVALID_STATE_TRANSITION",
         VersioningErrorCode.ExamEnded => "EXAM_ENDED",
         VersioningErrorCode.PublicationNotReady => "PUBLICATION_NOT_READY",
+        VersioningErrorCode.InitialPublicationWindowClosed => "INITIAL_PUBLICATION_WINDOW_CLOSED",
         VersioningErrorCode.StructuralChangeRejected => "STRUCTURAL_CHANGE_REJECTED",
         VersioningErrorCode.StaleScheduleTask => "STALE_SCHEDULE_TASK",
         VersioningErrorCode.ScheduleTaskNotDue => "SCHEDULE_TASK_NOT_DUE",

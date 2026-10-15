@@ -65,9 +65,11 @@ public partial class App : Application
     private void OnDispatcherUnhandledException(object sender,
         System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
+        var diagnosticPath = StudentCrashDiagnostics.TryWrite(AppDataDirectory, e.Exception);
         // 未知异常可能已破坏业务状态，关闭程序并保留本地恢复记录。
         MessageBox.Show(
-            "程序发生错误，即将关闭。已保存的作答内容不会丢失，请重新启动程序或联系监考人员。",
+            "程序发生错误，即将关闭。已保存的作答内容不会丢失，请重新启动程序或联系监考人员。" +
+            (diagnosticPath is null ? "" : "\n\n错误记录已保存。请运行客户端文件夹中的“收集错误记录.cmd”，将生成的文件发给考务人员。"),
             "程序已停止当前操作",
             MessageBoxButton.OK,
             MessageBoxImage.Error);

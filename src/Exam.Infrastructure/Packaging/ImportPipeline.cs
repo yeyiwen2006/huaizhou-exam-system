@@ -86,6 +86,10 @@ public interface IExamImportService
     Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct = default,
         string? reason = null, IReadOnlyList<string>? changedQuestions = null);
 
+    Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct,
+        string? reason, IReadOnlyList<string>? changedQuestions, IProgress<string>? progress) =>
+        PrepareAsync(source, examId, ct, reason, changedQuestions);
+
     Task<ExamVersionSnapshot> PublishAsync(PreparedExamImport prepared, CancellationToken ct = default);
 }
 
@@ -97,10 +101,15 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
     /// <param name="changedQuestions">
     /// 开考后修订**声明**的变更题号。省略时采用按内容算出的差异提示；服务器会按内容核对，不一致即拒绝。
     /// </param>
-    public async Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct = default,
-        string? reason = null, IReadOnlyList<string>? changedQuestions = null)
+    public Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct = default,
+        string? reason = null, IReadOnlyList<string>? changedQuestions = null) =>
+        PrepareAsync(source, examId, ct, reason, changedQuestions, null);
+
+    public async Task<PreparedExamImport> PrepareAsync(string source, string examId, CancellationToken ct,
+        string? reason, IReadOnlyList<string>? changedQuestions, IProgress<string>? progress)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(examId);
+        progress?.Report("正在读取考试设置并检查试题材料…");
         var generation = api.Generation;
         var expected = await api.GetExamAsync(examId, ct);
         var selectedExam = await api.GetExamDetailAsync(examId, ct);
@@ -152,6 +161,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
             foreach (var question in manifest.Questions.OrderBy(q => q.QuestionNo))
             {
                 ct.ThrowIfCancellationRequested();
+                progress?.Report($"正在编译第 {compiled.Count + 1}/{manifest.Questions.Count} 题（已完成 {compiled.Count} 题）…");
                 var result = await compile(new TeXCompileRequest(workspace.PackageRoot,
                     question.Source, workspace.CompilationRoot), ct);
                 if (!result.Succeeded)
@@ -159,7 +169,9 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                         string.Join("；", result.Issues.Select(issue => issue.Message +
                             (issue.File is null ? "" : "（" + issue.File + (issue.Line is null ? "" : $"，第 {issue.Line} 行") + "）"))));
                 compiled.Add(question.QuestionId, result);
+                progress?.Report($"已完成编译 {compiled.Count}/{manifest.Questions.Count} 题…");
             }
+            progress?.Report($"已完成编译 {compiled.Count}/{manifest.Questions.Count} 题，正在核对最新考试设置…");
             // Compilation is the expensive part. Saving the same exam must not cancel it.
             // Rebind the compiled material to the latest compatible settings before previewing.
             var latest = await api.GetExamDetailAsync(examId, ct);
@@ -198,6 +210,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
             }
             expected = latestVersion;
             selectedExam = latest;
+            progress?.Report($"已完成编译 {compiled.Count}/{manifest.Questions.Count} 题，正在检查选项定位…");
             var regions = await Task.Run(() => new OptionRegionExtractor().Extract(new OptionRegionRequest(examId,
                 expected.Versions.PaperVersion + 1, manifest.Questions.Select(q =>
                     new OptionRegionSourceQuestion(q.QuestionId, compiled[q.QuestionId].OutputPdfPath!, q.Options!)).ToArray())), ct);
@@ -235,6 +248,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                 preview, source, publishReason, declared, hint)
             { ConnectionGeneration = generation, LogicalServerId = api.ServerId,
               ExpectedSettingsVersion = selectedExam.Summary.SettingsVersion };
+            progress?.Report($"已完成编译 {compiled.Count}/{manifest.Questions.Count} 题，正在整理预览和源材料…");
             await prepared.SealAsync(ct);
             return prepared;
         }
@@ -397,16 +411,20 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                 else
                 {
                     RequireFirstPublication(current);
-                    if (current.Versions != prepared.Expected.Versions)
-                        throw new InvalidOperationException("服务器版本已变化，请重新检查试题包，不能用旧预览发布。");
+                    // A schedule change does not change the compiled paper. The server checks
+                    // its latest saved schedule under the exam stream lock when publishing.
                 }
 
                 if (current.ExamId != prepared.Expected.ExamId ||
                     current.Versions.PaperVersion != prepared.Expected.Versions.PaperVersion ||
-                    detail.Summary.SettingsVersion != prepared.ExpectedSettingsVersion)
+                    (prepared.IsRevision && detail.Summary.SettingsVersion != prepared.ExpectedSettingsVersion))
                     throw new InvalidOperationException("考试版本或设置已变化，请重新检查试题包，不能用旧预览发布。");
                 if (!prepared.IsRevision)
-                ImportCatalogBinding.RequireMatch(prepared.ManifestJson, prepared.AnswerJson, detail.Summary.Name, detail.Settings);
+                {
+                    try { ImportCatalogBinding.RequireMatch(prepared.ManifestJson, prepared.AnswerJson, detail.Summary.Name, detail.Settings); }
+                    catch (ArgumentException error)
+                    { throw new InvalidOperationException("考试名称、科目题组或计分设置已改变，请重新检查试题包。仅修改考试时间无需重新编译。", error); }
+                }
                 var recipients = await api.GetPublicationRecipientsAsync(ct);
                 EnsureConnection(prepared.ConnectionGeneration, prepared.LogicalServerId);
                 if (recipients.Recipients is not { Count: > 0 and <= 32 })

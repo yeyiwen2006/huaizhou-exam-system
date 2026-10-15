@@ -56,7 +56,10 @@ public enum VersioningErrorCode
     ChangedQuestionIdsUnexpected,
 
     /// <summary>没有任何题目内容变化：应使用规则单独修订入口，而不是发布新试卷版本。</summary>
-    NoContentChange
+    NoContentChange,
+
+    /// <summary>首次发布时已达到最新开考时间，或考试已经开始。</summary>
+    InitialPublicationWindowClosed
 }
 
 public sealed record ScheduleWindow(DateTimeOffset StartsAt, DateTimeOffset EndsAt);

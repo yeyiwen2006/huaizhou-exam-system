@@ -402,7 +402,7 @@ public sealed partial class StudentExamRuntime(
             dispatcher.BeginInvoke(new Action(() => { if (!_disposed) StateChanged?.Invoke(this, EventArgs.Empty); }));
     }
 
-    private static bool IsLocalStorageError(Exception error) => error is IOException or
+    private static bool IsLocalStorageError(Exception error) => error is IOException or InvalidDataException or
         UnauthorizedAccessException or System.Data.Common.DbException or System.Text.Json.JsonException or
         CryptographicException or InvalidOperationException or ArgumentException;
 

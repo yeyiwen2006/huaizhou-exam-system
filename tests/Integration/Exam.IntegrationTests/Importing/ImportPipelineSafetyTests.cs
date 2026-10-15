@@ -17,6 +17,43 @@ public sealed class ImportPipelineSafetyTests
     private static ImportPipeline Pipeline(SyntheticPublicationClient api) => new(api)
     { CompileOverride = SyntheticImportFixture.CompileFixtureAsync };
 
+    [Fact]
+    public async Task ChangedScheduleAndResavedIdenticalSettingsReuseCompiledPreview()
+    {
+        using var source = new SyntheticImportFixture();
+        using var api = new SyntheticPublicationClient(source);
+        var compilations = 0;
+        var messages = new List<string>();
+        var pipeline = new ImportPipeline(api)
+        {
+            CompileOverride = (request, token) =>
+            {
+                compilations++;
+                return SyntheticImportFixture.CompileFixtureAsync(request, token);
+            }
+        };
+        using var prepared = await pipeline.PrepareAsync(source.Source, api.Current.ExamId,
+            CancellationToken.None, null, null, new InlineProgress(messages.Add));
+        Assert.Contains(messages, text => text.Contains("第 1/1 题"));
+        Assert.Contains(messages, text => text.Contains("1/1 题，正在检查选项定位"));
+        api.Current = api.Current with
+        {
+            Versions = api.Current.Versions with { ScheduleVersion = 2 },
+            Schedule = new(DateTimeOffset.UtcNow.AddHours(2), DateTimeOffset.UtcNow.AddHours(3))
+        };
+        api.Detail = api.Detail with { Summary = api.Detail.Summary with { SettingsVersion = 2 } };
+        var result = await pipeline.PublishAsync(prepared);
+        Assert.True(prepared.MatchesPublication(result));
+        Assert.Equal(api.Current.Schedule, result.Schedule);
+        Assert.Equal(2, result.Versions.ScheduleVersion);
+        Assert.Equal(1, compilations);
+    }
+
+    private sealed class InlineProgress(Action<string> report) : IProgress<string>
+    {
+        public void Report(string value) => report(value);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -205,7 +242,7 @@ public sealed class ImportPipelineSafetyTests
         api.NoRecipients = true;
         await Assert.ThrowsAsync<InvalidOperationException>(() => pipeline.PublishAsync(prepared));
         api.NoRecipients = false;
-        api.Detail = api.Detail with { Summary = api.Detail.Summary with { SettingsVersion = 2 } };
+        api.Detail = api.Detail with { Summary = api.Detail.Summary with { SettingsVersion = 2, Name = "已修改考试名称" } };
         await Assert.ThrowsAsync<InvalidOperationException>(() => pipeline.PublishAsync(prepared));
         Assert.Equal(0, api.Uploads);
     }

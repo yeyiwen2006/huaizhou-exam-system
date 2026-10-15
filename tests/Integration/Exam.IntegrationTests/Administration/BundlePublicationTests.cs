@@ -34,6 +34,31 @@ namespace Exam.IntegrationTests.Administration;
 public sealed class BundlePublicationTests(PostgresDatabaseFixture database)
 {
     [Fact]
+    public async Task FirstUploadRejectedAfterDeadlineCanRetryUnchangedAfterScheduleExtension()
+    {
+        using var f = await Fixture.Create(database.DataSource, persistResource: false);
+        var now = DateTimeOffset.UtcNow;
+        var past = f.Versions.UpdateSchedule(new(f.ExamId, 1,
+            new(now.AddMinutes(-1), now.AddHours(1)), now.AddMinutes(-2), Guid.NewGuid().ToString("N")));
+        Assert.True(past.Succeeded, past.Error);
+        var rejected = await f.Service.PublishUploadedAsync(f.ExamId, f.Upload,
+            f.Resource.EncryptedContent, f.MaterialsCipher, "synthetic-operator");
+        Assert.Equal(VersioningErrorCode.InitialPublicationWindowClosed, rejected.ErrorCode);
+        Assert.Equal(0, f.Versions.GetExam(f.ExamId).Value!.Versions.PaperVersion);
+        Assert.Null(await new PostgresPaperMaterialStore(database.DataSource).FindAsync(f.ExamId, 1));
+
+        // Keep the exact request ID and ciphertext: only the saved exam schedule changes.
+        var extended = f.Versions.UpdateSchedule(new(f.ExamId, 2,
+            new(now.AddHours(1), now.AddHours(2)), now, Guid.NewGuid().ToString("N")));
+        Assert.True(extended.Succeeded, extended.Error);
+        var published = await f.Service.PublishUploadedAsync(f.ExamId, f.Upload,
+            f.Resource.EncryptedContent, f.MaterialsCipher, "synthetic-operator");
+        Assert.True(published.Succeeded, published.Error);
+        Assert.Equal(extended.Value!.Schedule, published.Value!.Schedule);
+        Assert.Equal(1, published.Value.Versions.PaperVersion);
+    }
+
+    [Fact]
     public async Task ValidatedBundle_CommitsBothVersions_Replays_AndFeedsExistingGradingReader()
     {
         using var f=await Fixture.Create(database.DataSource);

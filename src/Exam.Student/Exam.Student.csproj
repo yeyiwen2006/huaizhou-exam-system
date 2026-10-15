@@ -7,6 +7,13 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\deploy\student\Collect-StudentDiagnostics.ps1" Link="Collect-StudentDiagnostics.ps1"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\student\收集错误记录.cmd" Link="收集错误记录.cmd"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!-- 原版题目显示使用 Windows.Data.Pdf（WinRT 投影），要求 Windows 10 19041+ -->

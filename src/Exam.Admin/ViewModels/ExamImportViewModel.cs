@@ -185,8 +185,12 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             ExamName = exam.Name;
             // Saving this exam is not a context switch. Compilation finishes against the
             // latest settings; an in-flight publication retains its original request.
-            if ((settingsChanged || nameChanged) && !IsBusy && _preview?.PublicationAttempted != true)
-                ClearPreview("考试设置已更新，请重新检查材料；已保留导入源。");
+            if (!IsBusy && _preview?.PublicationAttempted != true)
+            {
+                if (nameChanged) ClearPreview("考试名称已更新，请重新检查材料；已保留导入源。");
+                else if (settingsChanged && HasPreview)
+                    Status = "考试设置已保存，已保留预览。发布时会核对最新科目题组和计分设置，并以最新保存的开考时间为准。";
+            }
             return;
         }
         ClearPreview("考试已切换；旧检查结果已清除。");
@@ -217,10 +221,17 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         _operationCancellation = new CancellationTokenSource();
         IsChecking = true;
         PreparedExamImport? prepared = null;
+        var reporting = true;
+        var progress = new Progress<string>(message =>
+        {
+            if (reporting && !_disposed && context == _context && IsChecking)
+                Status = message;
+        });
         try
         {
             prepared = await _service.PrepareAsync(source, examId, _operationCancellation.Token,
-                string.IsNullOrWhiteSpace(PublishReason) ? null : PublishReason, ParseChangedQuestions());
+                string.IsNullOrWhiteSpace(PublishReason) ? null : PublishReason, ParseChangedQuestions(), progress);
+            reporting = false;
             if (context != _context || examId != ExamId || source != SourcePath) return;
             _preview = prepared;
             prepared = null;
@@ -248,6 +259,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
         }
         finally
         {
+            reporting = false;
             prepared?.Dispose();
             _operationCancellation?.Dispose();
             _operationCancellation = null;
