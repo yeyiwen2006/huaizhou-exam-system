@@ -30,7 +30,7 @@
                           CanUserResizeColumns="False" CanUserAddRows="False"
                           CanUserDeleteRows="False" HeadersVisibility="Column"
                           HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
-                          SelectionUnit="CellOrRowHeader" ClipboardCopyMode="IncludeHeader" />
+                          SelectionUnit="FullRow" ClipboardCopyMode="IncludeHeader" />
                 <Border x:Name="FooterBorder" Grid.Row="1" Style="{DynamicResource TableFooterRow}"
                         Padding="0" BorderThickness="0,1,0,0" Background="{DynamicResource Brush.Primary.Soft}" Visibility="Collapsed">
                     <Grid x:Name="FooterGrid" />

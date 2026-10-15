@@ -191,7 +191,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public void Deactivate()
     {
         if (!_active) return;
-        _active = false; _generation++; _polling?.Cancel(); _availabilityPolling?.Cancel(); CancelWaiting();
+        _active = false; _generation++; _polling?.Cancel(); _availabilityPolling?.Cancel(); StopWaiting();
+        if (_readBusy) Message = "查询已暂停，返回后可重新刷新状态与日志。";
         MarkProtectionUnknown();
         _reads = null; _readBusy = false; IsBusy = false; UpdateCommands();
     }
@@ -243,6 +244,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (!IsSignedIn || _connection is null || _readBusy) return;
         var connection = _connection; var generation = _generation;
         using var reads = BeginRead();
+        Message = "正在刷新状态与日志…";
         try
         {
             var status = await connection.StatusAsync(reads.Token);
@@ -287,7 +289,15 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             }
             Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "服务器状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
         }
-        catch (OperationCanceledException) { if (Current(connection, generation)) { MarkUnknown(); Message = "已停止本次查询；当前状态需重新核实。"; } }
+        catch (OperationCanceledException)
+        {
+            if (Current(connection, generation) && ReferenceEquals(_reads, reads))
+            {
+                MarkUnknown();
+                // A transport timeout does not cancel our token. Only the cancel command reports user cancellation.
+                if (!reads.IsCancellationRequested) Message = "刷新状态与日志超时，请检查连接后重试。";
+            }
+        }
         catch { if (Current(connection, generation)) MarkUnknown(); throw; }
         finally { EndRead(reads); }
     }
@@ -597,9 +607,13 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     { if (!ReferenceEquals(_reads, source)) return; _reads = null; _readBusy = false; UpdateCommands(); }
     public void CancelWaiting()
     {
+        StopWaiting();
+        Message = _pending is null ? "已取消本次等待。" : "已取消等待；原请求保留，服务器操作不会因此撤销。";
+    }
+    private void StopWaiting()
+    {
         _reads?.Cancel(); _restoreProgress?.Cancel();
         if (_restoreWriteInFlight is not null) RestoreText = RestoreStatus(_restoreOperation, false);
-        Message = _pending is null ? "已取消本次等待。" : "已取消等待；原请求保留，服务器操作不会因此撤销。";
     }
     private void ResetSession(bool dispose = true)
     {

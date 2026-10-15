@@ -56,6 +56,54 @@ public sealed class ManagementWorkspaceTests
     }
 
     [Fact]
+    public async Task LeavingPageDuringRefreshDoesNotReportUserCancellationAndNextRefreshShowsProgress()
+    {
+        var connection = new Connection(); using var vm = ViewModel(connection, new Store());
+        await vm.LoginAsync("synthetic"); vm.Activate();
+        connection.StatusResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = vm.RefreshAsync();
+        Assert.Equal("正在刷新状态与日志…", vm.Message);
+        vm.Deactivate(); await first;
+        Assert.DoesNotContain("取消", vm.Message);
+        vm.Activate();
+        var second = vm.RefreshAsync();
+        Assert.Equal("正在刷新状态与日志…", vm.Message);
+        connection.StatusResponse.SetResult(Connection.Reply(connection.Status)); await second;
+        Assert.Equal("服务器状态和限定日志已刷新。", vm.Message);
+        Assert.True(vm.RefreshCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task RefreshTransportTimeoutIsReportedAsTimeoutAndAllowsRetry()
+    {
+        var connection = new Connection(); using var vm = ViewModel(connection, new Store());
+        await vm.LoginAsync("synthetic");
+        connection.StatusResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refresh = vm.RefreshAsync();
+        connection.StatusResponse.SetException(new TaskCanceledException("synthetic transport timeout"));
+        await refresh;
+        Assert.Contains("超时", vm.Message); Assert.DoesNotContain("取消", vm.Message);
+        Assert.True(vm.RefreshCommand.CanExecute(null)); Assert.False(vm.CancelWaitCommand.CanExecute(null));
+        connection.StatusResponse = null; await vm.RefreshAsync();
+        Assert.Equal("服务器状态和限定日志已刷新。", vm.Message);
+    }
+
+    [Fact]
+    public async Task ExplicitRefreshCancellationKeepsUserMessageUntilNextRefreshStarts()
+    {
+        var connection = new Connection(); using var vm = ViewModel(connection, new Store());
+        await vm.LoginAsync("synthetic");
+        connection.StatusResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refresh = vm.RefreshAsync();
+        vm.CancelWaitCommand.Execute(null); await refresh;
+        Assert.Equal("已取消本次等待。", vm.Message);
+        var retry = vm.RefreshAsync();
+        Assert.Equal("正在刷新状态与日志…", vm.Message);
+        connection.StatusResponse.SetResult(Connection.Reply(connection.Status)); await retry;
+        Assert.Equal("服务器状态和限定日志已刷新。", vm.Message);
+    }
+
+    [Fact]
     public async Task ConfirmationCancelHasNoRequestRecordAndNoSideEffect()
     {
         var connection = new Connection(); var store = new Store();
@@ -382,12 +430,14 @@ public sealed class ManagementWorkspaceTests
         public ManagementReply<ManagementOperation>? QueryResponse { get; set; }
         public CancellationToken WriteToken { get; private set; }
         public TaskCompletionSource? SessionExchange { get; set; }
+        public TaskCompletionSource<ManagementReply<ManagementStatus>>? StatusResponse { get; set; }
         public ManagementStatus Status { get; set; } = new(BusinessServiceStatus.Stopped, BusinessReadiness.Unknown,
             new(ManagementWorkspaceTests.Target.ServerId, ManagementWorkspaceTests.Target.NodeId, "127.0.0.1", 8443, "C:\\synthetic-data", false, 7), []);
         public Task LoginAsync(string username, string password, CancellationToken token) => Task.CompletedTask;
         public Task UseBusinessSessionAsync(Exam.Admin.Services.AdminSessionSnapshot session, CancellationToken token) => SessionExchange?.Task ?? Task.CompletedTask;
         public Task LogoutAsync(CancellationToken token) => Task.CompletedTask;
-        public Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) => Task.FromResult(Reply(Status));
+        public Task<ManagementReply<ManagementStatus>> StatusAsync(CancellationToken token) =>
+            StatusResponse?.Task.WaitAsync(token) ?? Task.FromResult(Reply(Status));
         public Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ManagementAuditEntry>>([]));
         public Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token) => Task.FromResult(Reply<IReadOnlyList<ProtectedRuntimeLogEntry>>([]));
         public Task<ManagementReply<BackupInfo>> BackupInfoAsync(string directory, CancellationToken token)
