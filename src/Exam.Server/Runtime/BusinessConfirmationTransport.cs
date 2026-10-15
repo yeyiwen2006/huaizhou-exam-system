@@ -9,13 +9,18 @@ using Npgsql;
 
 namespace Exam.Server.Runtime;
 
-/// <summary>Holds HTTP success bytes until the independent durable confirmation completes.</summary>
+/// <summary>A display-only query; it does not acknowledge a write or release exam resources.</summary>
+public sealed class ReadOnlyObservation;
+
+/// <summary>Holds business success bytes until the independent durable confirmation completes.</summary>
 public sealed class BusinessConfirmationMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(HttpContext context, IBusinessConfirmation confirmation)
     {
         if (!context.Request.Path.StartsWithSegments("/api/v1") ||
-            context.GetEndpoint()?.Metadata.GetMetadata<ConfirmationBeforeResult>() is not null)
+            context.GetEndpoint()?.Metadata.GetMetadata<ConfirmationBeforeResult>() is not null ||
+            (HttpMethods.IsGet(context.Request.Method) &&
+             context.GetEndpoint()?.Metadata.GetMetadata<ReadOnlyObservation>() is not null))
         { await next(context); return; }
         var transport = context.Response.Body;
         await using var buffered = new MemoryStream();

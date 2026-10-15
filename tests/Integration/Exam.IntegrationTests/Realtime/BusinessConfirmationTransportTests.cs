@@ -1,14 +1,17 @@
 using System.Net;
 using System.Security.Claims;
 using Exam.Application.HighAvailability;
+using Exam.Application.Commands;
 using Exam.Contracts.Common;
 using Exam.Domain.Common;
 using Exam.Server.Runtime;
+using Exam.Server.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Exam.IntegrationTests.Realtime;
@@ -16,6 +19,70 @@ namespace Exam.IntegrationTests.Realtime;
 /// <summary>Transport ordering/failure tests; these substitutes are not PostgreSQL recovery evidence.</summary>
 public sealed class BusinessConfirmationTransportTests
 {
+    [Fact]
+    public async Task OnlyDisplayRoutesOptOutOfDurableConfirmation()
+    {
+        var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<ReliableCommandService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        await using var app = builder.Build();
+        var api = app.MapGroup("/api/v1");
+        api.MapExamCatalogApi(); api.MapReliableCommandApi();
+        await app.StartAsync();
+        var observations = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Where(endpoint => endpoint.Metadata.GetMetadata<ReadOnlyObservation>() is not null).ToArray();
+        Assert.Equal(new[] { "/api/v1/commands/time", "/api/v1/exams", "/api/v1/exams/{examId}" },
+            observations.Select(endpoint => endpoint.RoutePattern.RawText!.TrimEnd('/')).Order().ToArray());
+        Assert.All(observations, endpoint => Assert.Equal("GET",
+            Assert.Single(endpoint.Metadata.GetRequiredMetadata<HttpMethodMetadata>().HttpMethods)));
+    }
+
+    [Fact]
+    public async Task DisplayQueryReturnsWhileWriteIsWaitingForStandby()
+    {
+        var gate = new WaitingGate();
+        var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IBusinessConfirmation>(gate);
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>(); app.UseMiddleware<BusinessConfirmationMiddleware>();
+        app.MapPost("/api/v1/write", () => Results.Ok("saved"));
+        app.MapGet("/api/v1/display", () => Results.Ok("current-settings"))
+            .WithMetadata(new ReadOnlyObservation());
+        await app.StartAsync(); using var client = app.GetTestClient();
+        var write = client.PostAsync("/api/v1/write", null);
+        try
+        {
+            await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var read = await client.GetAsync("/api/v1/display").WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            Assert.Contains("current-settings", await read.Content.ReadAsStringAsync());
+            Assert.False(write.IsCompleted);
+            Assert.Equal(1, gate.Calls);
+        }
+        finally { gate.Release.TrySetResult(); }
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await write).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("POST", false)]
+    [InlineData("GET", true)]
+    public async Task DisplayMetadataCannotBypassWritesOrExplicitResourceConfirmation(string method, bool binary)
+    {
+        var gate = new TransportGate { HandlerCompleted = true };
+        var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IBusinessConfirmation>(gate);
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>(); app.UseMiddleware<BusinessConfirmationMiddleware>();
+        var endpoint = app.MapMethods("/api/v1/test", [method], () => Results.Ok("private-success-payload"))
+            .WithMetadata(new ReadOnlyObservation());
+        if (binary) endpoint.WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        await app.StartAsync(); using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), "/api/v1/test");
+        var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.DoesNotContain("private-success-payload", await response.Content.ReadAsStringAsync());
+        Assert.Equal(1, gate.Calls);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -141,6 +208,19 @@ public sealed class BusinessConfirmationTransportTests
             Assert.True(HandlerCompleted); Calls++;
             if (Fail) throw new DomainRuleException(ErrorCodes.ServiceRecovering, "确认未完成。", retryable: true);
             return Task.CompletedTask;
+        }
+    }
+    private sealed class WaitingGate : IBusinessConfirmation
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls { get; private set; }
+        public async Task ConfirmAsync(CancellationToken token)
+        {
+            Calls++;
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            throw new DomainRuleException(ErrorCodes.ServiceRecovering, "备机确认未完成。", retryable: true);
         }
     }
     public sealed class TestHub : Hub { public string Result() => "persisted-result"; }

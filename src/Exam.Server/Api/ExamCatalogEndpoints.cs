@@ -15,7 +15,8 @@ public static class ExamCatalogEndpoints
         group.MapGet("", async ([FromServices] PostgresExamCatalog catalog, HttpContext context,
                 IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier,
-                () => catalog.ListAsync(cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))));
+                () => catalog.ListAsync(cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapPost("", async (CreateExamRequest request, [FromServices] PostgresExamCatalog catalog,
                 HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
@@ -26,7 +27,8 @@ public static class ExamCatalogEndpoints
         group.MapGet("/{examId}", async (string examId, [FromServices] PostgresExamCatalog catalog,
                 HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier,
-                () => catalog.GetAsync(examId, cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))));
+                () => catalog.GetAsync(examId, cancellationToken, ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context))))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapPut("/{examId}/settings", async (string examId, UpdateExamSettingsRequest request,
                 [FromServices] PostgresExamCatalog catalog, HttpContext context, IConfiguration configuration,

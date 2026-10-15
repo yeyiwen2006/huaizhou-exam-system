@@ -347,7 +347,8 @@ public static class ExamApiEndpointExtensions
                 context,
                 configuration,
                 context.TraceIdentifier,
-                service.GetServerTime()));
+                service.GetServerTime()))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapGet("/due", async (
             string participationId,
