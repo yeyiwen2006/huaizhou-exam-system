@@ -280,12 +280,14 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         Assert.All(await probe.RunAsync(Configuration, default), check => Assert.True(check.Passed, check.Name));
         Assert.Equal(1, unwrap.Calls);
         Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        var revision = await ResourceRevisionAsync();
         var current = service.GetExam("synthetic-exam").Value!;
         Assert.True(service.UpdateSchedule(new("synthetic-exam", current.Versions.ScheduleVersion,
             new(current.Schedule.StartsAt.AddMinutes(10), current.Schedule.EndsAt.AddMinutes(10)),
             DateTimeOffset.UtcNow, "change-cache-schedule")).Succeeded);
         Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
         Assert.Equal(1, unwrap.Calls);
+        Assert.Equal(revision, await ResourceRevisionAsync());
         Assert.All(await probe.RunAsync(Configuration, default), check => Assert.True(check.Passed, check.Name));
         Assert.Equal(2, unwrap.Calls);
     }
@@ -311,6 +313,7 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
 
     [Theory]
     [InlineData("DELETE FROM exam.versioned_resources")]
+    [InlineData("TRUNCATE exam.versioned_resources CASCADE")]
     [InlineData("UPDATE exam.version_state SET snapshot=jsonb_set(snapshot,'{paper,structure,questions}','[]'::jsonb)")]
     [InlineData("INSERT INTO exam.paper_materials (exam_id, paper_version, archive, archive_sha256, package_content_sha256, format_version, file_count, archive_bytes, question_digests, created_at, created_by) VALUES ('synthetic-exam', 1, '\\x01'::bytea, repeat('a', 64), repeat('b', 64), 1, 1, 0, '{}'::jsonb, now(), 'synthetic-operator')")]
     public async Task ConfirmationInvalidatesResourceCacheWhenReferencedMetadataChanges(string damage)
@@ -325,6 +328,45 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         await ExecuteAsync(damage);
         Assert.False(await probe.VerifyConfirmationResourcesAsync(default));
         Assert.False(await probe.VerifyConfirmationResourcesAsync(default));
+    }
+
+    [Fact]
+    public async Task ConfirmationResourceRevisionRollsBackWithTheResourceWrite()
+    {
+        await StoreResourceAsync();
+        var revision = await ResourceRevisionAsync();
+        await using var connection = await _database.DataSource.OpenConnectionAsync();
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using var command = new NpgsqlCommand("""
+                UPDATE exam.versioned_resources SET encrypted_content=encrypted_content;
+                SELECT revision FROM exam.confirmation_resource_revision WHERE singleton;
+                """, connection, transaction);
+            Assert.True((long)(await command.ExecuteScalarAsync())! > revision);
+            await transaction.RollbackAsync();
+        }
+        Assert.Equal(revision, await ResourceRevisionAsync());
+    }
+
+    private async Task<long> ResourceRevisionAsync()
+    {
+        await using var command = _database.DataSource.CreateCommand(
+            "SELECT revision FROM exam.confirmation_resource_revision WHERE singleton");
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    [Fact]
+    public async Task ConfirmationLegacyBackupWithoutRevisionStillReceivesFullRecoveryChecks()
+    {
+        await StoreResourceAsync();
+        await ExecuteAsync("DROP TABLE exam.confirmation_resource_revision");
+        var unwrap = new CountingUnwrapper(_certificate);
+        var probe = new PostgresRecoveryReadinessProbe(_database.DataSource, unwrap);
+        Assert.All(await probe.RunAsync(Configuration, default), check => Assert.True(check.Passed, check.Name));
+        Assert.Equal(1, unwrap.Calls);
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.Equal(3, unwrap.Calls);
     }
 
     [Theory]

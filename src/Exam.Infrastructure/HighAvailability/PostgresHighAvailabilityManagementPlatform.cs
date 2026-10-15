@@ -404,9 +404,10 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         Directory.CreateDirectory(ConfirmationDirectory(primary, plan.After.ServerEpoch));
         var peer = new HttpConfirmationPeer(_http, PeerAddress(standby, ""), _options.ServerId, standby.NodeId, () => _options.PeerToken);
         await using var source = ManagementProbeConnection.Create(primary.ConnectionString, 10);
-        await new PostgresBusinessConfirmation(source, Confirmation(primary, plan.After.ServerEpoch), _options.ServerId,
+        using var confirmation = new PostgresBusinessConfirmation(source, Confirmation(primary, plan.After.ServerEpoch), _options.ServerId,
             primary.NodeId, standby.NodeId, plan.After.ServerEpoch, primary.ResourcesDirectory, peer,
-            primary.ConnectionString, _options.PostgresBinDirectory).ConfirmAsync(token);
+            primary.ConnectionString, _options.PostgresBinDirectory);
+        await confirmation.ConfirmAsync(token);
         var head = Confirmation(primary, plan.After.ServerEpoch).Read();
         var independent = await peer.ReadAsync(token);
         if (head is not { Confirmed: true } || independent != head) throw new IOException("恢复保护尚无双侧最新持久确认。");

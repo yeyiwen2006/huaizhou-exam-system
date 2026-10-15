@@ -23,20 +23,57 @@ public sealed class BusinessConfirmationTransportTests
     public async Task OnlyDisplayRoutesOptOutOfDurableConfirmation()
     {
         var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<ReliableCommandService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Application.Activation.ActivationService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Application.Participation.ParticipationService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Application.Submissions.SubmissionService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Application.Submissions.FocusEventService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Application.Submissions.CollectionCompletionService>(_ => throw new InvalidOperationException("Metadata inspection only."));
+        builder.Services.AddSingleton<Exam.Contracts.Versioning.IExamVersioningService>(_ => throw new InvalidOperationException("Metadata inspection only."));
         await using var app = builder.Build();
         var api = app.MapGroup("/api/v1");
         api.MapExamCatalogApi(); api.MapReliableCommandApi(); api.MapAdministrationApi(); api.MapReportApi();
+        api.MapStudentApi(); api.MapOperatorAccountApi(); api.MapActivationApi(); api.MapParticipationApi();
+        api.MapSubmissionApi(); api.MapVersioningApi(); api.MapGradingApi();
         await app.StartAsync();
         var observations = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>().Where(endpoint => endpoint.Metadata.GetMetadata<ReadOnlyObservation>() is not null).ToArray();
-        Assert.Equal(new[] { "/api/v1/commands/time", "/api/v1/devices", "/api/v1/devices/{clientNumber}/room-history",
+        Assert.Equal(new[] { "/api/v1/activation/devices/{deviceId}", "/api/v1/activation/pending",
+                "/api/v1/commands/time", "/api/v1/devices", "/api/v1/devices/{clientNumber}/room-history",
                 "/api/v1/exams", "/api/v1/exams/{examId}", "/api/v1/exams/{examId}/monitoring",
                 "/api/v1/exams/{examId}/roster", "/api/v1/exams/{examId}/uncollected",
-                "/api/v1/reports/{examId}/status", "/api/v1/rooms" },
+                "/api/v1/grading/{examId}/status", "/api/v1/operators", "/api/v1/operators/me",
+                "/api/v1/participation/exams/{examId}/actual", "/api/v1/participation/{participationId}",
+                "/api/v1/publications/recipients", "/api/v1/reports/{examId}/status", "/api/v1/rooms",
+                "/api/v1/student/exams", "/api/v1/student/instructions", "/api/v1/student/server-topology",
+                "/api/v1/submissions/focus-events", "/api/v1/versioning/exams/{examId}" }.Order(),
             observations.Select(endpoint => endpoint.RoutePattern.RawText!.TrimEnd('/')).Order().ToArray());
         Assert.All(observations, endpoint => Assert.Equal("GET",
             Assert.Single(endpoint.Metadata.GetRequiredMetadata<HttpMethodMetadata>().HttpMethods)));
+        var postQueries = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Where(endpoint => endpoint.Metadata.GetMetadata<ReadOnlyPostQuery>() is not null).ToArray();
+        Assert.Equal(new[] { "/api/v1/activation/status", "/api/v1/participation/authorize-write" },
+            postQueries.Select(endpoint => endpoint.RoutePattern.RawText!).Order().ToArray());
+        Assert.All(postQueries, endpoint => Assert.Equal("POST",
+            Assert.Single(endpoint.Metadata.GetRequiredMetadata<HttpMethodMetadata>().HttpMethods)));
+    }
+
+    [Theory]
+    [InlineData("POST", HttpStatusCode.OK)]
+    [InlineData("PUT", HttpStatusCode.ServiceUnavailable)]
+    public async Task ReadOnlyPostQuerySkipsOnlyItsDeclaredMethod(string method, HttpStatusCode expected)
+    {
+        var gate = new TransportGate { HandlerCompleted = true };
+        var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IBusinessConfirmation>(gate);
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>(); app.UseMiddleware<BusinessConfirmationMiddleware>();
+        app.MapMethods("/api/v1/query", [method], () => Results.Ok()).WithMetadata(new ReadOnlyPostQuery());
+        await app.StartAsync(); using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), "/api/v1/query");
+        Assert.Equal(expected, (await client.SendAsync(request)).StatusCode);
+        Assert.Equal(method == "POST" ? 0 : 1, gate.Calls);
     }
 
     [Theory]

@@ -159,7 +159,8 @@ public static class ExamApiEndpointExtensions
                 context,
                 configuration,
                 context.TraceIdentifier,
-                () => service.GetRequestStatusAsync(request, cancellationToken)));
+                () => service.GetRequestStatusAsync(request, cancellationToken)))
+            .WithMetadata(new ReadOnlyPostQuery());
 
         group.MapPost("/approve", async (
             ApproveActivationRequest request,
@@ -214,7 +215,7 @@ public static class ExamApiEndpointExtensions
                     "找不到设备登记。",
                     StatusCodes.Status404NotFound)
                 : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, result);
-        });
+        }).WithMetadata(new ReadOnlyObservation());
 
         group.MapGet("/pending", async (
             ActivationService service,
@@ -225,7 +226,8 @@ public static class ExamApiEndpointExtensions
                 context,
                 configuration,
                 context.TraceIdentifier,
-                await service.ListPendingRequestsAsync(cancellationToken)));
+                await service.ListPendingRequestsAsync(cancellationToken)))
+            .WithMetadata(new ReadOnlyObservation());
 
         return group;
     }
@@ -301,7 +303,8 @@ public static class ExamApiEndpointExtensions
             CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(
                 context, configuration, context.TraceIdentifier,
-                () => service.EnsureAuthorizedForWriteAsync(request, cancellationToken)));
+                () => service.EnsureAuthorizedForWriteAsync(request, cancellationToken)))
+            .WithMetadata(new ReadOnlyPostQuery());
 
         group.MapGet("/{participationId}", async (
             string participationId,
@@ -320,7 +323,7 @@ public static class ExamApiEndpointExtensions
                     "找不到参加考试记录。",
                     StatusCodes.Status404NotFound)
                 : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, result);
-        });
+        }).WithMetadata(new ReadOnlyObservation());
 
         group.MapGet("/exams/{examId}/actual", async (
             string examId,
@@ -330,7 +333,8 @@ public static class ExamApiEndpointExtensions
             CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(
                 context, configuration, context.TraceIdentifier,
-                () => service.ListActualParticipationsAsync(examId, cancellationToken)));
+                () => service.ListActualParticipationsAsync(examId, cancellationToken)))
+            .WithMetadata(new ReadOnlyObservation());
 
         return group;
     }
@@ -483,7 +487,8 @@ public static class ExamApiEndpointExtensions
             CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(
                 context, configuration, context.TraceIdentifier,
-                () => service.ListSummariesAsync(examId, cancellationToken)));
+                () => service.ListSummariesAsync(examId, cancellationToken)))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapPost("/collection/evaluate", async (
             EvaluateCollectionApiRequest request,
@@ -533,7 +538,8 @@ public static class ExamApiEndpointExtensions
                 context,
                 configuration,
                 context.TraceIdentifier,
-                service.GetExam(examId)));
+                service.GetExam(examId)))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapPut("/exams/{examId}/schedule", (
             string examId,

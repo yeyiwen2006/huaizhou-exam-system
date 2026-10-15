@@ -1,4 +1,5 @@
 using Exam.Application.Scoring;
+using Exam.Server.Runtime;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Exam.Server.Api;
@@ -21,7 +22,7 @@ public static class GradingApiEndpoints
             context.Response.Headers.CacheControl = "no-store";
             return ApiEndpointResults.Success(context, configuration, context.TraceIdentifier,
                 await grading.ReadAsync(examId, cancellationToken));
-        });
+        }).WithMetadata(new ReadOnlyObservation());
 
         return group;
     }

@@ -60,9 +60,10 @@ public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string s
 /// this actual fence and persist its acknowledgement before primary confirmation or transport success.</summary>
 public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
     string serverId, string primaryNodeId, string standbyNodeId, long epoch, string resourcesDirectory,
-    IDurableConfirmationPeer peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation
+    IDurableConfirmationPeer peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
     public async Task ConfirmAsync(CancellationToken token)
     {
         await _gate.WaitAsync(token);
@@ -70,7 +71,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         {
             using var locked = store.Lock();
             var previous = store.Read();
-            var resources = FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true);
+            var resources = _resources.Read();
             await using var connection = await source.OpenConnectionAsync(token);
             await using (var transaction = await connection.BeginTransactionAsync(token))
             {
@@ -109,7 +110,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
                 throw new IOException("备节点确认边界与原请求不同。");
             // Emergency success is local only. Its different primary head prevents an older standby
             // confirmation from later claiming coverage of emergency writes.
-            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != resources)
+            if (_resources.Read() != resources)
                 throw new IOException("确认期间资源发生变化。");
             await store.SaveAsync(new(record, true), token);
         }
@@ -117,14 +118,17 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认尚未完成，保留原请求重试。", retryable: true); }
         finally { _gate.Release(); }
     }
+
+    public void Dispose() => _resources.Dispose();
 }
 
 /// <summary>Runs on the standby's business listener but never writes its PostgreSQL database.</summary>
 public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
     string serverId, string standbyNodeId, string primaryNodeId, long epoch, string resourcesDirectory,
-    IPackageKeyUnwrapper unwrapper, string? timelineConnection = null, string? postgresBinDirectory = null)
+    IPackageKeyUnwrapper unwrapper, string? timelineConnection = null, string? postgresBinDirectory = null) : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
     private readonly PostgresRecoveryReadinessProbe _readiness = new(source, unwrapper);
     private bool _recoveryVerified;
     public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
@@ -144,7 +148,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
                 try { await VerifyPositionAsync(source, record, standbyNodeId, token); break; }
                 catch (IOException) when (DateTime.UtcNow < deadline) { await Task.Delay(50, token); }
             }
-            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
+            if (_resources.Read() != record.ResourcesDigest)
                 throw new IOException("备节点资源尚未持久追平。");
             if (!_recoveryVerified)
             {
@@ -157,7 +161,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             else if (!await _readiness.VerifyConfirmationResourcesAsync(token))
                 throw new IOException("备节点新增或变更的试题资源核对失败。");
             await VerifyPositionAsync(source, record, standbyNodeId, token);
-            if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
+            if (_resources.Read() != record.ResourcesDigest)
                 throw new IOException("备节点资源在确认期间改变。");
             var continuation = previous is not null && previous.Record.Timeline != record.Timeline
                 ? await VerifiedTimelineContinuation.ReadAsync(source, previous.Record, record.Timeline, timelineConnection, postgresBinDirectory, token) : null;
@@ -168,6 +172,8 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
     }
 
     public ConfirmationHead? Read() => store.Read();
+
+    public void Dispose() => _resources.Dispose();
 
     public static async Task VerifyPositionAsync(NpgsqlDataSource source, DurableConfirmation record,
         string standbyNodeId, CancellationToken token, string? timelineConnection = null, string? postgresBinDirectory = null)

@@ -27,6 +27,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     private static readonly string[] Names = ["activation-sequences", "version-projections", "published-resources",
         "submission-receipts", "reliable-events", "paper-materials"];
     private string? _verifiedResourceRevision;
+    private bool? _hasResourceRevision;
 
     /// <summary>Normal confirmation checks only resources changed since a successful inspection.
     /// Startup/recovery still use RunAsync and always perform all checks.</summary>
@@ -37,7 +38,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
         await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL row_security=off", connection, transaction))
             await readOnly.ExecuteNonQueryAsync(token);
         var revision = await ReadResourceRevisionAsync(connection, transaction, token);
-        if (!StringComparer.Ordinal.Equals(revision, _verifiedResourceRevision))
+        if (revision is null || !StringComparer.Ordinal.Equals(revision, _verifiedResourceRevision))
         {
             // Revision and bytes are read in the same snapshot. Cache only a fully successful result.
             if (!await CheckResourcesAsync(connection, transaction, token) ||
@@ -48,26 +49,23 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
         return true;
     }
 
-    private static async Task<string> ReadResourceRevisionAsync(NpgsqlConnection connection,
+    private async Task<string?> ReadResourceRevisionAsync(NpgsqlConnection connection,
         NpgsqlTransaction transaction, CancellationToken token)
     {
-        // PostgreSQL row revisions catch replacement/deletion even when a caller reuses the same
-        // logical paper version or digest. Do not fetch, decrypt or hash the binary payload here.
-        // Include each non-binary input used by the two resource checks; schedule/answer changes
-        // do not change this revision. This cache is process-local and never survives a restart.
+        if (_hasResourceRevision is null)
+        {
+            await using var exists = new NpgsqlCommand(
+                "SELECT to_regclass('exam.confirmation_resource_revision') IS NOT NULL", connection, transaction);
+            _hasResourceRevision = await exists.ExecuteScalarAsync(token) is true;
+        }
+        // A backup taken before this migration can still undergo complete recovery checks.
+        // Never cache resource validation for a legacy snapshot without the revision marker.
+        if (_hasResourceRevision is false) return null;
+        // Triggers advance this marker in the resource transaction, including same-version
+        // replacement, deletion and TRUNCATE. Schedule/answer-only changes leave it unchanged.
+        // Read one row instead of aggregating all publications and resources on every answer save.
         await using var command = new NpgsqlCommand("""
-            SELECT jsonb_build_array(
-              (SELECT jsonb_agg(jsonb_build_array(resource_id,xmin::text,ctid::text) ORDER BY resource_id)
-                 FROM exam.versioned_resources WHERE resource_kind='paper-package'),
-              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,xmin::text,ctid::text) ORDER BY exam_id,paper_version)
-                 FROM exam.paper_materials),
-              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,snapshot->'paper') ORDER BY exam_id)
-                 FROM exam.version_state WHERE paper_version>0),
-              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,unlock_reference,package_length) ORDER BY exam_id)
-                 FROM exam.exam_entry_access WHERE package_ready),
-              (SELECT jsonb_agg(jsonb_build_array(exam_id,stream_revision,xmin::text,ctid::text) ORDER BY exam_id,stream_revision)
-                 FROM exam.version_events WHERE operation_type='paper.publish')
-            )::text
+            SELECT revision::text FROM exam.confirmation_resource_revision WHERE singleton
             """, connection, transaction);
         return (string)(await command.ExecuteScalarAsync(token)
             ?? throw new IOException("试题资源版本读取失败。"));

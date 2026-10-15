@@ -28,7 +28,7 @@ public static class StudentApiEndpointExtensions
             return topology is null ? ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
                 "TOPOLOGY_NOT_CONFIGURED", "可信主备信息尚未配置，请联系考务人员。", StatusCodes.Status503ServiceUnavailable, true)
                 : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, topology);
-        }).WithTags("Student Connection");
+        }).WithTags("Student Connection").WithMetadata(new ReadOnlyObservation());
 
         api.MapPost("/activation/cancel-own", async (
             CancelOwnActivationRequest request,
@@ -53,7 +53,7 @@ public static class StudentApiEndpointExtensions
                     sessionId,
                     ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context),
                     cancellationToken)))
-            .WithTags("Student Exams");
+            .WithTags("Student Exams").WithMetadata(new ReadOnlyObservation());
 
         api.MapGet("/student/instructions", async (
             string preparationId,
@@ -69,7 +69,7 @@ public static class StudentApiEndpointExtensions
                     sessionId,
                     ExamApiAccessMiddleware.RequireAuthenticatedDeviceId(context),
                     cancellationToken)))
-            .WithTags("Student Exams");
+            .WithTags("Student Exams").WithMetadata(new ReadOnlyObservation());
 
         return api;
     }

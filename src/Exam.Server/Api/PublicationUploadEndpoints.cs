@@ -27,7 +27,7 @@ public static class PublicationUploadEndpoints
             try{return ApiEndpointResults.Success(context,configuration,context.TraceIdentifier,service.GetRecipients());}
             catch(CryptographicException){return ApiEndpointResults.Error(context,configuration,context.TraceIdentifier,
                 "PUBLICATION_NOT_READY","发布公钥证书不可用；请核对受管节点及公开证书配置。",StatusCodes.Status503ServiceUnavailable);}
-        });
+        }).WithMetadata(new ReadOnlyObservation());
         api.MapPost("/exams/{examId}/publications/upload",async (string examId,[FromServices] PostgresBundlePublicationService service,
             [FromServices] GradingRecalculationTrigger recalculation,
             [FromServices] PublicationUploadGate admission,HttpContext context,IConfiguration configuration,CancellationToken ct)=>

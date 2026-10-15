@@ -12,6 +12,9 @@ namespace Exam.Server.Runtime;
 /// <summary>A display-only query; it does not acknowledge a write or release exam resources.</summary>
 public sealed class ReadOnlyObservation;
 
+/// <summary>A POST used to query existing state; authentication and authorization still run.</summary>
+public sealed class ReadOnlyPostQuery;
+
 /// <summary>Ephemeral device presence, not an answer, receipt, authorization or exam setting.</summary>
 public sealed class TransientPresenceUpdate;
 
@@ -25,7 +28,8 @@ public sealed class BusinessConfirmationMiddleware(RequestDelegate next)
             (HttpMethods.IsGet(context.Request.Method) &&
              context.GetEndpoint()?.Metadata.GetMetadata<ReadOnlyObservation>() is not null) ||
             (HttpMethods.IsPost(context.Request.Method) &&
-             context.GetEndpoint()?.Metadata.GetMetadata<TransientPresenceUpdate>() is not null))
+             (context.GetEndpoint()?.Metadata.GetMetadata<TransientPresenceUpdate>() is not null ||
+              context.GetEndpoint()?.Metadata.GetMetadata<ReadOnlyPostQuery>() is not null)))
         { await next(context); return; }
         var transport = context.Response.Body;
         await using var buffered = new MemoryStream();
@@ -158,7 +162,7 @@ public static class BusinessConfirmationRegistration
         });
     }
 
-    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation
+    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation, IDisposable
     {
         private IBusinessConfirmation? _inner;
         private readonly object _gate = new();
@@ -167,6 +171,7 @@ public static class BusinessConfirmationRegistration
             try { lock (_gate) return (_inner ??= new BatchedBusinessConfirmation(create(), stoppingToken)).ConfirmAsync(token); }
             catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认配置不可用。", retryable: true); }
         }
+        public void Dispose() { lock (_gate) (_inner as IDisposable)?.Dispose(); }
     }
     // Only isolated test hosts explicitly select this registration. The business executable always uses full confirmation.
     private sealed class IsolatedTestConfirmation : IBusinessConfirmation

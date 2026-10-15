@@ -34,7 +34,8 @@ public static class OperatorAccountEndpoints
         group.MapGet("/me", async ([FromServices] PostgresOperatorAccounts accounts, HttpContext context,
                 IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier,
-                () => accounts.GetAsync(ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context), cancellationToken)));
+                () => accounts.GetAsync(ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context), cancellationToken)))
+            .WithMetadata(new ReadOnlyObservation());
 
         group.MapGet("", async ([FromServices] PostgresOperatorAccounts accounts, HttpContext context,
                 IConfiguration configuration, CancellationToken cancellationToken) =>
@@ -44,7 +45,7 @@ public static class OperatorAccountEndpoints
                     throw new Exam.Application.Participation.ParticipationRuleException(
                         OperatorErrorCodes.NotAdministrator, "只有管理员可以查看全部考务账号。");
                 return await accounts.ListAsync(cancellationToken);
-            }));
+            })).WithMetadata(new ReadOnlyObservation());
 
         group.MapPut("/status", async (SetOperatorStatusRequest request, [FromServices] PostgresOperatorAccounts accounts,
                 HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>

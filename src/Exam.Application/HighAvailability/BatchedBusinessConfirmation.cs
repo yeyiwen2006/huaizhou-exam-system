@@ -2,11 +2,13 @@ namespace Exam.Application.HighAvailability;
 
 /// <summary>Shares a new durability fence among requests already waiting when that fence starts.</summary>
 public sealed class BatchedBusinessConfirmation(
-    IBusinessConfirmation inner, CancellationToken stoppingToken = default) : IBusinessConfirmation
+    IBusinessConfirmation inner, CancellationToken stoppingToken = default) : IBusinessConfirmation, IDisposable
 {
     private readonly object _gate = new();
     private TaskCompletionSource? _pending;
     private bool _running;
+
+    public void Dispose() => (inner as IDisposable)?.Dispose();
 
     public Task ConfirmAsync(CancellationToken cancellationToken)
     {
