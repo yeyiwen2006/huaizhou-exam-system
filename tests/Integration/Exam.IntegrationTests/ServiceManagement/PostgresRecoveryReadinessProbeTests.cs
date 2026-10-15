@@ -266,6 +266,67 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
         Assert.Contains(await InspectAsync(), c => c.Name == "published-resources" && !c.Passed);
     }
 
+    [Fact]
+    public async Task ConfirmationReusesVerifiedResourcesAcrossReadsAndScheduleUpdatesButRecoveryStillRechecks()
+    {
+        CreateExam();
+        await StoreResourceAsync();
+        var service = new PostgresExamVersioningService(_database.DataSource);
+        Assert.True(service.PublishPaper(new("synthetic-exam", 0, "synthetic-resource",
+            SyntheticRecoveryPaper.Structure(), [], new(true, true, true, true), "operator",
+            "缓存检查", DateTimeOffset.UtcNow, "publish-cache")).Succeeded);
+        var unwrap = new CountingUnwrapper(_certificate);
+        var probe = new PostgresRecoveryReadinessProbe(_database.DataSource, unwrap);
+        Assert.All(await probe.RunAsync(Configuration, default), check => Assert.True(check.Passed, check.Name));
+        Assert.Equal(1, unwrap.Calls);
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        var current = service.GetExam("synthetic-exam").Value!;
+        Assert.True(service.UpdateSchedule(new("synthetic-exam", current.Versions.ScheduleVersion,
+            new(current.Schedule.StartsAt.AddMinutes(10), current.Schedule.EndsAt.AddMinutes(10)),
+            DateTimeOffset.UtcNow, "change-cache-schedule")).Succeeded);
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.Equal(1, unwrap.Calls);
+        Assert.All(await probe.RunAsync(Configuration, default), check => Assert.True(check.Passed, check.Name));
+        Assert.Equal(2, unwrap.Calls);
+    }
+
+    [Fact]
+    public async Task ConfirmationRechecksReplacedBytesAtSameVersionAndDoesNotCacheFailure()
+    {
+        await StoreResourceAsync();
+        var unwrap = new CountingUnwrapper(_certificate);
+        var probe = new PostgresRecoveryReadinessProbe(_database.DataSource, unwrap);
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.Equal(1, unwrap.Calls);
+        const string changeByte = "UPDATE exam.versioned_resources SET encrypted_content=set_byte(encrypted_content,0,get_byte(encrypted_content,0)#1)";
+        await ExecuteAsync(changeByte);
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => probe.VerifyConfirmationResourcesAsync(default));
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => probe.VerifyConfirmationResourcesAsync(default));
+        Assert.Equal(3, unwrap.Calls);
+        await ExecuteAsync(changeByte);
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.Equal(4, unwrap.Calls);
+    }
+
+    [Theory]
+    [InlineData("DELETE FROM exam.versioned_resources")]
+    [InlineData("UPDATE exam.version_state SET snapshot=jsonb_set(snapshot,'{paper,structure,questions}','[]'::jsonb)")]
+    [InlineData("INSERT INTO exam.paper_materials (exam_id, paper_version, archive, archive_sha256, package_content_sha256, format_version, file_count, archive_bytes, question_digests, created_at, created_by) VALUES ('synthetic-exam', 1, '\\x01'::bytea, repeat('a', 64), repeat('b', 64), 1, 1, 0, '{}'::jsonb, now(), 'synthetic-operator')")]
+    public async Task ConfirmationInvalidatesResourceCacheWhenReferencedMetadataChanges(string damage)
+    {
+        CreateExam();
+        await StoreResourceAsync();
+        Assert.True(new PostgresExamVersioningService(_database.DataSource).PublishPaper(new("synthetic-exam", 0,
+            "synthetic-resource", SyntheticRecoveryPaper.Structure(), [], new(true, true, true, true), "operator",
+            "资源引用检查", DateTimeOffset.UtcNow, "publish-cache-metadata")).Succeeded);
+        var probe = new PostgresRecoveryReadinessProbe(_database.DataSource, new TestUnwrapper(_certificate));
+        Assert.True(await probe.VerifyConfirmationResourcesAsync(default));
+        await ExecuteAsync(damage);
+        Assert.False(await probe.VerifyConfirmationResourcesAsync(default));
+        Assert.False(await probe.VerifyConfirmationResourcesAsync(default));
+    }
+
     [Theory]
     [InlineData("DELETE FROM exam.submission_idempotency")]
     [InlineData("UPDATE exam.submission_idempotency SET result_payload = jsonb_set(result_payload, '{submission,receipt,receiptId}', '\"forged-receipt\"'::jsonb)")]
@@ -406,6 +467,12 @@ public sealed class PostgresRecoveryReadinessProbeTests : IAsyncLifetime
     }
     private sealed class TestUnwrapper(X509Certificate2 certificate) : IPackageKeyUnwrapper
     { public byte[] Unwrap(EncryptedPackageEnvelope envelope) => PackageEncryptionService.UnwrapDataKey(envelope, "node", certificate); }
+    private sealed class CountingUnwrapper(X509Certificate2 certificate) : IPackageKeyUnwrapper
+    {
+        public int Calls { get; private set; }
+        public byte[] Unwrap(EncryptedPackageEnvelope envelope)
+        { Calls++; return PackageEncryptionService.UnwrapDataKey(envelope, "node", certificate); }
+    }
     private sealed class MissingKey : IPackageKeyUnwrapper
     { public byte[] Unwrap(EncryptedPackageEnvelope envelope) => throw new CryptographicException("synthetic-secret"); }
     private sealed class NoDeviceCredentials : IDeviceCredentialValidator

@@ -13,7 +13,8 @@ public static class AdministrationEndpoints
     {
         api.MapGet("/exams/{examId}/roster", async (string examId, [FromServices] PostgresCandidateRosterService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>service.GetAsync(examId,ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>service.GetAsync(examId,ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapPost("/exams/{examId}/roster/import", async (string examId, ImportCandidateRosterRequest request, [FromServices] PostgresCandidateRosterService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
@@ -32,7 +33,8 @@ public static class AdministrationEndpoints
 
         api.MapGet("/rooms", async ([FromServices] PostgresRoomService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>service.ListAsync(ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>service.ListAsync(ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapPost("/rooms", async (CreateRoomGroupRequest request, [FromServices] PostgresRoomService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
@@ -56,29 +58,33 @@ public static class AdministrationEndpoints
 
         api.MapGet("/devices", async ([FromQuery] string? roomGroupId, [FromQuery] string? query, [FromQuery] ActivationStatus? status, [FromQuery] int? offset, [FromQuery] int? limit, [FromServices] PostgresDeviceDirectory service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>service.ListAsync(roomGroupId,query,status,offset??0,limit??500,ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>service.ListAsync(roomGroupId,query,status,offset??0,limit??500,ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapGet("/devices/{clientNumber}/room-history", async (string clientNumber, [FromServices] PostgresRoomService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>service.HistoryAsync(clientNumber,ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>service.HistoryAsync(clientNumber,ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapGet("/exams/{examId}/monitoring", async (string examId, [FromQuery] string? roomGroupId, [FromQuery] string? query, [FromServices] PostgresMonitoringService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>service.GetAsync(examId,roomGroupId,query,ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>service.GetAsync(examId,roomGroupId,query,ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapGet("/exams/{examId}/uncollected", async (string examId, [FromServices] PostgresMonitoringService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
-            await Rule(context,configuration,context.TraceIdentifier,()=>ReadMissingAsync(service,examId,ct)));
+            await Rule(context,configuration,context.TraceIdentifier,()=>ReadMissingAsync(service,examId,ct)))
+            .WithMetadata(new ReadOnlyObservation());
 
         api.MapPost("/student/presence/open", async (OpenDevicePresenceRequest request, [FromServices] PostgresDevicePresenceService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
             await Rule(context,configuration,request.RequestId,()=>service.OpenAsync(Device(context),request,ct)))
-            .WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+            .WithMetadata(new TransientPresenceUpdate());
 
         api.MapPost("/student/presence", async (UpdateDevicePresenceRequest request, [FromServices] PostgresDevicePresenceService service,
                 HttpContext context, IConfiguration configuration, CancellationToken ct) =>
             await Rule(context,configuration,context.TraceIdentifier,()=>service.UpdateAsync(Device(context),request,ct)))
-            .WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+            .WithMetadata(new TransientPresenceUpdate());
 
         api.MapPost("/exams/{examId}/publications",async (string examId,PublishExamBundleApiRequest request,
                 [FromServices] PostgresBundlePublicationService service,[FromServices] Exam.Server.Runtime.GradingRecalculationTrigger recalculation,

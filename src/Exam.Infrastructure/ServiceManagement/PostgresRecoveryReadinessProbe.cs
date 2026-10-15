@@ -26,6 +26,52 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     private static readonly JsonSerializerOptions Json = JsonDefaults.Create();
     private static readonly string[] Names = ["activation-sequences", "version-projections", "published-resources",
         "submission-receipts", "reliable-events", "paper-materials"];
+    private string? _verifiedResourceRevision;
+
+    /// <summary>Normal confirmation checks only resources changed since a successful inspection.
+    /// Startup/recovery still use RunAsync and always perform all checks.</summary>
+    public async Task<bool> VerifyConfirmationResourcesAsync(CancellationToken token)
+    {
+        await using var connection = await source.OpenConnectionAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
+        await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL row_security=off", connection, transaction))
+            await readOnly.ExecuteNonQueryAsync(token);
+        var revision = await ReadResourceRevisionAsync(connection, transaction, token);
+        if (!StringComparer.Ordinal.Equals(revision, _verifiedResourceRevision))
+        {
+            // Revision and bytes are read in the same snapshot. Cache only a fully successful result.
+            if (!await CheckResourcesAsync(connection, transaction, token) ||
+                !await CheckPaperMaterialsAsync(connection, transaction, token)) return false;
+        }
+        await transaction.CommitAsync(token);
+        _verifiedResourceRevision = revision;
+        return true;
+    }
+
+    private static async Task<string> ReadResourceRevisionAsync(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, CancellationToken token)
+    {
+        // PostgreSQL row revisions catch replacement/deletion even when a caller reuses the same
+        // logical paper version or digest. Do not fetch, decrypt or hash the binary payload here.
+        // Include each non-binary input used by the two resource checks; schedule/answer changes
+        // do not change this revision. This cache is process-local and never survives a restart.
+        await using var command = new NpgsqlCommand("""
+            SELECT jsonb_build_array(
+              (SELECT jsonb_agg(jsonb_build_array(resource_id,xmin::text,ctid::text) ORDER BY resource_id)
+                 FROM exam.versioned_resources WHERE resource_kind='paper-package'),
+              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,xmin::text,ctid::text) ORDER BY exam_id,paper_version)
+                 FROM exam.paper_materials),
+              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,snapshot->'paper') ORDER BY exam_id)
+                 FROM exam.version_state WHERE paper_version>0),
+              (SELECT jsonb_agg(jsonb_build_array(exam_id,paper_version,unlock_reference,package_length) ORDER BY exam_id)
+                 FROM exam.exam_entry_access WHERE package_ready),
+              (SELECT jsonb_agg(jsonb_build_array(exam_id,stream_revision,xmin::text,ctid::text) ORDER BY exam_id,stream_revision)
+                 FROM exam.version_events WHERE operation_type='paper.publish')
+            )::text
+            """, connection, transaction);
+        return (string)(await command.ExecuteScalarAsync(token)
+            ?? throw new IOException("试题资源版本读取失败。"));
+    }
 
     public async Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration, CancellationToken token)
     {
@@ -65,7 +111,10 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
                       WHERE a.event_id = e.event_id AND a.result_request_id = e.acknowledgement_request_id
                         AND a.processing_result = e.acknowledgement_result AND a.acknowledged_at = e.acknowledged_at))
                 """, connection, transaction, token));
+            var resourceRevision = checks.All(c => c.Passed)
+                ? await ReadResourceRevisionAsync(connection, transaction, token) : null;
             await transaction.CommitAsync(token);
+            _verifiedResourceRevision = resourceRevision;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception)

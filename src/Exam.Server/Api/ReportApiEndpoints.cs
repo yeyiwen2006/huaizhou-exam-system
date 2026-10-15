@@ -19,7 +19,7 @@ public static class ReportApiEndpoints
             context.Response.Headers.CacheControl = "no-store";
             return ApiEndpointResults.Success(context, configuration, context.TraceIdentifier,
                 await reports.StatusAsync(examId, cancellationToken));
-        });
+        }).WithMetadata(new ReadOnlyObservation());
         group.MapGet("/{examId}", async (string examId, string? snapshotId, [FromServices] ReportPublicationService reports,
             HttpContext context, IConfiguration configuration, CancellationToken cancellationToken) =>
         {

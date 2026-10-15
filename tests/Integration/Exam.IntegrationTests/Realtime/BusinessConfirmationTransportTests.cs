@@ -26,14 +26,54 @@ public sealed class BusinessConfirmationTransportTests
         builder.Services.AddSingleton<ReliableCommandService>(_ => throw new InvalidOperationException("Metadata inspection only."));
         await using var app = builder.Build();
         var api = app.MapGroup("/api/v1");
-        api.MapExamCatalogApi(); api.MapReliableCommandApi();
+        api.MapExamCatalogApi(); api.MapReliableCommandApi(); api.MapAdministrationApi(); api.MapReportApi();
         await app.StartAsync();
         var observations = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>().Where(endpoint => endpoint.Metadata.GetMetadata<ReadOnlyObservation>() is not null).ToArray();
-        Assert.Equal(new[] { "/api/v1/commands/time", "/api/v1/exams", "/api/v1/exams/{examId}" },
+        Assert.Equal(new[] { "/api/v1/commands/time", "/api/v1/devices", "/api/v1/devices/{clientNumber}/room-history",
+                "/api/v1/exams", "/api/v1/exams/{examId}", "/api/v1/exams/{examId}/monitoring",
+                "/api/v1/exams/{examId}/roster", "/api/v1/exams/{examId}/uncollected",
+                "/api/v1/reports/{examId}/status", "/api/v1/rooms" },
             observations.Select(endpoint => endpoint.RoutePattern.RawText!.TrimEnd('/')).Order().ToArray());
         Assert.All(observations, endpoint => Assert.Equal("GET",
             Assert.Single(endpoint.Metadata.GetRequiredMetadata<HttpMethodMetadata>().HttpMethods)));
+    }
+
+    [Theory]
+    [InlineData("POST", HttpStatusCode.OK)]
+    [InlineData("GET", HttpStatusCode.ServiceUnavailable)]
+    public async Task TransientPresenceSkipsOnlyItsOwnPostConfirmation(string method, HttpStatusCode expected)
+    {
+        var gate = new TransportGate { HandlerCompleted = true };
+        var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IBusinessConfirmation>(gate);
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiExceptionMiddleware>(); app.UseMiddleware<BusinessConfirmationMiddleware>();
+        app.MapMethods("/api/v1/presence", [method], () => Results.Ok())
+            .WithMetadata(new TransientPresenceUpdate());
+        await app.StartAsync(); using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), "/api/v1/presence");
+        Assert.Equal(expected, (await client.SendAsync(request)).StatusCode);
+        Assert.Equal(method == "POST" ? 0 : 1, gate.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealtimeCatchUpSkipsOnlyAnEmptyDelivery(bool hasCommand)
+    {
+        var gate = new TransportGate { HandlerCompleted = true };
+        var hub = new Exam.Server.Realtime.ExamEventHub(null!, null!, null!);
+        var invocation = new HubInvocationContext(new Caller(), new ServiceCollection().BuildServiceProvider(), hub,
+            typeof(Exam.Server.Realtime.ExamEventHub).GetMethod(nameof(Exam.Server.Realtime.ExamEventHub.CatchUp))!, []);
+        IReadOnlyList<Exam.Contracts.Commands.CommandDelivery> result = hasCommand
+            ? [new(new("server", "node", 1), "event", "exam", "part", 1, CommandEventType.End, 2,
+                "device", 1, 1, null, new Dictionary<string, string>(), DateTimeOffset.UtcNow, 2)] : [];
+        var filter = new ConfirmationHubFilter(gate);
+        ValueTask<object?> Method(HubInvocationContext _) => ValueTask.FromResult<object?>(result);
+        if (hasCommand) await Assert.ThrowsAsync<HubException>(() => filter.InvokeMethodAsync(invocation, Method).AsTask());
+        else Assert.Same(result, await filter.InvokeMethodAsync(invocation, Method));
+        Assert.Equal(hasCommand ? 1 : 0, gate.Calls);
     }
 
     [Fact]

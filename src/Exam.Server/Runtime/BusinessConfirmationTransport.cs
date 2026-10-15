@@ -12,6 +12,9 @@ namespace Exam.Server.Runtime;
 /// <summary>A display-only query; it does not acknowledge a write or release exam resources.</summary>
 public sealed class ReadOnlyObservation;
 
+/// <summary>Ephemeral device presence, not an answer, receipt, authorization or exam setting.</summary>
+public sealed class TransientPresenceUpdate;
+
 /// <summary>Holds business success bytes until the independent durable confirmation completes.</summary>
 public sealed class BusinessConfirmationMiddleware(RequestDelegate next)
 {
@@ -20,7 +23,9 @@ public sealed class BusinessConfirmationMiddleware(RequestDelegate next)
         if (!context.Request.Path.StartsWithSegments("/api/v1") ||
             context.GetEndpoint()?.Metadata.GetMetadata<ConfirmationBeforeResult>() is not null ||
             (HttpMethods.IsGet(context.Request.Method) &&
-             context.GetEndpoint()?.Metadata.GetMetadata<ReadOnlyObservation>() is not null))
+             context.GetEndpoint()?.Metadata.GetMetadata<ReadOnlyObservation>() is not null) ||
+            (HttpMethods.IsPost(context.Request.Method) &&
+             context.GetEndpoint()?.Metadata.GetMetadata<TransientPresenceUpdate>() is not null))
         { await next(context); return; }
         var transport = context.Response.Body;
         await using var buffered = new MemoryStream();
@@ -71,6 +76,10 @@ public sealed class ConfirmationHubFilter(IBusinessConfirmation confirmation) : 
         Func<HubInvocationContext, ValueTask<object?>> next)
     {
         var result = await next(context);
+        // No events were released and no acknowledgement was accepted. An empty catch-up
+        // is just a connection check; it must not recheck every paper on the standby.
+        if (context.Hub is Exam.Server.Realtime.ExamEventHub && context.HubMethodName == "CatchUp" &&
+            result is IReadOnlyList<Exam.Contracts.Commands.CommandDelivery> { Count: 0 }) return result;
         try { await confirmation.ConfirmAsync(context.Context.ConnectionAborted); }
         catch (DomainRuleException) { throw new HubException("SERVICE_RECOVERING: 持久确认尚未完成，保留原请求重试。"); }
         return result;
@@ -90,7 +99,8 @@ public static class BusinessConfirmationRegistration
                 new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
                 Required("Confirmation:StandbyNodeId"), identity.ServerEpoch, Resources(),
                 new HttpConfirmationPeer(provider.GetRequiredService<HttpClient>(), new Uri(Required("Confirmation:StandbyHttpsUrl")),
-                    identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]), TimelineConnection(), configuration["Backup:PostgresBinDirectory"])));
+                    identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]), TimelineConnection(), configuration["Backup:PostgresBinDirectory"]),
+                provider.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
         services.AddSingleton(provider => new PostgresStandbyConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
             new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
             Required("Confirmation:PrimaryNodeId"), identity.ServerEpoch, Resources(),
@@ -148,13 +158,13 @@ public static class BusinessConfirmationRegistration
         });
     }
 
-    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create) : IBusinessConfirmation
+    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation
     {
-        private PostgresBusinessConfirmation? _inner;
+        private IBusinessConfirmation? _inner;
         private readonly object _gate = new();
         public Task ConfirmAsync(CancellationToken token)
         {
-            try { lock (_gate) return (_inner ??= create()).ConfirmAsync(token); }
+            try { lock (_gate) return (_inner ??= new BatchedBusinessConfirmation(create(), stoppingToken)).ConfirmAsync(token); }
             catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认配置不可用。", retryable: true); }
         }
     }

@@ -125,6 +125,8 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
     IPackageKeyUnwrapper unwrapper, string? timelineConnection = null, string? postgresBinDirectory = null)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly PostgresRecoveryReadinessProbe _readiness = new(source, unwrapper);
+    private bool _recoveryVerified;
     public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
     {
         FileConfirmationStore.Validate(record);
@@ -144,10 +146,16 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             }
             if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
                 throw new IOException("备节点资源尚未持久追平。");
-            var config = new ServiceConfiguration(serverId, standbyNodeId, "127.0.0.1", 1, resourcesDirectory, true, 1);
-            var checks = await new PostgresRecoveryReadinessProbe(source, unwrapper).RunAsync(config, token);
-            if (checks.Count == 0 || checks.Any(c => c.BlocksWrites && !c.Passed))
-                throw new IOException("备节点资源、解锁或持久数据核对失败。");
+            if (!_recoveryVerified)
+            {
+                var config = new ServiceConfiguration(serverId, standbyNodeId, "127.0.0.1", 1, resourcesDirectory, true, 1);
+                var checks = await _readiness.RunAsync(config, token);
+                if (checks.Count == 0 || checks.Any(c => c.BlocksWrites && !c.Passed))
+                    throw new IOException("备节点资源、解锁或持久数据核对失败。");
+                _recoveryVerified = true;
+            }
+            else if (!await _readiness.VerifyConfirmationResourcesAsync(token))
+                throw new IOException("备节点新增或变更的试题资源核对失败。");
             await VerifyPositionAsync(source, record, standbyNodeId, token);
             if (FileConfirmationStore.ResourcesDigest(resourcesDirectory, persist: true) != record.ResourcesDigest)
                 throw new IOException("备节点资源在确认期间改变。");

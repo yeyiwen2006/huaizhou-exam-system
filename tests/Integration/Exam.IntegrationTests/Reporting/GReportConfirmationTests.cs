@@ -36,6 +36,11 @@ public sealed partial class PostgresSubmissionStoreTests
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ReportTestToken);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Polling has a short client deadline; it must not wait for the report download fence.
+        using var statusResponse = await client.GetAsync("/api/v1/reports/" + context.ExamId + "/status", deadline.Token)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+        Assert.Equal(0, gate.Calls);
         var request = client.GetAsync("/api/v1/reports/" + context.ExamId + (binary ? "/xlsx" : "") +
             "?snapshotId=" + status.SnapshotId, deadline.Token);
         try
