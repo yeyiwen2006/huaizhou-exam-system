@@ -81,7 +81,7 @@
                             <Border Style="{StaticResource IconTile}" Width="32" Height="32" CornerRadius="8" VerticalAlignment="Center">
                                 <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Document}" Width="16" Height="16" />
                             </Border>
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="考试说明" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="考试计分说明" Margin="12,0,0,0" VerticalAlignment="Center" />
                         </DockPanel>
                         <ItemsControl x:Name="InstructionList" Margin="0,12,0,0" />
                     </StackPanel>

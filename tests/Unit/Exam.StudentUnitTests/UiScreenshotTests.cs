@@ -353,7 +353,27 @@ public sealed class UiScreenshotTests
                 TimeSpan.FromSeconds(15), throwOnTimeout: false);
             if (!ready) notes.AppendLine("答题页：15 秒内题目或题号导航未出现，截图为当时状态。");
             await IdleAsync(TimeSpan.FromMilliseconds(500));
+            var instructions = (ItemsControl)inProgress.FindName("InstructionList");
+            Assert.Equal(answeringRuntime.Manager.Instructions!.Lines.Count, instructions.Items.Count);
+            Assert.Contains(Descendants<TextBlock>(inProgress), text => text.Text == "考试计分说明");
+            Assert.Contains(Descendants<TextBlock>(waiting), text => text.Text == "考试计分说明");
             await CaptureAsync(window, directory, "student-exam-in-progress");
+            var originalInstructions = instructions.ItemsSource;
+            var navigationScroll = (ScrollViewer)inProgress.FindName("NavigationScroll");
+            instructions.ItemsSource = Enumerable.Range(1, 24).Select(index => InstructionTextRenderer.Create(
+                $"合成计分说明 {index}：单项选择题选对得 5 分，选错或未作答得 0 分；各题组按本场考试公布的规则计分。",
+                (Style)inProgress.FindResource("BodyText"))).ToArray();
+            await IdleAsync(); window.UpdateLayout();
+            Assert.True(navigationScroll.ScrollableHeight > 0);
+            Assert.True(instructions.TranslatePoint(new Point(0, 0), inProgress).Y >=
+                navList.TranslatePoint(new Point(0, navList.ActualHeight), inProgress).Y);
+            navigationScroll.ScrollToBottom();
+            await IdleAsync();
+            Assert.True(navigationScroll.VerticalOffset > 0);
+            await CaptureAsync(window, directory, "student-scoring-instructions-scrolled");
+            instructions.ItemsSource = originalInstructions;
+            navigationScroll.ScrollToTop();
+            await IdleAsync();
 
             ToggleButton Choice(string id) => Assert.Single(Descendants<ToggleButton>(questionView), button => Equals(button.Tag, id));
             bool ReadyAt(string id) => answers.CurrentQuestionId == id && navList.IsEnabled && questionView.HasQuestion;

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Exam.Admin.ViewModels;
 
 /// <summary>
-/// 考生计分说明的显示分段：正文用黑体、数字用 Times New Roman。
+/// 考试计分说明的显示分段：正文用黑体、数字用 Times New Roman。
 /// 分段只决定字体，不参与任何计分计算——说明文字永远由结构化配置生成，不从预览文字反推配置。
 /// 数字分段规则与学生端 <c>InstructionTextRenderer</c> 保持一致，保证考务预览与考生所见相同。
 /// </summary>

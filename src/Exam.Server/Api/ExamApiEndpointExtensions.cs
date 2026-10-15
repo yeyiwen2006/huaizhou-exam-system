@@ -550,7 +550,7 @@ public static class ExamApiEndpointExtensions
             if (request.Reason is { Length: > 1000 })
                 return ApiEndpointResults.FromVersioning(context, configuration, request.RequestId,
                     VersioningResult<ExamVersionSnapshot>.Failure(VersioningErrorCode.InvalidRequest,
-                        "修改时间的原因不能超过1000字。"));
+                        "修改时间备注不能超过1000字。"));
             var actor = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
             return ApiEndpointResults.FromVersioning(
                 context,

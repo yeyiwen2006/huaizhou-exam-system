@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Exam.Contracts.Resources;
+using Exam.Contracts.Student;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 using Exam.Desktop.Shared.Controls;
@@ -31,6 +32,7 @@ public partial class ExamInProgressPage : UserControl
 
     private PaperNavigator? _navigator;
     private StudentPaperManifest? _loadedPaper;
+    private InstructionsDocument? _displayedInstructions;
     private OptionRegionMap? _regionMap;
     private string? _regionError;
     private string? _currentQuestionId;
@@ -738,8 +740,18 @@ public partial class ExamInProgressPage : UserControl
             answers?.Answers, answers?.Marks, _currentQuestionId);
     }
 
+    private void RefreshInstructions()
+    {
+        var instructions = _runtime.Manager.Instructions;
+        if (ReferenceEquals(instructions, _displayedInstructions)) return;
+        _displayedInstructions = instructions;
+        InstructionList.ItemsSource = instructions?.Lines.Select(line =>
+            InstructionTextRenderer.Create(line, (Style)FindResource("BodyText"))).ToArray();
+    }
+
     private void RefreshStatus()
     {
+        RefreshInstructions();
         var question = _currentQuestionId is not null ? _navigator?.Find(_currentQuestionId) : null;
         CurrentQuestionText.Text = question is null
             ? "正在准备试题"

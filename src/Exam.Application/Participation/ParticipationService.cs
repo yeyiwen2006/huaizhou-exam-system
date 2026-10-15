@@ -383,7 +383,7 @@ public sealed class ParticipationService(
         Require(request.ParticipationId, nameof(request.ParticipationId));
         Require(request.SelectedDeviceId, nameof(request.SelectedDeviceId));
         Require(request.OperatorId, nameof(request.OperatorId));
-        Require(request.Reason, nameof(request.Reason));
+        request = request with { Reason = request.Reason?.Trim() ?? string.Empty };
         var now = _timeProvider.GetUtcNow();
         if (!await deviceCredentialValidator.IsActiveDeviceAsync(request.SelectedDeviceId, cancellationToken)
                 .ConfigureAwait(false))

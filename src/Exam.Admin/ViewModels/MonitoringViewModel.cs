@@ -393,7 +393,7 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         var cursor = _collectionCursors.GetValueOrDefault(examId);
         var added = 0;
         var notifications = new List<CollectionCompletedNotification>();
-        CollectionStatus = "正在查询收齐记录…";
+        // 保留上次结果，避免每秒轮询时在“查询中”和结果之间反复切换。
         try
         {
             for (var page = 0; page < 10; page++)
@@ -744,15 +744,15 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     public async Task DecideDeviceAsync()
     {
         if (string.IsNullOrWhiteSpace(ParticipationId) || string.IsNullOrWhiteSpace(SelectedDeviceId) ||
-            string.IsNullOrWhiteSpace(DecisionReason) || !long.TryParse(ExpectedVersionText, out var expectedVersion) || expectedVersion < 0)
+            !long.TryParse(ExpectedVersionText, out var expectedVersion) || expectedVersion < 0)
         {
-            Status = "请先在上表选中考生，再在冲突对照中选择要保留的设备并填写原因。";
+            Status = "请先在上表选中考生，再在冲突对照中选择要保留的设备。";
             return;
         }
 
         var participationId = ParticipationId.Trim();
         var selectedDeviceId = SelectedDeviceId.Trim();
-        var reason = DecisionReason.Trim();
+        var reason = DecisionReason?.Trim() ?? string.Empty;
         var operatorId = _api.OperatorId;
         var context = _contextVersion;
         var operation = ++_decisionRequestVersion;
@@ -778,7 +778,8 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         ExpectedVersionText = result.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         inputVersion = _decisionInputVersion;
         var retainedNumber = SelectedRow?.ConflictingDevices.FirstOrDefault(device => device.DeviceId == result.AuthorizedDeviceId)?.ClientNumber;
-        var success = $"已保留设备{(retainedNumber is null ? string.Empty : " " + retainedNumber)}继续答题，另一设备已停止答题（原因：{result.Reason}）。";
+        var success = $"已保留设备{(retainedNumber is null ? string.Empty : " " + retainedNumber)}继续答题，另一设备已停止答题。";
+        if (result.Reason.Length > 0) success += $"备注：{result.Reason}";
         try
         {
             await LoadAsync();

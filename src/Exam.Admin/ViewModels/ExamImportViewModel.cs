@@ -88,14 +88,14 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
     public bool CanEditRevisionDetails => !IsBusy && _preview?.PublicationAttempted != true;
     public bool CanPublish => !_disposed && HasPreview && !IsBusy && _preview!.Expected.ExamId == ExamId;
 
-    /// <summary>本次修改原因：开考后修订必须填写，随发布一起记录。</summary>
+    /// <summary>本次修改备注：开考后修订必须填写，随发布一起记录。</summary>
     public string PublishReason
     {
         get => _publishReason;
         set
         {
             if (_preview?.PublicationAttempted == true) return;
-            if (SetProperty(ref _publishReason, value)) ClearPreview("修改原因已改变，请重新检查后发布。");
+            if (SetProperty(ref _publishReason, value)) ClearPreview("修改备注已改变，请重新检查后发布。");
         }
     }
 
@@ -340,7 +340,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
             var revisionDetail = prepared.IsRevision
                 ? $"\n本次为开考后修订：试卷版本 {prepared.Expected.Versions.PaperVersion} → {prepared.TargetPaperVersion}" +
                   $"\n声明变更题号：{string.Join("、", prepared.DeclaredChangedQuestions)}" +
-                  $"\n修改原因：{prepared.Reason}"
+                  $"\n修改备注：{prepared.Reason}"
                 : string.Empty;
             var confirmed = await ConfirmPublicationAsync($"考试：{ExamName}\n来源：{prepared.Source}\n题目：{prepared.Questions.Count} 道{revisionDetail}\n确认已逐题查看版式、答案及选项绑定并正式发布？");
             if (context != _context || !ReferenceEquals(prepared, _preview)) return;

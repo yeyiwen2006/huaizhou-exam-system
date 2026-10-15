@@ -97,8 +97,11 @@ public sealed class ParticipationServiceTests
         Assert.Equal(ParticipationErrorCodes.InvalidBusinessState, error.Code);
     }
 
-    [Fact]
-    public async Task SecondDeviceWaitsForDecision_OriginalRemainsValid_ThenOldAuthorizationIsRejected()
+    [Theory]
+    [InlineData("原设备硬件异常")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SecondDeviceWaitsForDecision_OriginalRemainsValid_ThenOldAuthorizationIsRejected(string note)
     {
         var fixture = await Fixture.CreateAsync();
         var firstSession = await fixture.LoginAsync("device-1", "secret-1", "login-1");
@@ -126,7 +129,8 @@ public sealed class ParticipationServiceTests
             "device-2",
             participation.Version,
             "admin-1",
-            "原设备硬件异常"));
+            note));
+        Assert.Equal(note.Trim(), decision.Reason);
         Assert.Equal("device-2", decision.AuthorizedDeviceId);
         Assert.Equal("device-1", decision.RevokedDeviceId);
         Assert.Equal(participation.AuthorizationVersion + 1, decision.AuthorizationVersion);

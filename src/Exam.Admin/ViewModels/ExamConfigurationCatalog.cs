@@ -270,7 +270,7 @@ public sealed partial class ExamConfigurationViewModel
         var reason = ScheduleChangeReason.Trim();
         if (!isNew && timeChanged && reason.Length > 1000)
         {
-            Status = "修改时间的原因不能超过1000字。";
+            Status = "修改时间备注不能超过1000字。";
             return;
         }
         var structureSaved = false;

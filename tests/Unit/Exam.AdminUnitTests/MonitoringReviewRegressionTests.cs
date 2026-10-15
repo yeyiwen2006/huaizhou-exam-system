@@ -5,11 +5,58 @@ using Exam.Admin.ViewModels;
 using Exam.Contracts.Administration;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
+using Exam.Contracts.Submissions;
 
 namespace Exam.AdminUnitTests;
 
 public sealed partial class ReviewRegressionTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task DeviceDecision_AllowsEmptyNote(string note)
+    {
+        DeviceDecisionRequest? sent = null;
+        using var handler = new AsyncHandler(async message =>
+        {
+            if (message.Method == HttpMethod.Get) return Success(MonitoringFixture.Default());
+            sent = JsonSerializer.Deserialize<DeviceDecisionRequest>(await message.Content!.ReadAsStringAsync(), JsonDefaults.Create())!;
+            return Success(new DeviceDecisionResult(sent.ParticipationId, sent.SelectedDeviceId, "device-1", 2, 4,
+                sent.OperatorId, sent.Reason, DateTimeOffset.UtcNow));
+        });
+        using var api = Configured(handler);
+        using var viewModel = DecisionViewModel(api);
+        viewModel.DecisionReason = note;
+        await viewModel.DecideDeviceAsync();
+        Assert.NotNull(sent);
+        Assert.Equal(string.Empty, sent.Reason);
+        Assert.Contains("已保留设备", viewModel.Status);
+        Assert.DoesNotContain("备注：", viewModel.Status);
+    }
+
+    [Fact]
+    public async Task CollectionPolling_PreservesStatusUntilAResultChanges()
+    {
+        var pending = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        using var handler = new AsyncHandler(_ => ++calls == 1
+            ? Task.FromResult(Success(Array.Empty<CollectionCompletedNotification>())) : pending.Task);
+        using var api = Configured(handler);
+        using var viewModel = new MonitoringViewModel(api) { ExamId = "exam-1" };
+        await viewModel.RefreshCollectionEventsAsync();
+        var previous = viewModel.CollectionStatus;
+        var changes = new List<string>();
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(viewModel.CollectionStatus)) changes.Add(viewModel.CollectionStatus);
+        };
+        var polling = viewModel.RefreshCollectionEventsAsync();
+        Assert.Equal(previous, viewModel.CollectionStatus);
+        pending.SetResult(Success(Array.Empty<CollectionCompletedNotification>()));
+        await polling;
+        Assert.Empty(changes);
+    }
+
     [Fact]
     public async Task C04Review_DuplicateCandidateRowsAreNotAuthoritative()
     {

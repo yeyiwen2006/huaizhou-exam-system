@@ -17,7 +17,7 @@ using Exam.Contracts.Versioning;
 namespace Exam.AdminUnitTests;
 
 /// <summary>
-/// 「只改答案与计分规则」页面的行为：从本地材料包提交规则修订，
+/// 「仅修改答案与计分规则」页面的行为：从本地材料包提交规则修订，
 /// 并把「发布成功」与「重算中 / 结果就绪」分开显示。合成材料，不接触真实试卷。
 /// </summary>
 public sealed class GradingRevisionViewModelTests
@@ -114,7 +114,7 @@ public sealed class GradingRevisionViewModelTests
         await vm.SelectPackageAsync();
         await vm.PublishAsync();
         Assert.Equal(0, calls);
-        Assert.Contains("请填写本次修改原因", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("请填写本次修改备注", vm.Status, StringComparison.Ordinal);
     }
 
     [Fact]

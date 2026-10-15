@@ -195,7 +195,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public MonitoringViewModel Monitoring { get; }
     public ExamImportViewModel Import { get; }
 
-    /// <summary>只改答案与计分规则的入口（不重新编译、不组包）。</summary>
+    /// <summary>仅修改答案与计分规则的入口（不重新编译、不组包）。</summary>
     public GradingRevisionViewModel GradingRevision { get; }
     public Exam.Admin.Reporting.ReportPageViewModel Reports { get; }
 

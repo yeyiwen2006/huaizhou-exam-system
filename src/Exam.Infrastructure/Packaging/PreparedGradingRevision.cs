@@ -66,7 +66,7 @@ public sealed class PreparedGradingRevision : IDisposable
         string source, string reason, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000)
-            throw new InvalidDataException("请填写不超过 1000 字的本次修改原因。");
+            throw new InvalidDataException("请填写不超过 1000 字的本次修改备注。");
         var generation = api.Generation;
         var snapshot = await api.GetExamAsync(examId, ct);
         var serverId = api.ServerId;

@@ -80,7 +80,7 @@ public sealed class GradingRevisionViewModel : BindableBase, IDisposable
     {
         if (string.IsNullOrWhiteSpace(ExamId)) { Status = NoExamStatus; return false; }
         if (string.IsNullOrWhiteSpace(PackagePath)) { Status = "请先选择材料包目录（含 manifest.json 与 server-only/answer-key.json）。"; return false; }
-        if (string.IsNullOrWhiteSpace(Reason)) { Status = "请填写本次修改原因。"; return false; }
+        if (string.IsNullOrWhiteSpace(Reason)) { Status = "请填写本次修改备注。"; return false; }
         if (!File.Exists(Path.Combine(PackagePath, "manifest.json")) || !File.Exists(Path.Combine(PackagePath, "server-only", "answer-key.json")))
         { Status = "材料包里找不到 manifest.json 或 server-only/answer-key.json；换规则必须带完整参考答案。"; return false; }
         return true;

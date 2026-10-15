@@ -229,7 +229,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
                     .Select(question => question.QuestionId).ToArray();
             string publishReason;
             if (revision && string.IsNullOrWhiteSpace(reason))
-                throw new InvalidOperationException("开考后修订必须填写本次修改原因。");
+                throw new InvalidOperationException("开考后修订必须填写本次修改备注。");
             publishReason = string.IsNullOrWhiteSpace(reason) ? FirstImportReason : reason!;
             var prepared = new PreparedExamImport(workspace, manifest, manifestJson, answerJson, expected, compiled,
                 preview, source, publishReason, declared, hint)

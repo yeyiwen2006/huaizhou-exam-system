@@ -7,7 +7,7 @@
     <UserControl.Resources>
         <!-- 左侧题号方框：已作答绿色；当前题主色描边；右上角红点为私人标记。 -->
         <Style x:Key="NavBoxStyle" TargetType="Button">
-            <Setter Property="Width" Value="30" />
+            <Setter Property="MinWidth" Value="24" />
             <Setter Property="Height" Value="30" />
             <Setter Property="Margin" Value="0,0,3,3" />
             <Setter Property="Padding" Value="0" />
@@ -112,36 +112,44 @@
                             </StackPanel>
                         </WrapPanel>
                     </Border>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="NavList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="0,0,0,14">
-                                        <TextBlock Style="{StaticResource SectionTitle}"
-                                                   FontSize="{DynamicResource Font.Size.Body.Large}"
-                                                   Text="{Binding SubjectName, Mode=OneWay}" TextWrapping="Wrap"
-                                                   Visibility="{Binding ShowSubjectHeading, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
-                                        <TextBlock Style="{StaticResource CaptionText}"
-                                                   Text="{Binding GroupTitle, Mode=OneWay}"
-                                                   Margin="0,6,0,8" TextWrapping="Wrap" />
-                                        <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}" Width="330" HorizontalAlignment="Left">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <UniformGrid Columns="10" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Button Style="{StaticResource NavBoxStyle}"
-                                                            Tag="{Binding QuestionId, Mode=OneWay}"
-                                                            Click="OnNavBoxClick" />
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                    <ScrollViewer x:Name="NavigationScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,6,0">
+                            <ItemsControl x:Name="NavList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,14">
+                                            <TextBlock Style="{StaticResource SectionTitle}"
+                                                       FontSize="{DynamicResource Font.Size.Body.Large}"
+                                                       Text="{Binding SubjectName, Mode=OneWay}" TextWrapping="Wrap"
+                                                       Visibility="{Binding ShowSubjectHeading, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                            <TextBlock Style="{StaticResource CaptionText}"
+                                                       Text="{Binding GroupTitle, Mode=OneWay}"
+                                                       Margin="0,6,0,8" TextWrapping="Wrap" />
+                                            <ItemsControl ItemsSource="{Binding Boxes, Mode=OneWay}" HorizontalAlignment="Stretch">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Columns="10" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Style="{StaticResource NavBoxStyle}"
+                                                                Tag="{Binding QuestionId, Mode=OneWay}"
+                                                                Click="OnNavBoxClick" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,1,0,0" Padding="0,14,0,0" Margin="0,6,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="考试计分说明" Style="{StaticResource SectionTitle}" TextWrapping="Wrap" />
+                                    <ItemsControl x:Name="InstructionList" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                     </ScrollViewer>
                 </DockPanel>
             </Border>

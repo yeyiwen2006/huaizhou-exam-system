@@ -260,7 +260,7 @@
                                     <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" IsEnabled="{Binding Exam.CanEditTime}" Text="{Binding Exam.ScheduledEndText, UpdateSourceTrigger=PropertyChanged}"/>
                                 </StackPanel>
                             </Grid>
-                            <TextBlock Text="修改时间的原因" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="修改时间备注" Style="{StaticResource FormLabel}"/>
                             <TextBox Style="{StaticResource FormTextBox}" MaxLength="1000"
                                      IsEnabled="{Binding Exam.CanEditTime}"
                                      Text="{Binding Exam.ScheduleChangeReason, UpdateSourceTrigger=PropertyChanged}"/>
@@ -417,7 +417,7 @@
                         </Border>
                         <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
                             <StackPanel>
-                                <TextBlock Text="考生计分说明" Style="{StaticResource CardHeading}"/>
+                                <TextBlock Text="考试计分说明" Style="{StaticResource CardHeading}"/>
                                 <TextBlock Text="{Binding Exam.InstructionSourceText}" Style="{StaticResource CardNote}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                                 <Border Style="{StaticResource Card}" Margin="0,8,0,0" Padding="10,8">
                                     <ScrollViewer Height="150" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -465,7 +465,7 @@
                                     <TextBlock Text="点击“检查并生成预览”会编译出逐题 PDF，无需提前提供 PDF。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <TextBlock Text="本次修改原因（开考后修订必填，随版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="本次修改备注（开考后修订必填，随版本一起记录）" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding Import.PublishReason, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBox}" IsEnabled="{Binding Import.CanEditRevisionDetails}" />
                             <TextBlock Text="变更题号（空格、逗号或顿号分隔；留空＝按内容自动算出。开考后修订会以这里声明的为准，服务器按内容核对，不一致会拒绝发布）"
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
@@ -509,12 +509,12 @@
                     </Border>
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
-                            <TextBlock Text="只改答案与计分规则" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="仅修改答案与计分规则" Style="{StaticResource CardHeading}"/>
                             <TextBlock Text="不重新编译、不组包：从所选材料包读取清单与完整答案提交发布，服务器随后按新版本安排重算。重算期间旧报表不可查询或导出。"
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
                             <TextBlock Text="材料包目录（含 manifest.json 与 server-only/answer-key.json）" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding GradingRevision.PackagePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
-                            <TextBlock Text="本次修改原因（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="本次修改备注（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding GradingRevision.Reason, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding GradingRevision.CanEditRevision}" Style="{StaticResource FormTextBox}"/>
                             <WrapPanel>
                                 <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.SelectPackageCommand}"/>
@@ -726,9 +726,9 @@
                                 <Expander Header="排查详情" Margin="0,6,0,0">
                                     <TextBlock Text="{Binding Monitoring.SelectedConflictDevice.DiagnosticText}" Style="{StaticResource CardNote}"/>
                                 </Expander>
-                                <TextBlock Text="选中要保留的设备后确认，原因会写入操作记录。" Style="{StaticResource CardNote}" Margin="0,8,0,0"/>
-                                <TextBlock Text="原因" Style="{StaticResource FormLabel}"/>
-                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.DecisionReason}" ToolTip="填写保留该设备的原因"/>
+                                <TextBlock Text="选中要保留的设备后确认，可填写备注，备注会写入操作记录。" Style="{StaticResource CardNote}" Margin="0,8,0,0"/>
+                                <TextBlock Text="备注（可不填）" Style="{StaticResource FormLabel}"/>
+                                <TextBox Style="{StaticResource FormTextBox}" Margin="0,0,0,12" Text="{Binding Monitoring.DecisionReason}" ToolTip="可填写保留该设备的备注，也可留空"/>
                                 <Button Content="确认保留该设备" Style="{StaticResource Btn.Danger}" HorizontalAlignment="Left" MinWidth="120" Padding="14,0" Command="{Binding Monitoring.DecideDeviceCommand}"/>
                             </StackPanel>
                         </Border>
