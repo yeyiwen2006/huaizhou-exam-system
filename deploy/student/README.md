@@ -14,6 +14,10 @@
 | 证书 | 无需在学生机安装服务器证书（见下方“信任配置”） |
 | 显示 | 100% / 125% / 150% 缩放下界面清晰（PerMonitorV2） |
 
+## 统一部署入口
+
+同时部署三端时，双击仓库根目录的 `生成部署包.cmd`。学生端位于 `artifacts/deployment/日期时间/student`，对应压缩包为 `Exam.student-win-x64.zip`。完整解压后，双击 `启动学生端.cmd` 或 `Exam.Student.exe`。下面的单端脚本仍可单独发布学生端。
+
 ## 发布
 
 在仓库根目录执行（需要 .NET 10 SDK，见 `global.json`）：

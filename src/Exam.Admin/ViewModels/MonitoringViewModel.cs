@@ -10,7 +10,7 @@ using Exam.Contracts.Submissions;
 namespace Exam.Admin.ViewModels;
 
 /// <summary>
-/// 设备监控。参试列表、字段、回收人数与未回收名单全部来自服务器一次事务内的权威聚合快照
+/// 考试监控。参试列表、字段、回收人数与未回收名单全部来自服务器一次事务内的权威聚合快照
 /// （<c>GET /exams/{examId}/monitoring</c>），不再由考务端拼接多个来源或使用占位值。
 /// 收齐记录仍按历史补取轮询，用于页面重开与断线恢复。
 /// </summary>
@@ -920,7 +920,7 @@ public sealed record MonitoringRow(
     string ClassText = "",
     string AdmissionNo = "",
     string ClientNumber = "",
-    string RoomGroup = "未分组",
+    string RoomGroup = "未确定试场",
     string ConnectionState = "未登录",
     string Page = "未报告",
     string QuestionAnswer = "—",
@@ -949,7 +949,7 @@ public sealed record MonitoringRow(
         participant.ClassText,
         participant.AdmissionNo,
         participant.ClientNumber,
-        string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未分组" : participant.RoomGroupName,
+        participant.RoomGroupId is null || string.IsNullOrWhiteSpace(participant.RoomGroupName) ? "未确定试场" : participant.RoomGroupName,
         MonitoringDisplay.ConnectionState(participant.ConnectionState),
         string.IsNullOrWhiteSpace(participant.Page) ? "未报告" : participant.Page,
         MonitoringDisplay.CurrentAnswer(participant.CurrentQuestionId, participant.Answers, participant.CurrentQuestionNo, participant.CurrentOptionIds),
@@ -984,7 +984,7 @@ public sealed class ConflictDeviceRow(ConflictDevice device, Action<ConflictDevi
     public Action<ConflictDeviceRow> Select { get; } = select;
     public string DeviceId => Device.DeviceId;
     public string ClientNumber => Device.ClientNumber;
-    public string RoomGroupName => Device.RoomGroupName;
+    public string RoomGroupName => Device.RoomGroupName == "未分组" ? "未确定试场" : Device.RoomGroupName;
     public string ConnectionState => MonitoringDisplay.ConnectionState(Device.ConnectionState);
     public string AuthorizationText => Device.IsAuthorized ? "当前授权" : "等待裁决";
     public string LastCommunicationText => MonitoringDisplay.LastCommunication(Device.LastCommunicationAt);

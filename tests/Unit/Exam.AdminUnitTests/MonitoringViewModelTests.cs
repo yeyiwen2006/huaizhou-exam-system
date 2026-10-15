@@ -66,7 +66,7 @@ public sealed class MonitoringViewModelTests
         Assert.Equal("候考", waiting.BusinessState);
         // 没有有效通信记录时明确标识未登录，而不是显示为在线。
         Assert.Equal("未登录", waiting.ConnectionState);
-        Assert.Equal("未分组", waiting.RoomGroup);
+        Assert.Equal("未确定试场", waiting.RoomGroup);
         Assert.Equal("—", waiting.QuestionAnswer);
         Assert.Equal("暂无指令", waiting.CommandSummary);
         Assert.Equal("无通信记录", waiting.LastCommunicationText);
@@ -252,7 +252,7 @@ public sealed class MonitoringViewModelTests
 
         await viewModel.LoadAsync();
         Assert.Equal(300, viewModel.FilteredRows.Count());
-        Assert.Equal(new[] { "未分组", "第一试场" }, viewModel.RoomGroupOptions);
+        Assert.Equal(new[] { "未确定试场", "第一试场" }, viewModel.RoomGroupOptions);
 
         viewModel.ClassFilter = "002";
         Assert.Equal(150, viewModel.FilteredRows.Count());
@@ -268,7 +268,7 @@ public sealed class MonitoringViewModelTests
         Assert.Equal("合成考生003", Assert.Single(viewModel.FilteredRows).Name);
         viewModel.ClearFiltersCommand.Execute(null);
 
-        viewModel.RoomGroupFilter = "未分组";
+        viewModel.RoomGroupFilter = "未确定试场";
         Assert.Equal(100, viewModel.FilteredRows.Count());
         viewModel.ClassFilter = "001";
         viewModel.OnlyUncollected = true;

@@ -212,7 +212,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             if (context != _context || operation != _directoryOperation || cancellationToken.IsCancellationRequested) return;
             if (groups.Any(x => x is null || x.Version < 1 || string.IsNullOrWhiteSpace(x.GroupId) || string.IsNullOrWhiteSpace(x.Name)) ||
                 groups.Select(x => x.GroupId).Distinct(StringComparer.Ordinal).Count() != groups.Count)
-                throw new InvalidDataException("服务器试场分组信息无效。");
+                throw new InvalidDataException("服务器试场列表信息无效。");
             var incoming = new List<DeviceDirectoryEntry>();
             var offset = 0;
             DateTimeOffset asOf = default;
@@ -312,7 +312,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
             if (previous is not null) Devices.Remove(previous);
             Devices.Add(new(result.DeviceId, result.ClientNumber, ActivationText(result.Status), result.RoomGroupId ?? "",
                 "等待状态上报", "尚未通信", "尚未通信")
-            { RoomGroupName = Groups.FirstOrDefault(x => x.RoomGroupId == result.RoomGroupId)?.Name ?? (result.RoomGroupId is null ? "未分组" : "等待目录刷新") });
+            { RoomGroupName = Groups.FirstOrDefault(x => x.RoomGroupId == result.RoomGroupId)?.Name ?? (result.RoomGroupId is null ? "未确定试场" : "等待目录刷新") });
             var pending = PendingRequests.FirstOrDefault(x => x.ActivationRequestId == requestId);
             if (pending is not null) PendingRequests.Remove(pending);
             if (SelectedPendingRequest?.ActivationRequestId == requestId) SelectedPendingRequest = null;
@@ -350,11 +350,12 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         {
             var history = await _api.GetDeviceRoomHistoryAsync(number);
             if (context != _context || operation != _historyOperation || SelectedDevice?.ClientNumber != number) return;
-            if (history.Any(x => x.ClientNumber != number)) throw new InvalidDataException("转组历史不属于选中设备。");
+            if (history.Any(x => x.ClientNumber != number)) throw new InvalidDataException("设备变更试场历史不属于选中设备。");
             DeviceHistory.Clear();
             foreach (var row in history) DeviceHistory.Add(new(row.ChangedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
-                row.FromGroupName, row.ToGroupName, row.OperatorId, row.Reason));
-            Status = $"已读取学生端 {number} 最近 {history.Count} 条转组历史。";
+                row.FromGroupId is null ? "未确定试场" : row.FromGroupName,
+                row.ToGroupId is null ? "未确定试场" : row.ToGroupName, row.OperatorId, row.Reason));
+            Status = $"已读取学生端 {number} 最近 {history.Count} 条设备变更试场历史。";
         }
         catch when (context != _context || operation != _historyOperation) { }
         catch (Exception error) { SetError(error); }
@@ -416,8 +417,8 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
         _rebuildingChoices = true;
         try
         {
-            SynchronizeChoices(GroupChoices, [new("", "未分组"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
-            SynchronizeChoices(FilterChoices, [new(null, "全部试场"), new("", "未分组"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
+            SynchronizeChoices(GroupChoices, [new("", "未确定试场"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
+            SynchronizeChoices(FilterChoices, [new(null, "全部试场"), new("", "未确定试场"), .. Groups.Select(group => new RoomGroupChoice(group.RoomGroupId, group.Name))]);
             ApprovalRoomGroupId = Groups.Any(x => x.RoomGroupId == approval) ? approval : "";
             MoveToRoomGroupId = Groups.Any(x => x.RoomGroupId == move) ? move : "";
             FilterRoomGroupId = filter is null || filter == "" || Groups.Any(x => x.RoomGroupId == filter) ? filter : null;
@@ -457,7 +458,7 @@ public sealed class ActivationRoomViewModel : BindableBase, IDisposable
     private static ActivationDeviceRow FromDevice(DeviceDirectoryEntry device, bool selected) =>
         new(device.DeviceId, device.ClientNumber, ActivationText(device.ActivationStatus), device.RoomGroupId ?? "",
             device.CandidateName ?? "未登录", ConnectionText(device.ConnectionState), device.LastCommunicationAt?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "尚未通信")
-        { RoomGroupName = device.RoomGroupName, ClassText = device.ClassText ?? "—", AdmissionNo = device.AdmissionNo ?? "—",
+        { RoomGroupName = device.RoomGroupId is null ? "未确定试场" : device.RoomGroupName, ClassText = device.ClassText ?? "—", AdmissionNo = device.AdmissionNo ?? "—",
             ExamName = device.ExamName ?? "尚未选择考试", Page = device.Page, Version = device.Version, IsSelected = selected };
     internal static string ConnectionText(DeviceConnectionState state) => state switch
     { DeviceConnectionState.Online => "在线", DeviceConnectionState.Offline => "离线", DeviceConnectionState.Recovering => "恢复中", _ => "尚未通信" };
@@ -531,7 +532,7 @@ public sealed class ActivationDeviceRow(string deviceId, string clientNumber, st
     string candidate, string connectionStatus, string lastSeen) : BindableBase
 {
     private bool _isSelected;
-    private string _roomGroupName = "未分组";
+    private string _roomGroupName = "未确定试场";
     private string _clientNumber = clientNumber, _activationStatus = activationStatus, _roomGroupId = roomGroupId;
     private string _candidate = candidate, _connectionStatus = connectionStatus, _lastSeen = lastSeen;
     private string _classText = "—", _admissionNo = "—", _examName = "尚未选择考试", _page = "等待状态上报";

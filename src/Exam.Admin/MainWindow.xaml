@@ -598,10 +598,10 @@
         </TabItem>
 
 
-        <TabItem Header="设备监控" Tag="{StaticResource Icon.Monitor}" IsEnabled="{Binding HasCurrentExam}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
+        <TabItem Header="考试监控" Tag="{StaticResource Icon.Monitor}" IsEnabled="{Binding HasCurrentExam}" IsSelected="{Binding Monitoring.IsPageActive, Mode=TwoWay}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备监控" Tag="{StaticResource Icon.Monitor}"
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="考试监控" Tag="{StaticResource Icon.Monitor}"
                                     Content="查看考生在线、作答和答卷回收的权威状态，处理多设备冲突、请求补传和重发考试指令。" />
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -649,7 +649,7 @@
                                     <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="70"/>
                                     <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="SizeToCells" MinWidth="140"/>
                                     <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="SizeToCells" MinWidth="150"/>
-                                    <DataGridTextColumn Header="试场" Binding="{Binding RoomGroup}" Width="90"/>
+                                    <DataGridTextColumn Header="试场" Binding="{Binding RoomGroup}" Width="130"/>
                                     <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="80"/>
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionState}" Width="80"/>
                                     <DataGridTextColumn Header="当前页面" Binding="{Binding Page}" Width="SizeToCells" MinWidth="150"/>
@@ -680,7 +680,7 @@
                                     <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="70"/>
                                     <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="SizeToCells" MinWidth="140"/>
                                     <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="SizeToCells" MinWidth="150"/>
-                                    <DataGridTextColumn Header="试场" Binding="{Binding RoomGroup}" Width="90"/>
+                                    <DataGridTextColumn Header="试场" Binding="{Binding RoomGroup}" Width="130"/>
                                     <DataGridTextColumn Header="业务状态" Binding="{Binding BusinessState}" Width="80"/>
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionState}" Width="80"/>
                                     <DataGridTextColumn Header="最后通信" Binding="{Binding LastCommunicationText}" Width="SizeToCells" MinWidth="210"/>
@@ -715,7 +715,7 @@
                                 <DataGrid ItemsSource="{Binding Monitoring.SelectedConflictDevices}" SelectedItem="{Binding Monitoring.SelectedConflictDevice}" Height="120" IsReadOnly="True">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="120"/>
-                                        <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="90"/>
+                                        <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="130"/>
                                         <DataGridTextColumn Header="授权" Binding="{Binding AuthorizationText}" Width="90"/>
                                         <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionState}" Width="80"/>
                                         <DataGridTextColumn Header="最后通信" Binding="{Binding LastCommunicationText}" Width="190"/>
@@ -780,10 +780,10 @@
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
-        <TabItem Header="设备与试场分组" Tag="{StaticResource Icon.Device}">
+        <TabItem Header="设备与试场" Tag="{StaticResource Icon.Device}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
-                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备与试场分组" Tag="{StaticResource Icon.Device}"
+                    <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备与试场" Tag="{StaticResource Icon.Device}"
                         Content="查看已连接的学生端、当前考生与连接情况；试场和转组记录保存在服务器。"/>
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
@@ -816,7 +816,7 @@
                                     <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="考试" Binding="{Binding ExamName}" Width="160" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前页面" Binding="{Binding Page}" Width="110" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="140" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="*" MinWidth="140" IsReadOnly="True"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                             <WrapPanel Margin="0,12,0,0">
@@ -831,8 +831,8 @@
                             <TextBlock Text="{Binding Activation.Status}" Style="{StaticResource StatusLine}"/>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,14"/>
                             <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="查看选中设备的转组历史" Style="{StaticResource ActionButton}" Command="{Binding Activation.DeviceHistoryCommand}"/>
-                                <TextBlock Text="转组历史" Style="{StaticResource CardHeading}"/>
+                                <Button DockPanel.Dock="Right" Content="查看设备变更试场历史" Style="{StaticResource ActionButton}" Command="{Binding Activation.DeviceHistoryCommand}"/>
+                                <TextBlock Text="设备变更试场历史" Style="{StaticResource CardHeading}"/>
                             </DockPanel>
                             <DataGrid ItemsSource="{Binding Activation.DeviceHistory}" Height="160" IsReadOnly="True">
                                 <DataGrid.Columns>
@@ -847,8 +847,8 @@
                     </Border>
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
-                            <TextBlock Text="试场分组" Style="{StaticResource CardHeading}"/>
-                            <TextBlock Text="分组属于当前服务器，与具体考试无关；删除时由服务器检查所有设备，非空试场不能删除。" Style="{StaticResource CardNote}"/>
+                            <TextBlock Text="试场列表" Style="{StaticResource CardHeading}"/>
+                            <TextBlock Text="同一服务器上同一设备的试场归属与具体考试无关；删除时由服务器检查所有设备，非空试场不能删除。" Style="{StaticResource CardNote}"/>
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="24"/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <StackPanel>

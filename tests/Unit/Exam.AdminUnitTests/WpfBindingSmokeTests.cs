@@ -130,14 +130,14 @@ public sealed class WpfBindingSmokeTests
                 var tabs = Assert.Single(Descendants<TabControl>(window));
                 Assert.Equal("试卷导入与发布", ((TabItem)tabs.Items[MainViewModel.ImportPage]).Header);
                 Assert.Equal("考生名单", ((TabItem)tabs.Items[MainViewModel.RosterPage]).Header);
-                Assert.Equal("设备与试场分组", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
+                Assert.Equal("设备与试场", ((TabItem)tabs.Items[MainViewModel.ActivationPage]).Header);
                 Assert.Equal("隐藏的考试", ((TabItem)tabs.Items[MainViewModel.HiddenExamsPage]).Header);
                 foreach (var tab in tabs.Items.Cast<TabItem>())
                 {
                     tabs.SelectedItem = tab;
                     DrainDispatcher();
                     window.UpdateLayout();
-                    if ((string)tab.Header == "设备与试场分组")
+                    if ((string)tab.Header == "设备与试场")
                     {
                         Assert.DoesNotContain(Descendants<Button>(window), button =>
                             ReferenceEquals(button.Command, viewModel.Activation.ApproveCommand) ||
@@ -151,7 +151,7 @@ public sealed class WpfBindingSmokeTests
                         var queryButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.QueryDeviceCommand));
                         var reloadButton = Assert.Single(Descendants<Button>(window), button => ReferenceEquals(button.Command, viewModel.Activation.RefreshDirectoryCommand));
                         AdminUiFixture.Until(() => viewModel.Activation.CanEditDirectory);
-                        foreach (var name in new[] { "全部试场", "未分组", "全部试场", "全部试场" })
+                        foreach (var name in new[] { "全部试场", "未确定试场", "全部试场", "全部试场" })
                         {
                             roomFilter.SelectedItem = viewModel.Activation.FilterChoices.Single(choice => choice.Name == name);
                             queryButton.Command.Execute(null);
@@ -166,13 +166,13 @@ public sealed class WpfBindingSmokeTests
                         {
                             var choice = Assert.Single(Descendants<ComboBox>(window), input =>
                                 BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == binding);
-                            Assert.Equal("未分组", Assert.IsType<RoomGroupChoice>(choice.SelectedItem).Name);
+                            Assert.Equal("未确定试场", Assert.IsType<RoomGroupChoice>(choice.SelectedItem).Name);
                         }
                         var devicesGrid = Assert.Single(Descendants<DataGrid>(window), grid => ReferenceEquals(grid.ItemsSource, viewModel.Activation.Devices));
                         var selectedDevice = viewModel.Activation.Devices[0];
                         devicesGrid.SelectedItem = selectedDevice;
                         selectedDevice.IsSelected = true;
-                        var historyRow = new DeviceRoomHistoryRow("2026-10-08 12:00:00", "未分组", "合成试场A", "synthetic-operator", "合成转组");
+                        var historyRow = new DeviceRoomHistoryRow("2026-10-08 12:00:00", "未确定试场", "合成试场A", "synthetic-operator", "合成转组");
                         viewModel.Activation.DeviceHistory.Add(historyRow);
                         DrainDispatcher(); window.UpdateLayout();
                         var deviceContainer = Assert.IsType<DataGridRow>(devicesGrid.ItemContainerGenerator.ContainerFromItem(selectedDevice));
@@ -186,6 +186,14 @@ public sealed class WpfBindingSmokeTests
                             Assert.Same(historyRow, Assert.Single(viewModel.Activation.DeviceHistory));
                             Assert.True(selectedDevice.IsSelected);
                         }
+                        var originalWidth = window.Width;
+                        window.Width = 2100;
+                        DrainDispatcher(); window.UpdateLayout();
+                        Assert.True(devicesGrid.Columns[^1].ActualWidth > 140);
+                        Assert.InRange(devicesGrid.ActualWidth - devicesGrid.Columns.Sum(column => column.ActualWidth), 0, 24);
+                        SaveEditorScreenshot(window, devicesGrid, "wide-device-directory");
+                        window.Width = originalWidth;
+                        DrainDispatcher(); window.UpdateLayout();
                         SaveEditorScreenshot(window, devicesGrid, "stable-device-directory");
                         SaveEditorScreenshot(window, roomFilter, "activation-room-filter");
                         var top = queryInput.TranslatePoint(new Point(0, 0), window).Y;
@@ -211,7 +219,7 @@ public sealed class WpfBindingSmokeTests
                         Assert.False(viewModel.Import.CanPublish);
                         VerifyImportPreviewColumns(window, viewModel);
                     }
-                    if ((string)tab.Header == "设备监控")
+                    if ((string)tab.Header == "考试监控")
                     {
                         Assert.True(viewModel.Monitoring.IsPageActive);
                         AdminUiFixture.Until(() => viewModel.Monitoring.Rows.Count != 0);
@@ -269,7 +277,7 @@ public sealed class WpfBindingSmokeTests
                         }
                     }
                     else Assert.False(viewModel.Monitoring.IsPageActive);
-                    if ((string)tab.Header is "设备监控" or "成绩统计")
+                    if ((string)tab.Header is "考试监控" or "成绩统计")
                     {
                         var selectedIndex = tabs.SelectedIndex;
                         window.OpenManagement();
@@ -280,7 +288,7 @@ public sealed class WpfBindingSmokeTests
                         DrainDispatcher();
                         Assert.Equal(selectedIndex, tabs.SelectedIndex);
                         Assert.Same(tab, tabs.SelectedItem);
-                        Assert.Equal((string)tab.Header == "设备监控", viewModel.Monitoring.IsPageActive);
+                        Assert.Equal((string)tab.Header == "考试监控", viewModel.Monitoring.IsPageActive);
                         Assert.Equal((string)tab.Header == "成绩统计", viewModel.Reports.IsPageActive);
                     }
                 }

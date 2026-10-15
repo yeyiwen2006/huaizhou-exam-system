@@ -14,7 +14,7 @@ public sealed class ServerRoomViewModelTests
 {
     [Theory]
     [InlineData(null, "全部试场")]
-    [InlineData("", "未分组")]
+    [InlineData("", "未确定试场")]
     [InlineData("room-a", "合成试场A")]
     public async Task RoomFilterSelectionSurvivesRepeatedDirectoryQueries(string? groupId, string label)
     {
@@ -349,7 +349,7 @@ public sealed class ServerRoomViewModelTests
         Assert.Equal(movedNumber, Assert.Single(body.Devices).ClientNumber);
         Assert.Equal("room-b", body.RoomGroupId);
         Assert.Equal("合成试场B", test.Model.Devices.Single(row => row.ClientNumber == movedNumber).RoomGroupName);
-        Assert.Equal("未分组", test.Model.Devices.Single(row => row.ClientNumber != movedNumber).RoomGroupName);
+        Assert.Equal("未确定试场", test.Model.Devices.Single(row => row.ClientNumber != movedNumber).RoomGroupName);
     }
 
     [Fact]
