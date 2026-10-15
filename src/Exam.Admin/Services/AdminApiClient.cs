@@ -347,7 +347,7 @@ public sealed partial class AdminApiClient : IDisposable
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private HttpClient CreateClient() => _messageHandler is null
-        ? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        ? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, Proxy = new RadminDirectProxy(HttpClient.DefaultProxy) })
         : new HttpClient(_messageHandler, disposeHandler: false);
 
     public void Dispose()

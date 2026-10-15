@@ -9,6 +9,7 @@ using Exam.Contracts.Common;
 using Exam.Contracts.Exams;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Resources;
+using Exam.Contracts.ServiceManagement;
 using Exam.Contracts.Versioning;
 using Exam.Domain.Scoring;
 using Exam.Domain.Importing;
@@ -20,6 +21,7 @@ using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.Postgres.Scoring;
 using Exam.Infrastructure.Postgres.Versioning;
 using Exam.Infrastructure.Security;
+using Exam.Infrastructure.ServiceManagement;
 using Exam.IntegrationTests.Postgres;
 using Npgsql;
 
@@ -93,6 +95,10 @@ public sealed class PostgresExamArchiveTests(PostgresDatabaseFixture fixture)
             Assert.Equal(1L, await Scalar(targetDatabase.DataSource, "SELECT count(*) FROM exam.final_submissions WHERE exam_id=@exam", ("exam", copy.ExamId)));
             Assert.Equal(2L, await Scalar(targetDatabase.DataSource, "SELECT count(*) FROM exam.exam_catalog"));
             Assert.Equal(seed.ExamId, (await source.ExportAsync(seed.ExamId)).Manifest.SourceExamId);
+            var recovery = await new PostgresRecoveryReadinessProbe(targetDatabase.DataSource, new Unwrapper("target-node", targetCertificate))
+                .RunAsync(new ServiceConfiguration("target-server", "target-node", "127.0.0.1", 8443, "synthetic", false, 1), default);
+            Assert.True(Assert.Single(recovery, check => check.Name == "activation-sequences").Passed,
+                "Copied and overwritten device history must retain valid dates and daily sequences when the target restarts.");
         }
         finally { await targetDatabase.DisposeAsync(); }
     }
@@ -163,8 +169,11 @@ public sealed class PostgresExamArchiveTests(PostgresDatabaseFixture fixture)
         Assert.True(versions.PublishGradingRules(new(exam, 0, unique + "-rules", new(true, true, true), "source-operator", "初始评分规则", now, unique + "-rules", manifestJson, answerJson)).Succeeded);
         var seed = new Seed(exam, other.Summary.ExamId, unique + "-device", unique + "-session", unique + "-submission");
         await Sql(dataSource, """
+            INSERT INTO exam.activation_daily_sequences(activation_date,last_sequence) VALUES(CURRENT_DATE,1)
+              ON CONFLICT(activation_date) DO UPDATE SET last_sequence=exam.activation_daily_sequences.last_sequence+1;
             INSERT INTO exam.activation_devices(device_id,client_number,activation_date,activation_status,protected_credential,credential_version,created_at,version)
-              VALUES(@device,@number,CURRENT_DATE,'active','synthetic-source-verifier',1,@now,1);
+              SELECT @device,to_char(activation_date,'YYYYMMDD')||lpad(last_sequence::text,4,'0'),activation_date,'active','synthetic-source-verifier',1,@now,1
+                FROM exam.activation_daily_sequences WHERE activation_date=CURRENT_DATE;
             INSERT INTO exam.candidate_roster_entries VALUES(@exam,'candidate','合成考生','1','1');
             INSERT INTO exam.student_sessions VALUES(@session,@device,'candidate','合成考生','1','1',ARRAY[@exam,@other],jsonb_build_object(@exam,'candidate',@other,'other-candidate'),@now);
             INSERT INTO exam.entry_preparations VALUES(@preparation,@session,@exam,'candidate',@device,1,1,@now);
@@ -178,7 +187,7 @@ public sealed class PostgresExamArchiveTests(PostgresDatabaseFixture fixture)
               VALUES(@event,@event,@exam,@participation,1,'Start',1,@device,1,1,@unlock,@now,@now);
             UPDATE exam.exam_entry_access SET lifecycle='running' WHERE exam_id=@exam;
             """, ("exam", exam), ("other", seed.OtherExamId), ("device", seed.DeviceId), ("session", seed.SessionId),
-            ("number", Random.Shared.NextInt64(100000000000, 999999999999).ToString()), ("now", now),
+            ("now", now),
             ("preparation", unique + "-preparation"), ("participation", unique + "-participation"), ("submission", seed.SubmissionId),
             ("receipt", unique + "-receipt"), ("event", unique + "-event"), ("unlock", "resource-envelope:" + unique + "-resource"));
         Assert.True(versions.ExecuteScheduleTrigger(new(exam, 1, ScheduleTriggerKind.Start, now.AddHours(1), unique + "-start")).Value!.Applied);

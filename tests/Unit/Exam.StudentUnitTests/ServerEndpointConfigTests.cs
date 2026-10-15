@@ -106,6 +106,41 @@ public sealed class ServerEndpointConfigTests : IDisposable
         Assert.Throws<ArgumentException>(() => ServerEndpointConfig.Load(" "));
     }
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("pinned-certificate")]
+    [InlineData("unlisted-entry")]
+    public void PublicEndpointConfigurationRequiresListedEntryAndStandardCertificateValidation(string scenario)
+    {
+        var config = new System.Text.Json.Nodes.JsonObject
+        {
+            ["formatVersion"] = 1,
+            ["host"] = scenario == "unlisted-entry" ? "other.example.com" : "primary.example.com",
+            ["port"] = 443,
+            ["publicEndpoints"] = System.Text.Json.JsonSerializer.SerializeToNode(new PublicServerEndpoints("logical", [
+                new("primary", "primary.example.com", 443, "192.0.2.10", 443),
+                new("standby", "standby.example.com", 443, "192.0.2.11", 443)]),
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase })
+        };
+        if (scenario == "pinned-certificate") config["certificateSha256"] = new string('1', 64);
+        WriteConfig(config.ToJsonString());
+
+        var (loaded, error) = ServerEndpointConfig.Load(_directory);
+
+        if (scenario == "valid")
+        {
+            Assert.Null(error);
+            Assert.Equal("logical", loaded!.PublicEndpoints!.ServerId);
+            Assert.Equal(2, loaded.PublicEndpoints.Nodes.Count);
+            Assert.Null(loaded.CertificateSha256);
+        }
+        else
+        {
+            Assert.Null(loaded);
+            Assert.NotNull(error);
+        }
+    }
+
     private void WriteConfig(string content) =>
         File.WriteAllText(Path.Combine(_directory, ServerEndpointConfig.FileName), content);
 

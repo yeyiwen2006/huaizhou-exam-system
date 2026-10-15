@@ -57,7 +57,7 @@ public sealed partial class HttpStudentApi
                 try
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    deadline.CancelAfter(TimeSpan.FromSeconds(4));
+                    deadline.CancelAfter(TimeSpan.FromSeconds(node.UsesPublicHttps ? 15 : 4));
                     // No credentials, redirect following, discovery or promotion during probing.
                     using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(node.Address, "/api/v1/commands/time"));
                     using var response = await SendTrustedAsync(request, deadline.Token);

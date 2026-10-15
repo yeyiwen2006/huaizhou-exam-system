@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Exam.Application.Participation;
@@ -193,7 +194,10 @@ public sealed class PostgresExamArchiveService(NpgsqlDataSource dataSource, Port
         {
             var row = node!.AsObject(); row["activation_status"] = "revoked"; row["protected_credential"] = "archive-history-no-credential";
             row["room_group_id"] = null; row["last_seen_at"] = null;
-            row["client_number"] = await HistoricalClientNumberAsync(connection, transaction, row["client_number"]!.GetValue<string>(), ct);
+            var historicalNumber = await HistoricalClientNumberAsync(connection, transaction,
+                row["client_number"]!.GetValue<string>(), row["activation_date"]!.Deserialize<DateOnly>(Json), ct);
+            row["client_number"] = historicalNumber.Number;
+            row["activation_date"] = historicalNumber.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             await InsertRowsAsync(connection, transaction, "activation_devices", new JsonArray(row.DeepClone()), ct);
         }
         foreach (var table in ExamArchiveTables.All)
@@ -272,15 +276,34 @@ public sealed class PostgresExamArchiveService(NpgsqlDataSource dataSource, Port
         throw Conflict("相同考试名称过多，请先调整已有考试名称。");
     }
 
-    private static async Task<string> HistoricalClientNumberAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string original, CancellationToken ct)
+    private async Task<(string Number, DateOnly Date)> HistoricalClientNumberAsync(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, string original, DateOnly originalDate, CancellationToken ct)
     {
-        var number = original;
-        while (true)
+        if (original.Length is 11 or 12 && original.All(char.IsAsciiDigit) &&
+            original.StartsWith(originalDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture), StringComparison.Ordinal) &&
+            int.TryParse(original.AsSpan(8), NumberStyles.None, CultureInfo.InvariantCulture, out var originalSequence) && originalSequence > 0)
         {
-            await using var command = Command(connection, transaction, "SELECT EXISTS(SELECT 1 FROM exam.activation_devices WHERE client_number=@number)", ("number", number));
-            if (await command.ExecuteScalarAsync(ct) is false) return number;
-            number = (BitConverter.ToUInt64(Guid.NewGuid().ToByteArray()) % 1_000_000_000_000UL).ToString("D12", System.Globalization.CultureInfo.InvariantCulture);
+            await using var existing = Command(connection, transaction,
+                "SELECT EXISTS(SELECT 1 FROM exam.activation_devices WHERE client_number=@number)", ("number", original));
+            if (await existing.ExecuteScalarAsync(ct) is false)
+            {
+                await ExecuteAsync(connection, transaction, """
+                    INSERT INTO exam.activation_daily_sequences(activation_date,last_sequence) VALUES(@date,@sequence)
+                    ON CONFLICT(activation_date) DO UPDATE SET last_sequence=GREATEST(exam.activation_daily_sequences.last_sequence,EXCLUDED.last_sequence)
+                    """, ct, ("date", originalDate), ("sequence", originalSequence));
+                return (original, originalDate);
+            }
         }
+        var date = DateOnly.FromDateTime(time.GetLocalNow().DateTime);
+        await using var allocate = Command(connection, transaction, """
+            INSERT INTO exam.activation_daily_sequences(activation_date,last_sequence) VALUES(@date,1)
+            ON CONFLICT(activation_date) DO UPDATE SET last_sequence=exam.activation_daily_sequences.last_sequence+1
+              WHERE exam.activation_daily_sequences.last_sequence<9999
+            RETURNING last_sequence
+            """, ("date", date));
+        if (await allocate.ExecuteScalarAsync(ct) is not int sequence)
+            throw Conflict("目标服务器当天的学生端编号已用完，请改日重试归档导入。");
+        return (date.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + sequence.ToString("D4", CultureInfo.InvariantCulture), date);
     }
 
     private static PaperMaterialsRow ReadMaterials(JsonObject row, ExamArchiveDocument document) => new(

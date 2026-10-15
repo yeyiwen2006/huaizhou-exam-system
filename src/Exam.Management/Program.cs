@@ -65,7 +65,10 @@ public static class ManagementEntryPoint
                 configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
                 configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
                 Required("Management:BusinessServiceName"), Required("Confirmation:PeerToken"), configuration["HighAvailability:PostgresConfigurationPath"] ?? "",
-                configuration["HighAvailability:WalArchiveDirectory"] ?? "", configuration["HighAvailability:WalArchiveScriptsDirectory"] ?? "");
+                configuration["HighAvailability:WalArchiveDirectory"] ?? "", configuration["HighAvailability:WalArchiveScriptsDirectory"] ?? "")
+            {
+                WalArchiveTimeoutSeconds = configuration.GetValue("HighAvailability:WalArchiveTimeoutSeconds", 60)
+            };
             var journal = new FileManagementOperationStore(Required("Management:OperationDirectory"));
             return new(serverId, nodeId, new PostgresHighAvailabilityManagementPlatform(options,
                 provider.GetRequiredService<HttpClient>()), journal, new SystemClock());

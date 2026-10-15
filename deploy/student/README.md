@@ -76,6 +76,14 @@ $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq '
 [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData)) -replace '-',''
 ```
 
+## 通过公网 HTTPS 入口连接主备节点
+
+使用 Cloudflare 等 HTTPS 代理时，学生端可以将事先部署的公网域名对应到服务器返回的原主备节点。复制 [server.public.example.json](server.public.example.json) 为 exe 同目录的 `server.json`，替换逻辑服务器标识、两个节点标识、各自公网域名及原节点地址。示例中的域名和地址均为占位值。
+
+顶层 `host`、`port` 必须对应其中一个公网入口。`publicEndpoints.nodes` 必须包含两个不同节点，各自的 `originHost`、`originPort` 与服务器下发的主备地址一致。公网入口使用 Windows 标准 HTTPS 证书校验，不能同时配置 `certificateSha256`。登录时填写所配置的公网域名；登录后的 API、通知和资源下载沿用该映射，直接访问原节点时仍使用原证书指纹。
+
+公网映射从本机部署文件读取，服务器响应不能自行添加公网域名。已登记设备会保留原信任集合，临时通道更换域名后须安排明确的信任迁移，不能通过删除设备记录或答卷处理。每个公网入口须能访问对应节点；客户端配置不会创建通道或处理通道自身的故障接管。
+
 ## 冒烟测试（发布产物）
 
 ```powershell
@@ -106,4 +114,5 @@ dotnet test tests\Unit\Exam.StudentUnitTests -c Release
 | `publish-student.ps1` | 自包含发布 + 布局校验 + 溯源 + 打包 |
 | `smoke-test-student.ps1` | 发布产物隔离启动冒烟（三场景） |
 | `server.example.json` | 部署配置模板（占位值，不含真实地址/凭据） |
+| `server.public.example.json` | 公网 HTTPS 与原主备节点的对应关系模板 |
 | `README.md` | 本说明（随包复制，供监考/部署人员查阅） |

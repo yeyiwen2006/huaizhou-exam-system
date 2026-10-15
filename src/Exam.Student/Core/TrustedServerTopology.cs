@@ -5,13 +5,20 @@ namespace Exam.Student.Core;
 
 public sealed record TrustedServerNode(string Host, int Port, string NodeId, string CertificateSha256)
 {
+    public string? OriginHost { get; init; }
+    public int? OriginPort { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesPublicHttps => OriginHost is not null;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Uri? OriginAddress => OriginHost is null ? null : new UriBuilder(Uri.UriSchemeHttps, OriginHost, OriginPort!.Value).Uri;
     public Uri Address => new UriBuilder(Uri.UriSchemeHttps, Host, Port).Uri;
 }
 
 /// <summary>Allow-list received through the trusted activation connection and saved with the device identity.</summary>
 public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<TrustedServerNode> Nodes)
 {
-    public static TrustedServerTopology? FromActivation(ActivatedServerTopology? value, DeviceRecord record, string serverId)
+    public static TrustedServerTopology? FromActivation(ActivatedServerTopology? value, DeviceRecord record, string serverId,
+        PublicServerEndpoints? publicEndpoints = null)
     {
         if (value is null) return record.Topology;
         if (value.Nodes is null || value.Nodes.Any(node => node is null))
@@ -20,6 +27,7 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
             new TrustedServerNode(node.Host, node.Port, node.NodeId, node.CertificateSha256)).ToArray());
         try { topology.Validate(); }
         catch (FormatException) { throw new StudentIdentityException("主备信任信息无效，原设备登记已保留。"); }
+        if (publicEndpoints is not null) topology = publicEndpoints.Apply(topology, record);
         if (topology.ServerId != serverId ||
             !topology.Nodes.Any(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri) ||
             record.Topology is { } previous && !topology.Equivalent(previous))
@@ -38,7 +46,10 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
         if (string.IsNullOrWhiteSpace(ServerId) || Nodes is null || Nodes.Count != 2 ||
             Nodes.Any(node => node is null || Uri.CheckHostName(node.Host) == UriHostNameType.Unknown || node.Port is < 1 or > 65535 ||
                 string.IsNullOrWhiteSpace(node.NodeId) || node.CertificateSha256 is null ||
-                ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) != node.CertificateSha256) ||
+                ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) != node.CertificateSha256 ||
+                (node.OriginHost is null) != (node.OriginPort is null) ||
+                node.UsesPublicHttps && (Uri.CheckHostName(node.Host) != UriHostNameType.Dns ||
+                    Uri.CheckHostName(node.OriginHost) == UriHostNameType.Unknown || node.OriginPort is < 1 or > 65535)) ||
             Nodes.Select(node => node.Address).Distinct().Count() != 2 ||
             Nodes.Select(node => DeviceStore.NormalizeHost(node.Host)).Distinct().Count() != 2 ||
             Nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != 2)

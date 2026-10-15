@@ -57,7 +57,7 @@ public sealed class StudentLoginWorkflow(DeviceStore store, IStudentApi api)
             ServerId = envelope.ServerId, ServerEpoch = envelope.ServerEpoch,
             ClientNumber = number, Status = ActivationStatus.Active, ActivatedAt = result.Session.AuthenticatedAt,
             CredentialVersion = result.Device.CredentialVersion, ActiveNodeId = envelope.NodeId,
-            Topology = TrustedServerTopology.FromActivation(result.Device.Topology, record, envelope.ServerId),
+            Topology = TrustedServerTopology.FromActivation(result.Device.Topology, record, envelope.ServerId, ServerTrust.PublicEndpoints),
             PendingOperation = null, PendingOperationRequestId = null
         };
         await Task.Run(() => store.Save(record), ct);

@@ -102,6 +102,7 @@ Assert-True (-not (Test-Path (Join-Path $publishDir 'state.db'))) "local state d
 # Deployment helpers and build provenance.
 # ---------------------------------------------------------------------------
 Copy-Item (Join-Path $PSScriptRoot 'server.example.json') -Destination $publishDir
+Copy-Item (Join-Path $PSScriptRoot 'server.public.example.json') -Destination $publishDir
 Copy-Item (Join-Path $PSScriptRoot 'README.md') -Destination $publishDir
 
 if (-not $Commit) {

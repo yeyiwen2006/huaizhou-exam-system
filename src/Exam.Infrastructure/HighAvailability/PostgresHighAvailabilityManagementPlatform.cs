@@ -20,7 +20,10 @@ public sealed record HighAvailabilityManagementOptions(string ServerId, string L
     IReadOnlyDictionary<string, FailoverNodeDeployment> Nodes, string SelectionPath, string RebuildRoot,
     string PostgresBinDirectory, string PostgresDataDirectory, string PostgresServiceName,
     string BusinessServiceName, string PeerToken, string PostgresConfigurationPath = "",
-    string WalArchiveDirectory = "", string WalArchiveScriptsDirectory = "");
+    string WalArchiveDirectory = "", string WalArchiveScriptsDirectory = "")
+{
+    public int WalArchiveTimeoutSeconds { get; init; } = 60;
+}
 
 /// <summary>Actual PostgreSQL state, independent confirmation heads and configured local service controls.</summary>
 public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabilityManagementPlatform
@@ -463,12 +466,14 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
     // Shared by the SCM command and native regression tests: no alternate test-only settings.
     public static IReadOnlyList<string> BuildPostgresRuntimeArguments(HighAvailabilityManagementOptions options)
     {
+        if (options.WalArchiveTimeoutSeconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "WAL 归档切换周期必须为正数秒。");
         var archiveCommand = PostgresWalArchiving.BuildCommand(options);
         var settings = new NpgsqlConnectionStringBuilder(options.Nodes[options.LocalNodeId].ConnectionString);
         return ["-c", "config_file=" + Path.GetFullPath(options.PostgresConfigurationPath).Replace('\\', '/'),
             "-c", "data_directory=" + Path.GetFullPath(options.PostgresDataDirectory).Replace('\\', '/'),
             "-c", $"port={settings.Port}", "-c", "archive_mode=on", "-c", "archive_library=",
-            "-c", "archive_command=" + archiveCommand, "-c", "archive_timeout=60s",
+            "-c", "archive_command=" + archiveCommand, "-c", $"archive_timeout={options.WalArchiveTimeoutSeconds}s",
             "-c", "fsync=on", "-c", "full_page_writes=on",
             "-c", "shared_preload_libraries=", "-c", "session_preload_libraries=", "-c", "local_preload_libraries=",
             "-c", "restore_command=exit 1", "-c", "archive_cleanup_command=", "-c", "recovery_end_command="];

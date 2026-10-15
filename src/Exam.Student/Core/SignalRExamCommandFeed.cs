@@ -21,7 +21,7 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
     {
         AllowAutoRedirect = false,
         SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
-            device.Topology is { } topology ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
+            device.Topology is { } topology ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate, errors)
                 : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
     });
     private readonly SemaphoreSlim _deliveryGate = new(1, 1);

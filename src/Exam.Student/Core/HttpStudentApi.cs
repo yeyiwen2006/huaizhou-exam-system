@@ -57,7 +57,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     {
         AllowAutoRedirect = false,
         SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
-            topology is not null ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate)
+            topology is not null ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate, errors)
                 : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
     };
 
@@ -232,7 +232,8 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         if (result.GetLeftPart(UriPartial.Authority) != server.GetLeftPart(UriPartial.Authority))
         {
             // An old package descriptor may still name the prior trusted node after takeover.
-            if (_device?.Topology?.Nodes.Any(node => node.Address.GetLeftPart(UriPartial.Authority) == result.GetLeftPart(UriPartial.Authority)) != true)
+            if (_device?.Topology?.Nodes.Any(node => node.Address.GetLeftPart(UriPartial.Authority) == result.GetLeftPart(UriPartial.Authority) ||
+                    node.OriginAddress?.GetLeftPart(UriPartial.Authority) == result.GetLeftPart(UriPartial.Authority)) != true)
                 throw new InvalidOperationException("服务器返回了不可信的资源地址。");
             result = new Uri(server, result.PathAndQuery);
         }
@@ -315,7 +316,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // A silent former primary must not stall the small read-only time probe for 30 seconds.
-        if (typeof(T) == typeof(ServerTimeSnapshot)) deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        if (typeof(T) == typeof(ServerTimeSnapshot))
+        {
+            bool publicEndpoint;
+            lock (_connectionGate)
+                publicEndpoint = _server is not null && (ServerTrust.PublicEndpoints?.Contains(_server) == true ||
+                    _device?.Topology?.Nodes.Any(node => node.Address == _server && node.UsesPublicHttps) == true);
+            deadline.CancelAfter(TimeSpan.FromSeconds(publicEndpoint ? 15 : 2));
+        }
         try { return await SendOnceCoreAsync<T>(method, path, body, authenticated, identityGeneration, deadline.Token); }
         catch (OperationCanceledException error) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
         { throw new HttpRequestException("可信服务器探测超时，原登记和答卷已保留。", error); }

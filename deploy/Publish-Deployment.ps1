@@ -57,6 +57,7 @@ Copy-ReleaseFile 'deploy/admin/README.md' 'admin' '部署说明.md'
 Copy-ReleaseFile 'docs/cli-usage.md' 'admin' 'cli/使用说明.md'
 Copy-ReleaseFile 'deploy/student/README.md' 'student' '部署说明.md'
 Copy-ReleaseFile 'deploy/student/server.example.json' 'student' 'server.example.json'
+Copy-ReleaseFile 'deploy/student/server.public.example.json' 'student' 'server.public.example.json'
 foreach ($client in @('admin', 'student')) {
     $executable = if ($client -eq 'admin') { 'Exam.Admin.exe' } else { 'Exam.Student.exe' }
     $title = if ($client -eq 'admin') { '启动考务端.cmd' } else { '启动学生端.cmd' }

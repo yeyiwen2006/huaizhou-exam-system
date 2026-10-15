@@ -30,6 +30,7 @@ public sealed class PostgresWalArchivingTests : IDisposable
         Assert.Contains("archive_library=", args); Assert.Contains("restore_command=exit 1", args);
         Assert.Contains("archive_cleanup_command=", args); Assert.Contains("recovery_end_command=", args);
         Assert.Contains("fsync=on", args); Assert.Contains("full_page_writes=on", args);
+        Assert.Contains("archive_timeout=60s", args);
         Assert.Contains("archive_command=" + PostgresWalArchiving.BuildCommand(options), args);
         var command = PostgresHighAvailabilityManagementPlatform.BuildPostgresServiceCommand(options);
         Assert.Contains("archive_mode=on", command); Assert.DoesNotContain("ExecutionPolicy", command);
@@ -38,6 +39,25 @@ public sealed class PostgresWalArchivingTests : IDisposable
         // Isolated recovery is not a runtime primary: its original boundary stays intact.
         Assert.Contains("archive_mode=off", ControlledRecoveryDatabase.BuildServiceCommand("SyntheticRecovery",
             options.PostgresBinDirectory, options.RebuildRoot, options.PostgresConfigurationPath, 5445));
+    }
+
+    [Fact]
+    public void ConfiguredArchiveIntervalSurvivesServiceCommandGeneration()
+    {
+        var options = Options() with { WalArchiveTimeoutSeconds = 1800 };
+        var args = PostgresHighAvailabilityManagementPlatform.BuildPostgresRuntimeArguments(options);
+        Assert.Contains("archive_timeout=1800s", args);
+        Assert.DoesNotContain("archive_timeout=60s", args);
+        Assert.Contains("archive_timeout=1800s", PostgresHighAvailabilityManagementPlatform.BuildPostgresServiceCommand(options));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ArchiveIntervalMustRemainPositive(int seconds)
+    {
+        var options = Options() with { WalArchiveTimeoutSeconds = seconds };
+        Assert.Throws<ArgumentOutOfRangeException>(() => PostgresHighAvailabilityManagementPlatform.BuildPostgresServiceCommand(options));
     }
 
     [Theory]

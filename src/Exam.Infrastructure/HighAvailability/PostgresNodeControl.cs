@@ -170,7 +170,13 @@ public sealed class StagedPostgresNodeRebuilder(
             ["PGUSER"] = connection.Username ?? throw new InvalidOperationException("重建源数据库用户不能为空。"),
             ["PGPASSWORD"] = connection.Password ?? string.Empty,
             ["PGAPPNAME"] = nodeId,
-            ["PGSSLMODE"] = connection.SslMode.ToString().ToLowerInvariant()
+            ["PGSSLMODE"] = connection.SslMode switch
+            {
+                SslMode.VerifyCA => "verify-ca",
+                SslMode.VerifyFull => "verify-full",
+                _ => connection.SslMode.ToString().ToLowerInvariant()
+            },
+            ["PGSSLROOTCERT"] = connection.RootCertificate ?? string.Empty
         };
         var result = await processRunner.RunAsync(
             Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),

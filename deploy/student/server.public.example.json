@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "host": "primary.example.com",
+  "port": 443,
+  "publicEndpoints": {
+    "serverId": "synthetic-logical",
+    "nodes": [
+      {
+        "nodeId": "primary",
+        "host": "primary.example.com",
+        "port": 443,
+        "originHost": "192.0.2.10",
+        "originPort": 443
+      },
+      {
+        "nodeId": "standby",
+        "host": "standby.example.com",
+        "port": 443,
+        "originHost": "192.0.2.11",
+        "originPort": 443
+      }
+    ]
+  }
+}

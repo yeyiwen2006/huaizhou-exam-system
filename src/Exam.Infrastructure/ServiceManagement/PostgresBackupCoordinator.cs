@@ -673,11 +673,20 @@ public sealed class PostgresBackupCoordinator(
             ["PGPORT"] = connection.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["PGUSER"] = connection.Username ?? throw new InvalidOperationException("备份数据库用户不能为空。"),
             ["PGDATABASE"] = string.IsNullOrWhiteSpace(connection.Database) ? "postgres" : connection.Database,
-            ["PGSSLMODE"] = connection.SslMode.ToString().ToLowerInvariant()
+            ["PGSSLMODE"] = connection.SslMode switch
+            {
+                SslMode.VerifyCA => "verify-ca",
+                SslMode.VerifyFull => "verify-full",
+                _ => connection.SslMode.ToString().ToLowerInvariant()
+            }
         };
         if (!string.IsNullOrEmpty(connection.Password))
         {
             values["PGPASSWORD"] = connection.Password;
+        }
+        if (!string.IsNullOrWhiteSpace(connection.RootCertificate))
+        {
+            values["PGSSLROOTCERT"] = connection.RootCertificate;
         }
 
         return values;

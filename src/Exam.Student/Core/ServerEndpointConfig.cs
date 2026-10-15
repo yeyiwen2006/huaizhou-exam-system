@@ -10,6 +10,7 @@ namespace Exam.Student.Core;
 /// </summary>
 public sealed record ServerEndpointConfig(string Host, int Port, string? CertificateSha256)
 {
+    public PublicServerEndpoints? PublicEndpoints { get; init; }
     /// <summary>部署配置文件名（位于应用基目录，即 exe 旁）。</summary>
     public const string FileName = "server.json";
 
@@ -107,7 +108,26 @@ public sealed record ServerEndpointConfig(string Host, int Port, string? Certifi
                 }
             }
 
-            return (new ServerEndpointConfig(host, port, thumbprint), null);
+            PublicServerEndpoints? publicEndpoints = null;
+            if (root.TryGetProperty("publicEndpoints", out var publicElement))
+            {
+                try
+                {
+                    publicEndpoints = publicElement.Deserialize<PublicServerEndpoints>(
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                        ?? throw new FormatException("公网连接配置不能为空。");
+                    publicEndpoints.Validate();
+                    if (thumbprint is not null || !publicEndpoints.Nodes.Any(node =>
+                            new UriBuilder(Uri.UriSchemeHttps, node.Host, node.Port).Uri ==
+                            new UriBuilder(Uri.UriSchemeHttps, host, port).Uri))
+                        throw new FormatException("公网入口须使用标准 HTTPS 证书，并包含本机默认连接地址。");
+                }
+                catch (FormatException error)
+                {
+                    return (null, new LoadError($"{FileName} 的 publicEndpoints 无效：{error.Message}"));
+                }
+            }
+            return (new ServerEndpointConfig(host, port, thumbprint) { PublicEndpoints = publicEndpoints }, null);
         }
         catch (JsonException error)
         {
