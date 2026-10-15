@@ -21,10 +21,14 @@ public partial class ExamSelectionPage : UserControl
     private readonly ObservableCollection<ExamRow> _rows = new();
     private readonly DispatcherTimer _clockTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool _requesting;
+    private readonly IStudentApi _overviewApi;
+    private readonly CancellationTokenSource _lifetime = new();
+    private int _refreshCountdown;
 
-    public ExamSelectionPage(MainWindow.Navigation navigation)
+    public ExamSelectionPage(MainWindow.Navigation navigation, IStudentApi? overviewApi = null)
     {
         _navigation = navigation;
+        _overviewApi = overviewApi ?? App.Services.Api;
         InitializeComponent();
         DataContext = App.Services.Session;
         ExamList.ItemsSource = _rows;
@@ -34,14 +38,22 @@ public partial class ExamSelectionPage : UserControl
         LoginPill.Text = candidate is null ? "未登录" : "已登录";
         LoginPill.Level = candidate is null ? StatusLevel.Neutral : StatusLevel.Success;
 
-        _clockTimer.Tick += (_, _) => RefreshCurrentTime();
+        _clockTimer.Tick += (_, _) =>
+        {
+            RefreshCurrentTime();
+            if (++_refreshCountdown >= 10)
+            {
+                _refreshCountdown = 0;
+                _ = LoadExamsAsync(background: true);
+            }
+        };
         Loaded += async (_, _) =>
         {
             RefreshCurrentTime();
             _clockTimer.Start();
             await LoadExamsAsync();
         };
-        Unloaded += (_, _) => _clockTimer.Stop();
+        Unloaded += (_, _) => { _clockTimer.Stop(); _lifetime.Cancel(); };
     }
 
     private void RefreshCurrentTime()
@@ -52,16 +64,19 @@ public partial class ExamSelectionPage : UserControl
             : "正在同步服务器时间…";
     }
 
-    private async Task LoadExamsAsync()
+    private async Task LoadExamsAsync(bool background = false)
     {
-        if (_requesting)
+        if (_requesting || _lifetime.IsCancellationRequested)
         {
             return;
         }
 
         _requesting = true;
-        Busy.Message = "正在获取考试列表…";
-        Busy.IsBusy = true;
+        if (!background)
+        {
+            Busy.Message = "正在获取考试列表…";
+            Busy.IsBusy = true;
+        }
         try
         {
             if (App.Services.Session.LoginResult is not { } session)
@@ -70,7 +85,8 @@ public partial class ExamSelectionPage : UserControl
                 return;
             }
 
-            var overviews = await App.Services.Api.GetExamOverviewsAsync(session.SessionId);
+            var overviews = await _overviewApi.GetExamOverviewsAsync(session.SessionId, _lifetime.Token);
+            if (_lifetime.IsCancellationRequested || !ReferenceEquals(session, App.Services.Session.LoginResult)) return;
             var enrolled = session.ExamIds;
             _rows.Clear();
             foreach (var exam in overviews)
@@ -85,18 +101,19 @@ public partial class ExamSelectionPage : UserControl
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)
         {
-            EntryBanner.Show("考试列表获取失败，请检查连接后重试。");
+            if (!background && !_lifetime.IsCancellationRequested)
+                EntryBanner.Show("考试列表获取失败，请检查连接后重试。");
         }
         finally
         {
-            Busy.IsBusy = false;
+            if (!background) Busy.IsBusy = false;
             _requesting = false;
         }
     }
 
     private void OnEnterExam(object sender, RoutedEventArgs e)
     {
-        if (_requesting || sender is not Button { Tag: string examId })
+        if ((_requesting && Busy.IsBusy) || sender is not Button { Tag: string examId })
         {
             return;
         }

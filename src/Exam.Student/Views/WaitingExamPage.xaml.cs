@@ -15,7 +15,8 @@ namespace Exam.Student.Views;
 public partial class WaitingExamPage : UserControl
 {
     private readonly MainWindow.Navigation _navigation;
-    private readonly ExamOverview _exam;
+    private ExamOverview _exam;
+    private readonly IStudentApi _overviewApi;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private StudentExamRuntime? _runtime;
@@ -28,13 +29,16 @@ public partial class WaitingExamPage : UserControl
     private bool _updateRefreshQueued;
     private bool _recovering;
     private int _unlockRetryCountdown;
+    private int _scheduleRefreshCountdown;
+    private bool _refreshingSchedule;
 
     public string ExamName => _exam.Name;
 
-    public WaitingExamPage(MainWindow.Navigation navigation, ExamOverview exam)
+    public WaitingExamPage(MainWindow.Navigation navigation, ExamOverview exam, IStudentApi? overviewApi = null)
     {
         _navigation = navigation;
         _exam = exam;
+        _overviewApi = overviewApi ?? App.Services.Api;
         InitializeComponent();
         DataContext = App.Services.Session;
         RefreshTimeText();
@@ -468,6 +472,11 @@ public partial class WaitingExamPage : UserControl
 
     private void UpdateCountdown()
     {
+        if (++_scheduleRefreshCountdown >= 10)
+        {
+            _scheduleRefreshCountdown = 0;
+            _ = RefreshScheduleAsync();
+        }
         RefreshRuntimeError();
 
         if (_runtime?.Manager.ExamEnded == true)
@@ -488,6 +497,28 @@ public partial class WaitingExamPage : UserControl
         // 经过计划起止时间不会自行触发开考、结束、解锁或参试状态变化。
         MaybeRetryArbitration();
         MaybeRecoverUnlock();
+    }
+
+    private async Task RefreshScheduleAsync()
+    {
+        // Confirmed participants receive versioned schedule commands. Before confirmation,
+        // refresh the read-only overview so a waiting page cannot keep an old start time.
+        if (_refreshingSchedule || _lifetime.IsCancellationRequested || _navigated ||
+            _runtime?.Manager.Participation is not null || App.Services.Session.LoginResult is not { } session) return;
+        _refreshingSchedule = true;
+        try
+        {
+            var overviews = await _overviewApi.GetExamOverviewsAsync(session.SessionId, _lifetime.Token);
+            if (_lifetime.IsCancellationRequested || _navigated || _runtime?.Manager.Participation is not null ||
+                !ReferenceEquals(session, App.Services.Session.LoginResult)) return;
+            if (overviews.SingleOrDefault(item => item.ExamId == _exam.ExamId) is not { } latest) return;
+            _exam = latest;
+            RefreshTimeText();
+            UpdateCountdown();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (IsRecoverable(error)) { /* Keep the last received schedule and retry. */ }
+        finally { _refreshingSchedule = false; }
     }
 
     private void MaybeRecoverUnlock()
