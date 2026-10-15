@@ -37,11 +37,28 @@ public sealed class PostgresDatabaseFixture : IAsyncLifetime
             LogParameters = false
         };
         _adminConnectionString = adminBuilder.ConnectionString;
-        _databaseName = $"exam_test_{Guid.NewGuid():N}";
 
         await using (var admin = new NpgsqlConnection(_adminConnectionString))
         {
             await admin.OpenAsync();
+            // A separate database still shares WAL with every database in its cluster.
+            // Refuse operational clusters before CREATE DATABASE (and before setting the
+            // cleanup name). Native archive tests use our explicitly named disposable cluster.
+            await using (var safety = new NpgsqlCommand("""
+                SELECT pg_is_in_recovery() OR
+                    (current_setting('cluster_name') <> 'exam-integration-tests' AND
+                        (current_setting('archive_mode') <> 'off'
+                         OR current_setting('synchronous_standby_names') <> ''
+                         OR EXISTS (SELECT 1 FROM pg_replication_slots)
+                         OR EXISTS (SELECT 1 FROM pg_database WHERE NOT datistemplate
+                                    AND datname <> 'postgres' AND datname NOT LIKE 'exam\_test\_%' ESCAPE '\')));
+                """, admin))
+            {
+                if (await safety.ExecuteScalarAsync() is true)
+                    throw new InvalidOperationException(
+                        "禁止在业务或主备 PostgreSQL 实例上运行集成测试。请使用 eng/testing/run_isolated_postgres.py。");
+            }
+            _databaseName = $"exam_test_{Guid.NewGuid():N}";
             await using var create = new NpgsqlCommand(
                 $"CREATE DATABASE \"{_databaseName}\" TEMPLATE template0 ENCODING 'UTF8';",
                 admin);

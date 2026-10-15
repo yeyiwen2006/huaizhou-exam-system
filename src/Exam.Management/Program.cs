@@ -79,6 +79,7 @@ public static class ManagementEntryPoint
         builder.Services.AddSingleton(_ => new ManagementOperatorSessions(
             () => FileRecoveryDeploymentSelection.ResolveConnection(SelectedConfiguration, serverId, nodeId, CurrentEpoch()),
             configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache")));
+        builder.Services.AddHostedService(_ => new AutomaticBackupWorker(configuration, SelectedConfiguration));
 
         ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)
         {

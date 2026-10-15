@@ -35,7 +35,7 @@ class LocalPostgres:
             hba=self.data/'pg_hba.conf'
             hba.write_text('host replication postgres 127.0.0.1/32 trust\n'+hba.read_text(),encoding='ascii')
             with (self.data/'postgresql.conf').open('a',encoding='ascii') as stream:
-                stream.write(f"\nlisten_addresses='127.0.0.1'\nport={self.port}\nmax_connections=64\nwal_level=replica\nmax_wal_senders=10\n")
+                stream.write(f"\nlisten_addresses='127.0.0.1'\nport={self.port}\nmax_connections=64\nwal_level=replica\nmax_wal_senders=10\narchive_mode=off\ncluster_name='exam-integration-tests'\n")
             self.process=self.owner.start([self.command('postgres'),'-D',str(self.data)],self.owner.root,self.environment)
             deadline=time.monotonic()+30
             while time.monotonic()<deadline:

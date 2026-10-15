@@ -123,3 +123,6 @@ pwsh -File deploy/management/Export-AdminConnection.ps1 -ManagementConfiguration
 5. 分别检查错误账号、错误证书名称和未登录管理请求被拒绝，退出或换账号后不能沿用旧管理权限；再按[验收标准](../../docs/acceptance-criteria.md)执行现场考试及双机验收。
 
 本次代码检查不包含目标服务器安装、证书颁发、真实网络连通或 Linux 实机运行结果。部署后应记录使用的系统、节点地址、证书信任及上述操作的实际结果。
+
+
+自动备份和归档保留由管理服务内部执行，部署配置见 [自动维护说明](../../eng/maintenance/README.md)。启用前填写该节点独立的维护状态目录；默认不启用自动删除。
