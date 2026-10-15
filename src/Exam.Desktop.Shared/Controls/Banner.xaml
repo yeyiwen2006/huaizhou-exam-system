@@ -16,7 +16,11 @@
             Padding="12,8"
             Background="{DynamicResource Brush.Danger.Soft}"
             Visibility="Collapsed">
-        <StackPanel Orientation="Horizontal">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
             <Path x:Name="Icon"
                   Data="{StaticResource Icon.Alert}"
                   Stroke="{DynamicResource Brush.Danger}"
@@ -28,12 +32,13 @@
                   Stretch="Uniform"
                   VerticalAlignment="Center" />
             <TextBlock x:Name="MessageText"
+                       Grid.Column="1"
                        Text=""
                        FontSize="{DynamicResource Font.Size.Body}"
                        Foreground="{DynamicResource Brush.Text.Primary}"
                        Margin="8,0,0,0"
                        TextWrapping="Wrap"
                        VerticalAlignment="Center" />
-        </StackPanel>
+        </Grid>
     </Border>
 </UserControl>

@@ -19,6 +19,29 @@ namespace Exam.StudentUnitTests;
 public sealed partial class ExamPackageManagerTests
 {
     [Fact]
+    public async Task EntryRejectionPreservesErrorCodeWithoutDownloading_AndRetryClearsIt()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        fixture.Api.PreparationError = new ApiError(ParticipationErrorCodes.EntryNotAllowed,
+            "当前不在允许进入考试的时间或状态内。");
+        using var manager = fixture.Manager();
+
+        Assert.False(await manager.PrepareAndDownloadAsync());
+        Assert.Equal(ParticipationErrorCodes.EntryNotAllowed, manager.LastPreparationErrorCode);
+        Assert.Equal(fixture.Api.PreparationError.Message, manager.LastError);
+        Assert.Equal(0, fixture.Api.DownloadCalls);
+        Assert.False(manager.CanConfirmParticipation);
+
+        fixture.Api.PreparationError = null;
+        Assert.True(await manager.PrepareAndDownloadAsync());
+        Assert.Null(manager.LastPreparationErrorCode);
+        Assert.Null(manager.LastError);
+        Assert.Equal(1, fixture.Api.DownloadCalls);
+        Assert.True(manager.CanConfirmParticipation);
+        Assert.NotEqual(fixture.Api.Prepares[0].RequestId, fixture.Api.Prepares[1].RequestId);
+    }
+
+    [Fact]
     public async Task WithdrawalAllowsWaitingAndReturningBeforeASecondConfirmation()
     {
         using var fixture = await Fixture.CreateAsync();
@@ -632,6 +655,7 @@ public sealed partial class ExamPackageManagerTests
         public DateTimeOffset? ScheduledStart { get; set; }
         public DateTimeOffset? ScheduledEnd { get; set; }
         public bool DropPrepare { get; set; }
+        public ApiError? PreparationError { get; set; }
         public bool DropConfirm { get; set; }
         public bool DropWithdraw { get; set; }
         public bool DropAck { get; set; }
@@ -664,6 +688,9 @@ public sealed partial class ExamPackageManagerTests
         public Task<ApiEnvelope<EntryPreparationResult>> PrepareEntryAsync(PrepareExamEntryRequest request, CancellationToken ct = default)
         {
             Prepares.Add(request);
+            if (PreparationError is { } error)
+                return Task.FromResult(new ApiEnvelope<EntryPreparationResult>("server", "node", 1,
+                    request.RequestId, null, error));
             if (!_preparations.TryGetValue(request.RequestId, out var preparation))
                 _preparations[request.RequestId] = preparation = new(request.RequestId, ExamId, EntryPreparationStatus.Ready,
                     new ExamResourceDescriptor("/api/v1/resources/package", Ciphertext.Length, PaperVersion, 1),

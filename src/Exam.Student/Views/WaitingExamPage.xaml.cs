@@ -134,10 +134,21 @@ public partial class WaitingExamPage : UserControl
 
             if (!prepared)
             {
-                var msg = _runtime.Manager.HasPackage
+                var manager = _runtime.Manager;
+                var message = manager.HasPackage
                     ? "考试说明获取失败！请点击“重新下载”。"
                     : "试题获取失败！请点击“重新下载”。";
-                StudentMessages.ShowWithDetail(ErrorBanner, msg, _runtime.Manager.LastError);
+                if (manager.LastPreparationErrorCode == ParticipationErrorCodes.EntryNotAllowed)
+                {
+                    message = "当前不可进入该考试";
+                    var earliestEntry = (manager.OverriddenScheduledStart ?? _exam.ScheduledStart).AddMinutes(-20);
+                    if (!manager.ExamEnded && _exam.Lifecycle != ExamLifecycle.Ended &&
+                        App.Services.Clock.IsSynchronized && App.Services.Clock.UtcNow < earliestEntry)
+                    {
+                        message += $"。最早可进入时间：{earliestEntry.ToLocalTime():yyyy-MM-dd HH:mm}（开考前20分钟）。";
+                    }
+                }
+                StudentMessages.ShowWithDetail(ErrorBanner, message, manager.LastError);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)

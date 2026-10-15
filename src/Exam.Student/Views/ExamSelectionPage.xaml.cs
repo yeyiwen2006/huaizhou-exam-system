@@ -2,6 +2,7 @@
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Exam.Contracts.Common;
 using Exam.Contracts.Participation;
 using Exam.Desktop.Shared.Controls;
@@ -18,6 +19,7 @@ public partial class ExamSelectionPage : UserControl
 {
     private readonly MainWindow.Navigation _navigation;
     private readonly ObservableCollection<ExamRow> _rows = new();
+    private readonly DispatcherTimer _clockTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool _requesting;
 
     public ExamSelectionPage(MainWindow.Navigation navigation)
@@ -32,7 +34,22 @@ public partial class ExamSelectionPage : UserControl
         LoginPill.Text = candidate is null ? "未登录" : "已登录";
         LoginPill.Level = candidate is null ? StatusLevel.Neutral : StatusLevel.Success;
 
-        Loaded += async (_, _) => await LoadExamsAsync();
+        _clockTimer.Tick += (_, _) => RefreshCurrentTime();
+        Loaded += async (_, _) =>
+        {
+            RefreshCurrentTime();
+            _clockTimer.Start();
+            await LoadExamsAsync();
+        };
+        Unloaded += (_, _) => _clockTimer.Stop();
+    }
+
+    private void RefreshCurrentTime()
+    {
+        var clock = App.Services.Clock;
+        CurrentTimeText.Text = clock.IsSynchronized
+            ? $"当前时间（服务器）：{clock.UtcNow.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+            : "正在同步服务器时间…";
     }
 
     private async Task LoadExamsAsync()

@@ -26,6 +26,11 @@
                     <StackPanel>
                         <TextBlock Style="{StaticResource PageTitle}" Text="选择考试" />
                         <TextBlock Style="{StaticResource PageSubtitle}" Text="选择考务端已开放的考试并申请进入。" />
+                        <TextBlock x:Name="CurrentTimeText"
+                                   Style="{StaticResource BodyText}"
+                                   Text="正在同步服务器时间…"
+                                   TextWrapping="Wrap"
+                                   Margin="0,10,0,0" />
                     </StackPanel>
                     <controls:StatusPill x:Name="LoginPill"
                                          Text="已登录"

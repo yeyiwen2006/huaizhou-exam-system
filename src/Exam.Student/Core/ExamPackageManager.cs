@@ -95,6 +95,7 @@ public sealed partial class ExamPackageManager : IDisposable
     public string? ParticipationId => Participation?.ParticipationId;
     public string? UnlockReference => Participation?.UnlockReference;
     public string? LastError { get; private set; }
+    public string? LastPreparationErrorCode { get; private set; }
     /// <summary>已收到的最新试卷版本（PaperUpdated 事件推进）；高于当前描述符版本表示有待应用的更新。</summary>
     public long NewestPaperVersion => _state.NewestPaperVersion;
     /// <summary>ScheduleChanged 事件携带的最新开考时间；null 表示未收到过时间更新。</summary>
@@ -130,6 +131,7 @@ public sealed partial class ExamPackageManager : IDisposable
     public Task<bool> PrepareAndDownloadAsync(IProgress<PackageDownloadProgress>? progress = null,
         CancellationToken ct = default) => LockedAsync(async () =>
     {
+        LastPreparationErrorCode = null;
         var generation = ControlGeneration;
         if (_state.PendingPaperInstallation is not null)
         {
@@ -149,7 +151,11 @@ public sealed partial class ExamPackageManager : IDisposable
         if (_state.PendingConfirm is not null)
         {
             var replay = await ConfirmCoreAsync(_state.PendingConfirm, unlock: false, ct);
-            if (replay is null || !replay.IsSuccess) return false;
+            if (replay is null || !replay.IsSuccess)
+            {
+                LastPreparationErrorCode = replay?.Error?.Code;
+                return false;
+            }
         }
         var request = _state.PendingPrepare ?? new PrepareExamEntryRequest(RequestIds.New(), SessionId, ExamId);
         Save(_state with { PendingPrepare = request });
@@ -157,6 +163,7 @@ public sealed partial class ExamPackageManager : IDisposable
         ValidateServer(envelope);
         if (!envelope.IsSuccess || envelope.Result is not { } preparation)
         {
+            LastPreparationErrorCode = envelope.Error?.Code;
             RecordFailure(envelope.Error);
             if (!Retryable(envelope.Error)) Save(_state with { PendingPrepare = null });
             return false;
