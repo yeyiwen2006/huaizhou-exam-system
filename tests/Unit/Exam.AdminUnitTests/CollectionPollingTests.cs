@@ -114,14 +114,16 @@ public sealed partial class CollectionPollingTests
         vm.ConnectionReady = true;
 
         var result = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        // Keep the following read in flight: the live status must no longer describe the completed batch.
+        // A new automatic read must preserve the last completed summary instead of flickering.
         await nextPollStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(Enumerable.Range(502, 500).Select(value => (long)value),
             result.Versions);
         lock (cursors) Assert.Equal(Enumerable.Range(0, 11).Select(page => page * 100L), cursors.Take(11));
         Assert.Contains("最近 500 条", result.Status, StringComparison.Ordinal);
-        Assert.Equal("正在查询收齐记录…", vm.CollectionStatus);
+        Assert.Equal(result.Status, vm.CollectionStatus);
+        Assert.Equal(result.Versions, vm.CollectionEvents.Select(item => item.RosterVersion));
+        lock (cursors) Assert.Equal(1001L, cursors[11]);
     }
 
     [Fact]

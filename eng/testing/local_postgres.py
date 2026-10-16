@@ -56,7 +56,10 @@ class LocalPostgres:
             status=subprocess.run([self.command('pg_ctl'),'-D',str(self.data),'status'],env=self.environment,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
             # Native recovery tests may restart the same owned cluster with pg_ctl.
             if status.returncode==0:
-                actual=self.sql("SELECT current_setting('data_directory')")
+                # Windows PostgreSQL exposes native path bytes in the system code page.
+                # Preserve those bytes across psql output, then keep the exact ownership comparison.
+                raw=self.sql("SELECT encode(textsend(current_setting('data_directory')), 'hex')")
+                actual=bytes.fromhex(raw).decode('mbcs' if os.name=='nt' else 'utf-8',errors='strict')
                 if Path(actual).resolve()!=self.data: raise ValueError('Database directory identity changed')
                 subprocess.run([self.command('pg_ctl'),'-D',str(self.data),'-m','fast','stop'],env=self.environment,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=30)
             elif status.returncode!=3: raise RuntimeError('Cannot confirm owned database lifecycle')

@@ -235,6 +235,9 @@ public sealed partial class PostgresGradingPersistenceTests
         }).Build();
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(configuration);
+        // This standalone container must provide the lifetime normally supplied by HostBuilder.
+        // Keep production confirmation registration and recovery guards intact.
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostApplicationLifetime, GradingTestHostLifetime>();
         services.AddLogging();
         services.AddSignalR();
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(now ?? BoundaryNow));
@@ -245,6 +248,24 @@ public sealed partial class PostgresGradingPersistenceTests
         services.AddSingleton<NpgsqlDataSource>(_ => source);
         if (inputs is not null) services.AddSingleton(inputs);
         return services.BuildServiceProvider();
+    }
+
+    private sealed class GradingTestHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime, IDisposable
+    {
+        private readonly CancellationTokenSource _started = new();
+        private readonly CancellationTokenSource _stopping = new();
+        private readonly CancellationTokenSource _stopped = new();
+        public GradingTestHostLifetime() => _started.Cancel();
+        public CancellationToken ApplicationStarted => _started.Token;
+        public CancellationToken ApplicationStopping => _stopping.Token;
+        public CancellationToken ApplicationStopped => _stopped.Token;
+        public void StopApplication() => _stopping.Cancel();
+        public void Dispose()
+        {
+            StopApplication();
+            _stopped.Cancel();
+            _started.Dispose(); _stopping.Dispose(); _stopped.Dispose();
+        }
     }
 
     private async Task<int> WaitForBlockedClaimAsync(CancellationToken cancellationToken)

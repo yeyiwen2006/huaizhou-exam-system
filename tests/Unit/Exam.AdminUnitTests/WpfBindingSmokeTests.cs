@@ -176,6 +176,30 @@ public sealed class WpfBindingSmokeTests
                         viewModel.Activation.DeviceHistory.Add(historyRow);
                         DrainDispatcher(); window.UpdateLayout();
                         var deviceContainer = Assert.IsType<DataGridRow>(devicesGrid.ItemContainerGenerator.ContainerFromItem(selectedDevice));
+                        Assert.Equal("选择", Assert.IsType<DataGridTemplateColumn>(devicesGrid.Columns[0]).Header);
+                        var selector = Assert.Single(Descendants<CheckBox>(deviceContainer));
+                        var selectorBinding = BindingOperations.GetBinding(selector, System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty);
+                        Assert.Equal(BindingMode.TwoWay, selectorBinding!.Mode);
+                        var toggle = (System.Windows.Automation.Provider.IToggleProvider)new System.Windows.Automation.Peers.CheckBoxAutomationPeer(selector)
+                            .GetPattern(System.Windows.Automation.Peers.PatternInterface.Toggle);
+                        for (var click = 0; click < 6; click++)
+                        {
+                            var previous = selectedDevice.IsSelected;
+                            toggle.Toggle(); DrainDispatcher();
+                            Assert.Equal(!previous, selectedDevice.IsSelected);
+                            Assert.False(deviceContainer.IsEditing);
+                        }
+                        Assert.True(selector.ActualHeight >= 32);
+                        foreach (var fraction in new[] { 0.15, 0.5, 0.85 })
+                        {
+                            var hit = VisualTreeHelper.HitTest(selector, new Point(selector.ActualWidth * fraction, selector.ActualHeight / 2))?.VisualHit;
+                            Assert.NotNull(hit);
+                            while (hit is not null && !ReferenceEquals(hit, selector)) hit = VisualTreeHelper.GetParent(hit);
+                            Assert.Same(selector, hit);
+                        }
+                        var admissionColumn = devicesGrid.Columns.Single(column => Equals(column.Header, "准考证号"));
+                        Assert.True(admissionColumn.Width.IsSizeToCells);
+                        Assert.True(admissionColumn.MinWidth >= 200);
                         for (var refresh = 0; refresh < 3; refresh++)
                         {
                             queryButton.Command.Execute(null);
@@ -189,8 +213,12 @@ public sealed class WpfBindingSmokeTests
                         var originalWidth = window.Width;
                         window.Width = 2100;
                         DrainDispatcher(); window.UpdateLayout();
-                        Assert.True(devicesGrid.Columns[^1].ActualWidth > 140);
-                        Assert.InRange(devicesGrid.ActualWidth - devicesGrid.Columns.Sum(column => column.ActualWidth), 0, 24);
+                        Assert.True(devicesGrid.Columns[^1].ActualWidth >= 140);
+                        // Wider identity cells may need horizontal scrolling on the test display.
+                        // They must not shrink below their readable minimum to satisfy a viewport.
+                        var totalColumnWidth = devicesGrid.Columns.Sum(column => column.ActualWidth);
+                        Assert.True(totalColumnWidth >= devicesGrid.ActualWidth - 24);
+                        Assert.Equal(ScrollBarVisibility.Auto, devicesGrid.HorizontalScrollBarVisibility);
                         SaveEditorScreenshot(window, devicesGrid, "wide-device-directory");
                         window.Width = originalWidth;
                         DrainDispatcher(); window.UpdateLayout();

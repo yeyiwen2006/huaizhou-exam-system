@@ -71,7 +71,10 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
     private void SelectRow(MonitoringRow? row, bool fillOperatorInputs)
     {
         var previous = _selectedRow;
-        if (!SetProperty(ref _selectedRow, row)) return;
+        // Selection belongs to an item instance, not record value equality.
+        if (ReferenceEquals(previous, row)) return;
+        _selectedRow = row;
+        OnPropertyChanged(nameof(SelectedRow));
         OnPropertyChanged(nameof(SelectedTableRow));
         OnPropertyChanged(nameof(SelectedUncollectedRow));
         var selectedEventId = _selectedCommand?.Command.EventId;
@@ -697,7 +700,15 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(AsOfText));
     }
 
+    private readonly object _snapshotSync = new();
+
     private void Apply(MonitoringSnapshot snapshot)
+    {
+        // Manual and periodic responses may complete on different threads in a non-UI host.
+        lock (_snapshotSync) ApplySnapshot(snapshot);
+    }
+
+    private void ApplySnapshot(MonitoringSnapshot snapshot)
     {
         // 手动读取与周期读取可能并行；较早开始的响应不得把新状态覆盖回去。
         if (_asOf is { } current && snapshot.AsOf < current) return;
@@ -705,12 +716,15 @@ public sealed class MonitoringViewModel : BindableBase, IDisposable
         try
         {
         var selectedId = _selectedRow?.ParticipationId;
+        var previousRows = Rows.ToDictionary(row => row.ParticipationId, StringComparer.Ordinal);
         Rows.Clear();
         UncollectedRows.Clear();
         var byId = new Dictionary<string, MonitoringRow>(StringComparer.Ordinal);
         foreach (var participant in snapshot.Participants)
         {
             var row = MonitoringRow.From(participant);
+            if (previousRows.TryGetValue(row.ParticipationId, out var previousRow) && previousRow.HasSameContent(row))
+                row = previousRow;
             Rows.Add(row);
             byId[row.ParticipationId] = row;
         }
@@ -934,6 +948,11 @@ public sealed record MonitoringRow(
 {
     public IReadOnlyList<MonitoringCommand> AvailableCommands => Commands ?? [];
     public IReadOnlyList<ConflictDevice> ConflictingDevices => ConflictDevices ?? [];
+
+    internal bool HasSameContent(MonitoringRow other) =>
+        (this with { Commands = other.Commands, ConflictDevices = other.ConflictDevices }) == other &&
+        AvailableCommands.SequenceEqual(other.AvailableCommands) &&
+        ConflictingDevices.SequenceEqual(other.ConflictingDevices);
 
     public static MonitoringRow From(MonitoringParticipant participant) => new(
         participant.ParticipationId,

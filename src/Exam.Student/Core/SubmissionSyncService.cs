@@ -64,7 +64,7 @@ public sealed class SubmissionSyncService(
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
         var clockTask = SynchronizeClockAsync(linked.Token);
-        runtime.StateChanged += OnRuntimeStateChanged;
+        runtime.SynchronizationStateChanged += OnRuntimeStateChanged;
         runtime.SubmissionRetryRequested += OnSubmissionRetryRequested;
         try
         {
@@ -77,7 +77,7 @@ public sealed class SubmissionSyncService(
         catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
         finally
         {
-            runtime.StateChanged -= OnRuntimeStateChanged;
+            runtime.SynchronizationStateChanged -= OnRuntimeStateChanged;
             runtime.SubmissionRetryRequested -= OnSubmissionRetryRequested;
             linked.Cancel();
             try { await clockTask.ConfigureAwait(false); }
@@ -415,10 +415,9 @@ public sealed class SubmissionSyncService(
     {
         _phase = phase;
         _statusText = text;
-        void Raise() { if (!_disposed) StatusChanged?.Invoke(this, new(phase)); }
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess()) Raise();
-        else if (!dispatcher.HasShutdownStarted) dispatcher.BeginInvoke((Action)Raise);
+        // This is a worker notification. UI subscribers dispatch through their own view,
+        // rather than an unrelated or stopped Application.Current dispatcher.
+        if (!_disposed) StatusChanged?.Invoke(this, new(phase));
     }
 
     private static bool SameAnswers(IReadOnlyDictionary<string, AnswerValue> expected, IReadOnlyDictionary<string, AnswerValue> actual) =>

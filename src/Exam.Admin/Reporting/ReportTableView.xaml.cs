@@ -11,7 +11,15 @@ namespace Exam.Admin.Reporting;
 /// </summary>
 public partial class ReportTableView : UserControl
 {
-    private static readonly Brush ReportRed = new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28));
+    private static readonly Brush ReportRed = CreateReportRed();
+
+    private static Brush CreateReportRed()
+    {
+        // A shared WPF brush must not retain the dispatcher of the first report window.
+        var brush = new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28));
+        brush.Freeze();
+        return brush;
+    }
 
     public static readonly DependencyProperty TableProperty = DependencyProperty.Register(
         nameof(Table), typeof(ReportTable), typeof(ReportTableView),

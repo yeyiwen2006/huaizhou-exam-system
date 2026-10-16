@@ -691,6 +691,12 @@ public partial class ExamInProgressPage : UserControl
     private void OnSyncStatusChanged(object? sender, SubmissionSyncStatusChangedEventArgs e)
     {
         if (_lifetime.IsCancellationRequested) { return; }
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.BeginInvoke(new Action(() => OnSyncStatusChanged(sender, e)));
+            return;
+        }
         if (e.Phase == SubmissionSyncPhase.Confirmed && _sync.ConfirmedReceipt is { } receipt)
         {
             NavigateToSubmitted(receipt);

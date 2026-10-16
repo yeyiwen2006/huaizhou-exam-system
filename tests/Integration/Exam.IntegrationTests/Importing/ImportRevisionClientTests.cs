@@ -94,7 +94,7 @@ public sealed class ImportRevisionClientTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             Pipeline(client).PrepareAsync(source.Source, client.Current.ExamId, CancellationToken.None));
 
-        Assert.Contains("修改原因", error.Message, StringComparison.Ordinal);
+        Assert.Contains("本次修改备注", error.Message, StringComparison.Ordinal);
         Assert.Empty(client.Requests);
     }
 

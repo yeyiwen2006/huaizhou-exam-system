@@ -92,13 +92,23 @@ public sealed partial class StudentExamRuntime(
             ? receiptStore.SaveSubmissionReceiptAsync(_localKey, receipt, ct)
             : Task.FromResult(StoreWriteResult.Fail("本地存储尚未提供可靠回执保存，原答卷继续保留。"));
 
-    public Task RevokeSubmissionAuthorizationAsync()
+    public async Task RevokeSubmissionAuthorizationAsync()
     {
         _authorizationLost = true;
         var dispatcher = Application.Current?.Dispatcher;
-        return dispatcher is null || dispatcher.CheckAccess()
-            ? InvalidateAuthorizationOnUiAsync()
-            : dispatcher.InvokeAsync(InvalidateAuthorizationOnUiAsync, DispatcherPriority.Send).Task.Unwrap();
+        if (dispatcher is null || dispatcher.CheckAccess() || dispatcher.HasShutdownStarted)
+        {
+            await InvalidateAuthorizationOnUiAsync();
+            return;
+        }
+        var operation = dispatcher.InvokeAsync(InvalidateAuthorizationOnUiAsync, DispatcherPriority.Send);
+        try { await operation.Task.Unwrap(); }
+        catch (TaskCanceledException) when (operation.Status == DispatcherOperationStatus.Aborted)
+        {
+            // Window shutdown must not cancel durable authorization revocation.
+            // An aborted dispatch has not invoked the operation; do not replay an operation that ran.
+            await InvalidateAuthorizationOnUiAsync();
+        }
     }
 
     public bool LocalRecoveryChecked => _localRecoveryChecked;
@@ -393,9 +403,13 @@ public sealed partial class StudentExamRuntime(
         NotifyStateChanged();
     }
 
+    // Durable-state notifications for the upload worker must not wait for the UI dispatcher.
+    internal event EventHandler? SynchronizationStateChanged;
+
     private void NotifyStateChanged()
     {
         if (_disposed) { return; }
+        SynchronizationStateChanged?.Invoke(this, EventArgs.Empty);
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess()) { StateChanged?.Invoke(this, EventArgs.Empty); }
         else if (!dispatcher.HasShutdownStarted)

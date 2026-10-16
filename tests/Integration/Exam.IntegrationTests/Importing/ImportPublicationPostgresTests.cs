@@ -97,7 +97,8 @@ public sealed class ImportPublicationPostgresTests(PostgresDatabaseFixture datab
         };
         var failure = await Assert.ThrowsAsync<ExamPublicationApiException>(() => pipeline.PublishAsync(preview));
         Assert.Equal(change == "start" ? HttpStatusCode.BadRequest : HttpStatusCode.Conflict, failure.StatusCode);
-        Assert.Equal(change == "start" ? "PUBLICATION_NOT_READY" : "VERSION_CONFLICT", failure.Code);
+        // Crossing the start has its own server error; the atomic-publication checks below remain mandatory.
+        Assert.Equal(change == "start" ? "INITIAL_PUBLICATION_WINDOW_CLOSED" : "VERSION_CONFLICT", failure.Code);
         Assert.Equal(0L, await server.ResourceCount());
         var actual = server.Versions.GetExam(server.ExamId).Value!;
         Assert.Equal(0, actual.Versions.PaperVersion);
