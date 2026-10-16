@@ -31,6 +31,7 @@ public sealed class ManagementRuntime(
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
     public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
+    public Func<CancellationToken, Task<BackupMaintenanceStatus?>>? ReadAutomaticBackupStatus { get; init; }
     public async Task<BackupInfo> GetBackupInfoAsync(string sourceDirectory, CancellationToken token)
     {
         if (readBackupInfo is null) throw new InvalidOperationException("备份信息读取未配置。");
@@ -150,7 +151,10 @@ public sealed class ManagementRuntime(
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception) { readiness = BusinessReadiness.Unknown; }
         }
-        return new(process.Status, readiness, configuration, checks);
+        return new(process.Status, readiness, configuration, checks)
+        {
+            AutomaticBackup = ReadAutomaticBackupStatus is null ? null : await ReadAutomaticBackupStatus(cancellationToken)
+        };
     }
 
     public async Task<ServiceConfiguration> GetConfigurationAsync(CancellationToken cancellationToken)

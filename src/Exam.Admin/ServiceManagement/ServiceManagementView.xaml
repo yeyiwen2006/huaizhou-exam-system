@@ -79,6 +79,8 @@
                         <StackPanel>
                             <TextBlock Text="服务器状态" Style="{StaticResource SectionTitle}" Margin="0,0,0,12"/>
                             <controls:StatusPill x:Name="ServerStatusBar" Text="{Binding ServerStatusText}" Level="Info" HorizontalAlignment="Left" Margin="0,0,0,14"/>
+                            <TextBlock Text="自动备份与磁盘" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                            <TextBlock Text="{Binding AutomaticBackupText}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                             <WrapPanel>
                                 <Button Content="刷新状态与日志" Style="{StaticResource Management.Action}" Command="{Binding RefreshCommand}"/>
                                 <Button Content="运行状态检测" Style="{StaticResource Management.Action}" Command="{Binding ChecksCommand}"/>

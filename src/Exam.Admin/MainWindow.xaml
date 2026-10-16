@@ -156,9 +156,13 @@
 
     <Grid>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
-        <controls:Banner Grid.Row="0" Level="Warning" Margin="12,8,12,4" Padding="12"
-                         DataContext="{Binding Management, RelativeSource={RelativeSource AncestorType=Window}}"
-                         IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
+        <StackPanel Grid.Row="0" DataContext="{Binding Management, RelativeSource={RelativeSource AncestorType=Window}}">
+            <controls:Banner Level="Warning" Margin="12,8,12,4" Padding="12"
+                             IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
+            <controls:Banner Level="Warning" Margin="12,4,12,4" Padding="12"
+                             AutomationProperties.Name="自动备份与磁盘告警" AutomationProperties.LiveSetting="Polite"
+                             IsOpen="{Binding ShowAutomaticBackupWarning}" Message="{Binding AutomaticBackupText}"/>
+        </StackPanel>
         <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
@@ -807,13 +811,21 @@
                                 Height="270" HorizontalScrollBarVisibility="Auto" CanUserAddRows="False" CanUserDeleteRows="False"
                                 SelectionMode="Single" SelectionUnit="FullRow">
                                 <DataGrid.Columns>
-                                    <DataGridCheckBoxColumn Header="转组" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                                    <DataGridTemplateColumn Header="选择" Width="64" IsReadOnly="True">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                    HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinHeight="32"
+                                                    AutomationProperties.Name="选择设备" ToolTip="选择或取消选择此设备"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="145" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="130" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="90" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="75" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="110" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="SizeToCells" MinWidth="200" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="考试" Binding="{Binding ExamName}" Width="160" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前页面" Binding="{Binding Page}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="*" MinWidth="140" IsReadOnly="True"/>

@@ -3,8 +3,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Exam.Contracts\Exam.Contracts.csproj" />
     <ProjectReference Include="..\Exam.Desktop.Shared\Exam.Desktop.Shared.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>

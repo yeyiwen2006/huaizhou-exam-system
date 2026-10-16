@@ -75,6 +75,7 @@ public sealed class PostgresBackupCoordinator(
         await using var guard = new FileStream(lockPath,
             FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        await using var retentionLease = await BackupDirectoryLease.ReadAsync(options.AllowedBackupRoot, cancellationToken);
         var staging = ResolveChild(options.RestoreStagingRoot, request.BackupId);
         await ValidateCompletedRestoreAsync(staging, request, source, cancellationToken);
         var markerPath = ResolveChild(working, "working-copy.json");
@@ -130,6 +131,7 @@ public sealed class PostgresBackupCoordinator(
             !Path.IsPathFullyQualified(options.AllowedBackupRoot) || string.IsNullOrWhiteSpace(expectedBackupId))
             throw new InvalidOperationException("备份核验工具、根目录和备份标识必须明确配置。");
         var destination = ResolveWithinRoot(options.AllowedBackupRoot, directory);
+        await using var retentionLease = await BackupDirectoryLease.ReadAsync(options.AllowedBackupRoot, cancellationToken);
         var manifest = await ReadManifestAsync(destination, cancellationToken);
         if (!string.Equals(manifest.BackupId, expectedBackupId, StringComparison.Ordinal))
             throw new InvalidDataException("指定备份标识与清单不匹配。");
@@ -168,6 +170,7 @@ public sealed class PostgresBackupCoordinator(
         RequireRequest(request.RequestId, request.ActorId);
         ValidateOptions();
         var destination = ResolveWithinRoot(options.AllowedBackupRoot, request.DestinationDirectory);
+        await using var retentionLease = await BackupDirectoryLease.ReadAsync(options.AllowedBackupRoot, cancellationToken);
         await using var operationLock = await DatabaseOperationLock.AcquireAsync(
             dataSource,
             [$"backup-request:{request.RequestId}", $"backup-destination:{destination}"],
@@ -284,6 +287,7 @@ public sealed class PostgresBackupCoordinator(
         RequireRequest(request.RequestId, request.ActorId);
         ValidateOptions(requireSourceDirectories: false);
         var source = ResolveWithinRoot(options.AllowedBackupRoot, request.SourceDirectory);
+        await using var retentionLease = await BackupDirectoryLease.ReadAsync(options.AllowedBackupRoot, cancellationToken);
         var stagingRoot = Path.GetFullPath(options.RestoreStagingRoot);
         Directory.CreateDirectory(stagingRoot);
         var staging = ResolveWithinRoot(stagingRoot, Path.Combine(stagingRoot, request.BackupId));

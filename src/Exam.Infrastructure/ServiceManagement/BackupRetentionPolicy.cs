@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace Exam.Infrastructure.ServiceManagement;
 
 public sealed record RetainedBackup(string Directory, string BackupId, DateTimeOffset CompletedAt,
-    string StartWal, string SystemIdentifier, bool Automatic);
+    string StartWal, string SystemIdentifier, bool Automatic, IReadOnlyList<BackupWalRange>? WalRanges = null);
 
 /// <summary>Retention is determined by recovery positions, never by archive file modification time.</summary>
 public static partial class BackupRetentionPolicy

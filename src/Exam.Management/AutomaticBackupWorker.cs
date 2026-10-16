@@ -1,289 +1,362 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.ServiceManagement;
 using Npgsql;
 
 namespace Exam.Management;
 
-/// <summary>Online maintenance belongs to the management host, not to client requests or OS scheduled tasks.</summary>
-public sealed class AutomaticBackupWorker(IConfiguration configuration, Func<string, string?> selected) : BackgroundService
+/// <summary>Backup creation and retention have independent gates; neither changes exam or replication state.</summary>
+public sealed partial class AutomaticBackupWorker(IConfiguration configuration, Func<string, string?> selected,
+    IExternalProcessRunner? processRunner = null, TimeProvider? timeProvider = null) : BackgroundService
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly ExternalProcessRunner _runner = new();
-    private DateTimeOffset _retryAt;
-    private string Required(string key) => selected(key) is { Length: > 0 } value ? value
-        : throw new InvalidDataException("自动备份缺少配置：" + key);
+    private readonly IExternalProcessRunner _runner = processRunner ?? new ExternalProcessRunner();
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private DateTimeOffset Now => _time.GetUtcNow();
+    private string Required(string key) => selected(key) is { Length: > 0 } value ? value :
+        throw new MaintenanceDeferred($"自动维护缺少配置项 {key}。");
     private string StateRoot => Path.GetFullPath(Required("Backup:Automatic:StateDirectory"));
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
+        await Task.Delay(TimeSpan.FromSeconds(30), _time, stoppingToken);
+        while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-            while (!stoppingToken.IsCancellationRequested)
+            try
             {
-                if (configuration.GetValue("Backup:Automatic:Enabled", false) && DateTimeOffset.UtcNow >= _retryAt)
-                {
-                    _retryAt = DateTimeOffset.UtcNow.AddHours(1);
-                    try { await RunOnceAsync(stoppingToken); }
-                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-                    catch (Exception error)
-                    {
-                        // Do not expose native tool output, connection strings or certificate passwords.
-                        try { await WriteStatusAsync("paused", error is MaintenancePaused ? error.Message :
-                            "自动维护未完成，已保留现有备份和恢复归档。" + error.GetType().Name, stoppingToken); }
-                        catch (Exception) when (!stoppingToken.IsCancellationRequested) { }
-                    }
-                }
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                if (configuration.GetValue<bool>("Backup:Automatic:Enabled")) await RunOnceAsync(stoppingToken);
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            catch { /* RunOnce persists a bounded, non-sensitive status whenever its state directory is usable. */ }
+            await Task.Delay(TimeSpan.FromMinutes(5), _time, stoppingToken);
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 
-    public async Task RunOnceAsync(CancellationToken token)
+    public async Task<BackupMaintenanceStatus> RunOnceAsync(CancellationToken token)
     {
-        var days = configuration.GetValue("Backup:Automatic:RetentionDays", 7);
-        var hours = configuration.GetValue("Backup:Automatic:IntervalHours", 24);
-        if (days < 1 || hours < 1) throw new InvalidDataException("备份保留天数和间隔必须为正数。");
-        BackupRetentionPolicy.RejectLinks(StateRoot);
-        Directory.CreateDirectory(StateRoot);
-        await using var fileLock = new FileStream(Path.Combine(StateRoot, "maintenance.lock"),
-            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var lastPath = Path.Combine(StateRoot, "status.json");
-        if (File.Exists(lastPath))
+        var status = new BackupMaintenanceStatus { Enabled = configuration.GetValue<bool>("Backup:Automatic:Enabled"), ObservedAt = Now };
+        if (!status.Enabled) return status;
+        var warnings = new List<string>();
+        Paths? paths = null;
+        var stateDirectoryValidated = false;
+        FileStream? cycle = null;
+        async Task Publish()
         {
-            using var previous = await ReadAsync(lastPath, token);
-            if (previous.RootElement.GetProperty("status").GetString() == "completed" &&
-                previous.RootElement.GetProperty("at").GetDateTimeOffset().AddHours(hours) > DateTimeOffset.UtcNow) return;
+            if (stateDirectoryValidated && paths is not null) status = Measure(status, paths);
+            var notices = warnings.ToList();
+            AddSpaceWarnings(status, notices);
+            status = status with { ObservedAt = Now, Warnings = notices.Distinct(StringComparer.Ordinal).Take(16).ToArray() };
+            if (stateDirectoryValidated)
+                await AutomaticBackupStatusFile.SaveAsync(Path.Combine(StateRoot, "status.json"), status, token);
         }
-        var serverId = Required("Management:ServerId");
-        var nodeId = Required("Management:NodeId");
-        var epoch = long.Parse(Required("ExamServer:ServerEpoch"), System.Globalization.CultureInfo.InvariantCulture);
-        var connection = FileRecoveryDeploymentSelection.ResolveConnection(selected, serverId, nodeId, epoch)
-            ?? throw new InvalidDataException("自动备份数据库未配置。");
-        var resources = FileRecoveryDeploymentSelection.ResolveResources(selected, serverId, nodeId, epoch)
-            ?? throw new InvalidDataException("自动备份资源未配置。");
-        var settings = new NpgsqlConnectionStringBuilder(connection)
-        { Pooling = false, Timeout = 5, CommandTimeout = 10, ApplicationName = "Exam.AutomaticBackup" };
-        await using var database = new NpgsqlConnection(settings.ConnectionString);
-        await database.OpenAsync(token);
-        var state = await ObserveAsync(database, token);
-        if (state.Recovery || state.ServerId != serverId || state.ActiveNodeId != nodeId)
-            throw new MaintenancePaused("当前节点不是活动主节点，自动维护已暂停。");
-        // An independent host/duplicate process must not run the same cluster's maintenance concurrently.
-        await using (var acquire = new NpgsqlCommand("SELECT pg_try_advisory_lock(18739042, 70931)", database))
-            if (await acquire.ExecuteScalarAsync(token) is not true) return;
-        RequireSynchronousStandby(state);
-        var root = Path.GetFullPath(Required("Backup:AllowedBackupRoot"));
-        var archive = Path.GetFullPath(Required("HighAvailability:WalArchiveDirectory"));
-        BackupRetentionPolicy.RejectLinks(root);
-        BackupRetentionPolicy.RejectLinks(archive);
-        if (Overlaps(root, archive) || Overlaps(StateRoot, root) || Overlaps(StateRoot, archive) ||
-            selected("HighAvailability:PostgresDataDirectory") is { Length: > 0 } live && Overlaps(live, archive))
-            throw new InvalidDataException("备份、归档、维护状态与活动数据库目录不能重叠。");
-        var backups = await CatalogueAsync(root, token);
-        if (backups.Any(b => b.SystemIdentifier != state.SystemId))
-            throw new MaintenancePaused("备份目录包含其他数据库实例的备份，已暂停自动维护。");
-        var latest = backups.Where(b => b.Automatic).OrderByDescending(b => b.CompletedAt).FirstOrDefault();
-        if (latest is null || latest.CompletedAt.AddHours(hours) <= DateTimeOffset.UtcNow)
+        try
         {
+            paths = ReadPaths();
+            ValidatePaths(paths);
+            stateDirectoryValidated = true;
+            Directory.CreateDirectory(StateRoot);
+            Directory.CreateDirectory(paths.Backups);
+            BackupRetentionPolicy.RejectLinks(Path.Combine(StateRoot, "maintenance.lock"));
+            try { cycle = new FileStream(Path.Combine(StateRoot, "maintenance.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException)
+            {
+                // Never overwrite the heartbeat of the cycle that currently holds this lock.
+                return await AutomaticBackupStatusFile.ReadAsync(true, StateRoot, token) ?? status;
+            }
+            var days = configuration.GetValue("Backup:Automatic:RetentionDays", 7);
+            var hours = configuration.GetValue("Backup:Automatic:IntervalHours", 24);
             var minimum = configuration.GetValue("Backup:Automatic:MinimumFreeBytes", 10L * 1024 * 1024 * 1024);
-            if (new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace < minimum)
-                throw new MaintenancePaused("备份磁盘空间不足，已保留现有恢复材料并暂停自动维护。");
-            var pendingPath = Path.Combine(StateRoot, "pending.json");
-            Pending pending;
-            if (File.Exists(pendingPath))
-                pending = JsonSerializer.Deserialize<Pending>(await File.ReadAllTextAsync(pendingPath, token), Json)!;
-            else
+            if (days is < 1 or > 365 || hours is < 1 or > 168 || minimum <= 0)
+                throw new MaintenanceDeferred("自动维护的保留天数、备份间隔或空间阈值无效。");
+            status = status with { RetentionDays = days, MinimumAvailableBytes = minimum,
+                BackupPhase = BackupMaintenancePhase.Waiting, CleanupPhase = BackupMaintenancePhase.Waiting };
+            var server = Required("Management:ServerId");
+            var node = Required("Management:NodeId");
+            var epoch = long.Parse(Required("ExamServer:ServerEpoch"), System.Globalization.CultureInfo.InvariantCulture);
+            var connection = FileRecoveryDeploymentSelection.ResolveConnection(selected, server, node, epoch)
+                ?? throw new MaintenanceDeferred("自动维护没有可用的当前数据库配置。");
+            var builder = new NpgsqlConnectionStringBuilder(connection) { Pooling = false, Timeout = 5,
+                CommandTimeout = 10, ApplicationName = "Exam.AutomaticBackup" };
+            await using var db = new NpgsqlConnection(builder.ConnectionString);
+            await db.OpenAsync(token);
+            var before = await Observe(db, token);
+            if (before.Recovery || before.ServerId != server || before.ActiveNodeId != node)
             {
-                var name = "auto-" + DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + Guid.NewGuid().ToString("N")[..8];
-                pending = new(Path.Combine(root, name), name);
-                await SaveAsync(pendingPath, pending, token);
+                status = status with { Message = "本节点不是已核实的活动主库，不执行备份或清理。" };
+                await Publish(); return status;
             }
-            var destination = BackupRetentionPolicy.Child(root, pending.Directory);
-            if (!AutomaticName(destination)) throw new InvalidDataException("自动备份目录名称无效。");
-            var manifestPath = Path.Combine(destination, "exam-backup.json");
-            if (Directory.Exists(destination) && !File.Exists(manifestPath))
-                throw new MaintenancePaused("上次自动备份未完成，半成品已保留；处理后才能继续，未清理旧备份。");
-            if (!File.Exists(manifestPath))
+            await using (var advisory = new NpgsqlCommand("SELECT pg_try_advisory_lock(18739042, 70931);", db))
+                if (await advisory.ExecuteScalarAsync(token) is not true)
+                    throw new MaintenanceDeferred("另一个自动维护任务正在运行，本轮等待，不删除任何材料。");
+
+            var resources = FileRecoveryDeploymentSelection.ResolveResources(selected, server, node, epoch)
+                ?? throw new MaintenanceDeferred("当前版本化资源目录未配置。");
+            var coordinator = new PostgresBackupCoordinator(new PostgresBackupOptions(
+                Required("Backup:PostgresBinDirectory"), connection, paths.Backups, Required("Backup:RestoreStagingRoot"),
+                resources, Required("Backup:ProtectedConfigurationDirectory"),
+                TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), _runner, _time);
+            var catalogue = Catalogue(paths.Backups);
+            status = status with { LastSuccessfulBackupAt = LatestAutomatic(catalogue.Backups)?.CompletedAt,
+                IncompleteBackups = catalogue.Incomplete, StandbyConnected = before.StandbyConnected,
+                ReplicationRetainedBytes = RetainedBytes(before) };
+            if (!before.StandbyConnected && RequiresStandby)
+                warnings.Add("备机未建立流复制连接；本机备份仍独立运行，清理将保留有效复制槽需要的 WAL。");
+            if (before.ArchiveFailure) warnings.Add("PostgreSQL 最近一次归档失败尚未被成功归档取代，请检查归档服务与磁盘。");
+            await Publish();
+
+            // Failure or deferral in this phase must not bypass retention's separate safety assessment.
+            try
             {
-                var coordinator = new PostgresBackupCoordinator(new(Required("Backup:PostgresBinDirectory"), connection,
-                    root, Required("Backup:RestoreStagingRoot"), resources, Required("Backup:ProtectedConfigurationDirectory"),
-                    TimeSpan.FromMinutes(configuration.GetValue("Backup:ToolTimeoutMinutes", 60))), _runner);
-                await coordinator.CreateAsync(new(pending.RequestId, destination, "automatic-backup"), token);
+                var result = await BackupPhaseAsync(db, before, paths, catalogue.Backups, coordinator, hours, minimum,
+                    warnings, async () => { status = status with { BackupPhase = BackupMaintenancePhase.Running }; await Publish(); }, token);
+                status = status with { BackupPhase = result.Phase, NextBackupAttemptAt = result.NextAttempt };
             }
-            var executable = Path.Combine(Required("Backup:PostgresBinDirectory"),
-                OperatingSystem.IsWindows() ? "pg_verifybackup.exe" : "pg_verifybackup");
-            var verification = await _runner.RunAsync(executable,
-                ["--skip-checksums", Path.Combine(destination, "database")],
-                new Dictionary<string, string>(), TimeSpan.FromMinutes(10), token);
-            if (verification.ExitCode != 0) throw new MaintenancePaused("新备份的文件或 WAL 校验未通过，已暂停清理。");
-            using var manifest = await ReadAsync(manifestPath, token);
-            if (manifest.RootElement.GetProperty("requestId").GetString() != pending.RequestId)
-                throw new InvalidDataException("自动备份请求与清单不一致。");
-            await SaveAsync(Path.Combine(destination, "maintenance-complete.json"),
-                new { backupId = manifest.RootElement.GetProperty("backupId").GetString(), verifiedAt = DateTimeOffset.UtcNow }, token);
-            File.Delete(pendingPath);
-            backups = await CatalogueAsync(root, token);
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (MaintenanceDeferred error)
+            { status = status with { BackupPhase = BackupMaintenancePhase.Deferred }; warnings.Add(error.Message); }
+            catch (Exception error)
+            {
+                status = status with { BackupPhase = BackupMaintenancePhase.Failed };
+                warnings.Add($"新备份未完成（{error.GetType().Name}）；有效备份保持不变，未完成目录将在受控重试时处理。");
+            }
+            catalogue = Catalogue(paths.Backups);
+            status = status with { LastSuccessfulBackupAt = LatestAutomatic(catalogue.Backups)?.CompletedAt,
+                IncompleteBackups = catalogue.Incomplete };
+            await Publish();
+            try
+            {
+                var result = await CleanupPhaseAsync(db, before, paths, catalogue, coordinator, days, token);
+                status = status with { CleanupPhase = BackupMaintenancePhase.Completed,
+                    RemovedBackups = result.Backups, RemovedWal = result.Wal, ReclaimedBytes = result.Bytes };
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (MaintenanceDeferred error)
+            { status = status with { CleanupPhase = BackupMaintenancePhase.Deferred }; warnings.Add(error.Message); }
+            catch (Exception error)
+            {
+                status = status with { CleanupPhase = BackupMaintenancePhase.Failed };
+                warnings.Add($"清理未完成（{error.GetType().Name}）；未证明可删除的备份和归档均保留。");
+            }
+            if (status.IncompleteBackups > 0)
+                warnings.Add("备份目录中仍有未完成或旧版本遗留的自动备份；未计入有效恢复链，未确认归属的目录不会自动删除。");
+            if (status.LastSuccessfulBackupAt is null || Now - status.LastSuccessfulBackupAt > TimeSpan.FromHours(hours * 2))
+                warnings.Add("尚无有效自动备份，或最近成功备份已超过两个备份周期，请及时处理备份告警。");
+            status = status with { Message = "备份创建与保留清理已分别检查；不会删除复制槽、停用归档或修改考试数据。" };
         }
-        foreach (var key in new[] { "Backup:RestoreStagingRoot", "Recovery:WorkingRoot", "HighAvailability:RebuildRoot" })
-            if (selected(key) is { Length: > 0 } path && Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any())
-                throw new MaintenancePaused("存在恢复或重建工作目录，已暂停清理。");
-        state = await ObserveAsync(database, token);
-        RequireSamePrimary(state, serverId, nodeId);
-        var keep = BackupRetentionPolicy.Keep(backups, DateTimeOffset.UtcNow, days);
-        if (keep.Count == 0 || keep.Any(b => BackupRetentionPolicy.Timeline(b.StartWal) != state.Timeline))
-            throw new MaintenancePaused("保留的备份跨越时间线，需核对恢复链后继续清理。");
-        var floor = keep.Min(b => BackupRetentionPolicy.Segment(b.StartWal, state.SegmentBytes));
-        floor = Math.Min(floor, state.RequiredPositions.Min(p => BackupRetentionPolicy.Lsn(p) / state.SegmentBytes));
-        IReadOnlyList<string> obsoleteWal;
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            status = status with { BackupPhase = BackupMaintenancePhase.Deferred, CleanupPhase = BackupMaintenancePhase.Deferred };
+            warnings.Add(error is MaintenanceDeferred ? error.Message : $"自动维护暂不可用（{error.GetType().Name}），未执行未获安全证明的清理。");
+        }
+        finally
+        {
+            if (cycle is not null)
+            {
+                try { if (!token.IsCancellationRequested) await Publish(); }
+                finally { await cycle.DisposeAsync(); }
+            }
+        }
+        if (cycle is null) await Publish();
+        return status;
+    }
+
+    private bool RequiresStandby => configuration.GetSection("HighAvailability:Nodes").GetChildren().Any();
+
+    private async Task<(BackupMaintenancePhase Phase, DateTimeOffset? NextAttempt)> BackupPhaseAsync(
+        NpgsqlConnection db, Observation before, Paths paths, IReadOnlyList<RetainedBackup> backups,
+        PostgresBackupCoordinator coordinator, int hours, long minimum, List<string> warnings, Func<Task> progress, CancellationToken token)
+    {
+        var pendingPath = Path.Combine(StateRoot, "pending.json");
+        var pending = ReadSmall<Pending>(pendingPath);
+        if (pending is not null)
+        {
+            ValidatePending(paths.Backups, pending);
+            if (pending.SystemIdentifier is not null && pending.SystemIdentifier != before.SystemId)
+                throw new MaintenanceDeferred("未完成备份属于另一个数据库集群，保留原目录并停止对此请求的重试。");
+            var manifestPath = Path.Combine(pending.Directory, "exam-backup.json");
+            if (File.Exists(manifestPath))
+            {
+                await progress();
+                try
+                {
+                    // A crashed manifest write is a recoverable partial, not a permanent scheduler failure.
+                    // Reclamation below still requires a cluster-bound pending request and the exclusive lease.
+                    using var manifest = ReadDocument(manifestPath);
+                    var value = manifest.RootElement;
+                    if (value.ValueKind != JsonValueKind.Object ||
+                        !value.TryGetProperty("requestId", out var requestId) || requestId.ValueKind != JsonValueKind.String ||
+                        !value.TryGetProperty("actorId", out var actorId) || actorId.ValueKind != JsonValueKind.String ||
+                        !value.TryGetProperty("backupId", out var backupId) || backupId.ValueKind != JsonValueKind.String ||
+                        string.IsNullOrWhiteSpace(backupId.GetString()))
+                        throw new InvalidDataException("上次备份清单尚未写入完整。");
+                    if (requestId.GetString() != pending.RequestId || actorId.GetString() != "automatic-backup")
+                        throw new MaintenanceDeferred("未完成目录的请求身份不一致，未删除或覆盖该目录。");
+                    var id = backupId.GetString()!;
+                    await coordinator.VerifyAvailableBackupAsync(pending.Directory, id, token);
+                    var recovered = ReadBackup(pending.Directory, true, requireCompletion: false);
+                    if (recovered.SystemIdentifier != before.SystemId) throw new MaintenanceDeferred("未完成备份的原生集群身份不匹配。");
+                    RequireSamePrimary(before, await Observe(db, token));
+                    await MarkComplete(pending.Directory, id, token);
+                    File.Delete(pendingPath); ResetRetry();
+                    return (BackupMaintenancePhase.Completed, recovered.CompletedAt.AddHours(hours));
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (MaintenanceDeferred) { throw; }
+                catch when (!File.Exists(Path.Combine(pending.Directory, "maintenance-complete.json")))
+                { warnings.Add("上次未完成备份校验未通过，将在确认没有活动读取后回收本程序的半成品并受控重试。"); }
+            }
+            if (Directory.Exists(pending.Directory))
+            {
+                if (pending.SystemIdentifier is null)
+                {
+                    // Legacy pending records did not bind a cluster identity. Preserve that data once,
+                    // retire only its request metadata, and let new owned requests resume automatically.
+                    await AutomaticBackupStatusFile.SaveAsync(Path.Combine(StateRoot, "legacy-" + pending.RequestId + ".json"), pending, token);
+                    warnings.Add("旧版本半成品缺少归属证明，已保留原文件；新的自动备份不再被该半成品永久阻塞。");
+                }
+                else
+                {
+                    await using var lease = await BackupDirectoryLease.CleanupAsync(paths.Backups, token);
+                    var current = await Observe(db, token); RequireSamePrimary(before, current);
+                    if (current.NativeBackupsRunning > 0) throw new MaintenanceDeferred("仍有原生备份进程运行，暂不回收半成品。");
+                    EnsureRecoveryIdle();
+                    if (File.Exists(Path.Combine(pending.Directory, "maintenance-complete.json")) || IsPinned(pending.Directory))
+                        throw new MaintenanceDeferred("该目录已有完成凭据或被恢复配置固定保留，未作为半成品删除。");
+                    DeleteTree(paths.Backups, pending.Directory);
+                }
+            }
+            File.Delete(pendingPath);
+        }
+        var latest = LatestAutomatic(backups);
+        if (pending is null && latest is not null && latest.CompletedAt.AddHours(hours) > Now)
+            return (BackupMaintenancePhase.Waiting, latest.CompletedAt.AddHours(hours));
+        var currentState = await Observe(db, token); RequireSamePrimary(before, currentState);
+        if (currentState.NativeBackupsRunning > 0) throw new MaintenanceDeferred("其他原生备份正在运行，本轮不并发创建新备份。");
+        var available = Available(paths.Backups);
+        var estimate = latest is not null ? DirectoryBytes(latest.Directory) : DirectoryBytes(paths.Database);
+        if (MinimumAvailable(paths) is not { } minimumFree || minimumFree < minimum ||
+            available is null || estimate is null || available < minimum ||
+            estimate > long.MaxValue / 2 || available - minimum < estimate + estimate / 4)
+            throw new MaintenanceDeferred("备份卷空间不足以容纳预计的新备份并保留安全余量，已暂停新备份；仍会独立评估安全清理。");
+        var retryPath = Path.Combine(StateRoot, "retry.json");
+        var retry = ReadSmall<RetryWindow>(retryPath) ?? new(Now, 0, Now);
+        if (Now >= retry.WindowStart.AddHours(24)) retry = new(Now, 0, Now);
+        var limit = Math.Clamp(configuration.GetValue("Backup:Automatic:MaximumAttemptsPerDay", 3), 1, 8);
+        var next = retry.Attempts >= limit ? retry.WindowStart.AddHours(24) : retry.NextAttempt;
+        if (next > Now) { warnings.Add("自动备份处于受控重试间隔，清理与磁盘检查仍继续运行。"); return (BackupMaintenancePhase.Deferred, next); }
+        retry = retry with { Attempts = retry.Attempts + 1, NextAttempt = Now.AddHours(1) };
+        await AutomaticBackupStatusFile.SaveAsync(retryPath, retry, token);
+        var name = "auto-" + Now.ToString("yyyyMMdd'T'HHmmss'Z'", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
+        pending = new(Path.Combine(paths.Backups, name), name, before.SystemId, Now);
+        await AutomaticBackupStatusFile.SaveAsync(pendingPath, pending, token);
+        await progress();
+        using var createToken = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var task = CreateAndVerify();
         try
         {
-            var archiveFiles = Directory.EnumerateFiles(archive).Select(path => new FileInfo(path)).ToArray();
-            if (archiveFiles.Any(f => BackupRetentionPolicy.IsWal(f.Name) &&
-                                     BackupRetentionPolicy.Timeline(f.Name) == state.Timeline && (ulong)f.Length != state.SegmentBytes))
-                throw new InvalidDataException("归档长度异常。");
-            obsoleteWal = BackupRetentionPolicy.ObsoleteWal(archiveFiles.Select(f => f.Name),
-                state.Timeline, state.SegmentBytes, floor, BackupRetentionPolicy.Lsn(state.Lsn) / state.SegmentBytes);
-        }
-        catch (InvalidDataException) { throw new MaintenancePaused("恢复所需归档尚未齐全，已暂停清理并等待下次重试。"); }
-        var again = await ObserveAsync(database, token);
-        RequireSamePrimary(again, serverId, nodeId);
-        if (again.SystemId != state.SystemId || again.Timeline != state.Timeline ||
-            again.RequiredPositions.Any(p => BackupRetentionPolicy.Lsn(p) / state.SegmentBytes < floor))
-            throw new MaintenancePaused("主备恢复位置发生变化，已暂停清理。");
-        var pinned = selected("Backup:StartupVerificationDirectory");
-        var obsoleteBackups = backups.Where(b => b.Automatic && !keep.Contains(b) &&
-            (string.IsNullOrEmpty(pinned) || !SamePath(b.Directory, pinned))).ToArray();
-        long deleted = 0;
-        foreach (var backup in obsoleteBackups)
+        while (!task.IsCompleted)
         {
+            var tick = Task.Delay(TimeSpan.FromMinutes(1), _time, token);
+            if (await Task.WhenAny(task, tick) == task) break;
             token.ThrowIfCancellationRequested();
-            var path = BackupRetentionPolicy.Child(root, backup.Directory);
-            if (!AutomaticName(path)) throw new InvalidDataException("自动备份目录名称无效。");
-            foreach (var child in Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories))
-                BackupRetentionPolicy.Child(path, child);
-            deleted += Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
-            Directory.Delete(path, recursive: true);
-        }
-        foreach (var name in obsoleteWal)
-        {
-            token.ThrowIfCancellationRequested();
-            var path = BackupRetentionPolicy.Child(archive, Path.Combine(archive, name));
-            deleted += new FileInfo(path).Length;
-            File.Delete(path);
-        }
-        await SaveAsync(lastPath, new { status = "completed", at = DateTimeOffset.UtcNow, retentionDays = days,
-            latestBackup = backups.MaxBy(b => b.CompletedAt)!.Directory,
-            continuousRecoveryStartsAt = keep.Min(b => b.CompletedAt), keepWalFrom = BackupRetentionPolicy.WalName(state.Timeline, floor, state.SegmentBytes),
-            deletedBackups = obsoleteBackups.Length, deletedWal = obsoleteWal.Count, deletedBytes = deleted }, token);
-    }
-
-    private void RequireSamePrimary(Observation state, string server, string node)
-    {
-        if (state.Recovery || state.ServerId != server || state.ActiveNodeId != node)
-            throw new MaintenancePaused("活动主节点发生变化，已暂停清理。");
-        RequireSynchronousStandby(state);
-    }
-
-    private static void RequireSynchronousStandby(Observation state)
-    {
-        if (!state.Synchronous || state.RequiredPositions.Count == 0)
-            throw new MaintenancePaused("同步备机或复制槽暂不可用，已保留所有备份和恢复归档。");
-    }
-
-    private static async Task<Observation> ObserveAsync(NpgsqlConnection database, CancellationToken token)
-    {
-        await using var command = new NpgsqlCommand("""
-            SELECT json_build_object('recovery',pg_is_in_recovery(),
-              'systemId',(SELECT system_identifier::text FROM pg_control_system()),
-              'timeline',(SELECT timeline_id FROM pg_control_checkpoint()),
-              'segmentBytes',pg_size_bytes(current_setting('wal_segment_size')),
-              'lsn',CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn()::text ELSE pg_current_wal_lsn()::text END,
-              'serverId',(SELECT server_id FROM exam.server_state LIMIT 1),
-              'activeNodeId',(SELECT active_node_id FROM exam.server_state LIMIT 1),
-              'synchronous',current_setting('archive_mode')='on' AND current_setting('synchronous_commit')='remote_apply'
-                AND EXISTS(SELECT 1 FROM pg_stat_replication WHERE state='streaming' AND sync_state='sync' AND replay_lsn IS NOT NULL)
-                AND EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_type='physical')
-                AND NOT EXISTS(SELECT 1 FROM pg_replication_slots WHERE restart_lsn IS NULL OR wal_status='lost'),
-              'requiredPositions',(SELECT COALESCE(json_agg(position),'[]'::json) FROM (
-                SELECT restart_lsn::text AS position FROM pg_replication_slots WHERE restart_lsn IS NOT NULL
-                UNION ALL SELECT replay_lsn::text FROM pg_stat_replication WHERE replay_lsn IS NOT NULL) positions));
-            """, database);
-        return JsonSerializer.Deserialize<Observation>((string)(await command.ExecuteScalarAsync(token))!, Json)!;
-    }
-
-    private static async Task<List<RetainedBackup>> CatalogueAsync(string root, CancellationToken token)
-    {
-        var result = new List<RetainedBackup>();
-        foreach (var directory in Directory.EnumerateDirectories(root))
-        {
-            BackupRetentionPolicy.Child(root, directory);
-            var manifestPath = Path.Combine(directory, "exam-backup.json");
-            if (!File.Exists(manifestPath)) continue;
-            using var manifest = await ReadAsync(manifestPath, token);
-            var value = manifest.RootElement;
-            if (value.GetProperty("formatVersion").GetInt32() != 2) throw new InvalidDataException("备份格式不支持。");
-            var database = BackupRetentionPolicy.Child(directory, Path.Combine(directory, value.GetProperty("databaseDirectory").GetString()!));
-            using var native = await ReadAsync(Path.Combine(database, "backup_manifest"), token);
-            var label = await File.ReadAllTextAsync(Path.Combine(database, "backup_label"), token);
-            var start = Regex.Match(label, @"START WAL LOCATION: .*\(file ([0-9A-F]{24})\)").Groups[1].Value;
-            if (!BackupRetentionPolicy.IsWal(start)) throw new InvalidDataException("备份没有起始 WAL。");
-            var id = value.GetProperty("backupId").GetString()!;
-            var automatic = AutomaticName(directory);
-            if (automatic)
+            await progress();
+            if (MinimumAvailable(paths) is not { } free || free < minimum)
             {
-                var marker = Path.Combine(directory, "maintenance-complete.json");
-                if (!File.Exists(marker)) continue;
-                using var completion = await ReadAsync(marker, token);
-                if (completion.RootElement.GetProperty("backupId").GetString() != id)
-                    throw new InvalidDataException("自动备份标记不一致。");
+                createToken.Cancel();
+                try { await task; } catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                throw new MaintenanceDeferred("创建备份期间可用空间跌破安全余量，已停止本次新备份并保留重试状态；继续评估安全清理。");
             }
-            result.Add(new(directory, id, value.GetProperty("completedAt").GetDateTimeOffset(), start,
-                native.RootElement.GetProperty("System-Identifier").ToString(), automatic));
         }
-        return result;
+        await task;
+        }
+        catch
+        {
+            // Always reap the native backup before releasing its lock or disposing its database observation.
+            createToken.Cancel();
+            try { await task; } catch { }
+            throw;
+        }
+        File.Delete(pendingPath); ResetRetry();
+        return (BackupMaintenancePhase.Completed, Now.AddHours(hours));
+        async Task CreateAndVerify()
+        {
+            var result = await coordinator.CreateAsync(new(pending.RequestId, pending.Directory, "automatic-backup"), createToken.Token);
+            // Full native checksums and WAL parsing, plus versioned resource/configuration hashes.
+            await coordinator.VerifyAvailableBackupAsync(pending.Directory, result.BackupId, createToken.Token);
+            if (ReadBackup(pending.Directory, true, requireCompletion: false).SystemIdentifier != before.SystemId)
+                throw new MaintenanceDeferred("新备份的原生集群身份与活动主库不匹配，未标记完成。");
+            RequireSamePrimary(before, await Observe(db, createToken.Token));
+            await MarkComplete(pending.Directory, result.BackupId, createToken.Token);
+        }
     }
 
-    private static bool AutomaticName(string path) => Regex.IsMatch(Path.GetFileName(path), @"^auto-\d{8}T\d{6}Z-[0-9a-f]{8}$");
-    private static bool SamePath(string a, string b) => string.Equals(Path.GetFullPath(a), Path.GetFullPath(b),
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-    private static bool Overlaps(string a, string b)
+    private async Task<(int Backups, int Wal, long Bytes)> CleanupPhaseAsync(NpgsqlConnection db, Observation before,
+        Paths paths, BackupCatalogue catalogue, PostgresBackupCoordinator coordinator, int days, CancellationToken token)
     {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        a = Path.TrimEndingDirectorySeparator(Path.GetFullPath(a));
-        b = Path.TrimEndingDirectorySeparator(Path.GetFullPath(b));
-        return string.Equals(a, b, comparison) || a.StartsWith(b + Path.DirectorySeparatorChar, comparison)
-            || b.StartsWith(a + Path.DirectorySeparatorChar, comparison);
-    }
-    private async Task WriteStatusAsync(string status, string reason, CancellationToken token)
-    {
-        BackupRetentionPolicy.RejectLinks(StateRoot);
-        Directory.CreateDirectory(StateRoot);
-        await SaveAsync(Path.Combine(StateRoot, "status.json"), new { status, at = DateTimeOffset.UtcNow, reason }, token);
-    }
-    private static async Task<JsonDocument> ReadAsync(string path, CancellationToken token)
-    {
-        BackupRetentionPolicy.RejectLinks(path);
-        await using var stream = File.OpenRead(path);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: token);
-    }
-    private static async Task SaveAsync<T>(string path, T value, CancellationToken token)
-    {
-        BackupRetentionPolicy.RejectLinks(path);
-        var temporary = path + ".tmp";
-        BackupRetentionPolicy.RejectLinks(temporary);
-        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        var current = await Observe(db, token); RequireSamePrimary(before, current); RequireCleanupEvidence(current);
+        if (catalogue.Errors.Count > 0 || catalogue.Backups.Any(b => b.SystemIdentifier != before.SystemId))
+            throw new MaintenanceDeferred("已有备份清单损坏或混入其他集群，新的备份可独立运行，但本轮保留旧备份和归档。");
+        EnsureRecoveryIdle();
+        var keep = BackupRetentionPolicy.Keep(catalogue.Backups, Now, days);
+        var plan = ArchivePlan(paths.Archive, keep, current);
+        var obsolete = catalogue.Backups.Where(b => b.Automatic && !keep.Contains(b) && !IsPinned(b.Directory)).ToArray();
+        if (obsolete.Length == 0 && plan.ObsoleteWal.Count == 0) return (0, 0, 0);
+        foreach (var backup in keep) await coordinator.VerifyAvailableBackupAsync(backup.Directory, backup.BackupId, token);
+        // Built-in backup/restore readers share this lease; deletion takes it exclusively only after verification.
+        await using var lease = await BackupDirectoryLease.CleanupAsync(paths.Backups, token);
+        EnsureRecoveryIdle();
+        var final = await Observe(db, token); RequireSamePrimary(current, final); RequireCleanupEvidence(final);
+        var fresh = Catalogue(paths.Backups);
+        var finalKeep = BackupRetentionPolicy.Keep(fresh.Backups, Now, days);
+        if (fresh.Errors.Count > 0 || !keep.Select(b => b.BackupId).Order(StringComparer.Ordinal)
+                .SequenceEqual(finalKeep.Select(b => b.BackupId).Order(StringComparer.Ordinal)))
+            throw new MaintenanceDeferred("保留备份集合在核对期间变化，等待下一轮重新证明恢复链。");
+        var finalPlan = ArchivePlan(paths.Archive, finalKeep, final);
+        var wal = plan.ObsoleteWal.Intersect(finalPlan.ObsoleteWal, StringComparer.Ordinal).ToArray();
+        long bytes = 0;
+        foreach (var backup in obsolete) { token.ThrowIfCancellationRequested(); bytes += DeleteTree(paths.Backups, backup.Directory); }
+        foreach (var name in wal)
         {
-            await JsonSerializer.SerializeAsync(stream, value, Json, token);
-            stream.Flush(flushToDisk: true);
+            token.ThrowIfCancellationRequested();
+            var path = BackupRetentionPolicy.Child(paths.Archive, Path.Combine(paths.Archive, name));
+            bytes += new FileInfo(path).Length; File.Delete(path);
         }
-        File.Move(temporary, path, overwrite: true);
+        return (obsolete.Length, wal.Length, bytes);
     }
-    private sealed record Pending(string Directory, string RequestId);
-    private sealed record Observation(bool Recovery, string SystemId, uint Timeline, ulong SegmentBytes, string Lsn,
-        string ServerId, string ActiveNodeId, bool Synchronous, List<string> RequiredPositions);
-    private sealed class MaintenancePaused(string message) : Exception(message);
+
+    private ArchiveRetentionPlan ArchivePlan(string archive, IReadOnlyCollection<RetainedBackup> keep, Observation state)
+    {
+        try
+        {
+            var history = new Dictionary<uint, string>();
+            if (state.Timeline > 1)
+            {
+                var path = BackupRetentionPolicy.Child(archive, Path.Combine(archive, state.Timeline.ToString("X8") + ".history"));
+                if (File.Exists(path) && new FileInfo(path).Length <= 1024 * 1024) history[state.Timeline] = File.ReadAllText(path);
+            }
+            var plan = BackupRetentionPolicy.PlanArchiveCleanup(Directory.EnumerateFiles(archive).Select(path => Path.GetFileName(path)),
+                history, keep, state.Timeline, state.SegmentBytes, state.Lsn, state.RequiredPositions);
+            foreach (var name in plan.RequiredWal)
+                if ((ulong)new FileInfo(BackupRetentionPolicy.Child(archive, Path.Combine(archive, name))).Length != state.SegmentBytes)
+                    throw new MaintenanceDeferred("保留恢复链包含不完整的 WAL 文件，未执行清理。");
+            return plan;
+        }
+        catch (InvalidDataException error) { throw new MaintenanceDeferred(error.Message); }
+    }
+
+    private void RequireCleanupEvidence(Observation value)
+    {
+        if (!value.ArchivingEnabled) throw new MaintenanceDeferred("连续归档未启用或归档命令未配置，保留现有恢复材料。");
+        if (!value.SlotsHealthy || RequiresStandby && value.PhysicalSlots == 0)
+            throw new MaintenanceDeferred("复制槽缺失、失效或存在没有受控保留位置的备机，暂不清理恢复材料；本机备份不受此条件阻止。");
+    }
+    private static void RequireSamePrimary(Observation expected, Observation actual)
+    {
+        if (actual.Recovery || expected.SystemId != actual.SystemId || expected.Timeline != actual.Timeline ||
+            expected.ServerId != actual.ServerId || expected.ActiveNodeId != actual.ActiveNodeId)
+            throw new MaintenanceDeferred("活动主库身份或时间线在维护期间改变，等待下一轮重新核对，未继续清理。");
+    }
+    private sealed class MaintenanceDeferred(string message) : Exception(message);
+    private sealed record Pending(string Directory, string RequestId, string? SystemIdentifier = null, DateTimeOffset? CreatedAt = null);
+    private sealed record RetryWindow(DateTimeOffset WindowStart, int Attempts, DateTimeOffset NextAttempt);
 }

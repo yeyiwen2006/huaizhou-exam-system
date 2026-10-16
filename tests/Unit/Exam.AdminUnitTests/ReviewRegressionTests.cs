@@ -445,7 +445,7 @@ public sealed partial class ReviewRegressionTests
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
-    public void Roster_RejectsNumericIdentifierEvenWithZeroPaddingDisplayFormat(int column)
+    public void Roster_ReadsNumericIdentifierWithoutInventingDisplayPadding(int column)
     {
         WithWorkbook((path, sheet) =>
         {
@@ -454,8 +454,9 @@ public sealed partial class ReviewRegressionTests
         }, path =>
         {
             var preview = new RosterWorkbookService().ReadPreview(path, []);
-            Assert.True(preview.HasErrors);
-            Assert.Contains("以文本存储", Assert.Single(preview.Rows).Message, StringComparison.Ordinal);
+            Assert.False(preview.HasErrors);
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal("123", column == 2 ? row.ClassText : row.AdmissionNo);
         });
     }
 

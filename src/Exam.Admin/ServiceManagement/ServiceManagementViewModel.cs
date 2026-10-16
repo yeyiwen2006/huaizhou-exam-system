@@ -43,9 +43,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public ServiceManagementViewModel(Func<ManagementTarget, IManagementConnection> factory,
         IPendingManagementStore store, ManagementEndpointSettings? settings = null, IProtectionWarningStore? protectionMemory = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, bool automaticMonitoring = false)
     {
         _factory = factory; _store = store; _settings = settings; _protectionMemory = protectionMemory; _time = time ?? TimeProvider.System;
+        _automaticMonitoringEnabled = automaticMonitoring;
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsSignedIn && !_readBusy, OnError);
         ReconnectCommand = new AsyncRelayCommand(ReconnectAsync,
             () => _businessSession is not null && HasConnectionConfiguration && !IsBusy, OnError);
@@ -77,7 +78,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             new ProtectedPendingManagementStore(System.IO.Path.Combine(directory, "Pending")),
             new ManagementEndpointSettings(System.IO.Path.Combine(directory, "endpoint.json"),
                 System.IO.Path.Combine(AppContext.BaseDirectory, "management-connection.json")),
-            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")));
+            new ProtectedProtectionWarningStore(System.IO.Path.Combine(directory, "Protection")), automaticMonitoring: true);
     }
 
     public Func<ManagementConfirmation, Task<bool>> ConfirmAsync { get; set; } = _ => Task.FromResult(false);
@@ -158,6 +159,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (session is not null && _businessSession?.Matches(session) == true) return;
         ResetSession();
         _businessSession = session;
+        RestartBackupMonitoring();
         _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty;
         Username = session?.Username ?? string.Empty;
         Message = session is null ? "考务会话已退出，请重新登录考务端。" : string.Empty;
@@ -558,6 +560,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     private void ApplyStatus(ManagementStatus value, bool verified, long? epoch)
     {
+        ApplyAutomaticBackupStatus(value.AutomaticBackup);
         if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null ||
             value.Readiness == BusinessReadiness.Ready && (value.ProcessStatus != BusinessServiceStatus.Running ||
                 value.Checks.Count == 0 || value.Checks.Any(c => c.BlocksWrites && !c.Passed)))
@@ -684,6 +687,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     private void ConnectionSettingsChanged()
     {
+        RestartBackupMonitoring();
         if (!IsSignedIn) { _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty; }
         OnPropertyChanged(nameof(HasConnectionConfiguration)); OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(CanLogin));
@@ -713,5 +717,5 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         ManagementOperationKind.Takeover => "接管", ManagementOperationKind.Emergency => "进入单机应急", ManagementOperationKind.Rebuild => "重建旧节点", ManagementOperationKind.Reprotect => "恢复同步保护", _ => "未知操作" };
     private static string PhaseText(ManagementOperationPhase phase) => phase switch { ManagementOperationPhase.Completed => "完成", ManagementOperationPhase.Failed => "失败",
         ManagementOperationPhase.Accepted => "已受理", ManagementOperationPhase.Staged => "仅隔离暂存", _ => "待核对" };
-    public void Dispose() { if (_disposed) return; Deactivate(); ResetSession(); _disposed = true; _lifetime.Dispose(); }
+    public void Dispose() { if (_disposed) return; _backupMonitoring?.Cancel(); Deactivate(); ResetSession(); _disposed = true; _lifetime.Dispose(); }
 }

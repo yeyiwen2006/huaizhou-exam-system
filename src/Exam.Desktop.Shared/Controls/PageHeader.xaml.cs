@@ -61,7 +61,7 @@ public partial class PageHeader : UserControl
 
     private void UpdateIdentity()
     {
-        NumberText.Text = string.IsNullOrEmpty(ClientNumber) ? "未连接" : $"编号 {ClientNumber}";
+        NumberText.Text = string.IsNullOrEmpty(ClientNumber) ? "未连接" : $"设备编号 {ClientNumber}";
         NameText.Text = string.IsNullOrEmpty(CandidateName) ? "未登录" : CandidateName;
         ClassTextBlock.Text = ClassText ?? string.Empty;
     }

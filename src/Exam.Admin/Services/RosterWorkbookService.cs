@@ -40,6 +40,8 @@ public sealed partial class RosterWorkbookService
                     ?? throw new RosterImportException("工作簿中没有工作表。");
 
         ValidateHeaders(sheet);
+        stream.Position = 0;
+        var numericValues = ReadStoredNumericValues(stream);
         var rows = new List<RosterPreviewRow>();
         var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
         if (lastRow - 1 > MaxRows)
@@ -63,16 +65,16 @@ public sealed partial class RosterWorkbookService
                     "名册不接受公式，请粘贴为文本值后重试。"));
                 continue;
             }
-            if (Enumerable.Range(2, 2).Any(column =>
-                    !sheet.Cell(rowNumber, column).IsEmpty() && sheet.Cell(rowNumber, column).DataType != XLDataType.Text))
+            var name = ReadText(sheet.Cell(rowNumber, 1));
+            var cellIssues = new List<string>();
+            var classText = ReadIdentityCell(sheet.Cell(rowNumber, 2), ClassHeader, numericValues, cellIssues);
+            var admissionNo = ReadIdentityCell(sheet.Cell(rowNumber, 3), AdmissionHeader, numericValues, cellIssues);
+            if (cellIssues.Count > 0)
             {
-                rows.Add(new RosterPreviewRow(rowNumber, "", "", "", RosterPreviewState.Error,
-                    "班级和准考证号必须以文本存储；数字格式可能已丢失前导零或精度，请核对原始名单后重新录入文本。"));
+                rows.Add(new RosterPreviewRow(rowNumber, name, classText, admissionNo,
+                    RosterPreviewState.Error, string.Join(" " , cellIssues)));
                 continue;
             }
-            var name = ReadText(sheet.Cell(rowNumber, 1));
-            var classText = ReadText(sheet.Cell(rowNumber, 2));
-            var admissionNo = ReadText(sheet.Cell(rowNumber, 3));
             if (name.Length == 0 && classText.Length == 0 && admissionNo.Length == 0)
             {
                 continue;

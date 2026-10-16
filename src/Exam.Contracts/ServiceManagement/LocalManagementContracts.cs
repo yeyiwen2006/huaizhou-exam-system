@@ -26,7 +26,11 @@ public enum RecoveryActivationPhase { SelectionPending, Selected, StartingBusine
 // A process being Running is not evidence of business readiness.
 public sealed record ManagementStatus(
     BusinessServiceStatus ProcessStatus, BusinessReadiness Readiness,
-    ServiceConfiguration? Configuration, IReadOnlyList<StartupCheckResult> Checks);
+    ServiceConfiguration? Configuration, IReadOnlyList<StartupCheckResult> Checks)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BackupMaintenanceStatus? AutomaticBackup { get; init; }
+}
 
 public sealed record ManagementRestoreOutcome(
     string BackupId, bool IsolationStaged, bool RecoveryVerified, bool BusinessReady);

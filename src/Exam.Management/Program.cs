@@ -231,7 +231,11 @@ public static class ManagementEntryPoint
                 supportsAdvancedOperations: OperatingSystem.IsWindows(), checkReadinessOnStatus: true,
                 readBackupInfo: (directory, token) => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     "", "", Required("Backup:AllowedBackupRoot"), "", "", "", TimeSpan.FromSeconds(5)),
-                    new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token));
+                    new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token))
+            {
+                ReadAutomaticBackupStatus = token => AutomaticBackupStatusFile.ReadAsync(
+                    configuration.GetValue<bool>("Backup:Automatic:Enabled"), SelectedConfiguration("Backup:Automatic:StateDirectory"), token)
+            };
         }
 
         string Required(string key) => string.IsNullOrWhiteSpace(configuration[key])
