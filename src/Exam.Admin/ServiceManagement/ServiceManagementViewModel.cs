@@ -120,7 +120,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string PendingText => _pending is null ? string.Empty : $"请求：{_pending.RequestId} · {KindText(_pending.Kind)} · 待查询处理状态";
     public PendingManagementRequest? Pending => _pending;
     public ManagementOperation? Operation => _operation;
-    public bool IsSignedIn { get => _signedIn; private set { if (SetProperty(ref _signedIn, value)) { OnPropertyChanged(nameof(IsSignedOut)); UpdateCommands(); } } }
+    public bool IsSignedIn { get => _signedIn; private set { if (SetProperty(ref _signedIn, value)) { OnPropertyChanged(nameof(IsSignedOut)); OnPropertyChanged(nameof(ShowProtectionWarning)); UpdateCommands(); } } }
     public bool IsSignedOut => !IsSignedIn;
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
@@ -259,8 +259,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch);
             var availability = await connection.HighAvailabilityAsync(reads.Token);
             if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
-            if (availability.Envelope.Error is null && availability.Envelope.Result is { } observed) ApplyHighAvailability(observed);
-            else MarkProtectionUnknown();
+            ApplyHighAvailabilityReply(availability);
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);

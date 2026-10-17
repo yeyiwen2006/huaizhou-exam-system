@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net;
 using Exam.Admin.Infrastructure;
 using Exam.Contracts.HighAvailability;
 using Exam.Contracts.ServiceManagement;
@@ -16,9 +17,10 @@ public sealed partial class ServiceManagementViewModel
     private CancellationTokenSource? _protectionExpiry;
     private CancellationTokenSource? _availabilityPolling;
     private bool _lastDegraded, _hostOff, _networkIsolated, _destructiveRebuild;
-    private string _haReason = "", _haTarget = "", _protection = "当前服务器状态未核实；正在重新连接，已保存的数据和原请求继续保留。";
+    private string _haReason = "", _haTarget = "", _protection = "主备保护状态尚未核实；连接服务器管理后可查询。";
     public string ProtectionText { get => _protection; private set { if (SetProperty(ref _protection, value)) OnPropertyChanged(nameof(ShowProtectionWarning)); } }
-    public bool ShowProtectionWarning => _availability is null || !_availability.SynchronousProtectionVerified;
+    public bool ShowProtectionWarning => (IsSignedIn || _protectionEvidence is not null || _lastDegraded) &&
+        (_availability is null || !_availability.SynchronousProtectionVerified);
     public string HighAvailabilityVersionText => _availability is { State: { } state, VerifiedAt: { } time }
         ? $"活动节点：{state.ActiveNodeId}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
         : "当前活动节点未核实";
@@ -55,8 +57,7 @@ public sealed partial class ServiceManagementViewModel
                 {
                     var reply = await connection.HighAvailabilityAsync(reads.Token);
                     if (polling.IsCancellationRequested || reads.IsCancellationRequested || !Accept(connection, generation, reply.IsUnauthorized)) continue;
-                    if (reply.Envelope.Error is null && reply.Envelope.Result is { } status) ApplyHighAvailability(status);
-                    else MarkProtectionUnknown();
+                    ApplyHighAvailabilityReply(reply);
                 }
                 catch
                 {
@@ -94,6 +95,17 @@ public sealed partial class ServiceManagementViewModel
             throw new ArgumentException("须先确认重建目标服务器旧数据并保持隔离。");
         return new(id, target.ServerId, target.NodeId, actor, state.ServerEpoch, state.Version,
             HighAvailabilityTarget.Trim(), HighAvailabilityReason.Trim(), isolation, ConfirmDestructiveRebuild);
+    }
+
+    private void ApplyHighAvailabilityReply(ManagementReply<HighAvailabilityStatus> reply)
+    {
+        if (reply.Envelope.Error is null && reply.Envelope.Result is { } status)
+        { ApplyHighAvailability(status); return; }
+        MarkProtectionUnknown();
+        if (reply.StatusCode == HttpStatusCode.NotImplemented && reply.Envelope.Error?.Code == "PLATFORM_NOT_SUPPORTED")
+            ProtectionText = _lastDegraded
+                ? "此前处于单节点运行；当前管理服务不支持主备状态查询和切换。"
+                : "当前管理服务不支持主备状态查询和切换。";
     }
 
     public void ApplyHighAvailability(HighAvailabilityStatus status)
@@ -166,7 +178,7 @@ public sealed partial class ServiceManagementViewModel
     {
         _protectionExpiry?.Cancel();
         _availability = null; Nodes.Clear();
-        ProtectionText = _lastDegraded ? "此前处于单节点运行；当前连接状态尚未核实，已保存的数据和原请求继续保留。" : "当前服务器状态未核实；正在重新连接，已保存的数据和原请求继续保留。";
+        ProtectionText = _lastDegraded ? "此前处于单节点运行；当前主备保护状态未核实，已保存的数据和原请求继续保留。" : "当前主备保护状态未核实，已保存的数据和原请求继续保留。";
         OnPropertyChanged(nameof(HighAvailabilityVersionText)); OnPropertyChanged(nameof(ShowProtectionWarning));
         UpdateCommands();
     }
