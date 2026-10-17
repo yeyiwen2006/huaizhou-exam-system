@@ -61,10 +61,10 @@ public static class ManagementEntryPoint
                 section => new FailoverNodeDeployment(section.Key, Required(section.Path + ":ConnectionString"),
                     Required(section.Path + ":ResourcesDirectory"), Required(section.Path + ":CertificateThumbprint"),
                     Required(section.Path + ":ConfirmationDirectory"), Required(section.Path + ":BusinessHttpsUrl")), StringComparer.Ordinal);
-            var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, Required("HighAvailability:SelectionPath"),
+            var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, configuration["HighAvailability:SelectionPath"] ?? Path.Combine(Required("Management:OperationDirectory"), "node-selection.json"),
                 configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
                 configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
-                Required("Management:BusinessServiceName"), Required("Confirmation:PeerToken"), configuration["HighAvailability:PostgresConfigurationPath"] ?? "",
+                Required("Management:BusinessServiceName"), configuration["Confirmation:PeerToken"] ?? "", configuration["HighAvailability:PostgresConfigurationPath"] ?? "",
                 configuration["HighAvailability:WalArchiveDirectory"] ?? "", configuration["HighAvailability:WalArchiveScriptsDirectory"] ?? "")
             {
                 WalArchiveTimeoutSeconds = configuration.GetValue("HighAvailability:WalArchiveTimeoutSeconds", 60)

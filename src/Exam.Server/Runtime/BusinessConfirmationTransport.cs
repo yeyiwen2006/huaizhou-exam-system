@@ -101,15 +101,18 @@ public static class BusinessConfirmationRegistration
             ? new IsolatedTestConfirmation()
             : new ConfiguredConfirmation(() => new PostgresBusinessConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
                 new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
-                Required("Confirmation:StandbyNodeId"), identity.ServerEpoch, Resources(),
-                new HttpConfirmationPeer(provider.GetRequiredService<HttpClient>(), new Uri(Required("Confirmation:StandbyHttpsUrl")),
-                    identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]), TimelineConnection(), configuration["Backup:PostgresBinDirectory"]),
+                configuration["Confirmation:StandbyNodeId"] ?? "", identity.ServerEpoch, Resources(),
+                string.IsNullOrWhiteSpace(configuration["Confirmation:StandbyHttpsUrl"]) ? null :
+                    new HttpConfirmationPeer(provider.GetRequiredService<HttpClient>(), new Uri(Required("Confirmation:StandbyHttpsUrl")),
+                        identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]),
+                TimelineConnection(), configuration["Backup:PostgresBinDirectory"]),
                 provider.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
         services.AddSingleton(provider => new PostgresStandbyConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
             new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
-            Required("Confirmation:PrimaryNodeId"), identity.ServerEpoch, Resources(),
+            configuration["Confirmation:PrimaryNodeId"] ?? identity.NodeId, identity.ServerEpoch, Resources(),
             provider.GetRequiredService<IPackageKeyUnwrapper>(), TimelineConnection(), configuration["Backup:PostgresBinDirectory"]));
         services.AddSignalR(options => options.AddFilter<ConfirmationHubFilter>());
+        if (!isolatedTestRuntime) services.AddHostedService<ReplicaMaintenanceWorker>();
         string Resources() => Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveResources(
             key => configuration[key], identity.ServerId, identity.NodeId, identity.ServerEpoch)
             ?? throw new InvalidOperationException("持久确认缺少受保护资源配置。");
@@ -121,6 +124,7 @@ public static class BusinessConfirmationRegistration
 
     public static void MapStandbyConfirmation(this WebApplication app)
     {
+        app.MapReplicaResources();
         app.MapGet("/replication/v1/readiness", async (HttpContext context, IConfiguration configuration) =>
         {
             var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
@@ -162,13 +166,18 @@ public static class BusinessConfirmationRegistration
         });
     }
 
-    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation, IDisposable
+    private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation, IBusinessReplicationMaintenance, IDisposable
     {
         private IBusinessConfirmation? _inner;
+        private PostgresBusinessConfirmation? _producer;
         private readonly object _gate = new();
+        public Task MaintainReplicationAsync(CancellationToken token)
+        {
+            lock (_gate) return (_producer ??= create()).MaintainReplicationAsync(token);
+        }
         public Task ConfirmAsync(CancellationToken token)
         {
-            try { lock (_gate) return (_inner ??= new BatchedBusinessConfirmation(create(), stoppingToken)).ConfirmAsync(token); }
+            try { lock (_gate) return (_inner ??= new BatchedBusinessConfirmation(_producer ??= create(), stoppingToken)).ConfirmAsync(token); }
             catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认配置不可用。", retryable: true); }
         }
         public void Dispose() { lock (_gate) (_inner as IDisposable)?.Dispose(); }

@@ -1,8 +1,8 @@
 # 服务器部署与跨设备连接
 
-考务端运行在 Windows 办公电脑上，通过 HTTPS 连接服务器。业务服务默认使用 443 端口，考务登录页填写 IP 或域名即可。登录后直接进入“服务器管理”，当前业务令牌用于安全换取管理会话，无须再次输入账号和密码。服务器管理仍由独立的 `Exam.Management` 进程提供，业务停止时由部署人员通过正式管理 API、CLI 或服务器运维工具处理启停。
+考务端运行在 Windows 办公电脑上，通过 HTTPS 连接服务器。业务服务默认使用 443 端口，考务登录页填写 IP 或域名即可。登录后直接进入“服务器管理”，当前业务令牌用于安全换取管理会话，无须再次输入账号和密码。服务器管理仍由独立的 `Exam.Management` 进程提供，业务停止时可从考务登录页进入独立服务器管理，以原账号连接备机并执行方案 A 接管；一般启停继续由管理 API、CLI 或服务器运维工具处理。
 
-这份说明用于准备真实服务器部署。示例中的域名、节点标识和路径都需要替换。安装脚本注册服务后不会启动服务，也不会创建数据库、初始化主备权威状态或导入旧单机测试数据。
+这份说明用于准备真实服务器部署。示例中的域名、节点标识和路径都需要替换。安装脚本注册服务后不会启动服务，也不会创建数据库或导入旧测试数据；初次空主库可按下述显式初始化步骤建立权威状态。
 
 ## 平台与文件
 
@@ -13,10 +13,10 @@
 | 业务服务启停，使用管理API或CLI | Windows 服务 | systemd 服务 |
 | 备份 | PostgreSQL Windows 工具 | PostgreSQL Linux 工具 |
 | 管理账号离线缓存 | Windows 本机加密缓存 | 不保存离线缓存 |
-| 隔离恢复、接管、应急、重建、恢复保护 | 使用现有 Windows 部署流程 | 当前管理宿主不提供这些操作 |
+| 隔离恢复、接管、重建、恢复保护 | 使用现有 Windows 部署流程 | 当前管理宿主不提供这些操作 |
 | 考务端、学生端和考务 CLI | Windows | 在独立 Windows 电脑上运行 |
 
-Linux 兼容范围保留现有业务的双节点确认要求。它不会通过关闭保护来获得单机运行模式。正式数据库复制、节点身份和持久确认仍须按[PostgreSQL 部署基线](../postgresql/README.md)准备；其中现有 Windows 归档、恢复和主备维护脚本不能直接拿到 Linux 执行。当前没有真实 Linux 主机验收记录。
+Linux 基础业务同样支持本机持久确认和自动补齐复制；单节点时不要求另一台确认。正式数据库复制、节点身份和持久确认仍须按[PostgreSQL 部署基线](../postgresql/README.md)准备；其中现有 Windows 归档、恢复和主备维护脚本不能直接拿到 Linux 执行。当前没有真实 Linux 主机验收记录。
 
 在装有项目指定 .NET SDK 的构建电脑上发布服务器程序。输出使用一个新目录。
 
@@ -44,9 +44,9 @@ Linux 对应使用本目录的 [业务配置](appsettings.business.linux.example
 | `ConnectionStrings:Exam` | 当前业务节点的真实 PostgreSQL 连接串，管理宿主也需要它认证考务账号 |
 | `ExamServer:ServerId/NodeId/ServerEpoch` | 与数据库中已初始化的权威节点状态一致的服务器、节点和代次 |
 | `Management:ServerId/NodeId` | 与这台服务器的业务身份一致 |
-| `HighAvailability:RequiredNodeIds` | 当前逻辑服务器的两个受管节点，与发布公钥和学生主备拓扑一致 |
+| `HighAvailability:RequiredNodeIds` | 一个或两个不同受管节点，包含本机，与发布公钥和学生信任拓扑一致 |
 | `Database`、`RequestCapacity` | 参考[容量配置](../server-capacity.example.json)，按实际 PostgreSQL 连接预算填写 |
-| `Confirmation` | 当前节点的独立确认目录、主备节点标识、对端 HTTPS 地址及受保护的 `PeerToken` |
+| `Confirmation` | 本机独立确认目录必需；双机时另配主备标识、对端 HTTPS 地址及受保护的 `PeerToken` |
 | `StudentFailover:Nodes` | 使用可从学生机访问的真实地址、443 端口及实际证书信任值，参考[主备拓扑模板](../student-failover.example.json) |
 | `Backup` | 工具、资源、受保护材料和备份目录；管理状态检测还使用已选定备份的目录及标识 |
 
@@ -58,7 +58,7 @@ Windows 主备管理的详细配置继续参照[主备配置模板](../../sample
 
 业务服务的 `service.json` 设置 `httpsPort` 为 `443`。`bindAddress` 填服务器网卡 IP，或用 `0.0.0.0` 监听所有 IPv4 网卡。管理服务单独设置 `Management:BindAddress` 和 `Management:HttpsPort`，例子使用 `9443`。未配置管理监听地址时仍只监听本机。
 
-业务和管理使用不同端口或不同监听 IP。同一 IP 上不要让两个独立进程同时占用 443。管理端口写入部署连接文件，考务人员登录后进入管理页，不再重复填写账号和密码。考务业务登录默认 HTTPS 443；非标准业务端口仍可由部署人员提供完整地址，例如 `https://exam.example.invalid:8443/`。
+业务和管理使用不同端口或不同监听 IP。同一 IP 上不要让两个独立进程同时占用 443。管理端口写入部署连接文件，正常登录后复用会话；故障接管可在登录页直接进入管理服务并使用原考务账号独立登录。考务业务登录默认 HTTPS 443；非标准业务端口仍可由部署人员提供完整地址，例如 `https://exam.example.invalid:8443/`。
 
 考务端和服务器都保留正常 HTTPS 证书验证。证书中的域名或 IP 要和实际访问地址相符。使用内部 CA 时，在考务电脑及需要访问对端 HTTPS 的服务器服务账户环境中部署信任链。
 
@@ -67,9 +67,9 @@ Windows 主备管理的详细配置继续参照[主备配置模板](../../sample
 | 业务 HTTPS | `Kestrel:Certificates:Default:Path` 和 `Password` |
 | 管理 HTTPS | `Management:CertificatePath` 和 `CertificatePassword`；Windows 也支持 `CertificateThumbprint` |
 | 节点题包解密 | `PackageSecurity:CertificatePath` 和 `CertificatePassword`；Windows 也支持原有证书指纹方式 |
-| 两节点发布公钥 | `PackageSecurity:RecipientCertificatePaths:<节点标识>` 指向 CER 或 PEM 公钥；Windows 原有 `RecipientCertificates` 指纹配置继续可用 |
+| 已配置节点的发布公钥 | `PackageSecurity:RecipientCertificatePaths:<节点标识>` 指向 CER 或 PEM 公钥；Windows 原有 `RecipientCertificates` 指纹配置继续可用 |
 
-配置了证书文件时优先从文件加载；同时提供指纹时要求匹配。节点题包证书需要 RSA 私钥，公钥发布配置要覆盖两个受管节点。HTTPS 证书和题包证书可分别配置。密码和私钥只保存在服务器受保护位置，不随考务连接文件分发。
+配置了证书文件时优先从文件加载；同时提供指纹时要求匹配。节点题包证书需要 RSA 私钥，公钥发布配置要覆盖已配置的所有受管节点：单台为一个，双机为两个。HTTPS 证书和题包证书可分别配置。密码和私钥只保存在服务器受保护位置，不随考务连接文件分发。
 
 `Management:BusinessReadyEndpoint` 要指向这台服务器业务证书覆盖的地址，例如 `https://exam-primary.example.invalid/health/ready`。管理程序在服务器上访问它，因此这个域名也要能从服务器自身正确解析。业务使用共享服务配置时，不再额外设置 `Urls`、`HTTP_PORTS`、`HTTPS_PORTS` 或 `Kestrel:Endpoints`。
 
@@ -88,7 +88,7 @@ pwsh -File deploy/server/Install-WindowsServices.ps1 -DeploymentDirectory "C:\Ex
 
 脚本拒绝覆盖已有同名服务。升级已有部署时先停止相关服务，再更换程序文件并保留实际配置、证书和数据，不向现有部署目录重新发布默认配置。
 
-首次业务运行所需数据库和主备初始化由部署人员在维护窗口完成，再启动业务完成第一个管理员账号的注册。随后启动独立管理服务并配置选定备份，业务启停继续使用管理 CLI 或服务器运维工具，考务 GUI 不提供启停按钮。已有部署继续使用原账号与数据。管理启动检查要求真实备份证据，空库首次部署也应建立初始备份后配置 `Backup:StartupVerificationDirectory` 和 `StartupVerificationBackupId`。
+首次在新建的空主数据库完成迁移，选定首台设置 HighAvailability:BootstrapPrimary=true、ExamServer:ServerEpoch=1，并配置一个或两个受管节点。业务启动以本机持久事务建立身份，再完成第一个管理员账号注册；已有环境不重新初始化。初始化成功后关闭 BootstrapPrimary 和迁移开关。随后启动独立管理服务并配置选定备份，业务启停继续使用管理 CLI 或服务器运维工具，考务 GUI 不提供启停按钮。已有部署继续使用原账号与数据。管理启动检查要求真实备份证据，空库首次部署也应建立初始备份后配置 `Backup:StartupVerificationDirectory` 和 `StartupVerificationBackupId`。
 
 ## Linux 服务安装
 
@@ -126,3 +126,13 @@ pwsh -File deploy/management/Export-AdminConnection.ps1 -ManagementConfiguration
 
 
 自动备份和归档保留由管理服务内部执行，部署配置见 [自动维护说明](../../eng/maintenance/README.md)。启用前填写该节点独立的维护状态目录；默认不启用自动删除。
+
+## 单节点与接管操作
+
+只装一台时，RequiredNodeIds、HighAvailability:Nodes 和 StudentFailover:Nodes 配置本机一项，发布公钥只配置本机。Confirmation:Directory 和版本资源目录仍须可靠落盘，对端 HTTPS 地址和 PeerToken 可省略。配置双机但暂时只启动主机时，保留已部署的节点身份、公钥与拓扑，主机业务不会等待备机上线。备用依赖的公钥是预部署的本地材料，不要求在线下载对端私钥。
+
+准备第二台时从活动节点建立 PostgreSQL 备用库，并准备各自证书、相同版本资源和受信节点连接。普通备用失联后自动追平；发生接管的旧主保持隔离，通过管理重建加入。醒目的接管按钮只提升已核实的本机备库，须先真实完成旧主断电或全部业务网络隔离。界面确认不会自动隔离设备。接管会启动新主业务并等待就绪，不需要再找单机应急或另行启动业务按钮。
+
+升级已有部署时更新两台程序及 PostgreSQL 通用配置，保持本机持久提交和 fsync，保留所有数据库、考试、确认日志及部署选择；不清库、不导入调试数据库。暂时不能升级另一台时，健康活动节点继续单节点服务，待对端版本和资源一致后恢复复制。现场操作细节见主备管理和恢复运行手册。
+
+单节点模板见 samples/service-management/appsettings.single-node.example.json，全部为合成占位值。将相应节完整替换到宿主配置，并移除旧的备用节点条目及确认地址；不能通过追加配置源保留另一节中的旧节点。模板保留 BootstrapPrimary=false，只有全新空库首次初始化才按上述步骤显式启用。数据库、证书、容量、共享服务配置及备份设置仍按本说明填写，真实配置保存在源码之外。

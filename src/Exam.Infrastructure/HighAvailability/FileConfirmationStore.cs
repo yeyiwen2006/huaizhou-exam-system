@@ -59,7 +59,9 @@ public sealed class FileConfirmationStore(string directory)
             previous.Record.SystemIdentifier != head.Record.SystemIdentifier ||
             previous.Record.Timeline != head.Record.Timeline &&
                 !(continuation is { } verified && verified.Previous == previous.Record && verified.Timeline == head.Record.Timeline) ||
-            previous.Record.DatabaseName != head.Record.DatabaseName || previous.Record.StandbyNodeId != head.Record.StandbyNodeId ||
+            previous.Record.DatabaseName != head.Record.DatabaseName ||
+            previous.Record.StandbyNodeId.Length > 0 && head.Record.StandbyNodeId.Length > 0 &&
+                previous.Record.StandbyNodeId != head.Record.StandbyNodeId ||
             head.Record.StateVersion < previous.Record.StateVersion || Lsn(head.Record.FlushLsn) < Lsn(previous.Record.FlushLsn)))
             throw new InvalidDataException("确认记录身份变化或位置回退，须独立维护核对。");
         var temporary = Path.Combine(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");
@@ -99,7 +101,8 @@ public sealed class FileConfirmationStore(string directory)
     public static void Validate(DurableConfirmation record)
     {
         if (!Guid.TryParseExact(record.Id, "N", out _) || string.IsNullOrWhiteSpace(record.ServerId) ||
-            string.IsNullOrWhiteSpace(record.PrimaryNodeId) || string.IsNullOrWhiteSpace(record.StandbyNodeId) ||
+            string.IsNullOrWhiteSpace(record.PrimaryNodeId) || record.StandbyNodeId is null ||
+            record.Mode == ProtectionMode.SynchronousDualNode && string.IsNullOrWhiteSpace(record.StandbyNodeId) ||
             record.PrimaryNodeId == record.StandbyNodeId || record.Epoch < 1 || record.StateVersion < 1 ||
             record.Mode is not (ProtectionMode.SynchronousDualNode or ProtectionMode.EmergencySingleNode) ||
             !ulong.TryParse(record.SystemIdentifier, out _) || string.IsNullOrWhiteSpace(record.DatabaseName) ||

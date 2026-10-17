@@ -30,7 +30,7 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
         if (publicEndpoints is not null) topology = publicEndpoints.Apply(topology, record);
         if (topology.ServerId != serverId ||
             !topology.Nodes.Any(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri) ||
-            record.Topology is { } previous && !topology.Equivalent(previous))
+            record.Topology is { } previous && !topology.Extends(previous))
             throw new StudentIdentityException("批准的主备信任信息与原设备登记不一致，原记录已保留。");
         var original = topology.Nodes.Single(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri);
         if (record.Topology is null && ServerTrust.PinnedCertificateThumbprint is { } pin && original.CertificateSha256 != pin)
@@ -38,21 +38,25 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
         return topology;
     }
 
+    // An authenticated existing node may add the second pre-approved endpoint; existing pins and identities stay fixed.
+    private bool Extends(TrustedServerTopology other) => ServerId == other.ServerId &&
+        other.Nodes.All(node => Nodes.Contains(node));
+
     public bool Equivalent(TrustedServerTopology other) => ServerId == other.ServerId &&
         Nodes.OrderBy(node => node.NodeId, StringComparer.Ordinal).SequenceEqual(other.Nodes.OrderBy(node => node.NodeId, StringComparer.Ordinal));
 
     public void Validate()
     {
-        if (string.IsNullOrWhiteSpace(ServerId) || Nodes is null || Nodes.Count != 2 ||
+        if (string.IsNullOrWhiteSpace(ServerId) || Nodes is null || Nodes.Count is < 1 or > 2 ||
             Nodes.Any(node => node is null || Uri.CheckHostName(node.Host) == UriHostNameType.Unknown || node.Port is < 1 or > 65535 ||
                 string.IsNullOrWhiteSpace(node.NodeId) || node.CertificateSha256 is null ||
                 ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) != node.CertificateSha256 ||
                 (node.OriginHost is null) != (node.OriginPort is null) ||
                 node.UsesPublicHttps && (Uri.CheckHostName(node.Host) != UriHostNameType.Dns ||
                     Uri.CheckHostName(node.OriginHost) == UriHostNameType.Unknown || node.OriginPort is < 1 or > 65535)) ||
-            Nodes.Select(node => node.Address).Distinct().Count() != 2 ||
-            Nodes.Select(node => DeviceStore.NormalizeHost(node.Host)).Distinct().Count() != 2 ||
-            Nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != 2)
+            Nodes.Select(node => node.Address).Distinct().Count() != Nodes.Count ||
+            Nodes.Select(node => DeviceStore.NormalizeHost(node.Host)).Distinct().Count() != Nodes.Count ||
+            Nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != Nodes.Count)
             throw new FormatException("主备可信配置无效或地址/节点重复。");
     }
 }

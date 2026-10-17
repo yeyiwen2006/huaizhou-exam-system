@@ -166,6 +166,10 @@
         <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
+        <Button x:Name="FailureManagementButton" Content="服务器管理 / 故障接管"
+                Style="{StaticResource Btn.Secondary}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                Panel.ZIndex="10" Margin="0,16,28,0" Click="OnManagementRequested"
+                ToolTip="业务服务不可用时，可直接登录备用服务器管理并完成隔离确认与接管"/>
 
         <!-- 主界面（登录后显示） -->
         <TabControl x:Name="MainTabArea"

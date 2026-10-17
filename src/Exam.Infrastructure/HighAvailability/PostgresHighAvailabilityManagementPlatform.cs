@@ -43,17 +43,17 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         IManagedBusinessHost? business = null, IManagedBusinessHost? postgres = null, TimeProvider? time = null,
         Action? verifyDeployment = null)
     {
-        if (options.Nodes.Count != 2 || !options.Nodes.ContainsKey(options.LocalNodeId) ||
+        if (options.Nodes.Count is < 1 or > 2 || !options.Nodes.ContainsKey(options.LocalNodeId) ||
             options.Nodes.Any(p => p.Key != p.Value.NodeId || string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 200 ||
                 p.Key.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))))
-            throw new ArgumentException("正式主备管理须配置两个不同节点，并包含本机节点。");
+            throw new ArgumentException("正式服务器管理须配置一个节点或两个不同节点，并包含本机节点。");
         static (string Host, int Port) Endpoint(FailoverNodeDeployment node)
         {
             var connection = new NpgsqlConnectionStringBuilder(node.ConnectionString);
             var host = (connection.Host ?? throw new ArgumentException("节点数据库监听地址未配置。")).Trim().ToLowerInvariant();
             return (host is "localhost" or "127.0.0.1" or "::1" ? "loopback" : host, connection.Port);
         }
-        if (options.Nodes.Values.Select(Endpoint).Distinct().Count() != 2)
+        if (options.Nodes.Values.Select(Endpoint).Distinct().Count() != options.Nodes.Count)
             throw new ArgumentException("两个节点不能引用同一数据库监听端点。");
         _options = options; _http = http; _time = time ?? TimeProvider.System;
         _processes = processes ?? new ExternalProcessRunner();
@@ -77,7 +77,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         {
             await using var source = ManagementProbeConnection.Create(node.ConnectionString, 5);
             var state = await new PostgresFailoverStateStore(source).LoadAsync(_options.ServerId, token);
-            if (state is null || state.Nodes.Count != 2 || !state.Nodes.Keys.Order().SequenceEqual(_options.Nodes.Keys.Order()) ||
+            if (state is null || state.Nodes.Count != _options.Nodes.Count || !state.Nodes.Keys.Order().SequenceEqual(_options.Nodes.Keys.Order()) ||
                 state.ServerEpoch <= 0 || state.Version <= 0 || !Enum.IsDefined(state.ProtectionMode) ||
                 !state.Nodes.TryGetValue(state.ActiveNodeId, out var active) || active.Role != DeploymentNodeRole.Primary)
                 return null;
@@ -134,8 +134,10 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
 
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
     {
-        var local = await ReadAsync(Local, token); var other = await ReadAsync(Other, token);
-        var primaryCandidates = new[] { (Node: Local.NodeId, Observation: local), (Node: Other.NodeId, Observation: other) }
+        var local = await ReadAsync(Local, token);
+        var otherNode = _options.Nodes.Values.SingleOrDefault(n => n.NodeId != Local.NodeId);
+        var other = otherNode is null ? null : await ReadAsync(otherNode, token);
+        var primaryCandidates = new[] { (Node: Local.NodeId, Observation: local), (Node: otherNode?.NodeId ?? "", Observation: other) }
             .Where(v => v.Observation is { Recovery: false } && v.Observation.Value.State.ActiveNodeId == v.Node)
             .Select(v => v.Observation)
             .OrderByDescending(v => v!.Value.State.ServerEpoch).ThenByDescending(v => v!.Value.State.Version).ToArray();
@@ -161,33 +163,53 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var verified = true;
         if (authoritative.Value.Recovery)
         {
-            // An offline primary is not replaced by a stale replica observation. Independent latest heads are required.
-            try { RequireMatchingHeads(state, state.ActiveNodeId, Local.NodeId); }
+            // The standby's independently persisted acknowledgement remains available after a whole-host failure.
+            // This proves its recoverable boundary; manual isolation still precedes promotion.
+            try { RequireTakeoverHead(state); }
             catch (Exception) { verified = false; }
         }
         var protection = false;
-        if (verified && state.ProtectionMode == ProtectionMode.SynchronousDualNode)
+        if (verified && _options.Nodes.Count == 2)
         {
             try { await VerifyDualProtectionAsync(state, nodes, token); protection = true; }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception) { }
         }
         var checks = new List<StartupCheckResult> {
-            new("failover-state", verified, verified ? "主备状态与实际数据库身份已读取。" : "最新原主确认不可核实，禁止据复制快照接管。", true),
-            new("synchronous-protection", protection, protection ? "实际双侧持久确认、材料与同步复制已核实。" : "同步保护未核实；节点在线或延迟为零不能替代确认。", true) };
+            new("failover-state", verified, verified ? "主备状态与实际数据库身份已读取。" : "本机副本的持久确认尚未核实，不能接管。", true),
+            new("synchronous-protection", protection, protection ? "双侧持久确认与复制材料已核实。" :
+                "单节点运行：业务继续以本机可靠落盘为准，后台持续尝试补齐复制。", false) };
         checks.AddRange(archiveChecks);
         return new(_options.ServerId, Local.NodeId, state with { Nodes = nodes }, verified ? _time.GetUtcNow() : null, protection, checks);
     }
 
-    private ConfirmationHead RequireMatchingHeads(ServerDeploymentState state, string primaryId, string standbyId)
+    private ConfirmationHead RequireTakeoverHead(ServerDeploymentState state)
     {
-        var primary = Confirmation(_options.Nodes[primaryId], state.ServerEpoch).Read();
-        var standby = Confirmation(_options.Nodes[standbyId], state.ServerEpoch).Read();
+        var head = Confirmation(Local, state.ServerEpoch).Read();
+        if (head is not { Confirmed: true } || head.Record.ServerId != state.ServerId ||
+            head.Record.Epoch != state.ServerEpoch || head.Record.StateVersion > state.Version ||
+            head.Record.PrimaryNodeId != state.ActiveNodeId || head.Record.StandbyNodeId != Local.NodeId ||
+            head.Record.Mode != ProtectionMode.SynchronousDualNode)
+            throw new IOException("本机缺少同身份、同代次的独立持久副本确认。");
+        return head;
+    }
+
+    private async Task<ConfirmationHead?> ReadHeadAsync(FailoverNodeDeployment node, long epoch, CancellationToken token)
+    {
+        if (node.NodeId == Local.NodeId) return Confirmation(node, epoch).Read();
+        return await new HttpConfirmationPeer(_http, PeerAddress(node, ""), _options.ServerId,
+            node.NodeId, () => _options.PeerToken).ReadAsync(token);
+    }
+
+    private async Task<ConfirmationHead> RequireMatchingHeadsAsync(ServerDeploymentState state, string primaryId, string standbyId, CancellationToken token)
+    {
+        var primary = await ReadHeadAsync(_options.Nodes[primaryId], state.ServerEpoch, token);
+        var standby = await ReadHeadAsync(_options.Nodes[standbyId], state.ServerEpoch, token);
         if (primary is not { Confirmed: true } || standby != primary || primary.Record.ServerId != state.ServerId ||
             primary.Record.Epoch != state.ServerEpoch || primary.Record.StateVersion != state.Version ||
             primary.Record.PrimaryNodeId != primaryId || primary.Record.StandbyNodeId != standbyId ||
             primary.Record.Mode != ProtectionMode.SynchronousDualNode)
-            throw new IOException("双侧最新持久确认记录不一致、缺失或处于单机应急。");
+            throw new IOException("双侧最新持久确认尚未一致，当前按单节点运行。");
         return primary;
     }
 
@@ -197,17 +219,16 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady) ||
             nodes[primary.NodeId].DatabaseInRecovery || !nodes[standby.NodeId].DatabaseInRecovery || nodes[standby.NodeId].ReplayLagBytes != 0)
             throw new IOException("实际节点复制或材料核对未通过。");
-        var head = RequireMatchingHeads(state, primary.NodeId, standby.NodeId);
-        if (FileConfirmationStore.ResourcesDigest(primary.ResourcesDirectory) != head.Record.ResourcesDigest ||
-            FileConfirmationStore.ResourcesDigest(standby.ResourcesDirectory) != head.Record.ResourcesDigest)
+        var head = await RequireMatchingHeadsAsync(state, primary.NodeId, standby.NodeId, token);
+        if (FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) != head.Record.ResourcesDigest)
             throw new IOException("双节点资源未覆盖最新确认。");
         await using var source = ManagementProbeConnection.Create(standby.ConnectionString, 5);
         await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, standby.NodeId, token,
             standby.ConnectionString, _options.PostgresBinDirectory);
         await using var active = ManagementProbeConnection.Create(primary.ConnectionString, 5);
-        await using var sync = active.CreateCommand("SELECT count(*) FROM pg_stat_replication WHERE application_name=$1 AND state='streaming' AND sync_state IN ('sync','quorum')");
+        await using var sync = active.CreateCommand("SELECT count(*) FROM pg_stat_replication WHERE application_name=$1 AND state='streaming'");
         sync.Parameters.AddWithValue(standby.NodeId);
-        if ((long)(await sync.ExecuteScalarAsync(token) ?? 0L) != 1) throw new IOException("同步复制未按配置节点生效。");
+        if ((long)(await sync.ExecuteScalarAsync(token) ?? 0L) != 1) throw new IOException("流复制未按配置节点生效。");
     }
 
     public async Task<FailoverExecutionPlan> PrepareAsync(ManagementOperation operation, HighAvailabilityRequest request,
@@ -221,7 +242,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (operation.Kind == ManagementOperationKind.Takeover)
         {
             if (!reference.Value.Recovery || !SameState(reference.Value.State, before)) throw new IOException("本机不是预期的备用库快照。");
-            var head = RequireMatchingHeads(before, before.ActiveNodeId, Local.NodeId);
+            var head = RequireTakeoverHead(before);
             await using var source = ManagementProbeConnection.Create(Local.ConnectionString, 5);
             await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, Local.NodeId, token,
                 Local.ConnectionString, _options.PostgresBinDirectory);
@@ -236,7 +257,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             var standbyIdentity = await ReadAsync(_options.Nodes[request.TargetNodeId], token);
             if (standbyIdentity is null || !standbyIdentity.Value.Recovery || standbyIdentity.Value.System != reference.Value.System ||
                 standbyIdentity.Value.Database != reference.Value.Database || !SameState(standbyIdentity.Value.State, before) ||
-                FileConfirmationStore.ResourcesDigest(Other.ResourcesDirectory) != FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory))
+                (await ReadHeadAsync(Other, before.ServerEpoch, token))?.Record.ResourcesDigest != FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory))
                 throw new IOException("重建备库集群、状态或资源与当前主库不一致。");
         }
         else if (operation.Kind == ManagementOperationKind.Emergency && (reference.Value.Recovery || !SameState(reference.Value.State, before)))
@@ -248,8 +269,9 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         }
         return new(operation.RequestId, operation.ContentHash, operation.Kind, before, after,
             reference.Value.System, reference.Value.Database, reference.Value.Timeline,
-            FileConfirmationStore.ResourcesDigest(operation.Kind == ManagementOperationKind.Rebuild
-                ? _options.Nodes[before.ActiveNodeId].ResourcesDirectory : Local.ResourcesDirectory));
+            operation.Kind == ManagementOperationKind.Rebuild
+                ? await ReadSourceResourcesAsync(_options.Nodes[before.ActiveNodeId], before, reference.Value.System, token)
+                : FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory));
     }
 
     public async Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token)
@@ -291,7 +313,13 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             await PublishAsync(plan, token); // Complete only the publication of this already-proven promotion.
         else if (!SameState(actual.Value.State, plan.After)) return false;
         if (plan.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Emergency)
-        { await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token); return true; }
+        {
+            await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token);
+            if (plan.Kind == ManagementOperationKind.Takeover)
+                await new ReadyCheckedBusinessHost(_business, _http, PeerAddress(Local, "health/ready"),
+                    _options.ServerId, Local.NodeId, plan.After.ServerEpoch).StartAsync(token);
+            return true;
+        }
         if (plan.Kind == ManagementOperationKind.Reprotect)
         {
             await SetSynchronousAsync(true, plan, token); await ConfirmSynchronousAsync(plan, token); await SelectAsync(plan, token);
@@ -309,12 +337,9 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
 
     private async Task VerifyPromotedStandbyAsync(FailoverExecutionPlan plan, int timeline, CancellationToken token)
     {
-        var primary = Confirmation(_options.Nodes[plan.Before.ActiveNodeId], plan.Before.ServerEpoch);
         var standby = Confirmation(Local, plan.Before.ServerEpoch);
-        // Same lock order as the normal primary-to-standby confirmation handshake.
-        using var primaryGuard = primary.Lock();
         using var standbyGuard = standby.Lock();
-        var head = RequireMatchingHeads(plan.Before, plan.Before.ActiveNodeId, Local.NodeId);
+        var head = RequireTakeoverHead(plan.Before);
         if (head.Record.SystemIdentifier != plan.SystemIdentifier || head.Record.DatabaseName != plan.DatabaseName ||
             head.Record.ResourcesDigest != plan.ResourcesDigest ||
             FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) != head.Record.ResourcesDigest)
@@ -356,7 +381,8 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
 
     private async Task PromoteConfirmedStandbyAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
-        var head = RequireMatchingHeads(plan.Before, plan.Before.ActiveNodeId, Local.NodeId);
+        using var replicaLock = Confirmation(Local, plan.Before.ServerEpoch).Lock();
+        var head = RequireTakeoverHead(plan.Before);
         await using var source = ManagementProbeConnection.Create(Local.ConnectionString, 70);
         await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, Local.NodeId, token,
             Local.ConnectionString, _options.PostgresBinDirectory);
@@ -372,7 +398,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var standbyId = _options.Nodes.Keys.Single(n => n != plan.After.ActiveNodeId);
         if (standbyId.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.')))
             throw new IOException("同步复制应用名须使用部署提供的 ASCII 节点标识。");
-        var setting = enabled ? $"FIRST 1 (\"{standbyId}\")" : "";
+        var setting = "";
         await using var source = ManagementProbeConnection.Create(_options.Nodes[plan.After.ActiveNodeId].ConnectionString, 10);
         await using var format = source.CreateCommand("SELECT format('ALTER SYSTEM SET synchronous_standby_names = %L', $1)");
         format.Parameters.AddWithValue(setting);
@@ -499,9 +525,24 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (File.Exists(Path.Combine(database, "tablespace_map")) && new FileInfo(Path.Combine(database, "tablespace_map")).Length > 0)
             throw new IOException("重建备份含外部表空间，须按独立受控部署处理，禁止自动启用。");
         var resources = Path.Combine(slot, "resources");
-        Directory.CreateDirectory(resources); CopyResources(source.ResourcesDirectory, resources, token);
-        if (FileConfirmationStore.ResourcesDigest(resources) != plan.ResourcesDigest || FileConfirmationStore.ResourcesDigest(source.ResourcesDirectory) != plan.ResourcesDigest)
-            throw new IOException("重建资源与原计划摘要不一致，禁止启用。");
+        Directory.CreateDirectory(resources);
+        if (plan.ResourcesDigest is null) throw new IOException("重建计划缺少资源版本。");
+        using (var request = ResourceSourceRequest(source, "snapshot", plan.After, plan.SystemIdentifier))
+        {
+            request.Headers.Add("X-Exam-Resources-Digest", plan.ResourcesDigest);
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentType?.MediaType != "application/zip" ||
+                response.Content.Headers.ContentLength > ReplicaResourceTransfer.MaximumBytes ||
+                !response.Headers.TryGetValues("X-Exam-Resources-Digest", out var versions) ||
+                versions.SingleOrDefault() != plan.ResourcesDigest) throw new IOException("活动节点资源快照响应无效。");
+            await using var body = await response.Content.ReadAsStreamAsync(token);
+            await ReplicaResourceTransfer.ReceiveAsync(body, resources, plan.ResourcesDigest, async ct =>
+            {
+                if (await ReadSourceResourcesAsync(source, plan.After, plan.SystemIdentifier, ct) != plan.ResourcesDigest)
+                    throw new IOException("资源源节点或版本发生变化，禁止启用重建结果。");
+            }, token);
+        }
         await _postgres.StopAsync(token);
         if (_business.Status != BusinessServiceStatus.Stopped || _postgres.Status != BusinessServiceStatus.Stopped)
             throw new IOException("本机业务与数据库未确认停止，禁止替换旧数据。");
@@ -516,16 +557,31 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         // Starts the confirmation listener. Business write guards still reject this non-active node.
         await _business.StartAsync(token);
     }
-    private static void CopyResources(string source, string target, CancellationToken token)
+    private HttpRequestMessage ResourceSourceRequest(FailoverNodeDeployment node, string kind,
+        ServerDeploymentState state, string systemIdentifier)
     {
-        RejectLinkedTree(source);
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            token.ThrowIfCancellationRequested(); PathBoundary.RejectExistingReparsePoints(source, file);
-            var destination = PathBoundary.ResolveWithinRoot(target, Path.Combine(target, Path.GetRelativePath(source, file)), "重建资源超出工作槽。");
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Copy(file, destination, false);
-        }
+        var request = PeerRequest(HttpMethod.Get, PeerAddress(node, "replication/v1/resources/" + kind), node.NodeId);
+        request.Headers.Add("X-Exam-Primary-Node-Id", state.ActiveNodeId);
+        request.Headers.Add("X-Exam-Epoch", state.ServerEpoch.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        request.Headers.Add("X-Exam-System-Identifier", systemIdentifier);
+        return request;
     }
+
+    private async Task<string> ReadSourceResourcesAsync(FailoverNodeDeployment node, ServerDeploymentState state,
+        string systemIdentifier, CancellationToken token)
+    {
+        using var request = ResourceSourceRequest(node, "source", state, systemIdentifier);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        response.EnsureSuccessStatusCode();
+        await using var body = await response.Content.ReadAsStreamAsync(token);
+        var proof = await ReplicaResourceTransfer.ReadStateAsync(body, token);
+        if (proof.ServerId != state.ServerId || proof.NodeId != state.ActiveNodeId || proof.NodeId != node.NodeId ||
+            proof.InRecovery || proof.ActiveNodeId != proof.NodeId || proof.Epoch != state.ServerEpoch ||
+            proof.SystemIdentifier != systemIdentifier || proof.ResourcesDigest.Length != 64 ||
+            proof.ResourcesDigest.Any(c => !Uri.IsHexDigit(c))) throw new IOException("活动节点资源身份无效。");
+        return proof.ResourcesDigest;
+    }
+
     private static void RejectLinkedTree(string root)
     {
         PathBoundary.RejectExistingReparsePoints(root, root);

@@ -26,7 +26,8 @@ public sealed class ManagementRuntime(
     bool checkReadinessOnStatus = false,
     bool requireCurrentRecoveryState = true,
     bool supportsAdvancedOperations = true,
-    Func<string, CancellationToken, Task<BackupInfo>>? readBackupInfo = null)
+    Func<string, CancellationToken, Task<BackupInfo>>? readBackupInfo = null,
+    string? unsupportedOperationsMessage = null)
 {
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
@@ -67,7 +68,7 @@ public sealed class ManagementRuntime(
     {
         if (!SupportsAdvancedOperations)
             throw new DomainRuleException("PLATFORM_NOT_SUPPORTED",
-                "Linux 当前支持业务服务启停、配置、状态、日志和备份；主备切换及隔离恢复需要 Windows 管理宿主。");
+                unsupportedOperationsMessage ?? "Linux 当前支持业务服务启停、配置、状态、日志和备份；主备切换及隔离恢复需要 Windows 管理宿主。");
     }
     public Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token) =>
         readAudit is null ? throw new InvalidOperationException("受保护操作日志未配置。") : readAudit(limit, token);

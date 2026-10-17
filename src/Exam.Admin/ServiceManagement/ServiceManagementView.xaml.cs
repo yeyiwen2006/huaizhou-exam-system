@@ -42,6 +42,13 @@ public partial class ServiceManagementView : UserControl
     }
     private async void OnReload(object sender, RoutedEventArgs e)
     { try { await _viewModel.ReloadConfigurationAsync(); } catch (Exception error) { _viewModel.ReportError(error); } }
+    private async void OnIndependentManagementLogin(object sender, RoutedEventArgs e)
+    {
+        var password = IndependentManagementPassword.Password;
+        IndependentManagementPassword.Clear();
+        try { await _viewModel.LoginAsync(password); }
+        catch (Exception error) { _viewModel.ReportError(error); }
+    }
     private void OnBack(object sender, RoutedEventArgs e) => BackRequested?.Invoke();
     public void Detach()
     {

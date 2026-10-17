@@ -99,7 +99,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
     public string ConnectionStatus => !HasConnectionConfiguration
         ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。"
-        : _businessSession is null ? "连接已配置，请先登录考务端，再访问服务器管理。"
+        : _businessSession is null ? "管理连接已配置；业务服务不可用时，可直接使用已启用的考务账号登录管理。"
         : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
         : "连接已配置，将使用当前考务账号连接服务器管理。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
@@ -162,7 +162,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         RestartBackupMonitoring();
         _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty;
         Username = session?.Username ?? string.Empty;
-        Message = session is null ? "考务会话已退出，请重新登录考务端。" : string.Empty;
+        Message = session is null ? "业务服务不可用时，可在此使用考务账号独立登录管理服务。" : string.Empty;
         OnPropertyChanged(nameof(ConnectionStatus)); UpdateCommands();
         if (_active && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
     }
@@ -544,8 +544,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Configure => "后端核对已停止状态与当前配置版本；冲突时不覆盖。",
             ManagementOperationKind.Backup => "须先停止服务器；备份结果必须包含三项完整性证据。",
             ManagementOperationKind.Restore => RestoreGuidance,
-            ManagementOperationKind.Takeover => "仅在原主机断电或业务网络隔离后提升目标服务器备库。提升后进入单机应急；心跳丢失不能作为隔离证据。",
-            ManagementOperationKind.Emergency => "停止目标服务器并切换为单机持久确认。完成后请运行状态检测，并联系部署人员启动服务器；应急期间保护降低，请尽快恢复备用节点。",
+            ManagementOperationKind.Takeover => "确认原主已断电或全部业务网络已隔离后，提升本机备库并自动恢复业务。沿用原考生身份、答案和提交标识；恢复前旧主必须保持隔离。",
+            ManagementOperationKind.Emergency => "健康主节点会自动以本机可靠落盘继续服务，不需要单独启用。",
             ManagementOperationKind.Rebuild => "停止目标服务器服务，从当前主机重新建立备库和资源。旧数据保留在隔离目录，禁止自动回写到新主机。",
             ManagementOperationKind.Reprotect => "只有实际复制、材料和双侧最新持久确认全部核实后才恢复同步保护；失败保持待核对。",
             _ => "操作结果以服务器实际检查为准。"

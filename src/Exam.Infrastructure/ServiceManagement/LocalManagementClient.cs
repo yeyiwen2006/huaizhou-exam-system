@@ -178,7 +178,9 @@ public sealed class LocalManagementClient : IDisposable
                 ManagementOperationKind.Restore => operation.Restore is { IsolationStaged: true, RecoveryVerified: true, BusinessReady: true },
                 ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild =>
                     operation.HighAvailability is { State: not null, VerifiedAt: not null } ha &&
-                    ha.State.ProtectionMode == (operation.Kind == ManagementOperationKind.Rebuild ? ProtectionMode.Recovering : ProtectionMode.EmergencySingleNode),
+                    (operation.Kind != ManagementOperationKind.Rebuild
+                        ? ha.State.ActiveNodeId == _nodeId
+                        : ha.State.Nodes.TryGetValue(_nodeId, out var rebuilt) && rebuilt.Role == DeploymentNodeRole.Standby && rebuilt.DatabaseInRecovery),
                 ManagementOperationKind.Reprotect => operation.HighAvailability is { State.ProtectionMode: ProtectionMode.SynchronousDualNode,
                     VerifiedAt: not null, SynchronousProtectionVerified: true },
                 _ => false
@@ -193,18 +195,18 @@ public sealed class LocalManagementClient : IDisposable
         if (availability.ServerId != _serverId || availability.NodeId != _nodeId || availability.Checks is null ||
             state is null && (availability.VerifiedAt is not null || availability.SynchronousProtectionVerified) ||
             state is not null && (state.ServerId != _serverId || state.ServerEpoch <= 0 || state.Version <= 0 ||
-                !Enum.IsDefined(state.ProtectionMode) || state.Nodes is null || state.Nodes.Count != 2 || !state.Nodes.ContainsKey(_nodeId) ||
+                !Enum.IsDefined(state.ProtectionMode) || state.Nodes is null || state.Nodes.Count is < 1 or > 2 || !state.Nodes.ContainsKey(_nodeId) ||
                 !state.Nodes.TryGetValue(state.ActiveNodeId, out var active) || active.Role != DeploymentNodeRole.Primary ||
                 state.Nodes.Values.Count(n => n.Role == DeploymentNodeRole.Primary) != 1 ||
                 state.Nodes.Any(n => n.Value is null || n.Key != n.Value.NodeId || !Enum.IsDefined(n.Value.Role))) ||
             availability.VerifiedAt is not null && !availability.Checks.Any(c => c.Name == "failover-state" && c.Passed && c.BlocksWrites))
             throw new HttpRequestException("主备响应身份、状态或核实证据无效。");
-        if (availability.SynchronousProtectionVerified && (state is not { ProtectionMode: ProtectionMode.SynchronousDualNode } ||
+        if (availability.SynchronousProtectionVerified && (state is null || state.Nodes.Count != 2 ||
             availability.VerifiedAt is null || state.Nodes.Values.Count(n => n.Role == DeploymentNodeRole.Standby) != 1 ||
             state.Nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady ||
                 n.Role == DeploymentNodeRole.Primary && n.DatabaseInRecovery || n.Role == DeploymentNodeRole.Standby && (!n.DatabaseInRecovery || n.ReplayLagBytes != 0)) ||
             availability.Checks.Any(c => c.BlocksWrites && !c.Passed) ||
-            !availability.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed && c.BlocksWrites)))
+            !availability.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed)))
             throw new HttpRequestException("主备响应缺少完整同步保护证据。");
     }
 

@@ -8,9 +8,13 @@
 
 ## 使用入口
 
-学生使用 `Exam.Student` 填写服务器地址和考生信息后直接登录，完成等待、作答和交卷。学生端和考务端 `Exam.Admin` 均只需填写服务器 IP 或域名，默认连接 HTTPS 443；也支持包含自定义端口的完整 HTTPS 地址。考务端登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成，考务界面保留状态检测、配置、日志、备份恢复及请求处理状态查询。
+学生使用 `Exam.Student` 填写服务器地址和考生信息后直接登录，完成等待、作答和交卷。学生端和考务端 `Exam.Admin` 均只需填写服务器 IP 或域名，默认连接 HTTPS 443；也支持包含自定义端口的完整 HTTPS 地址。考务端登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。业务故障时，登录页“服务器管理 / 故障接管”可直接使用原考务账号登录备机管理服务。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成，考务界面保留状态检测、配置、日志、备份恢复及请求处理状态查询。
 
 [系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[服务器部署](deploy/server/README.md)、[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[服务器管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
+
+## 单节点与故障接管
+
+一个健康活动节点即可运行正式考试。备机缺席时自动以本机可靠落盘返回成功，并显示单节点状态；双机恢复后继续补齐复制。主机故障采用方案 A：先实际关闭旧主或隔离其全部业务网络，再在备机服务器管理点击“接管为主服务器”。接管完成后自动启动业务，学生沿用原身份、答案和提交标识重连。旧主回归必须保持隔离并重建为备机。详见[主备管理](docs/high-availability-management.md)。
 
 ## 运行依赖
 
@@ -31,9 +35,8 @@
 ```powershell
 dotnet restore Huaizhou.ExamSystem.sln --locked-mode
 dotnet build Huaizhou.ExamSystem.sln --no-restore --configuration Release
-python eng/testing/run_checks.py --profile core --profile wpf --output artifacts/checks
 ```
 
-数据库、真实编译、故障和发布检查见[测试工具](docs/test-infrastructure.md)。输出使用新的项目内忽略目录或系统临时目录，不覆盖已有报告。
+正式目录及 GitHub 只包含正式源码；根解决方案和远端流程只构建正式项目。测试工具、测试计划和完整测试解决方案仅保留在本地 exam-system-test 目录，具体位置及同步规则见[本地同步说明](docs/local-debug.md)。测试输出保存在测试目录的忽略目录中，原有报告及同步备份继续保留。
 
 [系统架构](docs/architecture.md)、[数据契约](docs/system-contracts.md)和[界面规范](docs/gui-spec.md)供维护与故障排查使用。真实试卷、答案、考生资料、连接配置及私钥不提交仓库。

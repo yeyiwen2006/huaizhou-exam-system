@@ -65,21 +65,22 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
                 active = nodeId; epoch++;
                 break;
             case ManagementOperationKind.Emergency:
-                if (active != nodeId || request.TargetNodeId != active)
-                    throw new DomainRuleException(ErrorCodes.NotActiveServer, "单机应急只能在当前活动主节点执行。");
-                break;
+                throw new DomainRuleException(ErrorCodes.InvalidInput,
+                    "健康主节点已自动支持本机持久保存，无需单独启用单机应急。");
             case ManagementOperationKind.Rebuild:
                 if (request.TargetNodeId != nodeId || nodeId == active || !request.ConfirmDestructiveRebuild ||
                     !(target.Role is DeploymentNodeRole.Isolated or DeploymentNodeRole.Rebuilding ||
-                      target.Role == DeploymentNodeRole.Standby && before.ProtectionMode == ProtectionMode.EmergencySingleNode))
+                      target.Role == DeploymentNodeRole.Standby))
                     throw new DomainRuleException(ErrorCodes.InvalidInput, "只能明确确认后重建本机隔离旧节点；禁止重建活动主节点。");
-                nodes[nodeId] = target with { Role = DeploymentNodeRole.Rebuilding, Reachable = false };
-                mode = ProtectionMode.Recovering;
+                nodes[nodeId] = target with { Role = DeploymentNodeRole.Standby, Reachable = false };
+                // The active server remains available while this non-active node is rebuilt.
+                // Actual role/replay/resource checks keep it unprotected until it is ready.
+                mode = ProtectionMode.EmergencySingleNode;
                 break;
             case ManagementOperationKind.Reprotect:
                 if (active != nodeId || target.NodeId == active ||
                     !(target.Role == DeploymentNodeRole.Rebuilding ||
-                      target.Role == DeploymentNodeRole.Standby && before.ProtectionMode == ProtectionMode.EmergencySingleNode))
+                      target.Role == DeploymentNodeRole.Standby))
                     throw new DomainRuleException(ErrorCodes.InvalidInput, "须在当前主节点核对已重建备节点后恢复同步保护。");
                 nodes[target.NodeId] = target with { Role = DeploymentNodeRole.Standby };
                 mode = ProtectionMode.SynchronousDualNode;

@@ -8,11 +8,12 @@ namespace Exam.Infrastructure.Postgres.HighAvailability;
 /// 不能另开连接代写；连接终止时状态锁与业务修改一起回滚。
 /// 此边界只串行化同一数据库内的状态变化，不能替代接管时对旧主机的隔离。
 /// </summary>
-public sealed class PostgresActiveNodeWriteGuard(ServerNodeEnvelope identity, bool allowUninitializedState = false)
+public sealed class PostgresActiveNodeWriteGuard(ServerNodeEnvelope identity, bool allowUninitializedState = false, Func<bool>? isFenced = null)
 {
     public async ValueTask<NpgsqlTransaction> BeginAsync(NpgsqlConnection connection,
         CancellationToken cancellationToken = default)
     {
+        if (isFenced?.Invoke() == true) throw new InvalidOperationException("旧节点已隔离，禁止业务写入。");
         var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
@@ -42,6 +43,7 @@ public sealed class PostgresActiveNodeWriteGuard(ServerNodeEnvelope identity, bo
             {
                 throw new InvalidOperationException("当前节点或服务代次已失效，禁止计分写入。");
             }
+            if (isFenced?.Invoke() == true) throw new InvalidOperationException("旧节点已隔离，禁止业务写入。");
             return transaction;
         }
         catch

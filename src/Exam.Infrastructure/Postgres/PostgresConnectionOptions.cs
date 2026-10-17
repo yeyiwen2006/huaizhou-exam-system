@@ -51,6 +51,9 @@ public sealed record PostgresConnectionOptions(
         connection.MinPoolSize = minimum;
         connection.IncludeErrorDetail = false;
         connection.LogParameters = false;
+        // Every business transaction must flush locally even when a configured standby is absent.
+        // The response confirmation separately records whether an independent replica also persisted it.
+        connection.Options = (connection.Options ?? "") + " -c synchronous_commit=local";
         return connection;
     }
 

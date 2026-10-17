@@ -21,7 +21,8 @@ public sealed class BusinessRecoveryGuard
 
 public sealed class BusinessRecoveryWorker(
     NpgsqlDataSource source, IPackageKeyUnwrapper unwrapper, BusinessRecoveryGuard guard,
-    IConfiguration configuration, TimeProvider timeProvider, BusinessServiceConfiguration? managedConfiguration = null) : BackgroundService
+    IConfiguration configuration, TimeProvider timeProvider, BusinessServiceConfiguration? managedConfiguration = null,
+    NodeAuthorityGuard? authority = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -32,6 +33,11 @@ public sealed class BusinessRecoveryWorker(
         {
             try
             {
+                if (authority is not null && !await authority.CheckAsync(stoppingToken))
+                {
+                    guard.Observe([new("active-node-authority", false, "旧节点已隔离，须从活动服务器重建。", true)], timeProvider.GetUtcNow());
+                    return;
+                }
                 var selection = FileRecoveryDeploymentSelection.ReadConfigured(key => configuration[key],
                     identity.ServerId, identity.NodeId, identity.ServerEpoch);
                 IReadOnlyList<StartupCheckResult> checks;

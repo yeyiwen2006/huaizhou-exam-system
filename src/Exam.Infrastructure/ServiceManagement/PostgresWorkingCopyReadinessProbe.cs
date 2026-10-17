@@ -11,6 +11,22 @@ public sealed class PostgresWorkingCopyReadinessProbe(string originalConnectionS
     string certificateThumbprint, long expectedEpoch, IStartupReadinessProbe? recoveryReadiness = null,
     NpgsqlDataSource? actualSource = null)
 {
+    // PostgreSQL control paths on Windows can contain native ACP bytes even in a UTF-8 database.
+    // Decode before the exact path/port/system checks; an encoding mismatch never skips ownership checks.
+    private static string DecodeControlPath(string hexadecimal)
+    {
+        var bytes = Convert.FromHexString(hexadecimal);
+        try { return new System.Text.UTF8Encoding(false, true).GetString(bytes); }
+        catch (System.Text.DecoderFallbackException) when (OperatingSystem.IsWindows())
+        {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            return System.Text.Encoding.GetEncoding((int)GetACP(),
+                System.Text.EncoderFallback.ExceptionFallback, System.Text.DecoderFallback.ExceptionFallback).GetString(bytes);
+        }
+    }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint GetACP();
+
     public async Task<IReadOnlyList<StartupCheckResult>> RunAsync(ServiceConfiguration configuration,
         RecoveryWorkingCopy workingCopy, CancellationToken cancellationToken)
     {
@@ -41,14 +57,14 @@ public sealed class PostgresWorkingCopyReadinessProbe(string originalConnectionS
             var source = actualSource ?? ownedSource!;
             await using (var connection = await source.OpenConnectionAsync(cancellationToken))
             await using (var command = new NpgsqlCommand("""
-                SELECT current_database(),current_setting('data_directory'),inet_server_port(),pg_is_in_recovery(),
+                SELECT current_database(),encode(pg_catalog.textsend(current_setting('data_directory')), 'hex'),inet_server_port(),pg_is_in_recovery(),
                        system_identifier::text,timeline_id FROM pg_control_system() CROSS JOIN pg_control_checkpoint()
                 """, connection))
             await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
             {
                 var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
                 if (!await reader.ReadAsync(cancellationToken) || reader.GetString(0) != target.Database ||
-                    !string.Equals(Path.GetFullPath(reader.GetString(1)), expectedDirectory, comparison) ||
+                    !string.Equals(Path.GetFullPath(DecodeControlPath(reader.GetString(1))), expectedDirectory, comparison) ||
                     reader.GetInt32(2) != target.Port || reader.GetBoolean(3) || reader.GetString(4) != systemIdentifier ||
                     reader.GetInt32(5) <= sourceTimeline)
                     throw new InvalidDataException("实际恢复数据库目标不匹配。");

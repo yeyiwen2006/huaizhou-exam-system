@@ -6,6 +6,68 @@ namespace Exam.Infrastructure.Postgres.HighAvailability;
 
 public sealed class PostgresFailoverStateStore(NpgsqlDataSource dataSource)
 {
+    /// <summary>Explicit first-install bootstrap only. Never changes an existing deployment or promotes a replica.</summary>
+    public async Task<bool> BootstrapPrimaryAsync(string serverId, string nodeId, long epoch,
+        IReadOnlyList<string> nodeIds, CancellationToken token = default)
+    {
+        if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId) ||
+            nodeIds.Count is < 1 or > 2 || nodeIds.Any(string.IsNullOrWhiteSpace) ||
+            nodeIds.Distinct(StringComparer.Ordinal).Count() != nodeIds.Count || !nodeIds.Contains(nodeId))
+            throw new ArgumentException("初始节点配置无效。");
+        await using var connection = await dataSource.OpenConnectionAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(token);
+        await using (var settings = new NpgsqlCommand("SET LOCAL synchronous_commit=local; SELECT pg_advisory_xact_lock(7427101701);", connection, transaction))
+            await settings.ExecuteNonQueryAsync(token);
+        await using (var existing = new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM exam.server_state WHERE server_id=$1)", connection, transaction))
+        {
+            existing.Parameters.AddWithValue(serverId);
+            if ((bool)(await existing.ExecuteScalarAsync(token) ?? false)) return false;
+        }
+        await using (var safe = new NpgsqlCommand("""
+            SELECT NOT pg_is_in_recovery() AND current_setting('transaction_read_only')='off'
+              AND current_setting('fsync')='on' AND current_setting('full_page_writes')='on'
+              AND NOT EXISTS(SELECT 1 FROM exam.server_state)
+              AND NOT EXISTS(SELECT 1 FROM exam.exam_catalog)
+              AND NOT EXISTS(SELECT 1 FROM exam.operator_accounts)
+              AND NOT EXISTS(SELECT 1 FROM exam.activation_devices)
+              AND NOT EXISTS(SELECT 1 FROM exam.final_submissions)
+            """, connection, transaction))
+        {
+            if (epoch != 1 || (bool)(await safe.ExecuteScalarAsync(token) ?? false) is false)
+                throw new IOException("仅允许在空的可写数据库上建立第一代初始主节点；已有考试或备库须走恢复/接管流程。");
+        }
+        await using (var state = new NpgsqlCommand("""
+            INSERT INTO exam.server_state(server_id,active_node_id,server_epoch,protection_mode,state_version,updated_at)
+            VALUES($1,$2,1,'EmergencySingleNode',1,clock_timestamp())
+            """, connection, transaction))
+        {
+            state.Parameters.AddWithValue(serverId); state.Parameters.AddWithValue(nodeId);
+            await state.ExecuteNonQueryAsync(token);
+        }
+        foreach (var id in nodeIds)
+        {
+            await using var node = new NpgsqlCommand("""
+                INSERT INTO exam.server_nodes(server_id,node_id,node_role,reachable,database_in_recovery,
+                    replay_lag_bytes,key_material_ready,certificate_ready,observed_at)
+                VALUES($1,$2,$3,$4,$5,0,false,false,clock_timestamp())
+                """, connection, transaction);
+            node.Parameters.AddWithValue(serverId); node.Parameters.AddWithValue(id);
+            node.Parameters.AddWithValue(id == nodeId ? "Primary" : "Standby");
+            node.Parameters.AddWithValue(id == nodeId); node.Parameters.AddWithValue(id != nodeId);
+            await node.ExecuteNonQueryAsync(token);
+        }
+        await using (var audit = new NpgsqlCommand("""
+            INSERT INTO exam.failover_audit(server_id,action,actor_id,reason,node_id,server_epoch,occurred_at)
+            VALUES($1,'BootstrapPrimary','deployment','首次部署显式建立初始主节点',$2,1,clock_timestamp())
+            """, connection, transaction))
+        {
+            audit.Parameters.AddWithValue(serverId); audit.Parameters.AddWithValue(nodeId);
+            await audit.ExecuteNonQueryAsync(token);
+        }
+        await transaction.CommitAsync(token);
+        return true;
+    }
+
     public async Task SaveAsync(
         ServerDeploymentState state,
         CancellationToken cancellationToken = default)

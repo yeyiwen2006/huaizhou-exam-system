@@ -11,6 +11,6 @@ public sealed class AdminWorkspaceRouter
         _businessConnected = connected;
         if (!connected || Route != AdminWorkspaceRoute.LocalManagement) ReturnToBusiness();
     }
-    public void OpenManagement() { if (_businessConnected) Route = AdminWorkspaceRoute.LocalManagement; }
+    public void OpenManagement() { Route = AdminWorkspaceRoute.LocalManagement; }
     public void ReturnToBusiness() => Route = _businessConnected ? AdminWorkspaceRoute.BusinessWorkspace : AdminWorkspaceRoute.BusinessLogin;
 }

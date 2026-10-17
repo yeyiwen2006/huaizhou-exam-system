@@ -5,7 +5,13 @@ namespace Exam.Contracts.HighAvailability;
 // These observations are produced by the management host, never by GUI checkboxes.
 public sealed record HighAvailabilityStatus(string ServerId, string NodeId,
     ServerDeploymentState? State, DateTimeOffset? VerifiedAt, bool SynchronousProtectionVerified,
-    IReadOnlyList<StartupCheckResult> Checks);
+    IReadOnlyList<StartupCheckResult> Checks)
+{
+    // The database mode is retained for compatibility with existing journals.
+    // Only current independent acknowledgements can advertise two durable copies.
+    public ProtectionMode? EffectiveProtectionMode => State is null ? null :
+        SynchronousProtectionVerified ? ProtectionMode.SynchronousDualNode : ProtectionMode.EmergencySingleNode;
+}
 
 public sealed record HighAvailabilityMaterialProof(string ServerId, string NodeId, long Epoch,
     bool KeysReady, bool CertificateReady, DateTimeOffset ObservedAt);

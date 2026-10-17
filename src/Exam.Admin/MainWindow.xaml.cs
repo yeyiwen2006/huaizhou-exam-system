@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     {
         DetachLogin();
         _loginPage = new AdminLoginPage(_viewModel.Connection);
+        FailureManagementButton.Visibility = Visibility.Visible;
         PageRegion.Content = _loginPage;
         MainTabArea.Visibility = Visibility.Collapsed;
     }
@@ -52,6 +53,7 @@ public partial class MainWindow : Window
     private void ShowRegistrationSuccessPage()
     {
         DetachLogin();
+        FailureManagementButton.Visibility = Visibility.Collapsed;
         PageRegion.Content = new RegistrationSuccessPage(_viewModel.Connection);
         MainTabArea.Visibility = Visibility.Collapsed;
     }
@@ -59,6 +61,7 @@ public partial class MainWindow : Window
     private void ShowMainArea()
     {
         DetachLogin();
+        FailureManagementButton.Visibility = Visibility.Collapsed;
         PageRegion.Content = null;
         MainTabArea.Visibility = Visibility.Visible;
     }
@@ -137,8 +140,8 @@ public partial class MainWindow : Window
     }
     public void OpenManagement()
     {
-        if (!_viewModel.Connection.IsConnected || _viewModel.CaptureBusinessSession() is not { } session) return;
-        Management.SetBusinessSession(session);
+        Management.SetBusinessSession(_viewModel.CaptureBusinessSession());
+        FailureManagementButton.Visibility = Visibility.Collapsed;
         if (_router.Route != AdminWorkspaceRoute.LocalManagement) _businessPage = _viewModel.SelectedPage;
         _router.OpenManagement();
         DetachLogin();

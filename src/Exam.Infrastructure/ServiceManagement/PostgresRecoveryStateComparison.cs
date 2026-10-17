@@ -56,7 +56,7 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
             authority.Parameters.AddWithValue("server", configuration.ServerId);
             await using var row = await authority.ExecuteReaderAsync(token);
             if (!await row.ReadAsync(token) || row.GetString(0) != configuration.NodeId || row.GetInt64(1) != epoch ||
-                row.GetString(2) != (configuration.HighAvailabilityEnabled ? "SynchronousDualNode" : "EmergencySingleNode") || await row.ReadAsync(token))
+                row.GetString(2) is not ("SynchronousDualNode" or "EmergencySingleNode" or "Recovering") || await row.ReadAsync(token))
                 throw new InvalidDataException("恢复不能自行更改原主备授权。");
         }
         using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);

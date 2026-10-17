@@ -19,6 +19,11 @@ SOURCE_ROOTS = {'src', 'tests', 'eng', 'docs', 'schemas', 'samples', 'deploy', '
 SOURCE_SUFFIXES = {'.cs', '.csproj', '.props', '.targets', '.xaml', '.py', '.ps1', '.md',
                    '.yml', '.yaml', '.sql', '.sh', '.cmd', '.bat', '.manifest', '.resx', '.sln'}
 ROOT_NAMES = {'sync-code.cmd'}
+TEST_ONLY_PREFIXES = ('tests/', 'eng/testing/', 'eng/manual-test/', '本机联调/',
+                      'docs/screenshots/', 'docs/g-reporting-images/')
+TEST_ONLY_FILES = {'src/Exam.Admin/Infrastructure/ManualClientConfiguration.cs',
+                   'src/Exam.Admin/Services/ManualClientTransport.cs',
+                   'docs/load-testing.md', 'docs/test-coverage.json', 'docs/test-infrastructure.md', 'docs/testing-plan.md', 'eng/development/test_sync_code.py'}
 PRIVATE_SUFFIXES = {'.pfx', '.p12', '.pem', '.key', '.db', '.sqlite', '.dump', '.backup', '.log'}
 
 
@@ -57,10 +62,47 @@ def public_path(relative: str) -> bool:
     parts = Path(relative).parts
     lower = [part.lower() for part in parts]
     name = lower[-1]
-    return not (any(p in PRIVATE_ROOTS | {'bin', 'obj', '__pycache__'} for p in lower)
+    relative = '/'.join(parts)
+    return not (relative.startswith(TEST_ONLY_PREFIXES) or relative in TEST_ONLY_FILES or
+                any(p in PRIVATE_ROOTS | {'bin', 'obj', '__pycache__'} for p in lower)
                 or name.startswith('.env') or name in {'server.json', 'local-settings.json', 'management-connection.json'}
                 or name.startswith('appsettings.') and ('.local.' in name or '.development.' in name)
                 or Path(name).suffix in PRIVATE_SUFFIXES or '.db-' in name or '.sqlite-' in name)
+
+
+
+def read_overlays(testing: Path) -> dict:
+    path = safe_path(testing, '.artifacts/folder-sync/test-overlays.json')
+    if not path.exists():
+        return {}
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if value.get('version') != 1 or not isinstance(value.get('files'), dict):
+        raise ValueError('本地联调差异登记格式无效。')
+    for relative, pairs in value['files'].items():
+        safe_path(testing, relative)
+        if not public_path(relative) or not isinstance(pairs, list):
+            raise ValueError('本地联调差异路径无效。')
+        for pair in pairs:
+            if not isinstance(pair, dict) or not all(isinstance(pair.get(k), str) and pair[k] for k in ('public', 'testing')):
+                raise ValueError('本地联调差异缺少已审阅的双侧内容。')
+    return value['files']
+
+
+def project_overlay(relative: str, content: bytes | None, overlays: dict, testing: bool = False) -> bytes | None:
+    pairs = overlays.get(relative)
+    if content is None or not pairs:
+        return content
+    bom = content.startswith(b'\xef\xbb\xbf')
+    value = content.decode('utf-8-sig')
+    newline = '\r\n' if '\r\n' in value else '\n'
+    value = value.replace('\r\n', '\n')
+    for pair in pairs:
+        before, after = (pair['public'], pair['testing']) if testing else (pair['testing'], pair['public'])
+        if value.count(before) == 1:
+            value = value.replace(before, after, 1)
+        elif value.count(after) != 1:
+            raise ValueError(f'通用改动与本地联调差异重叠，须先人工合并：{relative}')
+    return (b'\xef\xbb\xbf' if bom else b'') + value.replace('\n', newline).encode('utf-8')
 
 
 def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -146,18 +188,20 @@ def synchronize(development: Path, testing: Path, dry_run: bool = False) -> int:
         previous = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
         if previous and (previous.get('version') != 1 or previous.get('pair') != pair):
             raise ValueError('同步记录属于其他目录，未执行覆盖。')
+        overlays = read_overlays(testing)
         candidates = source_files(development) | source_files(testing) | set(previous['paths'] if previous else [])
         candidates = sorted(name for name in candidates if public_path(name))
         baseline = state / 'baseline'
         operations, snapshots, conflicts = [], {}, []
         for relative in candidates:
             left_path, right_path = safe_path(development, relative), safe_path(testing, relative)
-            left, right = read(left_path), read(right_path)
+            left_raw, right_raw = read(left_path), read(right_path)
+            left, right = left_raw, project_overlay(relative, right_raw, overlays)
             if same(left, right):
                 snapshots[relative] = left
                 continue
             if previous and relative in previous['paths']:
-                base = read(safe_path(baseline, relative))
+                base = project_overlay(relative, read(safe_path(baseline, relative)), overlays)
             elif previous:
                 base = None
             else:
@@ -171,10 +215,10 @@ def synchronize(development: Path, testing: Path, dry_run: bool = False) -> int:
                     conflicts.append(relative)
                     continue
             if same(left, base):
-                operations.append((development, relative, left, right))
+                operations.append((development, relative, left_raw, right))
                 snapshots[relative] = right
             elif same(right, base):
-                operations.append((testing, relative, right, left))
+                operations.append((testing, relative, right_raw, project_overlay(relative, left, overlays, testing=True)))
                 snapshots[relative] = left
             else:
                 conflicts.append(relative)

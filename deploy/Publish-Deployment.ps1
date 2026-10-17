@@ -43,6 +43,7 @@ foreach ($relative in @(
     'samples/service-management/appsettings.business.example.json',
     'samples/service-management/appsettings.management.example.json',
     'samples/service-management/appsettings.high-availability.example.json',
+    'samples/service-management/appsettings.single-node.example.json',
     'samples/service-management/service-configuration.example.json'
 )) { Copy-ReleaseFile $relative 'server' }
 # Keep the reference tree intact so links in the deployment and recovery instructions work offline.

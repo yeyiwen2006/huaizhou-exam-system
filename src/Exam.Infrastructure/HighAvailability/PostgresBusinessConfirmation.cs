@@ -15,9 +15,11 @@ public interface IDurableConfirmationPeer
 {
     Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token);
     Task<ConfirmationHead?> ReadAsync(CancellationToken token);
+    Task SynchronizeResourcesAsync(string directory, CancellationToken token) => Task.CompletedTask;
+
 }
 
-public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string serverId, string standbyNodeId,
+public sealed partial class HttpConfirmationPeer(HttpClient http, Uri endpoint, string serverId, string standbyNodeId,
     Func<string?> credential) : IDurableConfirmationPeer
 {
     private Uri Address()
@@ -51,19 +53,28 @@ public sealed class HttpConfirmationPeer(HttpClient http, Uri endpoint, string s
         { if (buffer.Length + count > 16384) throw new IOException("备节点确认响应超限。"); buffer.Write(bytes, 0, count); }
         return System.Text.Json.JsonSerializer.Deserialize<T>(buffer.ToArray(), JsonDefaults.Create());
     }
-    public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token) =>
-        await SendAsync<DurableConfirmation>(HttpMethod.Post, record, token) ?? throw new IOException("备节点未返回确认。");
+    public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
+    {
+        _latestRequest = record;
+        return await SendAsync<DurableConfirmation>(HttpMethod.Post, record, token) ?? throw new IOException("备节点未返回确认。");
+    }
     public Task<ConfirmationHead?> ReadAsync(CancellationToken token) => SendAsync<ConfirmationHead>(HttpMethod.Get, null, token);
 }
 
-/// <summary>The WAL-producing fence flushes all earlier local commits. The independent peer must replay
-/// this actual fence and persist its acknowledgement before primary confirmation or transport success.</summary>
+/// <summary>Flushes earlier local commits and records the actual protection level.
+/// Peer failure leaves a durable local confirmation; local failures never produce success.</summary>
 public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileConfirmationStore store,
     string serverId, string primaryNodeId, string standbyNodeId, long epoch, string resourcesDirectory,
-    IDurableConfirmationPeer peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation, IDisposable
+    IDurableConfirmationPeer? peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
+    private long _nextPeerAttempt;
+    public async Task MaintainReplicationAsync(CancellationToken token)
+    {
+        if (peer is not null) await peer.SynchronizeResourcesAsync(resourcesDirectory, token);
+        await ConfirmAsync(token);
+    }
     public async Task ConfirmAsync(CancellationToken token)
     {
         await _gate.WaitAsync(token);
@@ -76,14 +87,14 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             await using (var transaction = await connection.BeginTransactionAsync(token))
             {
                 // This fence must flush locally even if the configured synchronous standby is absent.
-                // Dual-node success still requires the independent replay/resource acknowledgement below;
-                // only an already-authorized emergency mode can finish without that peer.
+                // A healthy peer adds a second durable copy. Its absence cannot block local success.
                 await using var durability = new NpgsqlCommand("SET LOCAL synchronous_commit=local", connection, transaction);
                 await durability.ExecuteNonQueryAsync(token);
                 await using var fence = new NpgsqlCommand("""
                     UPDATE exam.server_state SET updated_at=updated_at
                     WHERE server_id=$1 AND active_node_id=$2 AND server_epoch=$3
-                      AND protection_mode IN ('SynchronousDualNode','EmergencySingleNode');
+                      AND protection_mode IN ('SynchronousDualNode','EmergencySingleNode','Recovering')
+                      AND current_setting('fsync')='on' AND current_setting('full_page_writes')='on';
                     """, connection, transaction);
                 fence.Parameters.AddWithValue(serverId); fence.Parameters.AddWithValue(primaryNodeId); fence.Parameters.AddWithValue(epoch);
                 if (await fence.ExecuteNonQueryAsync(token) != 1) throw new IOException("确认时权威活动节点不匹配。");
@@ -101,15 +112,32 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             {
                 if (!await row.ReadAsync(token) || row.GetBoolean(5)) throw new IOException("确认源不是活动主库。");
                 record = new(Guid.NewGuid().ToString("N"), serverId, primaryNodeId, standbyNodeId, epoch,
-                    row.GetInt64(1), Enum.Parse<ProtectionMode>(row.GetString(0)), row.GetString(2), row.GetString(6), row.GetInt32(3), row.GetString(4), resources);
+                    row.GetInt64(1), ProtectionMode.EmergencySingleNode, row.GetString(2), row.GetString(6), row.GetInt32(3), row.GetString(4), resources);
             }
             var continuation = previous is not null && previous.Record.Timeline != record.Timeline
                 ? await VerifiedTimelineContinuation.ReadAsync(source, previous.Record, record.Timeline, timelineConnection, postgresBinDirectory, token) : null;
             await store.SaveAsync(new(record, false), token, continuation);
-            if (record.Mode == ProtectionMode.SynchronousDualNode && await peer.ConfirmAsync(record, token) != record)
-                throw new IOException("备节点确认边界与原请求不同。");
-            // Emergency success is local only. Its different primary head prevents an older standby
-            // confirmation from later claiming coverage of emergency writes.
+            if (peer is not null && Environment.TickCount64 >= Interlocked.Read(ref _nextPeerAttempt))
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                deadline.CancelAfter(TimeSpan.FromMilliseconds(750));
+                var dual = record with { Mode = ProtectionMode.SynchronousDualNode };
+                try
+                {
+                    if (await peer.ConfirmAsync(dual, deadline.Token) != dual)
+                        throw new IOException("备节点确认边界与原请求不同。");
+                    record = dual;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception)
+                {
+                    // Only peer work is recoverable here. Local I/O, ownership, WAL and resource failures
+                    // remain outside this catch and still refuse success.
+                    Interlocked.Exchange(ref _nextPeerAttempt, Environment.TickCount64 + 3000);
+                }
+            }
+            token.ThrowIfCancellationRequested();
+            // A local-only head differs from the peer's older head and cannot claim dual protection.
             if (_resources.Read() != resources)
                 throw new IOException("确认期间资源发生变化。");
             await store.SaveAsync(new(record, true), token);
@@ -172,6 +200,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
     }
 
     public ConfirmationHead? Read() => store.Read();
+    public string ReadResourcesDigest() => _resources.Read();
 
     public void Dispose() => _resources.Dispose();
 
@@ -193,7 +222,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             FileConfirmationStore.Lsn(row.GetString(2)) < FileConfirmationStore.Lsn(record.FlushLsn) ||
             row.GetString(3) != record.SystemIdentifier ||
             row.GetString(5) != record.PrimaryNodeId || row.GetInt64(6) != record.Epoch ||
-            row.GetString(7) != "SynchronousDualNode" || row.GetInt64(8) != record.StateVersion || row.GetString(9) != "Standby" ||
+            row.GetString(7) is not ("SynchronousDualNode" or "EmergencySingleNode" or "Recovering") || row.GetInt64(8) < record.StateVersion || row.GetString(9) != "Standby" ||
             row.GetString(10) != record.DatabaseName || row.IsDBNull(11) ||
             FileConfirmationStore.Lsn(row.GetString(11)) < FileConfirmationStore.Lsn(record.FlushLsn))
             throw new IOException("实际备库未覆盖确认边界或身份不匹配。");

@@ -73,7 +73,10 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<PostgresReadinessProbe>();
         services.AddSingleton<BusinessRecoveryGuard>();
         services.AddHostedService<BusinessRecoveryWorker>();
-        services.AddSingleton(new ActiveNodeGuard(dataSource, identity, allowUninitializedFailoverState));
+        services.AddSingleton(provider => new NodeAuthorityGuard(dataSource, configuration, identity,
+            provider.GetRequiredService<HttpClient>(), provider.GetRequiredService<IHostApplicationLifetime>()));
+        services.AddSingleton(provider => new ActiveNodeGuard(dataSource, identity, allowUninitializedFailoverState,
+            allowUninitializedFailoverState ? null : provider.GetRequiredService<NodeAuthorityGuard>()));
         services.AddSingleton<PostgresFailoverStateStore>();
 
         services.AddSingleton<IActivationPersistence, PostgresActivationPersistence>();
@@ -104,7 +107,8 @@ public static class PostgresRuntimeRegistration
         // 计分适配器和后台任务共同处理已提交答卷，并在重启后继续未完成的计分。
         services.AddSingleton<IPublishedGradingDirectory, PostgresGradingPublicationDirectory>();
         services.AddSingleton(provider => new PostgresActiveNodeWriteGuard(
-            provider.GetRequiredService<ServerNodeEnvelope>(), allowUninitializedFailoverState));
+            provider.GetRequiredService<ServerNodeEnvelope>(), allowUninitializedFailoverState,
+            () => !allowUninitializedFailoverState && provider.GetRequiredService<NodeAuthorityGuard>().IsRetired));
         // 生产写适配器显式要求事务内主节点校验，不能采用独立模块的无门禁构造路径。
         services.AddSingleton<IGradingTaskSource>(provider => new PostgresGradingTaskSource(
             provider.GetRequiredService<NpgsqlDataSource>(), provider.GetRequiredService<PostgresActiveNodeWriteGuard>()));
@@ -167,10 +171,10 @@ public static class PostgresRuntimeRegistration
             ?? [identity.NodeId];
         if (requiredNodeIds.Any(string.IsNullOrWhiteSpace) ||
             requiredNodeIds.Distinct(StringComparer.Ordinal).Count() != requiredNodeIds.Length ||
-            (!allowUninitializedFailoverState && requiredNodeIds.Length < 2))
+            requiredNodeIds.Length is < 1 or > 2 || !requiredNodeIds.Contains(identity.NodeId, StringComparer.Ordinal))
         {
             throw new InvalidOperationException(
-                "HighAvailability:RequiredNodeIds 必须是不重复的节点列表，生产环境至少配置两个节点。");
+                "HighAvailability:RequiredNodeIds 须包含本机，可配置一个节点或两个不同节点。");
         }
 
         var encryptionPolicy = new ManagedNodeEncryptionPolicy(

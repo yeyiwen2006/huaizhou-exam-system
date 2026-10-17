@@ -56,18 +56,16 @@ function Get-ReplicationErrors($Primary, $Standby, [string]$ApplicationName, [lo
             $Primary.database -ne $Standby.database) { $errors.Add('Cluster identifier or database differs.') }
         if ([int]$Primary.versionNumber -lt 180000 -or [int]$Primary.versionNumber -ge 190000 -or
             $Primary.versionNumber -ne $Standby.versionNumber) { $errors.Add('Both nodes must use the same PostgreSQL 18 patch version.') }
-        if ($Primary.synchronousCommit -ne 'remote_apply' -or $Primary.fsync -ne 'on' -or $Primary.fullPageWrites -ne 'on' -or
+        if ($Primary.synchronousCommit -ne 'local' -or $Primary.fsync -ne 'on' -or $Primary.fullPageWrites -ne 'on' -or
             $Standby.fsync -ne 'on' -or $Standby.fullPageWrites -ne 'on') {
-            $errors.Add('Synchronous replay and local WAL durability settings are required.')
+            $errors.Add('Local commit and durable WAL settings are required; peer absence must not block primary commits.')
         }
-        $escaped = [regex]::Escape($ApplicationName)
-        $single = '(?:' + $escaped + '|"' + $escaped + '")'
-        if ([string]$Primary.synchronousStandbyNames -notmatch ('^\s*(?:' + $single + '|(?:FIRST|ANY)\s+1\s*\(\s*' + $single + '\s*\))\s*$')) {
-            $errors.Add('Synchronous standby configuration must name exactly the required peer.')
+        if (-not [string]::IsNullOrWhiteSpace([string]$Primary.synchronousStandbyNames)) {
+            $errors.Add('synchronous_standby_names must be empty; independent application confirmations report replica protection.')
         }
         $matching = @($Primary.standbys | Where-Object { $_.applicationName -ceq $ApplicationName })
-        if ($matching.Count -ne 1 -or $matching[0].state -ne 'streaming' -or $matching[0].syncState -notin @('sync', 'quorum')) {
-            $errors.Add('Exactly one streaming synchronous required peer must be connected.')
+        if ($matching.Count -ne 1 -or $matching[0].state -ne 'streaming') {
+            $errors.Add('Exactly one streaming configured peer must be connected to report replication ready.')
         } else {
             if ((ConvertFrom-PgLsn $matching[0].replayLsn) -lt (ConvertFrom-PgLsn $Primary.flushLsn)) {
                 $errors.Add('Peer replay is behind the sampled primary flush boundary.')

@@ -16,9 +16,9 @@ public sealed partial class ServiceManagementViewModel
     private CancellationTokenSource? _protectionExpiry;
     private CancellationTokenSource? _availabilityPolling;
     private bool _lastDegraded, _hostOff, _networkIsolated, _destructiveRebuild;
-    private string _haReason = "", _haTarget = "", _protection = "主备保护状态未核实；配置勾选不表示同步保护已经生效。";
+    private string _haReason = "", _haTarget = "", _protection = "当前服务器状态未核实；正在重新连接，已保存的数据和原请求继续保留。";
     public string ProtectionText { get => _protection; private set { if (SetProperty(ref _protection, value)) OnPropertyChanged(nameof(ShowProtectionWarning)); } }
-    public bool ShowProtectionWarning => _lastDegraded || _availability?.State is { ProtectionMode: not ProtectionMode.SynchronousDualNode };
+    public bool ShowProtectionWarning => _availability is null || !_availability.SynchronousProtectionVerified;
     public string HighAvailabilityVersionText => _availability is { State: { } state, VerifiedAt: { } time }
         ? $"活动节点：{state.ActiveNodeId}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
         : "当前活动节点未核实";
@@ -73,7 +73,10 @@ public sealed partial class ServiceManagementViewModel
     private bool CanIssueHighAvailability(ManagementOperationKind kind) =>
         kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect) ||
         _availability is { State: not null, VerifiedAt: { } time } && _time.GetUtcNow() - time < TimeSpan.FromSeconds(10) &&
-        time <= _time.GetUtcNow().AddSeconds(5);
+        time <= _time.GetUtcNow().AddSeconds(5) &&
+        (kind != ManagementOperationKind.Takeover ||
+            _availability.State.Nodes.TryGetValue(NodeId.Trim(), out var local) && local.Role == DeploymentNodeRole.Standby &&
+            local.DatabaseInRecovery && _availability.State.ActiveNodeId != NodeId.Trim());
 
     private HighAvailabilityRequest BuildHighAvailabilityRequest(ManagementOperationKind kind, ManagementTarget target, string actor, string id)
     {
@@ -97,10 +100,10 @@ public sealed partial class ServiceManagementViewModel
     {
         var target = _connection?.Target;
         if (target is null || status.ServerId != target.ServerId || status.NodeId != target.NodeId || status.Checks is null ||
-            status.State is { } s && (s.ServerId != target.ServerId || s.ServerEpoch <= 0 || s.Version <= 0 || s.Nodes.Count != 2 ||
+            status.State is { } s && (s.ServerId != target.ServerId || s.ServerEpoch <= 0 || s.Version <= 0 || s.Nodes.Count is < 1 or > 2 ||
                 !Enum.IsDefined(s.ProtectionMode) || !s.Nodes.ContainsKey(s.ActiveNodeId) ||
                 s.Nodes.Any(n => n.Key != n.Value.NodeId || !Enum.IsDefined(n.Value.Role))) ||
-            status.SynchronousProtectionVerified && status.State?.ProtectionMode != ProtectionMode.SynchronousDualNode)
+            status.SynchronousProtectionVerified && status.State?.Nodes.Count != 2)
             throw new InvalidDataException("主备响应身份、状态或保护证据无效。");
         if (status.SynchronousProtectionVerified && (status.State!.Nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady ||
                 n.Role is not (DeploymentNodeRole.Primary or DeploymentNodeRole.Standby) ||
@@ -108,7 +111,7 @@ public sealed partial class ServiceManagementViewModel
                 _time.GetUtcNow() - n.ObservedAt >= TimeSpan.FromSeconds(10) || n.ObservedAt > _time.GetUtcNow().AddSeconds(5)) ||
             status.Checks.Any(c => !c.Passed && c.BlocksWrites) ||
             !status.Checks.Any(c => c.Name == "failover-state" && c.Passed && c.BlocksWrites) ||
-            !status.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed && c.BlocksWrites)))
+            !status.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed)))
             throw new InvalidDataException("同步保护缺少实际节点及双侧确认检查证据。");
         if (status.VerifiedAt is not { } time || status.State is not { } state ||
             _time.GetUtcNow() - time >= TimeSpan.FromSeconds(10) || time > _time.GetUtcNow().AddSeconds(5))
@@ -120,15 +123,14 @@ public sealed partial class ServiceManagementViewModel
         if (_protectionEvidence is { } prior && OlderThan(state.ServerEpoch, state.Version, time, prior))
         { MarkProtectionUnknown(); return; }
         _availability = status;
-        if (state.ProtectionMode is ProtectionMode.EmergencySingleNode or ProtectionMode.Recovering) _lastDegraded = true;
-        else if (status.SynchronousProtectionVerified) _lastDegraded = false;
+        _lastDegraded = !status.SynchronousProtectionVerified;
         _protectionMemory?.Save(target, state.ServerEpoch, state.Version, time, _lastDegraded);
         _protectionEvidence = new(target.Key, state.ServerEpoch, state.Version, time, _lastDegraded);
-        ProtectionText = state.ProtectionMode switch {
-            ProtectionMode.EmergencySingleNode => "单机应急：当前仅有单机持久确认，双机保护已降低。请尽快重建备用节点。",
-            ProtectionMode.Recovering => "恢复中：旧节点保持隔离，尚未完成双侧持久确认，不能判定同步保护已恢复。",
-            _ when status.SynchronousProtectionVerified => "同步双机保护已核实：实际复制、材料及双侧最新持久确认均通过。",
-            _ => _lastDegraded ? "此前保护已降低；当前同步保护仍未核实，不能据在线或延迟为零解除警示。" : "当前同步保护未核实；节点在线或延迟为零不能替代双侧确认。" };
+        ProtectionText = status.SynchronousProtectionVerified
+            ? "双节点保护正常：数据库、试题资源与最新持久确认已同步。"
+            : state.ActiveNodeId == target.NodeId
+                ? "单节点运行：本机可靠保存后即可继续业务，复制恢复后自动补齐；当前新数据可能只有一份。"
+                : "当前为备用节点。原主故障时，请确认原主已断电或隔离全部业务网络，再点击“接管为主服务器”。";
         if (string.IsNullOrWhiteSpace(HighAvailabilityTarget)) HighAvailabilityTarget = target.NodeId;
         Nodes.Clear();
         foreach (var node in state.Nodes.Values.OrderBy(n => n.NodeId, StringComparer.Ordinal))
@@ -164,7 +166,7 @@ public sealed partial class ServiceManagementViewModel
     {
         _protectionExpiry?.Cancel();
         _availability = null; Nodes.Clear();
-        ProtectionText = _lastDegraded ? "此前已进入单机应急或恢复中；当前保护未核实，警示保留。" : "主备保护状态未核实；配置勾选不表示同步保护已经生效。";
+        ProtectionText = _lastDegraded ? "此前处于单节点运行；当前连接状态尚未核实，已保存的数据和原请求继续保留。" : "当前服务器状态未核实；正在重新连接，已保存的数据和原请求继续保留。";
         OnPropertyChanged(nameof(HighAvailabilityVersionText)); OnPropertyChanged(nameof(ShowProtectionWarning));
         UpdateCommands();
     }

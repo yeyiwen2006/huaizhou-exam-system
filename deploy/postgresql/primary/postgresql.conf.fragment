@@ -9,9 +9,10 @@ max_slot_wal_keep_size = '8192MB'
 fsync = on
 full_page_writes = on
 
-# A transaction is acknowledged only after the named standby has replayed it.
-synchronous_standby_names = 'FIRST 1 ("{{STANDBY_APPLICATION_NAME}}")'
-synchronous_commit = remote_apply
+# Local fsync is the minimum success condition. The application confirms a healthy
+# replica separately and automatically retries WAL/resource protection after an outage.
+synchronous_standby_names = ''
+synchronous_commit = local
 
 archive_mode = on
 archive_timeout = '60s'

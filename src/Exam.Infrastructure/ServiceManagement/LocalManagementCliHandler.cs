@@ -74,7 +74,7 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
              DateTimeOffset.UtcNow - verified > TimeSpan.FromSeconds(10) || verified > DateTimeOffset.UtcNow.AddSeconds(5) ||
              availability.SynchronousProtectionVerified && availability.State.Nodes.Values.Any(n =>
                  DateTimeOffset.UtcNow - n.ObservedAt > TimeSpan.FromSeconds(10) || n.ObservedAt > DateTimeOffset.UtcNow.AddSeconds(5)) ||
-             availability.State.ProtectionMode == ProtectionMode.SynchronousDualNode && !availability.SynchronousProtectionVerified)) code = 6;
+             availability.Checks.Any(c => c.BlocksWrites && !c.Passed))) code = 6;
         await (code == 0 ? output : errors).WriteLineAsync(JsonSerializer.Serialize(envelope, JsonDefaults.Create()));
         return code;
     }

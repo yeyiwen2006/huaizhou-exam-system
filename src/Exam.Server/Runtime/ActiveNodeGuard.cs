@@ -8,12 +8,15 @@ public sealed record ActiveNodeCheck(bool Allowed, string ErrorCode, string? Rea
 public sealed class ActiveNodeGuard(
     NpgsqlDataSource dataSource,
     ServerIdentityOptions identity,
-    bool allowUninitializedState)
+    bool allowUninitializedState,
+    NodeAuthorityGuard? authority = null)
 {
     public async Task<ActiveNodeCheck> CheckAsync(CancellationToken cancellationToken = default)
     {
         try
         {
+            if (authority is not null && !await authority.CheckAsync(cancellationToken))
+                return new(false, ErrorCodes.NotActiveServer, "本机旧代次已隔离，须从当前活动服务器补齐后作为备机加入。");
             await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
             await using (var writable = new NpgsqlCommand(
                              "SELECT NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off';",

@@ -3,6 +3,8 @@
 
 ## 部署配置与账户
 
+正式系统允许仅部署首台主节点；本节两机部署工具只用于准备和核对双节点复制，不是单节点业务的启动门禁。备机缺席时本机可靠落盘即满足业务成功条件。方案 A 的接管必须先真实隔离旧主，再点击管理页“接管为主服务器”；按钮完成提升、代次更新及业务启动，旧主回归须隔离重建。
+
 两机使用同提交业务/管理/考务/CLI 包、同 PostgreSQL 18 补丁版本，以及相同字体和 TeX 宏包依赖。服务账户与管理员操作账户分开；二进制、配置、工具、CA 与目录祖先由部署账户保护，业务账户不得修改它们。相应服务账户可读取各自节点证书私钥、解锁材料和版本资源；管理账户可控制绑定服务并写自己的审计/暂存/备份目录。不能用复制原机 DPAPI 密文代替异机密钥准备。账户/ACL/私钥访问必须以实际运行账户完成服务管理和主备检查，工具不自动授予权限。
 
 `New-PostgresqlDeployment.ps1` 读取公开 CA 文件、两独立 IP、端口、备用节点应用名、复制槽名和路径，在**全新的输出目录**生成三个可审阅配置片段及规范化的公开 PEM CA；不安装 PostgreSQL、不覆盖现有配置、不创建运行库、不启动服务。拒绝路径链接/联接、非绝对路径、已有输出、模板未替换以及私钥/过期证书文件。复制槽上限参数必须依据实际考试写入量、保留时长及存储容量核定；示例 8192 MB 不是正式容量建议。
@@ -16,7 +18,7 @@
   -CaCertificatePath C:/SyntheticExam/public-ca.cer -MaxSlotWalKeepSizeMB 8192
 ```
 
-部署人员审阅片段后并入独立受保护 PostgreSQL 配置，保持 `fsync`/`full_page_writes`、TLS 和同步确认要求；业务主备管理的独立持久确认仍然生效。生成的 `pg_hba` 只允许给定备用 IP 使用专用复制账户，不含口令，不代替业务/监测账户规则。Windows SCM 绑定按照 [主备管理契约](../high-availability-management.md) 的 `BuildPostgresServiceCommand` 和 [恢复边界](../backup-and-failover-runbook.md) 的 `BuildServiceCommand` 生成值登记；不要用通用 `pg_ctl register` 命令猜测这些受控参数。业务及管理宿主分别使用现有 `ExamServer:WindowsServiceName` / `Management:ServiceName` 配置。真实 SCM 注册/权限为部署步骤，本工具不会修改已有服务。
+部署人员审阅片段后并入独立受保护 PostgreSQL 配置，保持 `fsync`/`full_page_writes`、TLS 和本机持久确认要求；synchronous_commit=local，synchronous_standby_names 为空；业务主备管理的独立持久确认仍然生效。生成的 `pg_hba` 只允许给定备用 IP 使用专用复制账户，不含口令，不代替业务/监测账户规则。Windows SCM 绑定按照 [主备管理契约](../high-availability-management.md) 的 `BuildPostgresServiceCommand` 和 [恢复边界](../backup-and-failover-runbook.md) 的 `BuildServiceCommand` 生成值登记；不要用通用 `pg_ctl register` 命令猜测这些受控参数。业务及管理宿主分别使用现有 `ExamServer:WindowsServiceName` / `Management:ServiceName` 配置。真实 SCM 注册/权限为部署步骤，本工具不会修改已有服务。
 
 正式主备服务通过 `BuildPostgresServiceCommand` 固定 `archive_mode=on`、空 `archive_library`、受控 `archive_command`、`fsync=on` 和 `full_page_writes=on`。归档命令仅调用预部署工具，不从备份继承；工具和归档目录均须位于数据、资源、重建目录之外。管理配置须给出 `HighAvailability:WalArchiveDirectory` 与 `HighAvailability:WalArchiveScriptsDirectory`。缺目录、缺工具、链接或命令分隔符会阻止生成服务命令，不能退回关闭归档。服务管理的主备检查会返回 `wal-archiving`：主库须有成功回执且没有较新的未解决失败；备库核对固定配置，提升后同样要求归档回执。
 
@@ -43,9 +45,9 @@ WAL 归档及恢复按 PostgreSQL 文件名验证，拒绝路径穿越、NTFS �
 [合成配置](../../deploy/postgresql/check-deployment.example.json)包含无口令 URI、预期集群、槽预算和五类目录。部署时替换并保存仓库外；监测账户需要只读统计/控制函数权限。口令用 `pgpass.conf` 或受保护环境，URI 不携带口令；两侧使用 `verify-full`。SQL 设置连接/语句超时和只读事务，恢复调用者原环境设置。
 
 ```powershell
-# 一次检查；非零退出表示不满足检查条件，不能投入正式使用。
+# 双机复制检查；非零表示双份保护未核实，不能单凭此结果认定健康主机业务不可用。
 ./deploy/postgresql/scripts/Test-ExamDeployment.ps1 -ConfigurationPath C:/SyntheticExam/protected/check.json
-# 持续采样，输出每次独立 JSON；Ctrl+C 停止，不会切主或启用应急。
+# 持续采样，输出每次独立 JSON；Ctrl+C 停止，不会自动切主。
 ./deploy/postgresql/scripts/Test-ExamDeployment.ps1 -ConfigurationPath C:/SyntheticExam/protected/check.json -Samples 360 -IntervalSeconds 10
 ```
 

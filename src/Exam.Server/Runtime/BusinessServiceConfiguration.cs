@@ -76,31 +76,14 @@ public sealed class BusinessServiceConfiguration
             command.Parameters.AddWithValue(Value.NodeId);
             command.Parameters.AddWithValue(_serverEpoch);
             var mode = await command.ExecuteScalarAsync(cancellationToken) as string;
-            var ready = mode == nameof(ProtectionMode.SynchronousDualNode);
-            if (!ready && mode == nameof(ProtectionMode.EmergencySingleNode))
-            {
-                var selection = FileFailoverDeploymentSelection.ReadConfigured(k =>
-                    k == "HighAvailability:SelectionPath" ? _selectionPath :
-                    k == $"HighAvailability:Nodes:{Value.NodeId}:ConfirmationDirectory" ? _confirmationRoot : null, Value.ServerId, Value.NodeId);
-                if (selection is { Mode: ProtectionMode.EmergencySingleNode } && selection.ActiveNodeId == Value.NodeId && selection.Epoch == _serverEpoch)
-                {
-                    await using var proof = source.CreateCommand("""
-                        SELECT EXISTS(SELECT 1 FROM exam.failover_audit a JOIN exam.server_state s USING(server_id)
-                          WHERE a.server_id=$1 AND a.node_id=$2 AND a.server_epoch=$3
-                            AND a.action IN ($4,$5) AND s.state_version >= $6)
-                        """);
-                    proof.Parameters.AddWithValue(Value.ServerId); proof.Parameters.AddWithValue(Value.NodeId);
-                    proof.Parameters.AddWithValue(_serverEpoch); proof.Parameters.AddWithValue("F02:Takeover:" + selection.RequestId);
-                    proof.Parameters.AddWithValue("F02:Emergency:" + selection.RequestId); proof.Parameters.AddWithValue(selection.StateVersion);
-                    ready = (bool)(await proof.ExecuteScalarAsync(cancellationToken) ?? false);
-                }
-            }
-            return new("managed-protection", ready, ready ? mode == nameof(ProtectionMode.EmergencySingleNode)
-                ? "本次已授权单机应急部署与权威审计相符；业务使用单机持久确认。" : "当前权威状态满足双机保护启动要求。" :
-                "当前权威节点、代次或保护模式不满足双机启动要求；不会自动改变主备状态。", true);
+            var ready = mode is nameof(ProtectionMode.SynchronousDualNode) or
+                nameof(ProtectionMode.EmergencySingleNode) or nameof(ProtectionMode.Recovering);
+            return new("managed-protection", ready, ready
+                ? "当前活动节点与服务身份一致；业务可靠落盘后可用，实际复制保护单独显示。"
+                : "当前节点或服务代次不具备业务写入权。", true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception)
-        { return new("managed-protection", false, "无法核对当前双机保护状态，业务就绪检查未通过。", true); }
+        { return new("managed-protection", false, "无法核对当前活动节点，业务就绪检查未通过。", true); }
     }
 }

@@ -52,6 +52,13 @@ if (databaseConfigured && builder.Configuration.GetValue("Database:ApplyMigratio
         .MigrateAsync(app.Lifetime.ApplicationStopping);
 }
 
+if (builder.Configuration.GetValue("HighAvailability:BootstrapPrimary", false))
+{
+    var nodes = builder.Configuration.GetSection("HighAvailability:RequiredNodeIds").Get<string[]>() ?? [identity.NodeId];
+    await app.Services.GetRequiredService<Exam.Infrastructure.Postgres.HighAvailability.PostgresFailoverStateStore>()
+        .BootstrapPrimaryAsync(identity.ServerId, identity.NodeId, identity.ServerEpoch, nodes, app.Lifetime.ApplicationStopping);
+}
+
 app.UseMiddleware<ApiExceptionMiddleware>();
 app.UseHttpsRedirection();
 app.UseMiddleware<ExamApiAccessMiddleware>();
@@ -83,7 +90,7 @@ app.MapGet("/health/ready", async (
     {
         try { await app.Services.GetRequiredService<Exam.Application.HighAvailability.IBusinessConfirmation>().ConfirmAsync(cancellationToken); }
         catch (Exam.Domain.Common.DomainRuleException)
-        { return Results.Json(new { status = "recovering", reason = "本机及备节点持久确认尚未完成。" }, statusCode: 503); }
+        { return Results.Json(new { status = "recovering", reason = "本机持久确认尚未完成。" }, statusCode: 503); }
     }
     return readiness.Ready
         ? Results.Ok(new

@@ -1,6 +1,6 @@
 # GUI 与 CLI 功能覆盖
 
-本表与 `test-coverage.json` 一一对应，只记录入口和验证位置，不表示所有现场场景已通过。实际通过范围以对应提交的分类报告为准；通用 HTTP 传输命令不代替专用业务命令。
+本表记录正式功能入口，不表示所有现场场景已通过。测试清单、夹具和结果仅保留在本地测试目录。实际通过范围以对应提交的分类报告为准；通用 HTTP 传输命令不代替专用业务命令。
 
 | 编号 | 功能 | GUI 实现 | CLI 入口 | 当前行为 |
 | --- | --- | --- | --- | --- |
@@ -24,8 +24,8 @@
 | COV-018 | 隔离恢复 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management restore | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-019 | 查询请求处理状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management operation | GUI默认查询最近操作，允许输入历史请求编号；不再单列待核对请求，处理情况由操作结果展示，不提供原内容重试或恢复续行按钮 |
 | COV-020 | 同步状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management ha-status | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
-| COV-021 | 应急确认 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management emergency | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
-| COV-022 | 接管 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management takeover | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
+| COV-021 | 自动单节点持久确认 | 无需操作；管理页显示实际保护状态 | management ha-status | 备机缺席时自动本机持久保存，取消应急按钮；旧 emergency 路由拒绝新应急请求 |
+| COV-022 | 接管 | src/Exam.Admin/ServiceManagement/ServiceManagementView.xaml | management takeover | 登录页可独立进入管理；醒目接管按钮要求真实隔离旧主，保持原请求，完成提升后自动启动业务 |
 | COV-023 | 主节点重建 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management rebuild / management reprotect | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-024 | 连接与每日编号 | src/Exam.Student/Views/LoginPage.xaml | 不适用，学生端仅提供 GUI | 无需批准直接登录，同一设备当天沿用编号，次日重分 |
 | COV-025 | 学生端连接状态 | src/Exam.Admin/ViewModels/ActivationRoomViewModel.cs | devices list / devices show | 查看学生端信息、当前考生和连接状态，无学生设备批准组件 |

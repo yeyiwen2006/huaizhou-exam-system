@@ -519,3 +519,21 @@ management-connection.json
 # Complete exam archives contain private exam and candidate data.
 exam.archive
 .exam-export-*/
+
+# Local manual testing connection and login details.
+/联调信息.txt
+
+# Tests and manual integration belong only to the local test checkout.
+/tests/
+/eng/testing/
+/eng/manual-test/
+/本机联调/
+/src/Exam.Admin/Infrastructure/ManualClientConfiguration.cs
+/src/Exam.Admin/Services/ManualClientTransport.cs
+
+# Test plans and runner checks remain only in exam-system-test.
+/docs/load-testing.md
+/docs/test-coverage.json
+/docs/test-infrastructure.md
+/docs/testing-plan.md
+/eng/development/test_sync_code.py
