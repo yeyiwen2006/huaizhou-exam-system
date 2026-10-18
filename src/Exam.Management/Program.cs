@@ -82,7 +82,8 @@ public static class ManagementEntryPoint
                     var kind = error is TimeoutException or Npgsql.NpgsqlException { InnerException: TimeoutException } ? "Timeout" :
                         error is Npgsql.PostgresException { SqlState: "28P01" or "28000" } ? "AuthenticationFailed" : "Unavailable";
                     new ProtectedRuntimeLogWriter(Path.Combine(Required("Management:OperationDirectory"), "management-runtime.jsonl"), "management")
-                        .Write("Exam.Management.Database." + (observedNode == nodeId ? "Local." : "Peer.") + kind, "Error", 7002);
+                        .Write("Exam.Management.Database." + (observedNode == nodeId ? "Local." : "Peer.") + kind,
+                            kind == "AuthenticationFailed" ? "Error" : "Warning", 7002);
                 }, readSelection: () => FileFailoverDeploymentSelection.ReadConfigured(k => configuration[k], serverId, nodeId)),
                 journal, new SystemClock());
         });

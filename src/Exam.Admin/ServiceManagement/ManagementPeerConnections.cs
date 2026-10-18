@@ -475,9 +475,10 @@ public sealed partial class ServiceManagementViewModel
         if (target is null) return "管理状态待查询";
         if (!_nodeStatuses.TryGetValue(target.Key, out var value) || value.Status is null) return "管理状态待查询";
         var fresh = !value.Unavailable && _time.GetUtcNow() - value.ObservedAt < HighAvailabilityStatus.ObservationLifetime;
+        var health = LocalObservation(nodeId)?.State ?? _displayState?.Nodes.GetValueOrDefault(nodeId);
         var standby = fresh && value.Status is { ProcessStatus: BusinessServiceStatus.Running, Readiness: BusinessReadiness.NotReady } &&
-            _displayState?.Nodes.GetValueOrDefault(nodeId) is { Role: DeploymentNodeRole.Standby,
-                Reachable: true, DatabaseInRecovery: true, KeyMaterialReady: true, CertificateReady: true } &&
+            _displayState?.Nodes.GetValueOrDefault(nodeId)?.Role == DeploymentNodeRole.Standby &&
+            health is { Reachable: true, DatabaseInRecovery: true } &&
             Nodes.Any(row => row.NodeId == nodeId && row.IsCurrent);
         return standby ? "服务器程序已启动（备机待命）" : fresh ? ProcessStatusText(value.Status) :
             $"上次程序状态：{ProcessStatusText(value.Status)}；当前未核实（{value.ObservedAt.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}）";

@@ -87,15 +87,15 @@
                         <StackPanel Orientation="Horizontal">
                             <Button x:Name="TakeoverPrimaryButton" Content="接管为主服务器"
                                 Style="{StaticResource Btn.Primary}" Command="{Binding TakeoverCommand}"
-                                HorizontalAlignment="Left" MinWidth="220" MinHeight="48" FontSize="18"
+                                HorizontalAlignment="Left"
                                 AutomationProperties.Name="接管为主服务器"/>
                             <Button x:Name="RebuildIsolatedButton" Content="重建隔离的服务器并作为备机"
                                 Style="{StaticResource Btn.Secondary}" Command="{Binding RebuildCommand}"
-                                Margin="12,0,0,0" MinHeight="48" FontSize="18"
+                                Margin="8,0,0,0"
                                 AutomationProperties.Name="重建隔离的服务器并作为备机"/>
                             <Button x:Name="CancelHighAvailabilityButton" Content="{Binding CancelHighAvailabilityText}"
                                 Style="{StaticResource Btn.Secondary}" Command="{Binding CancelHighAvailabilityCommand}"
-                                Margin="12,0,0,0" MinHeight="48" FontSize="18"/>
+                                Margin="8,0,0,0"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

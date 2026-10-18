@@ -76,6 +76,7 @@ public sealed partial class ManagementOperationRunner(
                 if (await store.IsCancellationRequestedAsync(requestId, CancellationToken.None)) durableDeadline.Cancel();
             }
             ManagementOperation result;
+            Exception? executionError = null;
             try
             {
                 result = await execute(accepted, executionToken);
@@ -91,7 +92,7 @@ public sealed partial class ManagementOperationRunner(
             catch (DomainRuleException error)
             {
                 await PreserveCheckpointAsync();
-                try { recordFailure?.Invoke(accepted, error); } catch { }
+                executionError = error;
                 result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification ||
                         accepted.FailoverPlan is not null || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
@@ -107,8 +108,7 @@ public sealed partial class ManagementOperationRunner(
             catch (Exception error)
             {
                 await PreserveCheckpointAsync();
-                try { recordFailure?.Invoke(accepted, error); }
-                catch { /* Diagnostic failure must not prevent the durable operation result. */ }
+                executionError = error;
                 // Includes cancellation after acceptance. SCM/tools may have taken effect; never repeat automatically.
                 result = accepted with { Phase = kind == ManagementOperationKind.Checks
                         ? ManagementOperationPhase.Failed : ManagementOperationPhase.NeedsVerification,
@@ -124,7 +124,12 @@ public sealed partial class ManagementOperationRunner(
             }
             result = result with { UpdatedAt = clock.UtcNow };
             // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.
-            return await SaveFinalAsync(result, CancellationToken.None);
+            result = await SaveFinalAsync(result, CancellationToken.None);
+            if (executionError is not null && result.Phase is ManagementOperationPhase.Failed or ManagementOperationPhase.NeedsVerification &&
+                !await store.IsCancellationRequestedAsync(requestId, CancellationToken.None))
+                try { recordFailure?.Invoke(result, executionError); }
+                catch { /* Diagnostic failure must not change the durable result. */ }
+            return result;
         }
         finally { _cancellations.TryRemove(requestId, out _); _executing.TryRemove(requestId, out _); }
     }
@@ -173,8 +178,11 @@ public sealed partial class ManagementOperationRunner(
         }
         catch (Exception error)
         {
-            try { recordFailure?.Invoke(original, error); } catch { }
-            if (await store.IsCancellationRequestedAsync(original.RequestId, CancellationToken.None))
+            var cancellationRequested = await store.IsCancellationRequestedAsync(original.RequestId, CancellationToken.None);
+            var latest = await store.FindAsync(original.RequestId, CancellationToken.None);
+            if (!cancellationRequested && latest?.Phase != ManagementOperationPhase.Completed)
+                try { recordFailure?.Invoke(original, error); } catch { }
+            if (cancellationRequested)
             {
                 try
                 {

@@ -14,7 +14,8 @@ if (([System.IO.File]::GetAttributes($source) -band [System.IO.FileAttributes]::
     throw 'WAL source must not be a reparse point.'
 }
 
-if ($WalFileName -notmatch '^(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$') {
+# Promotion may archive the old timeline's final, incomplete segment as .partial.
+if ($WalFileName -notmatch '^(?:[0-9A-F]{24}(?:\.partial|\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$') {
     throw 'WAL file name must not contain a directory component.'
 }
 

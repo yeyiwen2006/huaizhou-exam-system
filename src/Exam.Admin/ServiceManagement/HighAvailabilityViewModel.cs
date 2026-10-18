@@ -189,14 +189,12 @@ public sealed partial class ServiceManagementViewModel
     {
         if (kind != ManagementOperationKind.Rebuild)
             return CanIssueHighAvailability(kind);
-        // Displaying an isolated old copy does not require that copy to have the
-        // active node's database state. Execution still checks the active authority.
-        return SelectedNode is { IsPlaceholder: false } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
-            ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
-            IsHighAvailabilityTargetRoutable(selected.NodeId) && selected.NodeId != CurrentActiveNodeId &&
-            (selected.Role is "隔离" or "重建" || selected.Recovery.StartsWith("旧库", StringComparison.Ordinal) ||
-                selected.Role == "备机" && _highAvailabilityOperation is { Kind: ManagementOperationKind.Rebuild, Phase: ManagementOperationPhase.Canceled } canceled &&
-                canceled.NodeId == selected.NodeId);
+        // Background reconnect establishes the target's session. Once enabled,
+        // rebuilding can open its confirmation without waiting for authentication.
+        if (!CanIssueHighAvailability(kind) || _routingConnection) return false;
+        var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == HighAvailabilityTarget.Trim());
+        return target is not null && NodeSession(target).Connection is { Actor: { } actor } &&
+            string.Equals(actor, _connection?.Actor, StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>
@@ -359,7 +357,7 @@ public sealed partial class ServiceManagementViewModel
         if (status.State is not { } state || state.ActiveNodeId != target.NodeId ||
             CurrentActiveNodeId is { } active && active != target.NodeId && state.ServerEpoch <= (_businessSession?.ServerEpoch ?? 0) ||
             state.ServerEpoch < Math.Max(_highestObservedServerEpoch, _businessSession?.ServerEpoch ?? 0)) return;
-        if (_availability is { SynchronousProtectionVerified: true, State: { } prior, VerifiedAt: { } observed } &&
+        if (_availability is { State: { } prior, VerifiedAt: { } observed } &&
             prior.ServerEpoch == state.ServerEpoch && prior.Version >= state.Version &&
             _time.GetUtcNow() - observed < HighAvailabilityStatus.ObservationLifetime) return;
         ApplyHighAvailability(status, proofAlreadyPersisted: true, observedTarget: target);
@@ -454,12 +452,13 @@ public sealed partial class ServiceManagementViewModel
                 $"{configured.NodeId} · {Nodes.FirstOrDefault(row => row.NodeId == configured.NodeId)?.Role}\n{GetNodeProcessStatusText(configured.NodeId)}。";
         }
         var row = Nodes.FirstOrDefault(n => n.NodeId == node.NodeId);
-        var observed = node.ObservedAt == default ? "尚无观察" : node.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss");
+        var health = LocalObservation(node.NodeId)?.State ?? node;
+        var observed = health.ObservedAt == default ? "尚无观察" : health.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss");
         var latest = row is { IsCurrent: true };
         var process = GetNodeProcessStatusText(node.NodeId);
         return $"{node.NodeId} · {row?.Role}\n{process}\n" +
             (latest ? $"{row!.Reachability}；数据库：{row.Recovery}；重放差值：{row.ReplayLag} 字节。" :
-                $"当前状态未核实。上次观察：{(node.Reachable ? "可连接" : "不可连接")}；{(node.DatabaseInRecovery ? "备库" : "主库")}。") +
+                $"当前状态未核实。上次观察：{(health.Reachable ? "可连接" : "不可连接")}；{(health.DatabaseInRecovery ? "备库" : "主库")}。") +
             $"\n观察时间：{observed}" + (latest ? "" : "（仅供参考，请刷新）");
     }
 
