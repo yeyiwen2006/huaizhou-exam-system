@@ -232,7 +232,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (!_active) return;
         _active = false; _generation++; _polling?.Cancel(); _availabilityPolling?.Cancel(); StopWaiting();
         if (_readBusy) Message = "查询已暂停，返回后可重新刷新状态与日志。";
-        MarkProtectionUnknown();
+        InvalidateExpiredProtection();
         _reads = null; _readBusy = false; IsBusy = false; UpdateCommands();
     }
     public bool IsPageActive => _active;

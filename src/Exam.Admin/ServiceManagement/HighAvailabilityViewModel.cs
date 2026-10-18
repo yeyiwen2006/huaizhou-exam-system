@@ -261,7 +261,9 @@ public sealed partial class ServiceManagementViewModel
             {
                 // State versions are node-local, but a deployment epoch identifies the active
                 // authority for the whole server. A peer cannot revive an older authority.
-                if (_availability?.State is not { } current || current.ServerEpoch < knownEpoch) MarkProtectionUnknown();
+                // A returned authority from an older epoch is contradictory evidence,
+                // unlike a connection switch or a canceled page wait.
+                MarkProtectionUnknown();
                 return;
             }
             _highestObservedServerEpoch = reported.ServerEpoch;
@@ -295,13 +297,12 @@ public sealed partial class ServiceManagementViewModel
         if (!proofAlreadyPersisted) _protectionMemory?.Save(target, state.ServerEpoch, state.Version, time, _lastDegraded);
         _protectionEvidence = new(target.Key, state.ServerEpoch, state.Version, time, _lastDegraded);
         ProtectionText = status.SynchronousProtectionVerified
-            ? "双节点保护正常：数据库、试题资源与最新持久确认已同步。"
-            : state.Nodes.Count == 2 && state.Nodes.Values.All(node => node.Reachable)
-                ? (state.ActiveNodeId == target.NodeId ? "" : "当前为备用节点。") +
-                    "主备数据库已连接；双侧持久确认尚未通过，当前按主机可靠保存继续业务。"
-            : state.ActiveNodeId == target.NodeId
-                ? "单节点运行：本机可靠保存后即可继续业务，复制恢复后自动补齐；当前新数据可能只有一份。"
-                : "当前为备用节点。原主故障时，请确认原主已断电或隔离全部业务网络，再点击“接管为主服务器”。";
+            ? $"当前主机：{state.ActiveNodeId}。双节点保护正常，数据库、试题资源与最新持久确认已同步。"
+            : state.Nodes[state.ActiveNodeId].Reachable
+                ? $"当前主机：{state.ActiveNodeId}。" +
+                    (state.Nodes.Count == 2 && state.Nodes.Values.All(node => node.Reachable) ? "主备数据库已连接；" : "") +
+                    "业务数据由主机可靠保存；双节点保护尚未恢复，当前新数据可能只有一份。"
+                : $"当前主机：{state.ActiveNodeId}，连接状态尚未确认。确认原主已断电或隔离全部业务网络后，可选择备机接管。";
         UpdateDisplayedNodes();
         OnPropertyChanged(nameof(HighAvailabilityVersionText)); OnPropertyChanged(nameof(ShowProtectionWarning)); UpdateCommands();
         _protectionExpiry?.Cancel();
@@ -465,6 +466,10 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             target ??= new(Address, ServerId, NodeId);
+            // Protection describes the cluster, not the management connection. Keep
+            // its original expiry when routing between nodes of the same server.
+            if (_availability is { State: { } current, VerifiedAt: { } verified } &&
+                current.ServerId == target.ServerId && _time.GetUtcNow() - verified < HighAvailabilityStatus.ObservationLifetime) return;
             UpdateDisplayedNodes();
             if (string.IsNullOrWhiteSpace(Address)) return;
             _protectionEvidence = null;
