@@ -64,16 +64,26 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         if (ExternalPreparationProcesses.IsRunning(_options.PostgresBinDirectory, RebuildSlot(plan)))
             throw new IOException("原基础备份或校验进程尚未退出。");
         await SaveRebuildProgressAsync(progress with { Phase = "Installing" }, token);
-        await _business.StopAsync(token);
-        await _postgres.StopAsync(token);
-        if (_business.Status != BusinessServiceStatus.Stopped || _postgres.Status != BusinessServiceStatus.Stopped)
-            throw new IOException("本机服务未停止，禁止交换目录。");
-        InstallDirectory(Path.Combine(RebuildSlot(plan), Local.NodeId), _options.PostgresDataDirectory,
-            progress.OldDatabaseIdentity, progress.DatabaseIdentity, plan.ContentHash);
-        InstallDirectory(Path.Combine(RebuildSlot(plan), "resources"), Local.ResourcesDirectory,
+        var database = Path.Combine(RebuildSlot(plan), Local.NodeId);
+        var resources = Path.Combine(RebuildSlot(plan), "resources");
+        var installed = DirectoryInstalled(database, _options.PostgresDataDirectory, progress.OldDatabaseIdentity,
+            progress.DatabaseIdentity, plan.ContentHash) && DirectoryInstalled(resources, Local.ResourcesDirectory,
             progress.OldResourcesIdentity, progress.ResourcesIdentity, plan.ContentHash);
+        if (!installed)
+        {
+            await _business.StopAsync(token);
+            await _postgres.StopAsync(token);
+            if (_business.Status != BusinessServiceStatus.Stopped || _postgres.Status != BusinessServiceStatus.Stopped)
+                throw new IOException("本机服务未停止，禁止交换目录。");
+            InstallDirectory(database, _options.PostgresDataDirectory,
+                progress.OldDatabaseIdentity, progress.DatabaseIdentity, plan.ContentHash);
+            InstallDirectory(resources, Local.ResourcesDirectory,
+                progress.OldResourcesIdentity, progress.ResourcesIdentity, plan.ContentHash);
+        }
         await SelectAsync(plan, token);
-        await _postgres.StartAsync(token);
+        // A previous wait may have expired while PostgreSQL was replaying. Keep the
+        // proven installation running so repeated reconciliation cannot reset progress.
+        if (_postgres.Status != BusinessServiceStatus.Running) await _postgres.StartAsync(token);
         // Base backup/resources were verified before installation. Startup waits only
         // for fixed database identity/state and a cached resource inventory, not a full
         // resource rehash every poll or a moving zero-lag target under exam traffic.
@@ -106,6 +116,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         else if (DirectoryIdentity(quarantine) != oldIdentity) throw new IOException("原部署隔离证据不完整。");
         ReplicaResourceTransfer.MoveDirectory(staged, target);
     }
+
+    private static bool DirectoryInstalled(string staged, string target, string? oldIdentity, string newIdentity, string hash) =>
+        DirectoryIdentity(target) == newIdentity && !Directory.Exists(staged) &&
+        DirectoryIdentity(target + ".quarantine." + hash) == oldIdentity;
 
     private bool HasRebuildCompletion(FailoverExecutionPlan plan)
     {

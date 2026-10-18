@@ -180,6 +180,9 @@ public sealed class LocalManagementClient : IDisposable
                 entry.ServerEpoch == completed.ServerEpoch)))
             throw new HttpRequestException("历史主备完成证据与当前权威或原请求不一致。");
         if (!Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
+            operation.FailoverWorkInProgress && (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild or
+                ManagementOperationKind.Emergency or ManagementOperationKind.Reprotect) ||
+                operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification)) ||
             operation.Phase == ManagementOperationPhase.Staged &&
                 (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
                     { IsolationStaged: true, BusinessReady: false }) ||

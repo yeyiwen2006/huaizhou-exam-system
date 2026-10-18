@@ -55,4 +55,6 @@ public sealed record ManagementOperation(
     HighAvailabilityStatus? HighAvailability = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FailoverExecutionPlan? FailoverPlan = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ServerDeploymentState? FailoverCompletedState = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverFailureVerified = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverFailureVerified = false,
+    // Transient query projection only; durable journals retain the last proven checkpoint.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverWorkInProgress = false);

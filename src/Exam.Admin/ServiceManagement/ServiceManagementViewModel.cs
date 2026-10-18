@@ -98,7 +98,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     public bool CanConfigureConnection => IsSignedOut && !IsBusy;
     public bool CanLogin => CanEnterManagementCredentials && HasConnectionConfiguration;
-    public string ConnectionStatus => !HasConnectionConfiguration
+    public string ConnectionStatus => _peerLoginTarget is { } peer
+        ? $"正在验证节点 {peer.NodeId} 的管理身份。隔离节点可能没有新主机签发的考务会话，请使用同一考务账号独立认证；当前主机连接继续保留。"
+        : !HasConnectionConfiguration
         ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员核对部署配置。"
         : _businessSession is null ? "管理连接已配置；主服务器不可用导致无法正常登录时，可直接使用已启用的考务账号登录管理。"
         : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
@@ -257,7 +259,13 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task RefreshAsync()
     {
         if (!IsSignedIn || _connection is null || _readBusy) return;
-        await ReconcileKnownRequestsAsync();
+        StartPolling();
+        using (var reconciliationWait = BeginRead())
+        {
+            try { await ReconcileKnownRequestsAsync().WaitAsync(reconciliationWait.Token); }
+            catch (OperationCanceledException) when (reconciliationWait.IsCancellationRequested) { return; }
+            finally { EndRead(reconciliationWait); }
+        }
         if (!IsSignedIn || _connection is null || _readBusy) return;
         var connection = _connection; var generation = _generation;
         using var reads = BeginRead();
@@ -415,39 +423,59 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         var id = string.IsNullOrWhiteSpace(RequestIdToQuery) ? _lastRequestId : RequestIdToQuery.Trim();
         if (id.Length == 0) id = _pending?.RequestId ?? _knownPendingRequests.Values.FirstOrDefault()?.RequestId ?? string.Empty;
         if (!await RoutePendingQueryAsync(id)) return;
+        if (_knownPendingRequests.Values.FirstOrDefault(request => request.RequestId == id) is
+            { Kind: ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild } request)
+        {
+            if (_connection?.Actor != request.Actor)
+            { Message = "该请求属于原管理账号。请用原账号登录考务端后查询。"; return; }
+            using var wait = BeginRead();
+            try { await ReconcileKnownRequestsAsync().WaitAsync(wait.Token); }
+            catch (OperationCanceledException) when (wait.IsCancellationRequested) { }
+            finally { EndRead(wait); }
+            return;
+        }
         await QueryRequestAsync(id);
     }
 
-    private async Task ReconcileKnownRequestsAsync()
+    private Task ReconcileKnownRequestsAsync()
+    {
+        if (!IsSignedIn || !HasUnresolvedManagementRequests) return Task.CompletedTask;
+        return _pendingReconciliation is { IsCompleted: false } pending ? pending :
+            _pendingReconciliation = ReconcileKnownRequestsCoreAsync();
+    }
+
+    private async Task ReconcileKnownRequestsCoreAsync()
     {
         var version = _managementSessionVersion;
         var generation = _generation;
-        using var wait = BeginRead();
+        var token = _lifetime.Token;
         var pending = _knownPendingRequests.Values.Append(_pending).OfType<PendingManagementRequest>()
             .DistinctBy(request => request.Target.Key).ToArray();
-        try { await Task.WhenAll(pending.Select(async request =>
+        await Task.WhenAll(pending.Select(async request =>
         {
             try
             {
-                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(wait.Token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(3));
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                deadline.CancelAfter(TimeSpan.FromSeconds(25));
                 var connection = await EnsureTargetSessionAsync(request.Target, deadline.Token);
                 if (connection?.Actor != request.Actor) return;
                 var reply = await connection.FindAsync(request.RequestId, deadline.Token);
-                if (deadline.IsCancellationRequested || version != _managementSessionVersion || generation != _generation ||
-                    reply.IsUnauthorized || reply.Envelope.Result is not { } operation) return;
-                ValidatePendingOperation(operation, request);
-                if (ReferenceEquals(connection, _connection)) Apply(reply, request, connection, generation);
-                else if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)
+                if (deadline.IsCancellationRequested || version != _managementSessionVersion || generation != _generation) return;
+                if (ReferenceEquals(connection, _connection))
+                    Apply(reply, request, connection, generation);
+                else if (reply.IsUnauthorized) MarkNodeSessionUnavailable(connection, true);
+                else if (reply.Envelope.Result is { } operation)
                 {
+                    ValidatePendingOperation(operation, request);
+                    if (operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)) return;
                     _store.Clear(request);
                     _knownPendingRequests.TryRemove(request.Target.Key, out _);
                     NotifyPending();
+                    PublishSettledRoleSnapshot();
                 }
             }
             catch (Exception) { /* Keep the exact original request until its owner can verify it. */ }
-        })); }
-        finally { EndRead(wait); }
+        }));
     }
 
     private async Task QueryRequestAsync(string id)
@@ -552,7 +580,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         _missingOriginal = false;
         _operation = operation;
         OnPropertyChanged(nameof(Operation));
-        OperationText = $"{KindText(operation.Kind)}：{PhaseText(operation.Phase)} · {operation.RequestId}";
+        OperationText = $"{KindText(operation.Kind)}：{(operation.FailoverWorkInProgress ? "正在处理原请求" : PhaseText(operation.Phase))} · {operation.RequestId}";
         CanResumeRestore = operation.Kind == ManagementOperationKind.Restore &&
             (operation.Phase == ManagementOperationPhase.Staged || operation.Phase == ManagementOperationPhase.NeedsVerification &&
                 operation.Restore is { IsolationStaged: true } && operation.RecoveryActivation is null &&
@@ -567,7 +595,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             RestoreBackupId = backup.BackupId;
             RestoreSource = backup.DestinationDirectory;
         }
-        Message = operation.Phase switch
+        Message = operation.FailoverWorkInProgress
+            ? "服务器正在按原请求执行或续办核对；关闭页面不会中断。完成或确认安全失败后会自动解除等待，期间不重复发起重建。"
+            : operation.Phase switch
         {
             ManagementOperationPhase.Completed when operation.Kind == ManagementOperationKind.Checks && operation.Checks!.Any(c => !c.Passed && c.BlocksWrites) => "状态检测已完成，存在阻止业务写入的失败项。",
             ManagementOperationPhase.Completed when operation.Backup is { } => "备份已完成：数据库、受保护配置和版本资源均已包含。",
@@ -579,10 +609,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         };
         if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)
         {
-            _polling?.Cancel();
             if (operation.Configuration is not null && operation.Phase == ManagementOperationPhase.Completed) LoadConfiguration(operation.Configuration);
             _store.Clear(request); _knownPendingRequests.TryRemove(request.Target.Key, out _);
             _pending = null; CanResumeRestore = false; LoadCurrentPendingRequest();
+            PublishSettledRoleSnapshot();
         }
     }
 
@@ -592,6 +622,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             operation.ServerId != request.Target.ServerId || operation.NodeId != request.Target.NodeId || operation.ContentHash != request.BodyHash)
             throw new System.IO.InvalidDataException("操作身份与原请求不一致。");
         if (!Enum.IsDefined(operation.Phase) || operation.Phase == ManagementOperationPhase.Failed && operation.Error is null ||
+            operation.FailoverWorkInProgress && (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild or
+                ManagementOperationKind.Emergency or ManagementOperationKind.Reprotect) ||
+                operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification)) ||
             operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.Completed or ManagementOperationPhase.Staged && operation.Error is not null)
             throw new System.IO.InvalidDataException("操作阶段证据无效。");
     }
@@ -727,7 +760,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void StartPolling()
     {
         StartHighAvailabilityPolling();
-        if (!_active || !IsSignedIn || _pending is null || _polling is { IsCancellationRequested: false }) return;
+        if (!_active || !IsSignedIn || !HasUnresolvedManagementRequests || _polling is { IsCancellationRequested: false }) return;
         var polling = _polling = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _ = PollAsync(polling);
     }
@@ -735,12 +768,17 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         try
         {
-            // Bounded, read-only and serialized with explicit reads; never repeats a mutation.
-            for (var attempt = 0; attempt < 10 && _active && IsSignedIn && _pending is not null; attempt++)
+            // One bounded reconciliation per interval, shared with manual refresh. Requests
+            // on another node still settle after routing changes; never repeat a mutation.
+            while (_active && IsSignedIn && HasUnresolvedManagementRequests && !polling.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(2), polling.Token);
-                if (!_readBusy && !IsBusy && !polling.IsCancellationRequested && _pending is { } pending)
-                    await QueryRequestAsync(pending.RequestId);
+                await Task.Delay(TimeSpan.FromSeconds(10), _time, polling.Token);
+                if (!_readBusy && !IsBusy && !polling.IsCancellationRequested)
+                {
+                    if (_pending is { Kind: ManagementOperationKind.Restore } restore)
+                        await QueryRequestAsync(restore.RequestId);
+                    else await ReconcileKnownRequestsAsync().WaitAsync(polling.Token);
+                }
             }
         }
         catch (OperationCanceledException) { }

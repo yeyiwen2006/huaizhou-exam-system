@@ -13,6 +13,7 @@ public sealed class ManagementOperationRunner(
     Action<ManagementOperation, Exception>? recordFailure = null)
 {
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _reconcilingFailover = new(StringComparer.Ordinal);
 
     public async Task<ManagementOperation> ExecuteAsync<T>(
         string requestId, string actorId, ManagementOperationKind kind, T content,
@@ -124,12 +125,43 @@ public sealed class ManagementOperationRunner(
         if (_executing.ContainsKey(requestId) || reconcile is null ||
             operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
             return ForQuery(operation);
+        if (HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_reconcilingFailover.TryAdd(requestId, 0))
+                _ = ReconcileFailoverInBackgroundAsync(operation);
+            return ForQuery(operation);
+        }
         await using var guard = await store.AcquireAsync(cancellationToken);
         operation = await store.FindAsync(requestId, cancellationToken)
             ?? throw new DomainRuleException(ErrorCodes.NotFound, "未找到本机管理操作。");
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
         return await ReconcileUnderLockAsync(operation, cancellationToken);
+    }
+
+    private async Task ReconcileFailoverInBackgroundAsync(ManagementOperation original)
+    {
+        // Finishing an interrupted installation may outlast any status request. The
+        // original durable intent owns this work, just as it owns initial execution.
+        // Repeated readers share it; disconnecting cannot restart/abort installation.
+        await Task.Yield();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(90));
+        try
+        {
+            await using var guard = await store.AcquireAsync(deadline.Token);
+            var operation = await store.FindAsync(original.RequestId, deadline.Token);
+            if (operation is null || operation.ServerId != serverId || operation.NodeId != nodeId ||
+                operation.ActorId != original.ActorId || operation.Kind != original.Kind || operation.ContentHash != original.ContentHash)
+                throw new InvalidDataException("原主备请求的持久绑定发生变化。");
+            await ReconcileUnderLockAsync(operation, deadline.Token);
+        }
+        catch (Exception error)
+        {
+            try { recordFailure?.Invoke(original, error); } catch { }
+            // Preserve the checkpoint; a later query/restart can continue the same intent.
+        }
+        finally { _reconcilingFailover.TryRemove(original.RequestId, out _); }
     }
 
     private async Task<ManagementOperation> ReconcileUnderLockAsync(ManagementOperation operation, CancellationToken token)
@@ -163,9 +195,13 @@ public sealed class ManagementOperationRunner(
         return observed;
     }
 
-    private ManagementOperation ForQuery(ManagementOperation operation) =>
-        operation.Phase == ManagementOperationPhase.Accepted && !_executing.ContainsKey(operation.RequestId)
-            ? operation with { Phase = ManagementOperationPhase.NeedsVerification,
-                Error = new ApiError(ErrorCodes.ServiceRecovering, "原操作尚未确认完成，先核对实际状态；不会重复执行。") }
-            : operation;
+    private ManagementOperation ForQuery(ManagementOperation operation)
+    {
+        if (operation.Phase == ManagementOperationPhase.Accepted && !_executing.ContainsKey(operation.RequestId))
+            operation = operation with { Phase = ManagementOperationPhase.NeedsVerification,
+                Error = new ApiError(ErrorCodes.ServiceRecovering, "原操作尚未确认完成，先核对实际状态；不会重复执行。") };
+        return operation with { FailoverWorkInProgress = HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind) &&
+            operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification &&
+            (_executing.ContainsKey(operation.RequestId) || _reconcilingFailover.ContainsKey(operation.RequestId)) };
+    }
 }

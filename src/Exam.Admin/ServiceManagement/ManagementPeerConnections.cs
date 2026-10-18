@@ -15,6 +15,8 @@ public sealed partial class ServiceManagementViewModel
         public IManagementConnection? Connection;
         public Task<IManagementConnection?>? Authentication;
         public Exception? AuthenticationError;
+        public AdminSessionSnapshot? AttemptedBusinessSession;
+        public DateTimeOffset NextBusinessAuthenticationAt;
         public long StatusSequence;
         public object Gate { get; } = new();
     }
@@ -32,6 +34,7 @@ public sealed partial class ServiceManagementViewModel
     private bool _routingConnection;
     private bool _peerStatusRefreshing;
     private Task? _peerStatusRefresh;
+    private Task? _pendingReconciliation;
     private DateTimeOffset _lastPeerStatusRefresh = DateTimeOffset.MinValue;
 
     public bool ShowManagementLogin => IsSignedOut || _peerLoginTarget is not null;
@@ -110,6 +113,7 @@ public sealed partial class ServiceManagementViewModel
                 node.Connection = connection;
                 connection = null; // Ownership belongs to the per-node session until logout/reset.
             }
+            if (_peerLoginTarget is { } awaiting && SameEndpoint(awaiting, node.Target)) SetPeerLoginTarget(null);
             UpdateCommands();
             if (IsSignedIn && !ReferenceEquals(node.Connection, _connection))
                 _ = RefreshPeerStatusAsync(force: true);
@@ -140,6 +144,25 @@ public sealed partial class ServiceManagementViewModel
                 lock (node.Gate) if (ReferenceEquals(node.Authentication, completed)) node.Authentication = null;
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             return task;
+        }
+    }
+
+    private Task<IManagementConnection?> StartBusinessAuthentication(ManagementTarget target, AdminSessionSnapshot session)
+    {
+        var node = NodeSession(target);
+        lock (node.Gate)
+        {
+            if (node.Connection is { Actor: not null } ready) return Task.FromResult<IManagementConnection?>(ready);
+            if (node.Authentication is { IsCompleted: false } pending) return pending;
+            // An isolated database may not contain a session issued by the new primary.
+            // Back off repeated exchanges; retry later because a rebuilt replica may
+            // eventually contain it. Explicit password authentication bypasses this gate.
+            if (node.AttemptedBusinessSession?.SameAuthentication(session) == true &&
+                _time.GetUtcNow() < node.NextBusinessAuthenticationAt)
+                return Task.FromResult<IManagementConnection?>(null);
+            node.AttemptedBusinessSession = session;
+            node.NextBusinessAuthenticationAt = _time.GetUtcNow().AddSeconds(30);
+            return StartNodeAuthentication(target, (connection, token) => connection.UseBusinessSessionAsync(session, token), session.Username);
         }
     }
 
@@ -231,10 +254,11 @@ public sealed partial class ServiceManagementViewModel
     {
         _peerLoginTarget = target;
         OnPropertyChanged(nameof(ShowManagementLogin)); OnPropertyChanged(nameof(CanEnterManagementCredentials));
-        OnPropertyChanged(nameof(CanLogin)); UpdateCommands();
+        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(ConnectionStatus)); UpdateCommands();
     }
 
-    private async Task<IManagementConnection?> EnsureTargetSessionAsync(ManagementTarget target, CancellationToken token)
+    private async Task<IManagementConnection?> EnsureTargetSessionAsync(ManagementTarget target, CancellationToken token,
+        bool requestCredentials = false)
     {
         var version = _managementSessionVersion;
         bool CurrentAttempt() => !token.IsCancellationRequested && !_disposed && version == _managementSessionVersion;
@@ -250,12 +274,20 @@ public sealed partial class ServiceManagementViewModel
         if (!CurrentAttempt()) return null;
         if (_businessSession is { } session)
         {
-            var result = await StartNodeAuthentication(target, (connection, cancellation) => connection.UseBusinessSessionAsync(session, cancellation),
-                session.Username).WaitAsync(token);
-            return CurrentAttempt() ? result : null;
+            var result = await StartBusinessAuthentication(target, session).WaitAsync(token);
+            if (!CurrentAttempt()) return null;
+            if (result is not null) return result;
+            if (node.AuthenticationError is not UnauthorizedAccessException)
+            {
+                if (requestCredentials) Message = $"节点 {target.NodeId} 的管理连接暂不可用；当前管理连接及原请求继续保留。";
+                return null;
+            }
         }
-        SetPeerLoginTarget(target);
-        Message = $"需要验证节点 {target.NodeId} 的管理身份，请在本页输入当前考务账号的密码。当前管理连接继续保留。";
+        if (requestCredentials)
+        {
+            SetPeerLoginTarget(target);
+            Message = $"需要验证节点 {target.NodeId} 的管理身份，请在本页输入当前考务账号的密码。当前管理连接继续保留。";
+        }
         return null;
     }
 
@@ -309,7 +341,7 @@ public sealed partial class ServiceManagementViewModel
         {
             using var deadline = _routingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(25));
-            var candidate = await EnsureTargetSessionAsync(target, deadline.Token);
+            var candidate = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: true);
             if (candidate is null || version != _managementSessionVersion || !IsSignedIn || selected != HighAvailabilityTarget.Trim()) return false;
             if (!string.Equals(candidate.Actor, previous.Actor, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("两个管理节点的考务账号不一致。");
@@ -370,7 +402,7 @@ public sealed partial class ServiceManagementViewModel
         {
             using var deadline = _routingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(25));
-            var candidate = await EnsureTargetSessionAsync(target, deadline.Token);
+            var candidate = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: true);
             if (candidate is null || deadline.IsCancellationRequested || version != _managementSessionVersion ||
                 generation != _generation || !IsSignedIn) return false;
             if (!string.Equals(candidate.Actor, request.Actor, StringComparison.OrdinalIgnoreCase))
@@ -508,8 +540,7 @@ public sealed partial class ServiceManagementViewModel
                 var node = NodeSession(target);
                 connection = node.Connection;
                 if (connection is null && _businessSession is { } session)
-                    connection = await StartNodeAuthentication(target, (client, cancellation) => client.UseBusinessSessionAsync(session, cancellation),
-                        session.Username).WaitAsync(token);
+                    connection = await StartBusinessAuthentication(target, session).WaitAsync(token);
                 if (connection is null || token.IsCancellationRequested || version != _managementSessionVersion) return;
                 // Explicit refresh owns the current node's status read; peers remain independent.
                 if (ReferenceEquals(connection, _connection) && (_readBusy || IsBusy)) return;
@@ -540,6 +571,7 @@ public sealed partial class ServiceManagementViewModel
         _routingCancellation = null; _routingConnection = false;
         _peerAuthentication?.Cancel(); _peerAuthentication?.Dispose(); _peerAuthentication = null;
         _peerStatusRefresh = null; _peerStatusRefreshing = false; _lastPeerStatusRefresh = DateTimeOffset.MinValue;
+        _pendingReconciliation = null;
         var connections = _nodeSessions.Values.Select(value => { lock (value.Gate) return value.Connection; }).Append(_connection)
             .Where(value => value is not null).Cast<IManagementConnection>().Distinct<IManagementConnection>(ReferenceEqualityComparer.Instance).ToArray();
         _nodeSessions.Clear(); _knownPendingRequests.Clear();

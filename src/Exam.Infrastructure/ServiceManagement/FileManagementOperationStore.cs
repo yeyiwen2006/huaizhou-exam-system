@@ -168,6 +168,8 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     private static void Validate(ManagementOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        if (operation.FailoverWorkInProgress)
+            throw new InvalidDataException("正在执行标记仅用于查询，不能替代持久操作阶段。");
         if (operation.FailoverFailureVerified &&
             (operation.Kind != ManagementOperationKind.Rebuild || operation.Phase != ManagementOperationPhase.Failed ||
              operation.FailoverPlan is not { Kind: ManagementOperationKind.Rebuild } || operation.Error is null ||

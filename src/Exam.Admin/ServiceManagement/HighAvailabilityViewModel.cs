@@ -185,7 +185,14 @@ public sealed partial class ServiceManagementViewModel
 
     private bool CanVerifyHighAvailabilityTarget(ManagementOperationKind kind)
     {
-        return CanIssueHighAvailability(kind);
+        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
+            return CanIssueHighAvailability(kind);
+        // The current node may have no authority proof after isolation. Permit only
+        // authentication and a read on the configured target; issuing the operation
+        // still requires fresh target evidence and explicit operator confirmation.
+        return SelectedNode is { } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
+            ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
+            IsHighAvailabilityTargetRoutable(selected.NodeId);
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>
@@ -228,6 +235,15 @@ public sealed partial class ServiceManagementViewModel
     }
 
     public void ApplyHighAvailability(HighAvailabilityStatus status) => ApplyHighAvailability(status, proofAlreadyPersisted: false);
+
+    private void PublishSettledRoleSnapshot()
+    {
+        // A journal reply can contain an old observation. Once its exact request is
+        // terminal, publish a newer already-verified snapshot as one pair of roles.
+        if (!RoleTransitionPending && _availability is { } status)
+            ApplyHighAvailability(status, proofAlreadyPersisted: true);
+        OnPropertyChanged(nameof(HighAvailabilityVersionText));
+    }
 
     private void ApplyHighAvailability(HighAvailabilityStatus status, bool proofAlreadyPersisted, bool completedRoleTransition = false)
     {

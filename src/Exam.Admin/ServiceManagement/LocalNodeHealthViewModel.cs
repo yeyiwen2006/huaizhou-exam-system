@@ -26,8 +26,7 @@ public sealed partial class ServiceManagementViewModel
                     deadline.CancelAfter(TimeSpan.FromSeconds(20));
                     var connection = NodeSession(target).Connection;
                     if (connection is null && _businessSession is { } session)
-                        connection = await StartNodeAuthentication(target,
-                            (client, cancellation) => client.UseBusinessSessionAsync(session, cancellation), session.Username).WaitAsync(deadline.Token);
+                        connection = await StartBusinessAuthentication(target, session).WaitAsync(deadline.Token);
                     if (!Current()) return;
                     if (connection is null) MarkLocalNodeUnavailable(target,
                         NodeSession(target).AuthenticationError is UnauthorizedAccessException);

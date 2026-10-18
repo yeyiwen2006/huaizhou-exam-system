@@ -189,8 +189,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         if (local is null)
             return new(_options.ServerId, Local.NodeId, null, null, false,
                 [new("failover-state", false, "本机数据库主备状态不可读取。", true)]);
-        var state = local.Value.State;
-        await RecoverLocalResourcesAsync(local.Value.State, local.Value.Recovery, local.Value.System, token);
+        return await ObserveLocalStateAsync(local.Value.State, local.Value.Recovery, local.Value.System, token);
+    }
+
+    private async Task<HighAvailabilityStatus> ObserveLocalStateAsync(ServerDeploymentState state, bool recovery,
+        string system, CancellationToken token)
+    {
+        await RecoverLocalResourcesAsync(state, recovery, system, token);
         var materials = await MaterialsAsync(Local, token);
         var probe = _healthProbe;
         var health = await probe.ObserveAsync(Local.NodeId, state.Nodes[Local.NodeId].Role,
@@ -205,17 +210,25 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
 
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
     {
+        var local = await ReadAsync(Local, token);
+        if (local is { Recovery: false } && IsSelectedIsolatedPrimary(local.Value.State))
+        {
+            // Isolation is an explicit durable takeover result, not an inference from a
+            // timeout. Confirm this local authority without waiting for the isolated node's
+            // business listener. Its independent health/authentication remains unverified.
+            var observation = await ObserveLocalStateAsync(local.Value.State, false, local.Value.System, token);
+            return observation with { Checks = [.. observation.Checks,
+                new("synchronous-protection", false, "原主机已隔离；当前主机可靠保存，重建备机后再核对双节点保护。", false)] };
+        }
         var otherNode = _options.Nodes.Values.SingleOrDefault(n => n.NodeId != Local.NodeId);
-        var localRead = ReadAsync(Local, token);
         var otherRead = otherNode is null ? null : ReadAsync(otherNode, token);
         var probe = _healthProbe;
         // Independent peer timeouts must not accumulate behind the local observation.
         var materialsTasks = _options.Nodes.Values.ToDictionary(n => n.NodeId, n => MaterialsAsync(n, token));
         var peerTasks = _options.Nodes.Values.Where(n => n.NodeId != Local.NodeId).ToDictionary(n => n.NodeId,
             n => probe.ObserveAsync(n.NodeId, DeploymentNodeRole.Isolated, false, false, token));
-        await Task.WhenAll(localRead, otherRead is null ? Task.CompletedTask : otherRead,
+        await Task.WhenAll(otherRead is null ? Task.CompletedTask : otherRead,
             Task.WhenAll(materialsTasks.Values), Task.WhenAll(peerTasks.Values));
-        var local = await localRead;
         var other = otherRead is null ? null : await otherRead;
         if (local is { } localState)
             await RecoverLocalResourcesAsync(localState.State, localState.Recovery, localState.System, token);
@@ -272,6 +285,19 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
                 "单节点运行：业务继续以本机可靠落盘为准，后台持续尝试补齐复制。", false) };
         checks.AddRange(archiveChecks);
         return new(_options.ServerId, Local.NodeId, state with { Nodes = nodes }, verified ? _time.GetUtcNow() : null, protection, checks);
+    }
+
+    private bool IsSelectedIsolatedPrimary(ServerDeploymentState state)
+    {
+        if (state.ActiveNodeId != Local.NodeId || state.ProtectionMode != ProtectionMode.EmergencySingleNode ||
+            state.Nodes.Count != 2 || state.Nodes.Values.Any(node => node.NodeId != Local.NodeId && node.Role != DeploymentNodeRole.Isolated))
+            return false;
+        var selected = _readSelection();
+        return selected is not null && selected.ServerId == state.ServerId && selected.NodeId == Local.NodeId &&
+            selected.ActiveNodeId == Local.NodeId && selected.OtherNodeId == Other.NodeId && selected.Epoch == state.ServerEpoch &&
+            selected.StateVersion == state.Version && selected.Mode == state.ProtectionMode &&
+            state.Audit.Any(entry => entry.Action == $"F02:Takeover:{selected.RequestId}" && entry.NodeId == Local.NodeId &&
+                entry.ServerEpoch == state.ServerEpoch);
     }
 
     private ConfirmationHead RequireTakeoverHead(ServerDeploymentState state)
