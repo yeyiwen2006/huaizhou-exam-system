@@ -80,6 +80,10 @@ public interface IManagementConnection : IDisposable
         Task.FromResult(new ManagementReply<HighAvailabilityStatus>(HttpStatusCode.ServiceUnavailable,
             new(Target.ServerId, Target.NodeId, null, false, null, "unavailable", null,
                 new(ErrorCodes.ServiceRecovering, "正式主备管理暂不可用。"))));
+    Task<ManagementReply<HighAvailabilityStatus>> LocalHighAvailabilityAsync(CancellationToken token) =>
+        Task.FromResult(new ManagementReply<HighAvailabilityStatus>(HttpStatusCode.NotImplemented,
+            new(Target.ServerId, Target.NodeId, null, false, null, "unsupported", null,
+                new("PLATFORM_NOT_SUPPORTED", "该管理连接不支持独立节点检查。"))));
     Task<ManagementReply<IReadOnlyList<ManagementAuditEntry>>> AuditAsync(int limit, CancellationToken token);
     Task<ManagementReply<IReadOnlyList<ProtectedRuntimeLogEntry>>> LogsAsync(int limit, CancellationToken token);
     Task<ManagementReply<BackupInfo>> BackupInfoAsync(string sourceDirectory, CancellationToken token) =>
@@ -101,6 +105,12 @@ public sealed class ManagementConnection : IManagementConnection
     public async Task<ManagementReply<HighAvailabilityStatus>> HighAvailabilityAsync(CancellationToken token)
     {
         var reply = await _reads.GetHighAvailabilityAsync(token);
+        if (reply.StatusCode == HttpStatusCode.Unauthorized) Clear();
+        return new(reply.StatusCode, reply.Envelope);
+    }
+    public async Task<ManagementReply<HighAvailabilityStatus>> LocalHighAvailabilityAsync(CancellationToken token)
+    {
+        var reply = await _reads.GetLocalHighAvailabilityAsync(token);
         if (reply.StatusCode == HttpStatusCode.Unauthorized) Clear();
         return new(reply.StatusCode, reply.Envelope);
     }

@@ -137,6 +137,8 @@ public static class ManagementApi
                 await ReadAsync<RestoreRequest>(context, json), Actor(context), context.RequestAborted)));
         app.MapGet("/management/v1/high-availability/status", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetHighAvailabilityAsync(context.RequestAborted)));
+        app.MapGet("/management/v1/high-availability/local-status", async (HttpContext context, ManagementRuntime runtime) =>
+            await WriteAsync(context, runtime, await runtime.GetLocalHighAvailabilityAsync(context.RequestAborted)));
         foreach (var (route, kind) in new[] { ("takeover", ManagementOperationKind.Takeover),
                      ("emergency", ManagementOperationKind.Emergency), ("rebuild", ManagementOperationKind.Rebuild),
                      ("reprotect", ManagementOperationKind.Reprotect) })

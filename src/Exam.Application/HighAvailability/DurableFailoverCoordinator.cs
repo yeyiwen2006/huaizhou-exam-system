@@ -9,6 +9,7 @@ namespace Exam.Application.HighAvailability;
 public interface IHighAvailabilityManagementPlatform
 {
     Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token);
+    Task<HighAvailabilityStatus> ObserveLocalAsync(CancellationToken token) => ObserveAsync(token);
     Task<FailoverExecutionPlan> PrepareAsync(ManagementOperation operation, HighAvailabilityRequest request,
         ServerDeploymentState before, ServerDeploymentState after, CancellationToken token);
     Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token);
@@ -24,6 +25,7 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect;
 
     public Task<HighAvailabilityStatus> GetStatusAsync(CancellationToken token) => platform.ObserveAsync(token);
+    public Task<HighAvailabilityStatus> GetLocalStatusAsync(CancellationToken token) => platform.ObserveLocalAsync(token);
 
     public async Task<ManagementOperation> ExecuteAsync(ManagementOperation operation,
         HighAvailabilityRequest request, CancellationToken token)

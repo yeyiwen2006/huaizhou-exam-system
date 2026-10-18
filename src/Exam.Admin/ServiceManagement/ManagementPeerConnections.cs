@@ -504,6 +504,7 @@ public sealed partial class ServiceManagementViewModel
         var connections = _nodeSessions.Values.Select(value => { lock (value.Gate) return value.Connection; }).Append(_connection)
             .Where(value => value is not null).Cast<IManagementConnection>().Distinct<IManagementConnection>(ReferenceEqualityComparer.Instance).ToArray();
         _nodeSessions.Clear(); _knownPendingRequests.Clear();
+        _localNodeHealth.Clear();
         foreach (var key in _nodeStatuses.Keys)
             if (_nodeStatuses.TryGetValue(key, out var old)) _nodeStatuses[key] = old with { Sequence = 0, Unavailable = true };
         SetPeerLoginTarget(null);

@@ -69,6 +69,8 @@ public sealed partial class ServiceManagementViewModel
     {
         if (!_active || !IsSignedIn || _availabilityPolling is { IsCancellationRequested: false }) return;
         var polling = _availabilityPolling = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        foreach (var target in ConfiguredManagementTargets)
+            _ = PollLocalNodeHealthAsync(target, _managementSessionVersion, polling.Token);
         _ = PollHighAvailabilityAsync(polling);
     }
 
@@ -277,20 +279,20 @@ public sealed partial class ServiceManagementViewModel
         {
             foreach (var node in state.Nodes.Values.OrderBy(n => n.NodeId == state.ActiveNodeId ? 0 : 1).ThenBy(n => n.NodeId, StringComparer.Ordinal))
             {
-                var fresh = _availability is not null && _time.GetUtcNow() - node.ObservedAt < TimeSpan.FromSeconds(10) &&
-                    node.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
-                rows.Add(new(node.NodeId, node.Role switch { DeploymentNodeRole.Primary => "主机", DeploymentNodeRole.Standby => "备机", DeploymentNodeRole.Isolated => "隔离", _ => "重建" },
-                    fresh ? node.Reachable ? "可连接" : "不可连接" : "未核实",
-                    fresh && node.Reachable ? node.DatabaseInRecovery ? "备库" : "主库" : "未核实",
-                    fresh && node.Reachable && node.ReplayLagBytes != long.MaxValue ? node.ReplayLagBytes.ToString(System.Globalization.CultureInfo.InvariantCulture) : "未核实",
-                    fresh && node.KeyMaterialReady ? "已核实" : "未核实", fresh && node.CertificateReady ? "已核实" : "未核实",
-                    node.ObservedAt == default ? "尚未返回" : node.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("HH:mm:ss") + (fresh ? "" : "（已过期）"),
-                    IsCurrent: fresh));
+                var local = LocalObservation(node.NodeId);
+                var observed = local?.State ?? node;
+                if (local is not null && !observed.Reachable) observed = observed with { Role = node.Role };
+                var fresh = (local is not null || _availability is not null) && _time.GetUtcNow() - observed.ObservedAt < TimeSpan.FromSeconds(10) &&
+                    observed.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
+                rows.Add(LocalNodeRow(observed, fresh));
             }
         }
         foreach (var target in ConfiguredManagementTargets)
             if (rows.Count < 2 && rows.All(n => n.NodeId != target.NodeId))
-                rows.Add(PlaceholderNode(target.NodeId));
+                rows.Add(LocalObservation(target.NodeId) is { } local
+                    ? LocalNodeRow(local.State, _time.GetUtcNow() - local.State.ObservedAt < TimeSpan.FromSeconds(10)) with
+                        { Role = local.Epoch == 0 ? "角色待核实" : LocalNodeRow(local.State, false).Role }
+                    : PlaceholderNode(target.NodeId));
         if (rows.Count == 0) rows.Add(PlaceholderNode(string.IsNullOrWhiteSpace(NodeId) ? "主机（待连接）" : NodeId.Trim()));
         if (rows.Count == 1) rows.Add(PlaceholderNode("另一节点（待核实）"));
         var selection = SelectedNode?.NodeId;

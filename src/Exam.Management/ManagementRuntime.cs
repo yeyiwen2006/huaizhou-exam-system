@@ -50,6 +50,11 @@ public sealed class ManagementRuntime(
         RequireAdvancedOperations();
         return Failover.GetStatusAsync(token);
     }
+    public Task<HighAvailabilityStatus> GetLocalHighAvailabilityAsync(CancellationToken token)
+    {
+        RequireAdvancedOperations();
+        return Failover.GetLocalStatusAsync(token);
+    }
     public Task<ManagementOperation> ExecuteHighAvailabilityAsync(HighAvailabilityRequest request, string actor,
         ManagementOperationKind kind, CancellationToken token)
     {

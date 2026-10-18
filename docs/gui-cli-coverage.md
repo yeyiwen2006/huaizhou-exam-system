@@ -22,7 +22,7 @@
 | COV-016 | 运行日志 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management runtime-logs | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-017 | 备份 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management backup | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
 | COV-018 | 隔离恢复 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management restore | GUI与CLI已接独立管理宿主；权限、固定目标及原请求核对沿用同一服务 |
-| COV-019 | 查询请求处理状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management operation | GUI默认查询最近操作，允许输入历史请求编号；不再单列待核对请求，处理情况由操作结果展示，不提供原内容重试或恢复续行按钮 |
+| COV-019 | 查询请求处理状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management operation | GUI 保留后台原请求核对，不显示请求编号输入、手工查询按钮和顶部处理状态；人工查询由管理 API 或 CLI 提供 |
 | COV-020 | 同步状态 | src/Exam.Admin/ServiceManagement/ServiceManagementViewModel.cs | management ha-status | GUI与CLI已接主备协调；读取实际状态并保留持久请求和安全确认 |
 | COV-021 | 自动单节点持久确认 | 无需操作；管理页显示实际保护状态 | management ha-status | 备机缺席时自动本机持久保存，取消应急按钮；旧 emergency 路由拒绝新应急请求 |
 | COV-022 | 接管 | src/Exam.Admin/ServiceManagement/ServiceManagementView.xaml | management takeover | 登录页可独立进入管理；醒目接管按钮要求真实隔离旧主，保持原请求，完成提升后自动启动业务 |

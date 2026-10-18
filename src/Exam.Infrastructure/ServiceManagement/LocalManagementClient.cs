@@ -42,6 +42,13 @@ public sealed class LocalManagementClient : IDisposable
     public Task<ManagementClientResponse<ManagementStatus>> GetStatusAsync(CancellationToken token = default) =>
         SendAsync<ManagementStatus>(HttpMethod.Get, "service/status", null, token);
 
+    public async Task<ManagementClientResponse<HighAvailabilityStatus>> GetLocalHighAvailabilityAsync(CancellationToken token = default)
+    {
+        var response = await SendAsync<HighAvailabilityStatus>(HttpMethod.Get, "high-availability/local-status", null, token);
+        RequireHighAvailability(response.Envelope.Result);
+        return response;
+    }
+
     public async Task<ManagementClientResponse<HighAvailabilityStatus>> GetHighAvailabilityAsync(CancellationToken token = default)
     {
         var response = await SendAsync<HighAvailabilityStatus>(HttpMethod.Get, "high-availability/status", null, token);

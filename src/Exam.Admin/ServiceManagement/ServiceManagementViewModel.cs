@@ -438,7 +438,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             // Historical results describe that request only; never settle another pending request or overwrite current server status.
             _operation = operation; OnPropertyChanged(nameof(Operation));
             OperationText = $"{KindText(operation.Kind)}：{PhaseText(operation.Phase)} · {operation.RequestId}";
-            Message = $"请求 {id} 的处理状态：{PhaseText(operation.Phase)}。";
+            Message = string.Empty;
         }
         catch (Exception) { if (Current(connection, generation)) Message = "请求处理状态尚未确认，请核对编号和连接后再次查询。"; }
         finally { EndRead(wait); }

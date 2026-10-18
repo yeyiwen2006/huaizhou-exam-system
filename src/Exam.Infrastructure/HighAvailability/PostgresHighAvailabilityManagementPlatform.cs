@@ -103,13 +103,13 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
     private ServiceConfiguration LocalConfiguration(long version = 1) => new(_options.ServerId, Local.NodeId,
         "127.0.0.1", 1, Local.ResourcesDirectory, true, version);
 
-    private async Task<(bool Keys, bool Certificate, IReadOnlyList<StartupCheckResult> Checks)> MaterialsAsync(FailoverNodeDeployment node, long epoch, CancellationToken token)
+    private async Task<(bool Keys, bool Certificate, HighAvailabilityMaterialProof? Proof, IReadOnlyList<StartupCheckResult> Checks)> MaterialsAsync(FailoverNodeDeployment node, CancellationToken token)
     {
         if (node.NodeId == Local.NodeId)
         {
             var checks = await _localMaterials.RunAsync(LocalConfiguration(), token);
             var certificate = checks.Any(c => c.Name == "node-certificate-private-key" && c.Passed);
-            return (checks.Count > 1 && checks.All(c => c.Passed || !c.BlocksWrites), certificate, checks);
+            return (checks.Count > 1 && checks.All(c => c.Passed || !c.BlocksWrites), certificate, null, checks);
         }
         try
         {
@@ -117,26 +117,55 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(5));
             using var request = PeerRequest(HttpMethod.Get, endpoint, node.NodeId);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false, []);
+            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false, null, []);
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
             using var memory = new MemoryStream(); var bytes = new byte[4096]; int read;
             while ((read = await stream.ReadAsync(bytes, deadline.Token)) > 0)
-            { if (memory.Length + read > 16384) return (false, false, []); memory.Write(bytes, 0, read); }
+            { if (memory.Length + read > 16384) return (false, false, null, []); memory.Write(bytes, 0, read); }
             var proof = JsonSerializer.Deserialize<HighAvailabilityMaterialProof>(memory.ToArray(), JsonDefaults.Create());
-            if (proof is null || proof.ServerId != _options.ServerId || proof.NodeId != node.NodeId || proof.Epoch != epoch ||
-                _time.GetUtcNow() - proof.ObservedAt > TimeSpan.FromSeconds(10) || proof.ObservedAt > _time.GetUtcNow().AddSeconds(5))
-                return (false, false, []);
-            return (proof.KeysReady, proof.CertificateReady, []);
+            if (proof is null || proof.ServerId != _options.ServerId || proof.NodeId != node.NodeId)
+                return (false, false, null, []);
+            return (proof.KeysReady, proof.CertificateReady, proof, []);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return (false, false, []); }
+        catch (Exception) { return (false, false, null, []); }
+    }
+
+    public async Task<HighAvailabilityStatus> ObserveLocalAsync(CancellationToken token)
+    {
+        var local = await ReadAsync(Local, token);
+        if (local is null)
+            return new(_options.ServerId, Local.NodeId, null, null, false,
+                [new("failover-state", false, "本机数据库主备状态不可读取。", true)]);
+        var state = local.Value.State;
+        var materials = await MaterialsAsync(Local, token);
+        var probe = new PostgresNodeHealthProbe(new Dictionary<string, PostgresNodeConnection>
+            { [Local.NodeId] = new(Local.NodeId, Local.ConnectionString) }, _time);
+        var health = await probe.ObserveAsync(Local.NodeId, state.Nodes[Local.NodeId].Role,
+            materials.Keys, materials.Certificate, token);
+        var nodes = state.Nodes.ToDictionary(p => p.Key, p => p.Value with
+            { Reachable = false, ReplayLagBytes = long.MaxValue, KeyMaterialReady = false,
+                CertificateReady = false, ObservedAt = default });
+        nodes[Local.NodeId] = health;
+        return new(_options.ServerId, Local.NodeId, state with { Nodes = nodes }, _time.GetUtcNow(), false,
+            [new("failover-state", true, "已读取本机数据库角色与部署身份。", true), .. materials.Checks]);
     }
 
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
     {
-        var local = await ReadAsync(Local, token);
         var otherNode = _options.Nodes.Values.SingleOrDefault(n => n.NodeId != Local.NodeId);
-        var other = otherNode is null ? null : await ReadAsync(otherNode, token);
+        var localRead = ReadAsync(Local, token);
+        var otherRead = otherNode is null ? null : ReadAsync(otherNode, token);
+        var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString));
+        var probe = new PostgresNodeHealthProbe(connections, _time);
+        // Independent peer timeouts must not accumulate behind the local observation.
+        var materialsTasks = _options.Nodes.Values.ToDictionary(n => n.NodeId, n => MaterialsAsync(n, token));
+        var peerTasks = _options.Nodes.Values.Where(n => n.NodeId != Local.NodeId).ToDictionary(n => n.NodeId,
+            n => probe.ObserveAsync(n.NodeId, DeploymentNodeRole.Isolated, false, false, token));
+        await Task.WhenAll(localRead, otherRead is null ? Task.CompletedTask : otherRead,
+            Task.WhenAll(materialsTasks.Values), Task.WhenAll(peerTasks.Values));
+        var local = await localRead;
+        var other = otherRead is null ? null : await otherRead;
         var primaryCandidates = new[] { (Node: Local.NodeId, Observation: local), (Node: otherNode?.NodeId ?? "", Observation: other) }
             .Where(v => v.Observation is { Recovery: false } && v.Observation.Value.State.ActiveNodeId == v.Node)
             .Select(v => v.Observation)
@@ -149,16 +178,25 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             return new(_options.ServerId, Local.NodeId, null, null, false,
                 [new("failover-state", false, "实际数据库主备状态不可读取；代次与保护模式未核实。", true)]);
         var state = authoritative.Value.State;
-        var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString));
-        var probe = new PostgresNodeHealthProbe(connections, _time);
         var nodes = new Dictionary<string, NodeState>();
         var archiveChecks = new List<StartupCheckResult>();
         foreach (var node in _options.Nodes.Values)
         {
-            var materials = await MaterialsAsync(node, state.ServerEpoch, token);
+            var materials = await materialsTasks[node.NodeId];
             archiveChecks.AddRange(materials.Checks.Where(c => c.Name == "wal-archiving"));
-            nodes[node.NodeId] = await probe.ObserveAsync(node.NodeId, state.Nodes[node.NodeId].Role,
-                materials.Keys, materials.Certificate, token);
+            var materialsVerified = node.NodeId == Local.NodeId || materials.Proof is { } proof &&
+                proof.Epoch == state.ServerEpoch && _time.GetUtcNow() - proof.ObservedAt <= TimeSpan.FromSeconds(10) &&
+                proof.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
+            var role = state.Nodes[node.NodeId].Role;
+            // Observe local database health after the peer probes, keeping its timestamp current
+            // when an offline peer consumes its connection timeout.
+            var health = node.NodeId == Local.NodeId
+                ? await probe.ObserveAsync(node.NodeId, role, materialsVerified && materials.Keys,
+                    materialsVerified && materials.Certificate, token)
+                : await peerTasks[node.NodeId];
+            nodes[node.NodeId] = health with { Role = role,
+                DatabaseInRecovery = health.Reachable ? health.DatabaseInRecovery : role != DeploymentNodeRole.Primary,
+                KeyMaterialReady = materialsVerified && materials.Keys, CertificateReady = materialsVerified && materials.Certificate };
         }
         var verified = true;
         if (authoritative.Value.Recovery)

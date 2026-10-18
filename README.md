@@ -8,7 +8,7 @@
 
 ## 使用入口
 
-学生使用 `Exam.Student` 填写服务器地址和考生信息后直接登录，完成等待、作答和交卷。学生端和考务端 `Exam.Admin` 均只需填写服务器 IP 或域名，默认连接 HTTPS 443；也支持包含自定义端口的完整 HTTPS 地址。考务端登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。业务故障时，登录页“服务器管理 / 故障接管”可直接使用原考务账号登录备机管理服务。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成，考务界面保留状态检测、配置、日志、备份恢复及请求处理状态查询。
+学生使用 `Exam.Student` 填写服务器地址和考生信息后直接登录，完成等待、作答和交卷。学生端和考务端 `Exam.Admin` 均只需填写服务器 IP 或域名，默认连接 HTTPS 443；也支持包含自定义端口的完整 HTTPS 地址。考务端登录后可直接进入“服务器管理”，沿用当前考务身份，无须再次输入账号和密码。业务故障时，登录页“服务器管理 / 故障接管”可直接使用原考务账号登录备机管理服务。`Exam.Server` 承担考试业务，`Exam.Management` 提供独立服务器管理。业务服务启停由部署人员通过正式管理 API 或 `Exam.Cli` 完成。考务界面分别刷新主机与备机的本机检查，提供状态检测、日志和故障接管；原请求由后台继续核对，人工查询使用管理 API 或 CLI。
 
 [系统需求](requirements.md)定义业务规则；[导入规范](docs/import-package-spec.md)说明题目材料；[服务器部署](deploy/server/README.md)、[学生端部署](deploy/student/README.md)、[PostgreSQL 部署](deploy/postgresql/README.md)和[服务器管理](docs/service-management.md)说明运行准备。考务命令见[CLI 使用](docs/cli-usage.md)，备份与接管见[运行手册](docs/backup-and-failover-runbook.md)。
 

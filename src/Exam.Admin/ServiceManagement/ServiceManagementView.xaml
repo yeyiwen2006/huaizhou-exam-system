@@ -39,8 +39,6 @@
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding Message}" Style="{StaticResource Management.Message}"/>
-                <TextBlock x:Name="PersistentOperationText" Text="{Binding OperationText}"
-                           Style="{StaticResource Management.Message}"/>
             </StackPanel>
         </Border>
         <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -144,14 +142,6 @@
                 <Border x:Name="OperationLogsCard" Style="{StaticResource Management.Section}">
                     <StackPanel>
                         <TextBlock Text="操作与事件日志" Style="{StaticResource SectionTitle}" Margin="0,0,0,12"/>
-                        <TextBlock Text="请求编号" Style="{StaticResource FieldLabel}"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBox x:Name="RequestIdInput" Style="{StaticResource Management.Field}"
-                                     Text="{Binding RequestIdToQuery, UpdateSourceTrigger=PropertyChanged}"/>
-                            <Button Grid.Column="1" Content="查询请求处理状态" Style="{StaticResource Management.Action}"
-                                    VerticalAlignment="Center" Command="{Binding QueryCommand}"/>
-                        </Grid>
                         <TextBlock Text="显示最近的操作和事件，每类最多50条。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
                         <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="320">
                             <DataGrid.Columns>
