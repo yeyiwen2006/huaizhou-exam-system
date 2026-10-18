@@ -64,9 +64,8 @@ public sealed partial class ServiceManagementViewModel
         ConfiguredManagementTargets.Any(target => target.NodeId == business.NodeId) &&
         (_displayState is null || business.ServerEpoch > _displayState.ServerEpoch)
         ? business.NodeId : _displayState?.ActiveNodeId;
-    public string HighAvailabilityVersionText => RoleTransitionPending
-        ? "接管或重建仍在核对；保留操作前角色，完成后同时更新两个节点。" +
-            (_displayState is { } displayed ? $" 上次核实的活动节点：{displayed.ActiveNodeId}" : "")
+    public string HighAvailabilityVersionText => RoleTransitionPending && CurrentActiveNodeId is { } activeNode
+        ? $"当前活动节点：{activeNode}"
         : _availability is { State: { } state, VerifiedAt: { } time }
         ? $"活动节点：{state.ActiveNodeId}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
         : CurrentActiveNodeId is { } active ? $"当前活动节点：{active}；正在刷新运行状态。" : "当前活动节点未核实";

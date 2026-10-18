@@ -39,7 +39,7 @@ public sealed class PostgresNodeHealthProbe(
             {
                 var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
                 { CommandTimeout = 5, Pooling = true, MinPoolSize = 0, MaxPoolSize = 2, ApplicationName = "Exam.Management.Health" };
-                settings.Timeout = Math.Clamp(settings.Timeout, 3, 15);
+                settings.Timeout = ManagementProbeConnection.ConnectionTimeout(settings);
                 return NpgsqlDataSource.Create(settings.ConnectionString);
             })).Value;
             await using var connection = await source.OpenConnectionAsync(cancellationToken);
@@ -200,6 +200,7 @@ public sealed class StagedPostgresNodeRebuilder(
             ["PGUSER"] = connection.Username ?? throw new InvalidOperationException("重建源数据库用户不能为空。"),
             ["PGPASSWORD"] = connection.Password ?? string.Empty,
             ["PGAPPNAME"] = nodeId,
+            ["PGCONNECT_TIMEOUT"] = ManagementProbeConnection.ConnectionTimeout(connection).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["PGSSLMODE"] = connection.SslMode switch
             {
                 SslMode.VerifyCA => "verify-ca",

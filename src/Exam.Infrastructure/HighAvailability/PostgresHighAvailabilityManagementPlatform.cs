@@ -211,7 +211,9 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
     {
         var local = await ReadAsync(Local, token);
-        if (local is { Recovery: false } && IsSelectedIsolatedPrimary(local.Value.State))
+        var retired = new NodeRetirementStore(Local.ConfirmationDirectory).Read();
+        if (local is { Recovery: false } && (retired is null || local.Value.State.ServerEpoch > retired.ActiveEpoch) &&
+            IsSelectedIsolatedPrimary(local.Value.State))
         {
             // Isolation is an explicit durable takeover result, not an inference from a
             // timeout. Confirm this local authority without waiting for the isolated node's
@@ -233,7 +235,9 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         if (local is { } localState)
             await RecoverLocalResourcesAsync(localState.State, localState.Recovery, localState.System, token);
         var primaryCandidates = new[] { (Node: Local.NodeId, Observation: local), (Node: otherNode?.NodeId ?? "", Observation: other) }
-            .Where(v => v.Observation is { Recovery: false } && v.Observation.Value.State.ActiveNodeId == v.Node)
+            .Where(v => v.Observation is { Recovery: false } && v.Observation.Value.State.ActiveNodeId == v.Node &&
+                v.Observation.Value.State.ServerEpoch >= (retired?.ActiveEpoch ?? 1) &&
+                (v.Node != Local.NodeId || retired is null || v.Observation.Value.State.ServerEpoch > retired.ActiveEpoch))
             .Select(v => v.Observation)
             .OrderByDescending(v => v!.Value.State.ServerEpoch).ThenByDescending(v => v!.Value.State.Version).ToArray();
         var authoritative = primaryCandidates.FirstOrDefault() ?? (local is { Recovery: true } ? local : null);
@@ -242,7 +246,9 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             authoritative = null; // Conflicting primary identities at one epoch are never resolved by a GUI guess.
         if (authoritative is null)
             return new(_options.ServerId, Local.NodeId, null, null, false,
-                [new("failover-state", false, "实际数据库主备状态不可读取；代次与保护模式未核实。", true)]);
+                [new("failover-state", false, retired is not null
+                    ? "本机旧库已隔离，当前主机数据库连接暂不可用，尚未取得当前主备状态。"
+                    : "实际数据库主备状态不可读取；代次与保护模式未核实。", true)]);
         var state = authoritative.Value.State;
         var nodes = new Dictionary<string, NodeState>();
         var archiveChecks = new List<StartupCheckResult>();

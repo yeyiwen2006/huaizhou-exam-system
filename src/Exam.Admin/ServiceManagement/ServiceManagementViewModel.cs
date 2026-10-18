@@ -31,6 +31,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private bool _disposed, _busy, _readBusy, _active, _signedIn;
     private PendingManagementRequest? _pending;
     private ManagementOperation? _operation;
+    private ManagementOperation? _highAvailabilityOperation;
     private string _address = string.Empty, _server = string.Empty, _node = string.Empty, _username = string.Empty;
     private string _message = string.Empty;
     private string _serverStatus = "服务器程序状态未确认", _requestIdToQuery = string.Empty, _lastRequestId = string.Empty;
@@ -106,7 +107,29 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
         : "连接已配置，将使用当前考务账号连接服务器管理。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
-    public string Message { get => _message; private set => SetProperty(ref _message, value); }
+    public string Message { get => _message; private set { if (SetProperty(ref _message, value)) OnPropertyChanged(nameof(DisplayMessage)); } }
+    public string DisplayMessage => _highAvailabilityOperation is { } operation ? FailoverProgressText(operation) : Message;
+
+    private static string FailoverProgressText(ManagementOperation operation) =>
+        (operation.Kind == ManagementOperationKind.Takeover ? "接管" : "重建") +
+        (operation.FailoverWorkInProgress ? "中" : operation.Phase switch
+        { ManagementOperationPhase.Completed => "成功", ManagementOperationPhase.Failed => "失败", _ => "中" });
+
+    private void RememberFailoverProgress(ManagementOperation operation)
+    {
+        if (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)) return;
+        if (_highAvailabilityOperation is { } previous &&
+            (previous.RequestId != operation.RequestId && previous.AcceptedAt > operation.AcceptedAt ||
+             previous.RequestId == operation.RequestId && (previous.UpdatedAt > operation.UpdatedAt ||
+                previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed && !previous.FailoverWorkInProgress &&
+                (operation.FailoverWorkInProgress || operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed))))) return;
+        _highAvailabilityOperation = operation;
+        OnPropertyChanged(nameof(DisplayMessage));
+    }
+
+    private void RememberFailoverProgress(PendingManagementRequest request) => RememberFailoverProgress(new ManagementOperation(
+        request.RequestId, request.Target.ServerId, request.Target.NodeId, request.Actor, request.Kind,
+        request.BodyHash, ManagementOperationPhase.Accepted, request.CreatedAt, default));
     public string ServerStatusText
     {
         get => _serverStatus;
@@ -401,6 +424,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _store.Save(request); // Failure here must prevent network side effects.
             _knownPendingRequests[request.Target.Key] = request;
             _pending = request; _lastRequestId = request.RequestId; RequestIdToQuery = request.RequestId; NotifyPending();
+            RememberFailoverProgress(request);
             if (kind == ManagementOperationKind.Restore) await ExecuteRestoreAsync(request, connection, generation);
             else
             {
@@ -452,7 +476,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             try
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(25));
+                deadline.CancelAfter(TimeSpan.FromSeconds(45));
                 var connection = await EnsureTargetSessionAsync(request.Target, deadline.Token);
                 if (connection?.Actor != request.Actor) return;
                 var reply = await connection.FindAsync(request.RequestId, deadline.Token);
@@ -463,6 +487,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 else if (reply.Envelope.Result is { } operation)
                 {
                     ValidatePendingOperation(operation, request);
+                    RememberFailoverProgress(operation);
                     if (operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)) return;
                     _store.Clear(request);
                     _knownPendingRequests.TryRemove(request.Target.Key, out _);
@@ -507,6 +532,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 throw new System.IO.InvalidDataException("请求处理记录与当前身份不一致。");
             // Historical results describe that request only; never settle another pending request or overwrite current server status.
             _operation = operation; OnPropertyChanged(nameof(Operation));
+            RememberFailoverProgress(operation);
             OperationText = $"{KindText(operation.Kind)}：{PhaseText(operation.Phase)} · {operation.RequestId}";
             Message = string.Empty;
         }
@@ -575,6 +601,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         }
         _missingOriginal = false;
         _operation = operation;
+        RememberFailoverProgress(operation);
         OnPropertyChanged(nameof(Operation));
         OperationText = $"{KindText(operation.Kind)}：{(operation.FailoverWorkInProgress ? "正在处理原请求" : PhaseText(operation.Phase))} · {operation.RequestId}";
         CanResumeRestore = operation.Kind == ManagementOperationKind.Restore &&
@@ -747,6 +774,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         _polling?.Cancel(); _availabilityPolling?.Cancel(); _restoreProgress?.Cancel(); _restoreWriteInFlight = null; _restoreOperation = null; RestoreText = string.Empty;
         var released = ReleasePeerConnections(dispose);
         _connection = null; IsSignedIn = false; IsBusy = false;
+        _highAvailabilityOperation = null; OnPropertyChanged(nameof(DisplayMessage));
         _readBusy = false; _pending = null; _operation = null; _missingOriginal = false; CanResumeRestore = false;
         _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));

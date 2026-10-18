@@ -38,7 +38,7 @@
         <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
-                <TextBlock Text="{Binding Message}" Style="{StaticResource Management.Message}"/>
+                <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
             </StackPanel>
         </Border>
         <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">

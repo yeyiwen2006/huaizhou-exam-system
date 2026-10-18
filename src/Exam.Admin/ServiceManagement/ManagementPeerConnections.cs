@@ -243,6 +243,7 @@ public sealed partial class ServiceManagementViewModel
         var original = _pending ?? _knownPendingRequests.Values.OrderBy(value => value.Target.NodeId, StringComparer.Ordinal).FirstOrDefault();
         if (original is not null)
         {
+            RememberFailoverProgress(original);
             _lastRequestId = original.RequestId; RequestIdToQuery = original.RequestId;
             if (_pending is null) OperationText = $"节点 {original.Target.NodeId} 有待查询的原请求：{original.RequestId}";
         }
