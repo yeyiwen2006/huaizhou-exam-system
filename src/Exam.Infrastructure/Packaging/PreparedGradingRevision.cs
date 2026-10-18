@@ -36,7 +36,7 @@ public sealed class PreparedGradingRevision : IDisposable
         _metadata = metadata;
         if (string.IsNullOrWhiteSpace(metadata.ServerId) || string.IsNullOrWhiteSpace(metadata.Operator) ||
             string.IsNullOrWhiteSpace(metadata.ExamId) || metadata.PaperVersion < 1 || metadata.GradingVersion is < 1 or long.MaxValue ||
-            metadata.Reason is not { Length: > 0 and <= 1000 } || string.IsNullOrWhiteSpace(metadata.Reason) ||
+            metadata.Reason is null || metadata.Reason.Length > 1000 ||
             metadata.RequestId is not { Length: > 0 and <= 128 } || metadata.Structure is null ||
             Hash(manifest) != metadata.ManifestHash || Hash(answers) != metadata.AnswerHash ||
             metadata.RuleSetId != RuleSetId(manifest, answers))
@@ -54,7 +54,7 @@ public sealed class PreparedGradingRevision : IDisposable
             new GradingRevisionQuestion(q.QuestionNo, q.QuestionId, string.Join("、", q.Options!
                 .Select((id, index) => (id, index))
                 .Where(option => keys[q.QuestionId].CorrectOptionIds!.Contains(option.id, StringComparer.Ordinal))
-                .Select(option => q.DisplayMetadata?.OptionCaptions is { } captions ? captions[option.index] : option.id)),
+                .Select(option => (q.DisplayMetadata?.OptionCaptions is { } captions ? captions[option.index] : option.id).TrimEnd('.'))),
                 ImportPipeline.QuestionFullScore(groups[q.GroupId], keys[q.QuestionId].CorrectOptionIds!.Count))).ToArray());
     }
 
@@ -67,8 +67,9 @@ public sealed class PreparedGradingRevision : IDisposable
     public static async Task<PreparedGradingRevision> PrepareAsync(IGradingRevisionClient api, string examId,
         string source, string reason, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000)
-            throw new InvalidDataException("请填写不超过 1000 字的本次修改备注。");
+        reason = reason?.Trim() ?? string.Empty;
+        if (reason.Length > 1000)
+            throw new InvalidDataException("本次修改备注不能超过 1000 字。");
         var generation = api.Generation;
         var snapshot = await api.GetExamAsync(examId, ct);
         var serverId = api.ServerId;

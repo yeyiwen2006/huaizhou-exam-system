@@ -513,25 +513,40 @@
                                        Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
                             <TextBlock Text="材料包目录（含 manifest.json 与 server-only/answer-key.json）" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding GradingRevision.PackagePath, Mode=OneWay}" Style="{StaticResource FormTextBox}" IsReadOnly="True"/>
-                            <TextBlock Text="本次修改备注（随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
+                            <TextBlock Text="本次修改备注（选填，随规则版本一起记录）" Style="{StaticResource FormLabel}"/>
                             <TextBox Text="{Binding GradingRevision.Reason, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding GradingRevision.CanEditRevision}" Style="{StaticResource FormTextBox}"/>
                             <WrapPanel>
                                 <Button Content="选择材料包目录" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.SelectPackageCommand}"/>
-                                <Button Content="检查并预览规则" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.CheckCommand}"/>
+                                <Button Content="检查并预览" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.CheckCommand}"/>
                                 <Button Content="确认发布 / 重试原请求" Style="{StaticResource PrimaryAction}" Command="{Binding GradingRevision.PublishCommand}"/>
                                 <Button Content="刷新重算状态" Style="{StaticResource ActionButton}" Command="{Binding GradingRevision.RefreshStatusCommand}"/>
                             </WrapPanel>
                             <DataGrid ItemsSource="{Binding GradingRevision.Questions}" AutoGenerateColumns="False" IsReadOnly="True"
                                       CanUserAddRows="False" MinHeight="100" MaxHeight="300" Margin="0,8,0,8">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="80"/>
+                                    <DataGridTextColumn Header="题号" Binding="{Binding QuestionNo}" Width="*"/>
                                     <DataGridTextColumn Header="参考答案" Binding="{Binding CorrectOptions}" Width="*"/>
-                                    <DataGridTextColumn Header="满分" Binding="{Binding FullScore}" Width="120"/>
+                                    <DataGridTextColumn Header="满分" Binding="{Binding FullScore}" Width="*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                             <TextBlock Text="{Binding GradingRevision.Status}" Style="{StaticResource StatusLine}" TextWrapping="Wrap"/>
                             <TextBlock Text="{Binding GradingRevision.PublishedText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
                             <TextBlock Text="{Binding GradingRevision.RecalculationText}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardGap}">
+                        <StackPanel>
+                            <TextBlock Text="答案与计分规则版本记录" Style="{StaticResource CardHeading}"/>
+                            <DataGrid ItemsSource="{Binding GradingRevision.History}" AutoGenerateColumns="False" IsReadOnly="True"
+                                      CanUserAddRows="False" MinHeight="100" MaxHeight="300" Margin="0,8,0,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="规则版本" Binding="{Binding GradingVersion}" Width="110"/>
+                                    <DataGridTextColumn Header="试卷版本" Binding="{Binding PaperVersion}" Width="110"/>
+                                    <DataGridTextColumn Header="修改时间" Binding="{Binding ChangedAt}" Width="240"/>
+                                    <DataGridTextColumn Header="修改备注" Binding="{Binding Reason}" Width="*" MinWidth="160"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="{Binding GradingRevision.HistoryStatus}" Style="{StaticResource CardNote}" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>

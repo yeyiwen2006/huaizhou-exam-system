@@ -133,6 +133,17 @@ public static class PublicationUploadEndpoints
             }
         }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
 
+        api.MapGet("/exams/{examId}/grading-history", async (string examId,
+            [FromServices] Npgsql.NpgsqlDataSource dataSource, HttpContext context,
+            IConfiguration configuration, CancellationToken ct) =>
+        {
+            _ = ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
+            context.Response.Headers.CacheControl = "no-store";
+            var history = await new Exam.Infrastructure.Postgres.Scoring.PostgresGradingHistory(dataSource)
+                .ListAsync(examId, ct);
+            return ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, history);
+        }).WithMetadata(new ReadOnlyObservation());
+
         return api;
     }
 

@@ -601,7 +601,7 @@ public static class ExamApiEndpointExtensions
                     request.RuleSetId,
                     request.Validation,
                     request.Operator,
-                    request.Reason,
+                    request.Reason ?? string.Empty,
                     timeProvider.GetUtcNow(),
                     request.RequestId,
                     request.ManifestJson,

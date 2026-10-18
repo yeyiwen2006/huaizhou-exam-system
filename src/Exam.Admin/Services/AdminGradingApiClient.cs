@@ -19,6 +19,10 @@ public sealed partial class AdminApiClient : IGradingRevisionClient
     public Task<GradingMaterialSnapshot> GetGradingMaterialsAsync(string examId, CancellationToken ct = default) =>
         SendAsync<GradingMaterialSnapshot>(HttpMethod.Get, $"api/v1/exams/{Uri.EscapeDataString(examId)}/grading-materials", null, ct);
 
+    public Task<IReadOnlyList<GradingVersionHistory>> GetGradingHistoryAsync(string examId, CancellationToken ct = default) =>
+        SendAsync<IReadOnlyList<GradingVersionHistory>>(HttpMethod.Get,
+            $"api/v1/exams/{Uri.EscapeDataString(examId)}/grading-history", null, ct);
+
     public Task<GradingStatusReport> GetGradingStatusAsync(string examId, CancellationToken cancellationToken = default) =>
         SendAsync<GradingStatusReport>(HttpMethod.Get,
             $"api/v1/grading/{Uri.EscapeDataString(examId)}/status", null, cancellationToken);

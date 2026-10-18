@@ -79,6 +79,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
                 Home.RefreshCommand.Execute(null);
             if (value == ImportPage && Import.RefreshPublicationCommand.CanExecute(null))
                 Import.RefreshPublicationCommand.Execute(null);
+            if (value == ImportPage) _ = GradingRevision.RefreshHistoryAsync();
         }
     }
 
@@ -183,6 +184,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         if (CurrentExam?.ExamId == examId)
             CurrentExam = CurrentExam with { PaperVersion = paperVersion };
         Home.UpdatePaperVersion(examId, paperVersion);
+        if (GradingRevision.ExamId == examId) _ = GradingRevision.RefreshHistoryAsync();
     }
 
     // A view belongs to an examination for the whole authenticated session. Navigation only

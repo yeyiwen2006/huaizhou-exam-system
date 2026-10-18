@@ -180,7 +180,8 @@ public sealed class ExamVersionAggregate
             EnsureExpectedVersion(request.ExpectedVersion, _gradingVersion, "gradingVersion");
             RequireIdentifier(request.RuleSetId, nameof(request.RuleSetId));
             RequireIdentifier(request.Operator, nameof(request.Operator));
-            RequireIdentifier(request.Reason, nameof(request.Reason));
+            if (request.Reason is null || request.Reason.Length > 1000)
+                throw new VersioningRuleException(VersioningErrorCode.InvalidRequest, "修改备注不能超过 1000 字。");
             // 旧命令流允许重放；新 HTTP 发布必须提供源清单与答案，不能只信任布尔标志。
             if (request.ManifestJson is not null || request.AnswerKeyJson is not null)
             {
