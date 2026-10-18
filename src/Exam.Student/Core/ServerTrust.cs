@@ -13,14 +13,14 @@ public static class ServerTrust
 {
     private static string? _pinnedThumbprint;
     public static PublicServerEndpoints? PublicEndpoints { get; set; }
-    public static bool ValidateNodeCertificate(TrustedServerTopology topology, object? sender, X509Certificate? certificate,
+    public static bool ValidateNodeCertificate(TrustedServerTopology topology, Uri endpoint, X509Certificate? certificate,
         SslPolicyErrors errors)
     {
-        if (sender is not SslStream stream || certificate is null) return false;
+        if (certificate is null || endpoint.Scheme != Uri.UriSchemeHttps) return false;
         string host;
-        try { host = DeviceStore.NormalizeHost(stream.TargetHostName.Trim('[', ']')); }
+        try { host = DeviceStore.NormalizeHost(endpoint.IdnHost.Trim('[', ']')); }
         catch (ArgumentException) { return false; }
-        var node = topology.Nodes.SingleOrDefault(node => DeviceStore.NormalizeHost(node.Host) == host);
+        var node = topology.Nodes.SingleOrDefault(node => DeviceStore.NormalizeHost(node.Host) == host && node.Port == endpoint.Port);
         return node is not null && (node.UsesPublicHttps ? node.PublicCertificateSha256 is { } pin
             ? string.Equals(pin, certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase)
             : errors == SslPolicyErrors.None :

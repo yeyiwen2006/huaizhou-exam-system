@@ -53,12 +53,13 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     };
 
     // A pool belongs to one trust context. New device/trust contexts must perform a new TLS handshake.
-    private static SocketsHttpHandler CreateDefaultHandler(TrustedServerTopology? topology) => new()
+    private static HttpClientHandler CreateDefaultHandler(TrustedServerTopology? topology) => new()
     {
         AllowAutoRedirect = false,
-        SslOptions = { RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
-            topology is not null ? ServerTrust.ValidateNodeCertificate(topology, sender, certificate, errors)
-                : ServerTrust.ValidateCertificate(sender, certificate, chain, errors) }
+        ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
+            request.RequestUri is { } endpoint && (topology is not null
+                ? ServerTrust.ValidateNodeCertificate(topology, endpoint, certificate, errors)
+                : ServerTrust.ValidateCertificate(request, certificate, chain, errors))
     };
 
     public void ConfigureConnection(DeviceRecord device)
@@ -343,7 +344,9 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
                 if (reading.IsCompleted) return await reading;
                 probing = TryReconnectAsync(identityGeneration, generation, pending.Token);
                 await Task.WhenAny(reading, probing);
-                if (reading.IsCompleted) pending.Cancel();
+                // A refused old connection must not cancel the peer that may
+                // already be confirming the new primary at another port.
+                if (reading.IsCompletedSuccessfully && reading.Result.IsSuccess) pending.Cancel();
                 bool changed;
                 try { changed = await probing; }
                 catch (OperationCanceledException) when (pending.IsCancellationRequested && !ct.IsCancellationRequested) { changed = false; }
