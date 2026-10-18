@@ -829,6 +829,7 @@
                                 <Button DockPanel.Dock="Right" Content="查看设备变更试场历史" Style="{StaticResource ActionButton}" Command="{Binding Activation.DeviceHistoryCommand}"/>
                                 <TextBlock Text="设备变更试场历史" Style="{StaticResource CardHeading}"/>
                             </DockPanel>
+                            <TextBlock Text="可查询上表中选中设备的变更试场历史" Style="{StaticResource CardNote}"/>
                             <DataGrid ItemsSource="{Binding Activation.DeviceHistory}" Height="160" IsReadOnly="True">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="时间" Binding="{Binding ChangedAt}" Width="170"/>
