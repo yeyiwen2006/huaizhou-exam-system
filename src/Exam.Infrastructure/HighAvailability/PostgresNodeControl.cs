@@ -30,7 +30,8 @@ public sealed class PostgresNodeHealthProbe(
         try
         {
             var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
-            { Timeout = 5, CommandTimeout = 5, Pooling = false };
+            { CommandTimeout = 5, Pooling = false };
+            settings.Timeout = Math.Clamp(settings.Timeout, 3, 15);
             await using var connection = new NpgsqlConnection(settings.ConnectionString);
             await connection.OpenAsync(cancellationToken);
             const string sql = """
