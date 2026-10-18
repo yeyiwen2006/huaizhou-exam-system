@@ -104,6 +104,30 @@
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <!-- 页头：图标块 + 页面标题（Header）+ 用途说明（Content）；图标几何放在 Tag -->
+    <Style x:Key="PageHeading" TargetType="HeaderedContentControl">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Margin" Value="0,0,0,20" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="HeaderedContentControl">
+                    <DockPanel>
+                        <Border Style="{StaticResource IconTile}" Width="44" Height="44" CornerRadius="11">
+                            <Path Style="{StaticResource IconTile.Glyph}" Width="22" Height="22"
+                                  Data="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" />
+                        </Border>
+                        <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource PageTitle}"
+                                       Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}" />
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" />
+                        </StackPanel>
+                    </DockPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 状态/说明提示条（只读文字，无图标；有图标的业务反馈用 Banner 组件） -->
     <Style x:Key="Hint" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Brush.Surface.Alt}" />

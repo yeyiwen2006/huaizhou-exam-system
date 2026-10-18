@@ -23,21 +23,16 @@
         </Style>
     </UserControl.Resources>
     <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel>
-        <Border Style="{StaticResource TopBar}" Padding="28,24">
-            <DockPanel>
+        <StackPanel Margin="{StaticResource Padding.Page}">
+            <DockPanel Margin="0,0,0,20">
                 <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack" VerticalAlignment="Center"/>
                 <Button x:Name="RefreshServersButton" DockPanel.Dock="Right" Content="刷新"
                         Style="{StaticResource Btn.Secondary}" Margin="0,0,8,0" VerticalAlignment="Center"
                         Command="{Binding RefreshCommand}"/>
-                <StackPanel Margin="0,0,16,0">
-                    <TextBlock Text="服务器管理" Style="{StaticResource PageTitle}"/>
-                    <TextBlock Text="{Binding TargetText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"
-                               Margin="0,8,0,0" LineHeight="20"/>
-                </StackPanel>
+                <HeaderedContentControl Style="{StaticResource PageHeading}" Header="服务器管理"
+                                        Content="{Binding TargetText}" Tag="{StaticResource Icon.Server}" Margin="0,0,16,0"/>
             </DockPanel>
-        </Border>
-        <Border Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
+        <Border Background="{DynamicResource Brush.Background}">
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
@@ -45,7 +40,7 @@
                 <TextBlock Text="{Binding RecoveryLoginNotice}" Style="{StaticResource Management.Message}"/>
             </StackPanel>
         </Border>
-            <StackPanel Margin="{StaticResource Padding.Page}">
+            <StackPanel>
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding ShowManagementLogin, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <TextBlock Text="管理连接" Style="{StaticResource SectionTitle}"/>
