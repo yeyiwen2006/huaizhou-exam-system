@@ -98,7 +98,7 @@ public partial class LoginPage : UserControl
         {
             StudentMessages.ShowWithDetail(
                 ErrorBanner,
-                "连接校验未通过，已拒绝连接不受信任的服务器，请联系监考人员。",
+                "服务器证书校验未通过，请联系监考人员核对连接地址与部署配置；使用公网入口时需使用对应的公网配置。",
                 error.Message);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or InvalidOperationException or TimeoutException)

@@ -106,6 +106,8 @@ public sealed class DeviceStore
             // Only local operator configuration may change a public hostname. Preserve the
             // same logical server, node/origin bindings, device credentials and certificate pins.
             var topology = publicEndpoints.RebindSavedRoutes(saved.Topology!);
+            if (!topology.Nodes.Any(node => node.Address == address))
+                throw new StudentIdentityException("所选公网入口未对应已登记的可信节点，原设备登记已保留。");
             var originalNode = saved.Topology!.Nodes.Single(node =>
                 EndpointKey(node.Host, node.Port) == EndpointKey(saved.Host, saved.Port));
             var mapped = topology.Nodes.Single(node => node.NodeId == originalNode.NodeId);

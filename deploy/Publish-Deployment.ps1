@@ -59,10 +59,11 @@ Copy-ReleaseFile 'docs/cli-usage.md' 'admin' 'cli/使用说明.md'
 Copy-ReleaseFile 'deploy/student/README.md' 'student' '部署说明.md'
 Copy-ReleaseFile 'deploy/student/server.example.json' 'student' 'server.example.json'
 Copy-ReleaseFile 'deploy/student/server.public.example.json' 'student' 'server.public.example.json'
+Copy-ReleaseFile 'deploy/student/server.public.single.example.json' 'student' 'server.public.single.example.json'
 foreach ($client in @('admin', 'student')) {
     $executable = if ($client -eq 'admin') { 'Exam.Admin.exe' } else { 'Exam.Student.exe' }
     $title = if ($client -eq 'admin') { '启动考务端.cmd' } else { '启动学生端.cmd' }
-    $content = "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"%~dp0$executable`"`r`n"
+    $content = "$([char]64)echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"%~dp0$executable`"`r`n"
     [IO.File]::WriteAllText((Join-Path $destination "$client/$title"), $content, [Text.Encoding]::ASCII)
 }
 Copy-Item -LiteralPath (Join-Path $repository '部署指南.md') -Destination (Join-Path $destination '部署指南.md')

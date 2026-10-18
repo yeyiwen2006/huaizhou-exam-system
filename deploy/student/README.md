@@ -78,11 +78,15 @@ $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq '
 
 ## 通过公网 HTTPS 入口连接主备节点
 
-使用 Cloudflare 等 HTTPS 代理时，学生端可以将事先部署的公网域名对应到服务器返回的原主备节点。复制 [server.public.example.json](server.public.example.json) 为 exe 同目录的 `server.json`，替换逻辑服务器标识、两个节点标识、各自公网域名及原节点地址。示例中的域名和地址均为占位值。
+使用 Cloudflare 等 HTTPS 代理时，学生端可以将事先部署的公网域名对应到服务器返回的原主备节点。两个公网入口使用 [server.public.example.json](server.public.example.json)，仅一个入口使用 [server.public.single.example.json](server.public.single.example.json)。复制为 exe 同目录的 `server.json`，替换逻辑服务器标识、节点标识、公网域名及原节点地址。示例中的身份和地址均为合成占位值。
 
-顶层 `host`、`port` 必须对应其中一个公网入口。`publicEndpoints.nodes` 必须包含两个不同节点，各自的 `originHost`、`originPort` 与服务器下发的主备地址一致。公网入口使用 Windows 标准 HTTPS 证书校验，不能同时配置 `certificateSha256`。登录时填写所配置的公网域名；登录后的 API、通知和资源下载沿用该映射，直接访问原节点时仍使用原证书指纹。
+顶层 `host`、`port` 必须对应其中一个公网入口。`publicEndpoints.nodes` 可包含一至两个不同节点，各自的 `originHost`、`originPort` 与服务器下发的节点地址一致。只配置当前可用节点即可登录；未配置公网入口的已登记节点保留原地址、身份及证书指纹。公网入口使用 Windows 标准 HTTPS 证书校验，不能同时配置内网的 `certificateSha256`。登录时填写所配置的公网域名；登录后的 API、通知和资源下载沿用该映射，直接访问原节点时仍使用原证书指纹。
 
 公网映射从本机部署文件读取，服务器响应不能自行添加公网域名。已登记设备会保留原信任集合，临时通道更换域名后须安排明确的信任迁移，不能通过删除设备记录或答卷处理。每个公网入口须能访问对应节点；客户端配置不会创建通道或处理通道自身的故障接管。
+
+一个健康活动节点即可承接登录，成功登录不等待另一节点确认。原主机单独运行时可直接使用其入口；备机单独运行时须先由管理端按隔离及持久确认流程完成接管，再使用该节点的入口。仍处于物理只读状态的备库不能因客户端发现另一台不可达而获得写入权。
+
+若内网连接正常、输入公网代理域名却提示证书校验失败，核对正在运行的 exe 同目录 `server.json`：内网指纹与公网代理证书不同。部署正确的公网配置并重启学生端即可切换校验方式；不能关闭 TLS 验证，也不能复制代理证书指纹冒充原节点指纹。保留原设备登记与答卷。临时隧道域名变化后，由部署方更新映射后重启客户端。
 
 ## 冒烟测试（发布产物）
 
@@ -115,4 +119,5 @@ dotnet test tests\Unit\Exam.StudentUnitTests -c Release
 | `smoke-test-student.ps1` | 发布产物隔离启动冒烟（三场景） |
 | `server.example.json` | 部署配置模板（占位值，不含真实地址/凭据） |
 | `server.public.example.json` | 公网 HTTPS 与原主备节点的对应关系模板 |
+| `server.public.single.example.json` | 仅一个已批准公网入口的配置模板（合成样例） |
 | `README.md` | 本说明（随包复制，供监考/部署人员查阅） |
