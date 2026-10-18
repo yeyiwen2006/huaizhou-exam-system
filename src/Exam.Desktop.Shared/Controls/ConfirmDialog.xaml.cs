@@ -13,6 +13,8 @@ public partial class ConfirmDialog : Window
 
     public ConfirmDialog()
     {
+        if (Application.Current is null) Resources.MergedDictionaries.Add(new ResourceDictionary
+        { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
         Closed += (_, _) => _tcs.TrySetResult(false);
     }

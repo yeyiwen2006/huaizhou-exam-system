@@ -100,7 +100,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public bool CanLogin => CanEnterManagementCredentials && HasConnectionConfiguration;
     public string ConnectionStatus => !HasConnectionConfiguration
         ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员核对部署配置。"
-        : _businessSession is null ? "管理连接已配置；业务服务不可用时，可直接使用已启用的考务账号登录管理。"
+        : _businessSession is null ? "管理连接已配置；主服务器不可用导致无法正常登录时，可直接使用已启用的考务账号登录管理。"
         : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
         : "连接已配置，将使用当前考务账号连接服务器管理。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
@@ -169,7 +169,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         RestartBackupMonitoring();
         _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty;
         Username = session?.Username ?? string.Empty;
-        Message = session is null ? "业务服务不可用时，可在此使用考务账号独立登录管理服务。" : string.Empty;
+        Message = session is null ? "主服务器不可用导致无法正常登录时，可在此使用考务账号独立登录管理服务。" : string.Empty;
         OnPropertyChanged(nameof(ConnectionStatus)); UpdateCommands();
         if (_active && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
     }
@@ -333,7 +333,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task RequestAsync(ManagementOperationKind kind)
     {
         if (!IsSignedIn || _connection is null || IsBusy || HasUnresolvedManagementRequests) return;
-        if (kind == ManagementOperationKind.Takeover && !await RouteTakeoverToSelectedNodeAsync()) return;
+        if (kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild &&
+            !await RouteHighAvailabilityToSelectedNodeAsync(kind)) return;
         if (_connection?.Actor is not { } actor || !IsSignedIn || IsBusy || HasUnresolvedManagementRequests) return;
         var connection = _connection; var generation = _generation;
         var id = Guid.NewGuid().ToString("N");
@@ -347,18 +348,23 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 if (backup is null) return;
             }
             IsolationEvidence? isolation = null;
-            if (kind == ManagementOperationKind.Takeover)
+            var confirmedRebuild = false;
+            if (kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)
             {
                 if (!CanIssueHighAvailability(kind) || _availability?.State is not { } before)
-                    throw new ArgumentException("请刷新主备状态后选择可用备机。");
+                    throw new ArgumentException("请刷新主备状态后重新选择目标节点。");
                 var targetNode = HighAvailabilityTarget.Trim();
                 var note = HighAvailabilityReason.Trim();
                 if (note.Length > 500) throw new ArgumentException("备注最多500字。");
-                var confirmationText = $"准备变为主服务器的节点：{targetNode}\n当前主机：{before.ActiveNodeId}\n" +
+                var confirmationText = kind == ManagementOperationKind.Takeover
+                    ? $"准备变为主服务器的节点：{targetNode}\n当前主机：{before.ActiveNodeId}\n" +
                     "确认表示你已在现场将当前主机的全部业务网络隔离，且会在恢复处理完成前保持隔离。\n" +
-                    "系统将记录本次隔离确认，并提升所选备机、启动业务服务。" +
-                    (note.Length == 0 ? "" : $"\n备注：{note}");
-                if (!await ConfirmAsync(new("确认隔离旧主并接管", confirmationText, true))) return;
+                    "点击确定后，所选备机将接管为主服务器，原主机角色将变为隔离；点击取消不会执行接管。"
+                    : $"准备重建的隔离节点：{targetNode}\n当前主机：{before.ActiveNodeId}\n" +
+                    "系统将停止所选节点的旧服务，保留旧数据库和资源的隔离副本，从当前主机重新复制数据并启动为备机。\n" +
+                    "请保持旧业务隔离，并确保重建所需的管理和复制连接可用。点击确定开始重建，点击取消不执行。";
+                if (note.Length > 0) confirmationText += $"\n备注：{note}";
+                if (!await ConfirmAsync(new(kind == ManagementOperationKind.Takeover ? "确认接管为主服务器" : "确认重建隔离的服务器并作为备机", confirmationText, true))) return;
                 if (!Current(connection, generation) || !IsSignedIn) return;
                 // A human may need more than the proof lifetime to confirm. Re-read the selected node,
                 // and require another confirmation if the active node, epoch or selection changed.
@@ -368,17 +374,19 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                     after.Version != before.Version || HighAvailabilityTarget.Trim() != targetNode ||
                     HighAvailabilityReason.Trim() != note || !CanIssueHighAvailability(kind))
                 {
-                    Message = "主备状态或本次目标已变化，请核对后重新发起接管。";
+                    Message = "主备状态或本次目标已变化，请核对后重新发起操作。";
                     return;
                 }
-                isolation = new(before.ActiveNodeId, false, true, actor, "考务员通过接管确认对话，确认旧主全部业务网络已隔离并将保持隔离。");
+                if (kind == ManagementOperationKind.Takeover)
+                    isolation = new(before.ActiveNodeId, false, true, actor, "考务员通过接管确认对话，确认旧主全部业务网络已隔离并将保持隔离。");
+                else confirmedRebuild = true;
             }
-            var body = BuildBody(kind, connection.Target, actor, id, backup, isolation);
+            var body = BuildBody(kind, connection.Target, actor, id, backup, isolation, confirmedRebuild);
             var request = PendingManagementRequest.Create(connection.Target, actor, kind, id, body);
             var confirmation = kind == ManagementOperationKind.Restore
                 ? new ManagementConfirmation("确认按此备份恢复", RestoreConfirmationBody(request, backup!), true)
                 : new ManagementConfirmation("确认" + KindText(kind), ConfirmationBody(kind, request), kind is not ManagementOperationKind.Checks);
-            if (kind != ManagementOperationKind.Takeover && !await ConfirmAsync(confirmation)) return;
+            if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild) && !await ConfirmAsync(confirmation)) return;
             if (!Current(connection, generation) || !IsSignedIn) return;
             _store.Save(request); // Failure here must prevent network side effects.
             _knownPendingRequests[request.Target.Key] = request;
@@ -543,7 +551,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         }
     }
 
-    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null, IsolationEvidence? confirmedIsolation = null)
+    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null, IsolationEvidence? confirmedIsolation = null, bool confirmedRebuild = false)
     {
         object body = kind switch
         {
@@ -553,7 +561,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Restore => new RestoreRequest(id,
                 backup?.BackupId ?? throw new InvalidOperationException("备份信息尚未读取。"), backup.SourceDirectory, actor),
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
-                BuildHighAvailabilityRequest(kind, target, actor, id, confirmedIsolation),
+                BuildHighAvailabilityRequest(kind, target, actor, id, confirmedIsolation, confirmedRebuild),
             _ => new ManagementServiceRequest(id, target.ServerId, target.NodeId)
         };
         return JsonSerializer.Serialize(body, JsonDefaults.Create());

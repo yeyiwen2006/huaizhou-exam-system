@@ -41,6 +41,9 @@ $connection = [ordered]@{ address = $address.Uri.AbsoluteUri; serverId = $server
 $hasPeerConfiguration = -not [string]::IsNullOrWhiteSpace($PeerManagementConfigurationPath)
 $hasPeerHost = -not [string]::IsNullOrWhiteSpace($PeerHostName)
 if ($hasPeerConfiguration -ne $hasPeerHost) { throw 'Supply both PeerManagementConfigurationPath and PeerHostName for a two-node deployment.' }
+if (@($configuration.HighAvailability.Nodes.PSObject.Properties).Count -gt 1 -and -not $hasPeerConfiguration) {
+    throw 'This deployment has two nodes. Supply PeerManagementConfigurationPath and PeerHostName so the admin client can manage both nodes.'
+}
 if ($hasPeerConfiguration) {
     if ([Uri]::CheckHostName($PeerHostName.Trim('[', ']')) -eq [UriHostNameType]::Unknown) {
         throw 'PeerHostName must be the peer HTTPS certificate DNS name or IP, without scheme, path or port.'

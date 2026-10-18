@@ -39,8 +39,9 @@ public sealed partial class ServiceManagementViewModel
         set
         {
             if (!SetProperty(ref _selectedNode, value)) return;
-            if (value is { IsPlaceholder: false } && _displayState?.Nodes.ContainsKey(value.NodeId) == true)
-                HighAvailabilityTarget = value.NodeId;
+            HighAvailabilityTarget = value is { IsPlaceholder: false } && _displayState?.Nodes.ContainsKey(value.NodeId) == true
+                ? value.NodeId : string.Empty;
+            UpdateCommands();
         }
     }
     public string PrimaryServerStatusText => NodeStatusText(primary: true);
@@ -115,17 +116,25 @@ public sealed partial class ServiceManagementViewModel
         }
     }
 
-    private bool CanIssueHighAvailability(ManagementOperationKind kind) =>
-        kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect) ||
-        _availability is { State: not null, VerifiedAt: { } time } && _time.GetUtcNow() - time < TimeSpan.FromSeconds(10) &&
-        time <= _time.GetUtcNow().AddSeconds(5) &&
-        (kind != ManagementOperationKind.Takeover ||
-            _availability.State.Nodes.TryGetValue(HighAvailabilityTarget.Trim(), out var local) && IsTakeoverTargetRoutable(local.NodeId) &&
-            local.Role == DeploymentNodeRole.Standby && local.Reachable && local.DatabaseInRecovery &&
-            _time.GetUtcNow() - local.ObservedAt < TimeSpan.FromSeconds(10) && local.ObservedAt <= _time.GetUtcNow().AddSeconds(5) &&
-            _availability.State.ActiveNodeId != local.NodeId);
+    private bool CanIssueHighAvailability(ManagementOperationKind kind)
+    {
+        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect)) return true;
+        if (_availability is not { State: { } state, VerifiedAt: { } time } ||
+            _time.GetUtcNow() - time >= TimeSpan.FromSeconds(10) || time > _time.GetUtcNow().AddSeconds(5)) return false;
+        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)) return true;
+        return SelectedNode is { IsPlaceholder: false } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
+            selected.Role == (kind == ManagementOperationKind.Takeover ? "备机" : "隔离") &&
+            state.Nodes.TryGetValue(selected.NodeId, out var node) && IsHighAvailabilityTargetRoutable(node.NodeId) &&
+            IsHighAvailabilityTarget(kind, state, node);
+    }
 
-    private HighAvailabilityRequest BuildHighAvailabilityRequest(ManagementOperationKind kind, ManagementTarget target, string actor, string id, IsolationEvidence? confirmedIsolation = null)
+    private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>
+        state.ActiveNodeId != node.NodeId && (kind == ManagementOperationKind.Rebuild
+            ? node.Role == DeploymentNodeRole.Isolated
+            : node.Role == DeploymentNodeRole.Standby && node.Reachable && node.DatabaseInRecovery &&
+                _time.GetUtcNow() - node.ObservedAt < TimeSpan.FromSeconds(10) && node.ObservedAt <= _time.GetUtcNow().AddSeconds(5));
+
+    private HighAvailabilityRequest BuildHighAvailabilityRequest(ManagementOperationKind kind, ManagementTarget target, string actor, string id, IsolationEvidence? confirmedIsolation = null, bool confirmedRebuild = false)
     {
         if (_availability is not { State: { } state, VerifiedAt: { } time } ||
             _time.GetUtcNow() - time >= TimeSpan.FromSeconds(10) || time > _time.GetUtcNow().AddSeconds(5))
@@ -133,16 +142,17 @@ public sealed partial class ServiceManagementViewModel
         if (HighAvailabilityReason.Length > 500 ||
             string.IsNullOrWhiteSpace(HighAvailabilityTarget) || !state.Nodes.ContainsKey(HighAvailabilityTarget.Trim()))
             throw new ArgumentException("请选择已配置的目标节点；备注最多500字。");
-        if (kind == ManagementOperationKind.Takeover && (!CanIssueHighAvailability(kind) || HighAvailabilityTarget.Trim() != target.NodeId))
-            throw new ArgumentException("所选节点尚未核实为本次管理连接上的可用备机。");
+        if (kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild &&
+            (!CanIssueHighAvailability(kind) || HighAvailabilityTarget.Trim() != target.NodeId))
+            throw new ArgumentException("所选节点角色或管理连接已变化，请重新选择目标。");
         var isolation = kind == ManagementOperationKind.Takeover ? confirmedIsolation : null;
         if (kind == ManagementOperationKind.Takeover && (isolation is not { IsSufficient: true } ||
             isolation.IsolatedNodeId != state.ActiveNodeId || isolation.ConfirmedBy != actor || string.IsNullOrWhiteSpace(isolation.Reason)))
             throw new ArgumentException("必须确认原主机断电或业务网络隔离；心跳丢失不足以接管。");
-        if (kind == ManagementOperationKind.Rebuild && !ConfirmDestructiveRebuild)
+        if (kind == ManagementOperationKind.Rebuild && !confirmedRebuild)
             throw new ArgumentException("须先确认重建目标服务器旧数据并保持隔离。");
         return new(id, target.ServerId, target.NodeId, actor, state.ServerEpoch, state.Version,
-            HighAvailabilityTarget.Trim(), HighAvailabilityReason.Trim(), isolation, ConfirmDestructiveRebuild);
+            HighAvailabilityTarget.Trim(), HighAvailabilityReason.Trim(), isolation, confirmedRebuild);
     }
 
     private void ApplyHighAvailabilityReply(ManagementReply<HighAvailabilityStatus> reply)
@@ -206,8 +216,6 @@ public sealed partial class ServiceManagementViewModel
             : state.ActiveNodeId == target.NodeId
                 ? "单节点运行：本机可靠保存后即可继续业务，复制恢复后自动补齐；当前新数据可能只有一份。"
                 : "当前为备用节点。原主故障时，请确认原主已断电或隔离全部业务网络，再点击“接管为主服务器”。";
-        if (string.IsNullOrWhiteSpace(HighAvailabilityTarget))
-            HighAvailabilityTarget = state.Nodes.Values.FirstOrDefault(n => n.Role == DeploymentNodeRole.Standby && IsTakeoverTargetRoutable(n.NodeId))?.NodeId ?? string.Empty;
         UpdateDisplayedNodes();
         OnPropertyChanged(nameof(HighAvailabilityVersionText)); OnPropertyChanged(nameof(ShowProtectionWarning)); UpdateCommands();
         _protectionExpiry?.Cancel();
@@ -281,7 +289,9 @@ public sealed partial class ServiceManagementViewModel
             {
                 var local = LocalObservation(node.NodeId);
                 var observed = local?.State ?? node;
-                if (local is not null && !observed.Reachable) observed = observed with { Role = node.Role };
+                // Local health remains independent, but an old local database cannot revive a retired role.
+                if (local is not null && (local.Epoch <= state.ServerEpoch || !observed.Reachable))
+                    observed = observed with { Role = node.Role };
                 var fresh = (local is not null || _availability is not null) && _time.GetUtcNow() - observed.ObservedAt < TimeSpan.FromSeconds(10) &&
                     observed.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
                 rows.Add(LocalNodeRow(observed, fresh));

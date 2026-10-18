@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     public AdminWorkspaceRoute WorkspaceRoute => _router.Route;
     private ServiceManagementView? _managementPage;
     private int _businessPage;
+    private bool _confirmingLogout;
 
     public MainWindow() : this(new MainViewModel(), ServiceManagementViewModel.CreateDefault()) { }
 
@@ -91,6 +92,20 @@ public partial class MainWindow : Window
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
 
+    private async void OnLogoutRequested(object sender, RoutedEventArgs e)
+    {
+        if (_confirmingLogout || !_viewModel.Connection.IsConnected) return;
+        _confirmingLogout = true;
+        try
+        {
+            if (await Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "确认退出登录",
+                "确定退出当前考务账号并返回登录页面吗？", confirmText: "确定", cancelText: "取消") &&
+                _viewModel.Connection.LogoutCommand.CanExecute(null))
+                _viewModel.Connection.LogoutCommand.Execute(null);
+        }
+        finally { _confirmingLogout = false; }
+    }
+
     private void OnExamHidingMenuOpened(object sender, RoutedEventArgs e)
     {
         // The scope selector is inside the clickable exam card; opening it must not open the exam.
@@ -140,21 +155,26 @@ public partial class MainWindow : Window
     }
     public void OpenManagement()
     {
+        if (_router.Route == AdminWorkspaceRoute.LocalManagement && MainTabArea.SelectedIndex == MainViewModel.ManagementPage &&
+            ManagementPageRegion.Content is not null) return;
         Management.SetBusinessSession(_viewModel.CaptureBusinessSession());
         FailureManagementButton.Visibility = Visibility.Collapsed;
-        if (_router.Route != AdminWorkspaceRoute.LocalManagement) _businessPage = _viewModel.SelectedPage;
+        if (_router.Route != AdminWorkspaceRoute.LocalManagement && _viewModel.SelectedPage != MainViewModel.ManagementPage)
+            _businessPage = _viewModel.SelectedPage;
         _router.OpenManagement();
         DetachLogin();
         _viewModel.Activation.StopPolling();
         _viewModel.Monitoring.IsPageActive = false;
         _viewModel.Reports.IsPageActive = false;
-        MainTabArea.Visibility = Visibility.Collapsed;
+        PageRegion.Content = null;
+        MainTabArea.Visibility = Visibility.Visible;
         if (_managementPage is null)
         {
             _managementPage = new ServiceManagementView(Management);
             _managementPage.BackRequested += ReturnToBusiness;
         }
-        PageRegion.Content = _managementPage;
+        ManagementPageRegion.Content = _managementPage;
+        _viewModel.SelectedPage = MainViewModel.ManagementPage;
         Management.Activate();
     }
     public void ReturnToBusiness()
@@ -181,7 +201,17 @@ public partial class MainWindow : Window
 
     private void OnSelectedPageChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_router.Route == AdminWorkspaceRoute.LocalManagement) return;
+        if (!ReferenceEquals(e.OriginalSource, MainTabArea)) return;
+        if (MainTabArea.SelectedIndex == MainViewModel.ManagementPage) { OpenManagement(); return; }
+        if (_router.Route == AdminWorkspaceRoute.LocalManagement)
+        {
+            Management.Deactivate();
+            _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
+            _router.ReturnToBusiness();
+            if (!_viewModel.Connection.IsConnected) { ShowLoginPage(); return; }
+            ShowMainArea();
+        }
+        _businessPage = MainTabArea.SelectedIndex;
         if (_viewModel.SelectedPage == MainViewModel.ActivationPage)
             _viewModel.Activation.StartPolling();
         else

@@ -10,7 +10,7 @@
 
 部署人员在服务器上运行 `Export-AdminConnection.ps1`，将生成的 `management-connection.json` 放到考务电脑 `Exam.Admin.exe` 旁。服务器管理页面统一显示主机、备机与自动备份状态，使用右上角“刷新”，不再提供手工切换管理服务器或导入配置界面。
 
-双节点部署为导出脚本额外提供 `-PeerManagementConfigurationPath` 和 `-PeerHostName`。两份受保护管理配置必须属于同一逻辑服务器、不同节点；导出的文件只包含 `address/serverId/nodeId/peerAddress/peerNodeId`，不含口令或令牌。界面按选中的节点使用各自的管理连接和独立会话，不猜测对端端口，也不把一个节点的管理令牌转交另一个节点。
+双节点部署必须为导出脚本提供 `-PeerManagementConfigurationPath` 和 `-PeerHostName`。检测到双节点配置却未提供对端参数时，脚本会提示补齐，不再导出缺少备机的连接文件。两份受保护管理配置必须属于同一逻辑服务器、不同节点；导出的文件只包含 `address/serverId/nodeId/peerAddress/peerNodeId`，不含口令或令牌。界面按选中的节点使用各自的管理连接和独立会话，不猜测对端端口，也不把一个节点的管理令牌转交另一个节点。
 
 原先保存的单节点连接若与部署文件中的某个节点地址和身份完全相同，会自动补齐另一节点。若实际地址或逻辑身份已变更，由部署人员更新用户管理连接文件；不通过忽略证书或保留错误身份来强行连接。单节点部署仍兼容原来的三字段文件。
 

@@ -110,7 +110,7 @@ Linux 管理认证直接核对数据库，业务停机期间应保持 PostgreSQL
 pwsh -File deploy/management/Export-AdminConnection.ps1 -ManagementConfigurationPath "C:\Exam\Exam.Management\appsettings.json" -AdminDirectory "C:\Exam\AdminConnection" -HostName "manage.exam.example.invalid"
 ```
 
-生成的 `management-connection.json` 只含管理 HTTPS 地址、服务器标识和节点标识。把文件放到考务端程序旁，或在“服务器管理”页面点“导入连接配置”。更换节点或管理端口后重新导入，已有用户保存的连接优先于程序旁的文件。
+双节点部署还须提供 `-PeerManagementConfigurationPath` 和 `-PeerHostName`。生成的 `management-connection.json` 只含双方管理 HTTPS 地址、服务器标识和节点标识，将它放到两端考务程序旁。已有单节点用户配置与其中一端身份、地址完全一致时，程序会自动补齐对端；地址或身份已变更时，由部署人员更新用户连接文件。
 
 ## 目标设备联调
 

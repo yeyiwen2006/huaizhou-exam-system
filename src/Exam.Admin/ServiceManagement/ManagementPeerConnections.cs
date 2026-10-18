@@ -73,7 +73,7 @@ public sealed partial class ServiceManagementViewModel
     private ManagedNodeSession NodeSession(ManagementTarget target) =>
         _nodeSessions.GetOrAdd(target.Key, _ => new(target));
 
-    private bool IsTakeoverTargetRoutable(string nodeId) =>
+    private bool IsHighAvailabilityTargetRoutable(string nodeId) =>
         ConfiguredManagementTargets.Any(target => target.NodeId == nodeId);
 
     private async Task<IManagementConnection?> AuthenticateNodeAsync(ManagedNodeSession node,
@@ -258,13 +258,13 @@ public sealed partial class ServiceManagementViewModel
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));
     }
 
-    private async Task<bool> RouteTakeoverToSelectedNodeAsync()
+    private async Task<bool> RouteHighAvailabilityToSelectedNodeAsync(ManagementOperationKind kind)
     {
         if (_routingConnection || IsBusy || !IsSignedIn || _connection is null || HasUnresolvedManagementRequests) return false;
         var selected = HighAvailabilityTarget.Trim();
         var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == selected);
-        if (target is null || !CanIssueHighAvailability(ManagementOperationKind.Takeover))
-        { Message = "请选择已核实且已配置管理地址的备用节点。"; return false; }
+        if (target is null || !CanIssueHighAvailability(kind))
+        { Message = kind == ManagementOperationKind.Rebuild ? "请选择角色为隔离且已配置管理地址的节点。" : "请选择已核实且已配置管理地址的备用节点。"; return false; }
         _routingConnection = true; IsBusy = true;
         var version = _managementSessionVersion;
         var previous = _connection;
@@ -284,13 +284,11 @@ public sealed partial class ServiceManagementViewModel
             ValidateHighAvailabilityStatus(status, candidate.Target);
             if (status.State is not { } state || status.VerifiedAt is not { } observed ||
                 _time.GetUtcNow() - observed >= TimeSpan.FromSeconds(10) || observed > _time.GetUtcNow().AddSeconds(5) ||
-                !state.Nodes.TryGetValue(selected, out var node) || node.Role != DeploymentNodeRole.Standby ||
-                !node.Reachable || !node.DatabaseInRecovery || state.ActiveNodeId == selected ||
-                _time.GetUtcNow() - node.ObservedAt >= TimeSpan.FromSeconds(10) || node.ObservedAt > _time.GetUtcNow().AddSeconds(5) ||
+                !state.Nodes.TryGetValue(selected, out var node) || !IsHighAvailabilityTarget(kind, state, node) ||
                 state.ServerEpoch < ReadKnownServerEpoch(candidate.Target) ||
                 _protectionEvidence is { } previousProof && previousProof.TargetKey == candidate.Target.Key && (state.ServerEpoch < previousProof.Epoch ||
                     state.ServerEpoch == previousProof.Epoch && state.Version < previousProof.Version))
-            { Message = "目标节点的备机身份或主备状态尚未核实，当前管理连接继续保留。"; return false; }
+            { Message = "目标节点的角色或主备状态尚未核实，当前管理连接继续保留。"; return false; }
             var pending = ReadPendingRequest(candidate.Target);
             if (pending is not null) _knownPendingRequests[candidate.Target.Key] = pending;
             var targetProof = _protectionMemory?.Load(candidate.Target);

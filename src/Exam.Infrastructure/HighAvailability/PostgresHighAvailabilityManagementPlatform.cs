@@ -23,6 +23,7 @@ public sealed record HighAvailabilityManagementOptions(string ServerId, string L
     string WalArchiveDirectory = "", string WalArchiveScriptsDirectory = "")
 {
     public int WalArchiveTimeoutSeconds { get; init; } = 60;
+    public string PostgresHbaPath { get; init; } = string.Empty;
 }
 
 /// <summary>Actual PostgreSQL state, independent confirmation heads and configured local service controls.</summary>
@@ -535,13 +536,22 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             throw new ArgumentOutOfRangeException(nameof(options), "WAL 归档切换周期必须为正数秒。");
         var archiveCommand = PostgresWalArchiving.BuildCommand(options);
         var settings = new NpgsqlConnectionStringBuilder(options.Nodes[options.LocalNodeId].ConnectionString);
-        return ["-c", "config_file=" + Path.GetFullPath(options.PostgresConfigurationPath).Replace('\\', '/'),
-            "-c", "data_directory=" + Path.GetFullPath(options.PostgresDataDirectory).Replace('\\', '/'),
-            "-c", $"port={settings.Port}", "-c", "archive_mode=on", "-c", "archive_library=",
+        List<string> arguments = ["-c", "config_file=" + Path.GetFullPath(options.PostgresConfigurationPath).Replace('\\', '/'),
+            "-c", "data_directory=" + Path.GetFullPath(options.PostgresDataDirectory).Replace('\\', '/')];
+        if (!string.IsNullOrWhiteSpace(options.PostgresHbaPath))
+        {
+            if (!Path.IsPathFullyQualified(options.PostgresHbaPath) || options.PostgresHbaPath.IndexOfAny(['"', '\r', '\n']) >= 0)
+                throw new IOException("数据库认证配置须使用部署提供的绝对路径。");
+            var hba = Path.GetFullPath(options.PostgresHbaPath);
+            PathBoundary.RejectExistingReparsePoints(Path.GetDirectoryName(hba)!, hba);
+            arguments.AddRange(["-c", "hba_file=" + hba.Replace('\\', '/')]);
+        }
+        arguments.AddRange(["-c", $"port={settings.Port}", "-c", "archive_mode=on", "-c", "archive_library=",
             "-c", "archive_command=" + archiveCommand, "-c", $"archive_timeout={options.WalArchiveTimeoutSeconds}s",
             "-c", "fsync=on", "-c", "full_page_writes=on",
             "-c", "shared_preload_libraries=", "-c", "session_preload_libraries=", "-c", "local_preload_libraries=",
-            "-c", "restore_command=exit 1", "-c", "archive_cleanup_command=", "-c", "recovery_end_command="];
+            "-c", "restore_command=exit 1", "-c", "archive_cleanup_command=", "-c", "recovery_end_command="]);
+        return arguments;
     }
 
     private string RebuildSlot(FailoverExecutionPlan plan) => PathBoundary.ResolveWithinRoot(_options.RebuildRoot,

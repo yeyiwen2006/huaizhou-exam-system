@@ -22,6 +22,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public const int HiddenExamsPage = 6;
     public const int ActivationPage = 7; // 设备与试场：不与具体考试挂钩，不显示当前考试条。
     public const int AccountsPage = 8;
+    public const int ManagementPage = 9;
     private readonly AdminApiClient _api;
     private readonly IExamImportService? _importService;
     private readonly Dictionary<string, (ExamSummary Summary, ExamImportViewModel ViewModel)> _examImports = new(StringComparer.Ordinal);
@@ -82,7 +83,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     }
 
     /// <summary>进入某场考试（或新建考试）后，在除主页外的页面顶部显示当前考试。</summary>
-    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage && SelectedPage != HiddenExamsPage && SelectedPage != ActivationPage;
+    public bool ShowCurrentExamBar => CanEditSettings && SelectedPage != HomePage && SelectedPage != HiddenExamsPage && SelectedPage != ActivationPage && SelectedPage != ManagementPage;
 
     public ExamSummary? CurrentExam
     {
@@ -444,7 +445,7 @@ public sealed class ConnectionViewModel : BindableBase
         finally { ClearPasswords(); }
         IsRegistering = false;
         IsConnected = true;
-        Status = $"已登录服务器 {BuildServerAddress()}。";
+        Status = $"已登录服务器 {BuildServerAddress()}";
     }
 
     private async Task RegisterAsync()

@@ -159,10 +159,10 @@
         <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
-        <Button x:Name="FailureManagementButton" Content="服务器管理 / 故障接管"
+        <Button x:Name="FailureManagementButton" Content="主服务器故障，直接进入服务器管理"
                 Style="{StaticResource Btn.Secondary}" HorizontalAlignment="Right" VerticalAlignment="Top"
                 Panel.ZIndex="10" Margin="0,16,28,0" Click="OnManagementRequested"
-                ToolTip="业务服务不可用时，可直接登录备用服务器管理并完成隔离确认与接管"/>
+                ToolTip="主服务器不可用导致无法正常登录时，可直接登录备用服务器管理并完成隔离确认与接管"/>
 
         <!-- 主界面（登录后显示） -->
         <TabControl x:Name="MainTabArea"
@@ -179,10 +179,8 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <DockPanel>
-                        <Button DockPanel.Dock="Right" Content="退出登录" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
-                                Command="{Binding Connection.LogoutCommand}" />
-                        <Button DockPanel.Dock="Right" Content="服务器管理" Style="{StaticResource Btn.Secondary}"
-                                Margin="0,0,8,0" Click="OnManagementRequested" />
+                        <Button x:Name="LogoutButton" DockPanel.Dock="Right" Content="退出登录" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
+                                IsEnabled="{Binding Connection.IsConnected}" Click="OnLogoutRequested" />
                         <Border Style="{StaticResource IconTile}" Width="36" Height="36" CornerRadius="9" Margin="0,0,12,0">
                             <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Users}" Width="18" Height="18" />
                         </Border>
@@ -212,7 +210,7 @@
         </controls:NavShell.TopBar>
 
         <!-- 主页：全部考试以卡片列出，按名称区分；点击卡片进入该场考试，或新建考试。 -->
-        <TabItem Header="全部考试" Tag="{StaticResource Icon.Layers}">
+        <TabItem Header="全部考试" Tag="{StaticResource Icon.Layers}" IsEnabled="{Binding Connection.IsConnected}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <DockPanel Margin="0,0,0,20">
@@ -752,7 +750,7 @@
             <reporting:ReportPageView DataContext="{Binding Reports}" />
         </TabItem>
 
-        <TabItem Header="隐藏的考试" Tag="{StaticResource Icon.Layers}">
+        <TabItem Header="隐藏的考试" Tag="{StaticResource Icon.Layers}" IsEnabled="{Binding Connection.IsConnected}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <DockPanel Margin="0,0,0,20">
@@ -781,7 +779,7 @@
                 </StackPanel>
             </ScrollViewer>
         </TabItem>
-        <TabItem Header="设备与试场" Tag="{StaticResource Icon.Device}">
+        <TabItem Header="设备与试场" Tag="{StaticResource Icon.Device}" IsEnabled="{Binding Connection.IsConnected}">
             <ScrollViewer Style="{StaticResource PageScroller}">
                 <StackPanel Style="{StaticResource PageBody}">
                     <HeaderedContentControl Style="{StaticResource PageHeading}" Header="设备与试场" Tag="{StaticResource Icon.Device}"
@@ -935,6 +933,9 @@
         </TabItem>
 
 
+        <TabItem x:Name="ManagementTab" Header="服务器管理" Tag="{StaticResource Icon.Server}">
+            <ContentControl x:Name="ManagementPageRegion" />
+        </TabItem>
         </TabControl>
         </Grid>
     </Grid>
