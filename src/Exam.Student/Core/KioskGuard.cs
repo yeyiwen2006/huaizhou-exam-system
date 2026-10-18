@@ -94,7 +94,7 @@ public sealed class KioskGuard
         }
     }
 
-    /// <summary>停止拦截并卸载钩子；仅显式退出系统时调用。</summary>
+    /// <summary>退出登录或关闭考试窗口时，停止拦截并卸载钩子。</summary>
     public void Disable()
     {
         nint hook;

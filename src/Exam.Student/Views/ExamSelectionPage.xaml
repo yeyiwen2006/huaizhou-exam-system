@@ -14,8 +14,8 @@
                              CandidateName="{Binding CandidateDisplay, Mode=OneWay}">
             <controls:PageHeader.RightContent>
                 <Button Style="{StaticResource Btn.Danger}"
-                        Content="退出系统"
-                        Click="OnExitSystem" />
+                        Content="退出登录"
+                        Click="OnLogout" />
             </controls:PageHeader.RightContent>
         </controls:PageHeader>
 

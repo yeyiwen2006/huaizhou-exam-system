@@ -9,8 +9,8 @@ namespace Exam.Student;
 /// <summary>
 /// 学生端主壳：承载页面区域与导航。所有页面切换经由 Navigation，
 /// 统一处理编号姓名显示、账号数据隔离、全屏和断线重连。
-/// 登录后霸屏——无边框最大化置顶 + 普通权限低级键盘钩子拦截退出快捷键；
-/// 退出登录后恢复常规窗口。Ctrl+Alt+Del 用户态不可拦截，属文档注明边界。
+/// 登录页与考试页均为无边框最大化置顶窗口，拦截离开界面的快捷键；
+/// 退出登录返回登录页，在登录页退出系统才释放防护并关闭程序。
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -32,10 +32,10 @@ public partial class MainWindow : Window
         ApplyKioskState();
     }
 
-    /// <summary>登录后霸屏：拦截标题栏与系统关闭；退出登录后恢复常规关闭。</summary>
+    /// <summary>登录和考试页面均保持霸屏，系统关闭仅由登录页明确退出触发。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (!_applicationExitRequested && App.Services.Session.LoginResult is not null)
+        if (!_applicationExitRequested)
         {
             e.Cancel = true;
             if (WindowState != WindowState.Maximized)
@@ -76,23 +76,16 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    /// <summary>根据登录状态切换霸屏与常规窗口；每次页面切换都会核对。</summary>
+    /// <summary>登录页和考试页共用同一霸屏防护，退出登录时继续保留。</summary>
     private void ApplyKioskState()
     {
-        var loggedIn = App.Services.Session.LoginResult is not null;
-        if (loggedIn && _kiosk is null)
+        if (_kiosk is null)
         {
             _kiosk = KioskGuard.Enable(this);
             Topmost = true;
             if (!_kiosk.IsInstalled)
                 MessageBox.Show(this, $"本机考试防护未能开启，请联系监考人员。（错误代码 {_kiosk.InstallationError}）",
                     "考试防护未开启", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        else if (!loggedIn && _kiosk is not null)
-        {
-            _kiosk.Disable();
-            _kiosk = null;
-            Topmost = false;
         }
     }
 
@@ -111,11 +104,10 @@ public partial class MainWindow : Window
             _region.Content = page;
             if (Window.GetWindow(_region) is { } window)
             {
-                var loggedIn = App.Services.Session.LoginResult is not null;
-                window.WindowStyle = loggedIn ? WindowStyle.None : WindowStyle.SingleBorderWindow;
-                window.ResizeMode = loggedIn ? ResizeMode.NoResize : ResizeMode.CanResize;
-                window.WindowState = loggedIn ? WindowState.Maximized : WindowState.Normal;
-                // 霸屏随登录状态启停。
+                window.WindowStyle = WindowStyle.None;
+                window.ResizeMode = ResizeMode.NoResize;
+                window.WindowState = WindowState.Maximized;
+                // 返回登录页继续保持霸屏。
                 if (window is MainWindow main)
                 {
                     main.ApplyKioskState();

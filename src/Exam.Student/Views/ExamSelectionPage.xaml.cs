@@ -11,7 +11,7 @@ using Exam.Student.Core;
 namespace Exam.Student.Views;
 
 /// <summary>
-/// 选择考试页：显示个人登录状态与报名考试列表；右上角红色“退出系统”。
+/// 选择考试页：显示个人登录状态与报名考试列表；右上角“退出登录”。
 /// 进入考试结果：同意→等待页；ENTRY_NOT_ALLOWED→“当前不可进入该考试！”；
 /// RESOURCES_NOT_READY→“试题获取失败！”；其余错误显示服务器中文说明。
 /// </summary>
@@ -148,11 +148,11 @@ public partial class ExamSelectionPage : UserControl
 
     private bool _exitRequested;
 
-    private async void OnExitSystem(object sender, RoutedEventArgs e)
+    private async void OnLogout(object sender, RoutedEventArgs e)
     {
         if (_exitRequested || Window.GetWindow(this) is not { } window) return;
         _exitRequested = true;
-        try { await StudentExitDialog.ShowAsync(window, App.Services.Session); }
+        try { await StudentExitDialog.ShowAsync(window, App.Services.Session, _navigation.GoToLogin); }
         catch (InvalidOperationException error) { EntryBanner.Show(error.Message); }
         finally { _exitRequested = false; }
     }

@@ -34,7 +34,7 @@ public partial class LoginPage : UserControl
     {
         if (_requesting || Window.GetWindow(this) is not { } window) return;
         _requesting = true;
-        try { await StudentExitDialog.ShowAsync(window, App.Services.Session); }
+        try { await StudentExitDialog.ShowSystemExitAsync(window, App.Services.Session); }
         catch (InvalidOperationException error) { ErrorBanner.Show(error.Message); }
         finally { _requesting = false; OnInputChanged(null, EventArgs.Empty); }
     }

@@ -20,7 +20,7 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <Border Style="{StaticResource Card}"
-                    Width="440"
+                    Width="460"
                     Padding="0"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
