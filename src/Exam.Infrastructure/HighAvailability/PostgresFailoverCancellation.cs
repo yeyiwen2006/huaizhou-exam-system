@@ -33,7 +33,16 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         var actual = await ReadAsync(Local, token);
         if (actual is null || actual.Value.System != plan.SystemIdentifier || actual.Value.Database != plan.DatabaseName)
             return false;
-        if (actual.Value.Recovery && SameState(actual.Value.State, plan.Before)) return true;
+        if (actual.Value.Recovery && SameState(actual.Value.State, plan.Before))
+        {
+            // Preparation paused this read-only replica's confirmation listener.
+            // Canceling before promotion must leave it available as the same standby.
+            try { await _business.StartAsync(token); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            { try { _recordProbeFailure?.Invoke("Exam.Management.Takeover.StandbyListenerRestoreFailed", error); } catch { } }
+            return true;
+        }
         // Promotion is irreversible. Publish/select only the promotion already made;
         // this path cannot issue pg_promote or automatically switch the primary back.
         return false; // A promoted primary cannot be reported as a canceled takeover.
