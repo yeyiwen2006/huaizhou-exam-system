@@ -794,7 +794,7 @@
                                 Height="270" HorizontalScrollBarVisibility="Auto" CanUserAddRows="False" CanUserDeleteRows="False"
                                 SelectionMode="Single" SelectionUnit="FullRow">
                                 <DataGrid.Columns>
-                                    <DataGridTemplateColumn Header="选择" Width="64" IsReadOnly="True">
+                                    <DataGridTemplateColumn Header="选择" Width="52" IsReadOnly="True">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -803,12 +803,12 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="145" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="学生端编号" Binding="{Binding ClientNumber}" Width="170" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="试场" Binding="{Binding RoomGroupName}" Width="130" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="90" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="110" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="75" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="145" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="96" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="60" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="170" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="考试" Binding="{Binding ExamName}" Width="*" MinWidth="215" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前页面" Binding="{Binding Page}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="140" MinWidth="140" IsReadOnly="True"/>
