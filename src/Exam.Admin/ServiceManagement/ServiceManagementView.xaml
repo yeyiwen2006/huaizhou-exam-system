@@ -16,7 +16,7 @@
         </Style>
         <Style x:Key="Management.Message" TargetType="TextBlock" BasedOn="{StaticResource BodyText}">
             <Setter Property="TextWrapping" Value="Wrap"/>
-            <Setter Property="Margin" Value="0,12,0,12"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
             <Style.Triggers>
                 <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
             </Style.Triggers>
@@ -24,7 +24,7 @@
     </UserControl.Resources>
     <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="{StaticResource Padding.Page}">
-            <DockPanel Margin="0,0,0,20">
+            <DockPanel Margin="0,0,0,16">
                 <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack" VerticalAlignment="Center"/>
                 <Button x:Name="RefreshServersButton" DockPanel.Dock="Right" Content="刷新"
                         Style="{StaticResource Btn.Secondary}" Margin="0,0,8,0" VerticalAlignment="Center"
@@ -32,14 +32,15 @@
                 <HeaderedContentControl Style="{StaticResource PageHeading}" Header="服务器管理"
                                         Content="{Binding TargetText}" Tag="{StaticResource Icon.Server}" Margin="0,0,16,0"/>
             </DockPanel>
-        <Border Background="{DynamicResource Brush.Background}">
-            <StackPanel>
-                <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
-                <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
-                <TextBlock Text="{Binding HighAvailabilityFailureText}" Style="{StaticResource Management.Message}"/>
-                <TextBlock Text="{Binding RecoveryLoginNotice}" Style="{StaticResource Management.Message}"/>
-            </StackPanel>
-        </Border>
+            <Border Background="{DynamicResource Brush.Background}">
+                <StackPanel>
+                    <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"
+                                     Margin="0,0,0,16" Visibility="{Binding ShowProtectionWarning, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
+                    <TextBlock Text="{Binding HighAvailabilityFailureText}" Style="{StaticResource Management.Message}"/>
+                    <TextBlock Text="{Binding RecoveryLoginNotice}" Style="{StaticResource Management.Message}"/>
+                </StackPanel>
+            </Border>
             <StackPanel>
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding ShowManagementLogin, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
