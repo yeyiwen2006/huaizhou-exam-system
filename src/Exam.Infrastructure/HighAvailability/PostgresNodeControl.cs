@@ -7,7 +7,10 @@ using Npgsql;
 
 namespace Exam.Infrastructure.HighAvailability;
 
-public sealed record PostgresNodeConnection(string NodeId, string ConnectionString);
+public sealed record PostgresNodeConnection(string NodeId, string ConnectionString)
+{
+    public string? ReplicationConnectionString { get; init; }
+}
 
 public sealed class PostgresNodeHealthProbe(
     IReadOnlyDictionary<string, PostgresNodeConnection> nodes,
@@ -171,7 +174,11 @@ public sealed class StagedPostgresNodeRebuilder(
         // A temporary stream slot leaves a WAL recycling gap during verification/resource copy.
         var replicationSlot = "exam_rebuild_" + Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(nodeId + "\0" + target))).ToLowerInvariant()[..40];
-        var connection = new NpgsqlConnectionStringBuilder(source.ConnectionString);
+        var managementConnection = new NpgsqlConnectionStringBuilder(source.ConnectionString);
+        var connection = string.IsNullOrWhiteSpace(source.ReplicationConnectionString)
+            ? managementConnection : new NpgsqlConnectionStringBuilder(source.ReplicationConnectionString);
+        if (!string.Equals(connection.Host, managementConnection.Host, StringComparison.OrdinalIgnoreCase) || connection.Port != managementConnection.Port)
+            throw new IOException("复制连接须与已核实的源数据库使用相同主机和端口。");
         var environment = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["PGHOST"] = connection.Host ?? throw new InvalidOperationException("重建源数据库主机不能为空。"),

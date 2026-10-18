@@ -72,6 +72,7 @@
 | HighAvailability:RequiredNodeIds | 一或两个不同节点，包含本机；与发布公钥和学生信任拓扑一致 |
 | HighAvailability:BootstrapPrimary | 仅首台、第一代、空的新主数据库显式设 true；已有状态不修改，备库和已有业务数据拒绝初始化 |
 | HighAvailability:Nodes:&lt;node&gt;:ConnectionString | 管理配置可有一个或两个不同数据库端点；不能把同一数据库伪装成双机 |
+| HighAvailability:Nodes:&lt;node&gt;:ReplicationConnectionString | 重建基础备份和后续流复制使用的受保护连接；配置专用复制账号时须填写。主机和端口必须与该节点的管理数据库连接相同，账号须具备 REPLICATION 权限并获 pg_hba.conf 允许。未配置时兼容使用该节点的 ConnectionString，此时其账号也须允许物理复制。此字段包含凭据，不能导出到考务连接文件 |
 | 同节点 ResourcesDirectory、CertificateThumbprint、ConfirmationDirectory | 各自节点的资源、证书及独立确认根；远端资源通过 HTTPS 读取，不要求共享本地盘符 |
 | 同节点 BusinessHttpsUrl | 正常 TLS 校验的 HTTPS 根地址，不含用户信息、路径或查询 |
 | HighAvailability:SelectionPath | 受保护部署选择，管理可写、业务可读；未配置时位于 Management:OperationDirectory |

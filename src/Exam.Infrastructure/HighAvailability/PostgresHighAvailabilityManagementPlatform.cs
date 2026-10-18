@@ -14,7 +14,10 @@ using Npgsql;
 namespace Exam.Infrastructure.HighAvailability;
 
 public sealed record FailoverNodeDeployment(string NodeId, string ConnectionString, string ResourcesDirectory,
-    string CertificateThumbprint, string ConfirmationDirectory, string BusinessHttpsUrl);
+    string CertificateThumbprint, string ConfirmationDirectory, string BusinessHttpsUrl)
+{
+    public string? ReplicationConnectionString { get; init; }
+}
 
 public sealed record HighAvailabilityManagementOptions(string ServerId, string LocalNodeId,
     IReadOnlyDictionary<string, FailoverNodeDeployment> Nodes, string SelectionPath, string RebuildRoot,
@@ -562,7 +565,8 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (Directory.Exists(slot)) throw new IOException("原重建工作槽已存在，须查询原请求，禁止重新生成或覆盖。");
         Directory.CreateDirectory(slot);
         var source = _options.Nodes[plan.After.ActiveNodeId];
-        var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString));
+        var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString)
+            { ReplicationConnectionString = p.Value.ReplicationConnectionString });
         await new StagedPostgresNodeRebuilder(new(_options.PostgresBinDirectory, slot, connections, TimeSpan.FromMinutes(60)), _processes)
             .PrepareRebuildAsync(Local.NodeId, source.NodeId, token);
         var database = Path.Combine(slot, Local.NodeId);

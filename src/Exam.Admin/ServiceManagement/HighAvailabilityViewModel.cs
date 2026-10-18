@@ -294,13 +294,13 @@ public sealed partial class ServiceManagementViewModel
                     observed = observed with { Role = node.Role };
                 var fresh = (local is not null || _availability is not null) && _time.GetUtcNow() - observed.ObservedAt < TimeSpan.FromSeconds(10) &&
                     observed.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
-                rows.Add(LocalNodeRow(observed, fresh));
+                rows.Add(LocalNodeRow(observed, fresh, local?.AuthenticationRequired == true));
             }
         }
         foreach (var target in ConfiguredManagementTargets)
             if (rows.Count < 2 && rows.All(n => n.NodeId != target.NodeId))
                 rows.Add(LocalObservation(target.NodeId) is { } local
-                    ? LocalNodeRow(local.State, _time.GetUtcNow() - local.State.ObservedAt < TimeSpan.FromSeconds(10)) with
+                    ? LocalNodeRow(local.State, _time.GetUtcNow() - local.State.ObservedAt < TimeSpan.FromSeconds(10), local.AuthenticationRequired) with
                         { Role = local.Epoch == 0 ? "角色待核实" : LocalNodeRow(local.State, false).Role }
                     : PlaceholderNode(target.NodeId));
         if (rows.Count == 0) rows.Add(PlaceholderNode(string.IsNullOrWhiteSpace(NodeId) ? "主机（待连接）" : NodeId.Trim()));

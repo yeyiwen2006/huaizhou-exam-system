@@ -60,7 +60,8 @@ public static class ManagementEntryPoint
             var nodes = configuration.GetSection("HighAvailability:Nodes").GetChildren().ToDictionary(section => section.Key,
                 section => new FailoverNodeDeployment(section.Key, Required(section.Path + ":ConnectionString"),
                     Required(section.Path + ":ResourcesDirectory"), Required(section.Path + ":CertificateThumbprint"),
-                    Required(section.Path + ":ConfirmationDirectory"), Required(section.Path + ":BusinessHttpsUrl")), StringComparer.Ordinal);
+                    Required(section.Path + ":ConfirmationDirectory"), Required(section.Path + ":BusinessHttpsUrl"))
+                    { ReplicationConnectionString = section["ReplicationConnectionString"] }, StringComparer.Ordinal);
             var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, configuration["HighAvailability:SelectionPath"] ?? Path.Combine(Required("Management:OperationDirectory"), "node-selection.json"),
                 configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
                 configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
