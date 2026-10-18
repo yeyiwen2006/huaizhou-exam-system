@@ -1,4 +1,5 @@
 using System.Data;
+using System.Security.AccessControl;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Exam.Application.HighAvailability;
@@ -696,8 +697,22 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var quarantine = PathBoundary.ResolveWithinRoot(parent, full + ".quarantine." + hash, "旧数据隔离目标超出所属目录。");
         PathBoundary.ResolveWithinRoot(parent, full, "部署目标超出所属目录。");
         if (Directory.Exists(quarantine) || File.Exists(quarantine)) throw new IOException("旧数据隔离目录已存在，禁止覆盖或合并。");
+        PreserveRebuildAccess(staged, full);
         if (Directory.Exists(full)) Directory.Move(full, quarantine);
         Directory.Move(staged, full);
+    }
+    internal static void PreserveRebuildAccess(string staged, string target)
+    {
+        if (OperatingSystem.IsWindows() && Directory.Exists(target))
+        {
+            // A staged backup inherits the maintenance directory's permissions. Preserve
+            // the installed data/resource ACL before moving it, including the database
+            // service's inheritable write permission and existing resource readers.
+            var installed = new DirectoryInfo(target).GetAccessControl(AccessControlSections.Access);
+            var access = new DirectorySecurity();
+            access.SetSecurityDescriptorBinaryForm(installed.GetSecurityDescriptorBinaryForm(), AccessControlSections.Access);
+            new DirectoryInfo(staged).SetAccessControl(access);
+        }
     }
     private async Task WriteRebuildMarkerAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
