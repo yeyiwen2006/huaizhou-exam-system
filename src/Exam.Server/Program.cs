@@ -86,12 +86,8 @@ app.MapGet("/health/ready", async (
     if (managedServiceConfiguration is not null &&
         !(await managedServiceConfiguration.CheckProtectionAsync(app.Services.GetRequiredService<Npgsql.NpgsqlDataSource>(), cancellationToken)).Passed)
         return Results.Json(new { status = "recovering", reason = "当前权威保护状态不满足本机服务配置。" }, statusCode: 503);
-    if (readiness.Ready)
-    {
-        try { await app.Services.GetRequiredService<Exam.Application.HighAvailability.IBusinessConfirmation>().ConfirmAsync(cancellationToken); }
-        catch (Exam.Domain.Common.DomainRuleException)
-        { return Results.Json(new { status = "recovering", reason = "本机持久确认尚未完成。" }, statusCode: 503); }
-    }
+    // A health observation must not create a write fence or cancel background peer catch-up.
+    // Business responses retain their own durable confirmation in the request middleware.
     return readiness.Ready
         ? Results.Ok(new
         {
