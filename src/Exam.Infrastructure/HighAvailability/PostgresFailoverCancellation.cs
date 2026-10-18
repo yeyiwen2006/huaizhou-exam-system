@@ -11,12 +11,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
             return HasRebuildCompletion(plan) && await VerifyRebuiltLocalAsync(plan, token);
         if (plan.Kind != ManagementOperationKind.Takeover || plan.After.ActiveNodeId != Local.NodeId) return false;
         var selected = _readSelection();
-        if (selected is null || selected.ServerId != plan.After.ServerId || selected.ActiveNodeId != Local.NodeId ||
+        if (selected is null || selected.ServerId != plan.After.ServerId ||
             selected.Epoch < plan.After.ServerEpoch) return false;
         var actual = await ReadAsync(Local, token);
-        return actual is { Recovery: false } && actual.Value.System == plan.SystemIdentifier &&
+        return actual is not null && actual.Value.System == plan.SystemIdentifier &&
             actual.Value.Database == plan.DatabaseName && FailoverStateHistory.Covers(actual.Value.State, plan.After) &&
-            actual.Value.State.ServerEpoch >= plan.After.ServerEpoch;
+            (actual.Value.State.ServerEpoch > plan.After.ServerEpoch ||
+                !actual.Value.Recovery && selected.ActiveNodeId == Local.NodeId);
     }
 
     public async Task<bool> CancelAsync(FailoverExecutionPlan plan, CancellationToken token)
