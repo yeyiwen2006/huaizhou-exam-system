@@ -182,10 +182,10 @@
                                 </ControlTemplate>
                             </DataGrid.Template>
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="140"/>
+                                <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="Auto"/>
                                 <DataGridTextColumn Header="节点" Binding="{Binding Node}" Width="95"/>
-                                <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="100"/>
-                                <DataGridTextColumn Header="请求编号或事件编号" Binding="{Binding Identifier}" Width="190"/>
+                                <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="Auto"/>
+                                <DataGridTextColumn Header="请求编号或事件编号" Binding="{Binding Identifier}" Width="Auto"/>
                                 <DataGridTextColumn Header="类别" Binding="{Binding Kind}" Width="*" MinWidth="260"/>
                                 <DataGridTextColumn Header="阶段或事件级别" Binding="{Binding Phase}" Width="140"/>
                                 <DataGridTextColumn Header="结果" Binding="{Binding Code}" Width="100"/>
