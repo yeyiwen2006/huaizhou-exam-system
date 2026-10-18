@@ -825,11 +825,14 @@
                             <TextBlock Text="多台设备一起转组时，任一台未能转入，整批保持原试场。" Style="{StaticResource CaptionText}"/>
                             <TextBlock Text="{Binding Activation.Status}" Style="{StaticResource StatusLine}"/>
                             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,14"/>
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="查看设备变更试场历史" Style="{StaticResource ActionButton}" Command="{Binding Activation.DeviceHistoryCommand}"/>
-                                <TextBlock Text="设备变更试场历史" Style="{StaticResource CardHeading}"/>
+                            <DockPanel Margin="0,0,0,12">
+                                <Button DockPanel.Dock="Right" Content="查看设备变更试场历史" Style="{StaticResource ActionButton}"
+                                        Margin="0" VerticalAlignment="Center" Command="{Binding Activation.DeviceHistoryCommand}"/>
+                                <StackPanel Margin="0,0,16,0">
+                                    <TextBlock Text="设备变更试场历史" Style="{StaticResource CardHeading}" Margin="0"/>
+                                    <TextBlock Text="可查询上表中选中设备的变更试场历史" Style="{StaticResource CardNote}" Margin="0,4,0,0"/>
+                                </StackPanel>
                             </DockPanel>
-                            <TextBlock Text="可查询上表中选中设备的变更试场历史" Style="{StaticResource CardNote}"/>
                             <DataGrid ItemsSource="{Binding Activation.DeviceHistory}" Height="160" IsReadOnly="True">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="时间" Binding="{Binding ChangedAt}" Width="170"/>
