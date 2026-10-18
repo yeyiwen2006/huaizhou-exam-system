@@ -775,7 +775,7 @@
                     <Border Style="{StaticResource CardGap}">
                         <StackPanel>
                             <TextBlock Text="设备目录" Style="{StaticResource CardHeading}"/>
-                            <TextBlock Text="按学生端编号、姓名、班级或准考证号查询；在线状态与当前业务页面分别显示。页面打开时自动刷新，也可手动重新读取。" Style="{StaticResource CardNote}"/>
+                            <TextBlock Text="按学生端编号、姓名、班级或准考证号查询；在线状态与当前业务页面分别显示。页面打开时自动刷新，也可手动刷新。" Style="{StaticResource CardNote}"/>
                             <WrapPanel>
                                 <StackPanel Width="270" Margin="0,0,12,0">
                                     <TextBlock Text="学生端编号或考生信息" Style="{StaticResource FormLabel}"/>
@@ -787,7 +787,7 @@
                                         DisplayMemberPath="Name" Height="{DynamicResource Control.Height}" Margin="0,0,0,12"/>
                                 </StackPanel>
                                 <Button Content="查询设备" Style="{StaticResource ActionButton}" Margin="0,0,8,12" VerticalAlignment="Bottom" Command="{Binding Activation.QueryDeviceCommand}"/>
-                                <Button Content="重新读取目录" Style="{StaticResource ActionButton}" Margin="0,0,8,12" VerticalAlignment="Bottom" Command="{Binding Activation.RefreshDirectoryCommand}"/>
+                                <Button Content="刷新" Style="{StaticResource ActionButton}" Margin="0,0,8,12" VerticalAlignment="Bottom" Command="{Binding Activation.RefreshDirectoryCommand}"/>
                             </WrapPanel>
                             <TextBlock Text="{Binding Activation.DirectoryStatus}" Style="{StaticResource CaptionText}" Margin="0,0,0,10"/>
                             <DataGrid ItemsSource="{Binding Activation.Devices}" SelectedItem="{Binding Activation.SelectedDevice}" IsReadOnly="False"

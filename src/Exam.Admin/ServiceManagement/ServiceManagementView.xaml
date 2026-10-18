@@ -25,9 +25,8 @@
     <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="{StaticResource Padding.Page}">
             <DockPanel Margin="0,0,0,16">
-                <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack" VerticalAlignment="Center"/>
                 <Button x:Name="RefreshServersButton" DockPanel.Dock="Right" Content="刷新"
-                        Style="{StaticResource Btn.Secondary}" Margin="0,0,8,0" VerticalAlignment="Center"
+                        Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0" Margin="0" VerticalAlignment="Center"
                         Command="{Binding RefreshCommand}"/>
                 <HeaderedContentControl Style="{StaticResource PageHeading}" Header="服务器管理"
                                         Content="{Binding TargetText}" Tag="{StaticResource Icon.Server}" Margin="0,0,16,0"/>
