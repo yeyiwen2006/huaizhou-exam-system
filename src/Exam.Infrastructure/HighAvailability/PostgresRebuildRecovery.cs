@@ -53,6 +53,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
 
     private async Task InstallPreparedRebuildAsync(RebuildProgress progress, CancellationToken token)
     {
+        Interlocked.Increment(ref _localDatabaseTransition);
+        try { await InstallPreparedRebuildCoreAsync(progress, token); }
+        finally { Interlocked.Decrement(ref _localDatabaseTransition); }
+    }
+
+    private async Task InstallPreparedRebuildCoreAsync(RebuildProgress progress, CancellationToken token)
+    {
         var plan = progress.Plan;
         ValidateRebuildPaths();
         if (progress.Phase is not ("Prepared" or "Installing" or "Applied") || progress.DatabaseIdentity is null || progress.ResourcesIdentity is null)

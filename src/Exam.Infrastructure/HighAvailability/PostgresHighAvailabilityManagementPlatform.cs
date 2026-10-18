@@ -47,6 +47,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     private readonly ResourceDirectoryDigestCache _localResourceDigest;
     private readonly Action<string, Exception>? _recordProbeFailure;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _probeFailureTimes = new(StringComparer.Ordinal);
+    private int _localDatabaseTransition;
     private FailoverNodeDeployment Local => _options.Nodes[_options.LocalNodeId];
     private FailoverNodeDeployment Other => _options.Nodes.Values.Single(n => n.NodeId != _options.LocalNodeId);
 
@@ -112,6 +113,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception error)
         {
+            // Shutdown/startup rejects ordinary health reads while a controlled
+            // transition is in progress. The operation journal owns its outcome.
+            if (!ShouldRecordDatabaseFailure(error, node.NodeId == Local.NodeId &&
+                Volatile.Read(ref _localDatabaseTransition) > 0)) return null;
             var now = _time.GetUtcNow();
             if (_recordProbeFailure is not null && (!_probeFailureTimes.TryGetValue(node.NodeId, out var prior) || now - prior >= TimeSpan.FromSeconds(30)))
             {
@@ -121,6 +126,14 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             return null;
         }
     }
+
+    public static bool ShouldRecordDatabaseFailure(Exception error, bool replacingDatabase) => error switch
+    {
+        PostgresException { SqlState: "57P01" or "57P03" } => false,
+        PostgresException => true, // Authentication, SQL and storage errors remain visible.
+        NpgsqlException or IOException or TimeoutException when replacingDatabase => false,
+        _ => true
+    };
 
     private NpgsqlDataSource StateSource(FailoverNodeDeployment node) => _stateSources.GetOrAdd(node.NodeId,
         _ => new Lazy<NpgsqlDataSource>(() => ManagementProbeConnection.Create(node.ConnectionString, 5))).Value;
