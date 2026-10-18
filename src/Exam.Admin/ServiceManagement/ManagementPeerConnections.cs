@@ -97,7 +97,7 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(20));
+            deadline.CancelAfter(TimeSpan.FromSeconds(45));
             connection = _factory(node.Target);
             if (!SameEndpoint(connection.Target, node.Target))
                 throw new InvalidDataException("管理连接工厂返回了其他节点的连接。");
@@ -340,11 +340,24 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             using var deadline = _routingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(25));
+            deadline.CancelAfter(TimeSpan.FromSeconds(50));
             var candidate = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: true);
             if (candidate is null || version != _managementSessionVersion || !IsSignedIn || selected != HighAvailabilityTarget.Trim()) return false;
             if (!string.Equals(candidate.Actor, previous.Actor, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("两个管理节点的考务账号不一致。");
+            if (kind == ManagementOperationKind.Rebuild && _availability is { State: { } authority } currentAuthority &&
+                authority.ActiveNodeId != selected && authority.ServerEpoch >= (_businessSession?.ServerEpoch ?? 0))
+            {
+                // The isolated node still has its old database. Requiring it to prove
+                // the new role before rebuilding makes recovery impossible. The server
+                // validates the submitted active epoch/version immediately before work.
+                var original = ReadPendingRequest(candidate.Target);
+                SelectCurrentConnection(candidate, original);
+                _availability = currentAuthority;
+                UpdateCommands();
+                if (original is not null) { Message = "目标节点存在原请求，正在继续查询其处理状态。"; return false; }
+                return true;
+            }
             var reply = await candidate.HighAvailabilityAsync(deadline.Token);
             if (deadline.IsCancellationRequested || version != _managementSessionVersion || !IsSignedIn ||
                 selected != HighAvailabilityTarget.Trim()) return false;
@@ -545,7 +558,7 @@ public sealed partial class ServiceManagementViewModel
                 // Explicit refresh owns the current node's status read; peers remain independent.
                 if (ReferenceEquals(connection, _connection) && (_readBusy || IsBusy)) return;
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(20));
+                deadline.CancelAfter(TimeSpan.FromSeconds(45));
                 var reply = await connection.StatusAsync(deadline.Token);
                 if (deadline.IsCancellationRequested || version != _managementSessionVersion || _disposed) return;
                 if (reply.IsUnauthorized || reply.Envelope.Error is not null || reply.Envelope.Result is not { } value ||

@@ -98,7 +98,7 @@ public sealed partial class AdminApiClient : IDisposable
 
     public AdminSessionSnapshot? CaptureSession() => IsConfigured && _account is not null && _serverId is not null &&
         _httpClient.DefaultRequestHeaders.Authorization is { Scheme: "Bearer", Parameter: { Length: > 0 } credential }
-        ? new(_httpClient.BaseAddress!, _serverId, _account.Username, credential, Generation, _nodeId) : null;
+        ? new(_httpClient.BaseAddress!, _serverId, _account.Username, credential, Generation, _nodeId, _serverEpoch) : null;
 
     public void Configure(string baseAddress, string operatorToken, string operatorId)
     {

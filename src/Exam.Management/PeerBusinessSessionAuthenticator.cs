@@ -54,7 +54,7 @@ public sealed class PeerBusinessSessionAuthenticator : IDisposable
         var retirement = Retirement();
         if (retirement is not null && (retirement.ServerId != _serverId || retirement.NodeId != _nodeId || retirement.ActiveNodeId != peer.NodeId)) return null;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(peer.Address, "api/v1/operators/me"));

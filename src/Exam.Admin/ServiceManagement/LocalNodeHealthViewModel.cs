@@ -6,7 +6,7 @@ namespace Exam.Admin.ServiceManagement;
 
 public sealed partial class ServiceManagementViewModel
 {
-    private sealed record LocalNodeObservation(NodeState State, long Epoch, bool AuthenticationRequired = false);
+    private sealed record LocalNodeObservation(NodeState State, long Epoch, bool AuthenticationRequired = false, bool Unavailable = false);
     private readonly ConcurrentDictionary<string, LocalNodeObservation> _localNodeHealth = new(StringComparer.Ordinal);
 
     private async Task PollLocalNodeHealthAsync(ManagementTarget target, long version, CancellationToken token)
@@ -23,7 +23,7 @@ public sealed partial class ServiceManagementViewModel
                 try
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                    deadline.CancelAfter(TimeSpan.FromSeconds(20));
+                    deadline.CancelAfter(TimeSpan.FromSeconds(45));
                     var connection = NodeSession(target).Connection;
                     if (connection is null && _businessSession is { } session)
                         connection = await StartBusinessAuthentication(target, session).WaitAsync(deadline.Token);
@@ -51,6 +51,7 @@ public sealed partial class ServiceManagementViewModel
                             else
                             {
                                 _localNodeHealth[target.Key] = new(node, state.ServerEpoch);
+                                ApplyLocalAuthority(status, target);
                                 UpdateDisplayedNodes();
                             }
                         }
@@ -68,9 +69,14 @@ public sealed partial class ServiceManagementViewModel
     private void MarkLocalNodeUnavailable(ManagementTarget target, bool authenticationRequired = false)
     {
         var prior = _localNodeHealth.GetValueOrDefault(target.Key);
-        var role = _displayState?.Nodes.GetValueOrDefault(target.NodeId)?.Role ?? prior?.State.Role ?? DeploymentNodeRole.Isolated;
+        if (prior is not null && prior.State.ObservedAt != default)
+        {
+            _localNodeHealth[target.Key] = prior with { Unavailable = true, AuthenticationRequired = authenticationRequired };
+            UpdateDisplayedNodes(); return;
+        }
+        var role = _displayState?.Nodes.GetValueOrDefault(target.NodeId)?.Role ?? DeploymentNodeRole.Standby;
         _localNodeHealth[target.Key] = new(new(target.NodeId, role, false, role != DeploymentNodeRole.Primary,
-            long.MaxValue, false, false, _time.GetUtcNow()), prior?.Epoch ?? _displayState?.ServerEpoch ?? 0, authenticationRequired);
+            long.MaxValue, false, false, default), prior?.Epoch ?? _displayState?.ServerEpoch ?? 0, authenticationRequired, true);
         UpdateDisplayedNodes();
     }
 
@@ -80,13 +86,17 @@ public sealed partial class ServiceManagementViewModel
         return target is null ? null : _localNodeHealth.GetValueOrDefault(target.Key);
     }
 
-    private ManagementNodeRow LocalNodeRow(NodeState node, bool fresh, bool authenticationRequired = false, string? role = null) => new(node.NodeId,
-        role ?? (node.Role switch { DeploymentNodeRole.Primary => "主机", DeploymentNodeRole.Standby => "备机", DeploymentNodeRole.Isolated => "隔离", _ => "重建" }),
-        fresh ? authenticationRequired ? "待认证" : node.Reachable ? "可连接" : "不可连接" : "未核实",
-        fresh && node.Reachable ? node.DatabaseInRecovery ? "备库" : "主库" : "未核实",
+    private ManagementNodeRow LocalNodeRow(NodeState node, bool fresh, bool authenticationRequired = false, string? role = null, bool unavailable = false) => new(node.NodeId,
+        role ?? (CurrentActiveNodeId is { } active ? node.NodeId == active ? "主机" :
+            node.ObservedAt != default && (!node.DatabaseInRecovery || node.Role == DeploymentNodeRole.Isolated) ? "隔离" :
+            node.Role == DeploymentNodeRole.Rebuilding ? "重建" : "备机" :
+            node.Role switch { DeploymentNodeRole.Primary => "主机", DeploymentNodeRole.Standby => "备机", DeploymentNodeRole.Isolated => "隔离", _ => "重建" }),
+        authenticationRequired ? "待认证" : unavailable ? "暂不可连接" : fresh ? node.Reachable ? "可连接" : "不可连接" : "未核实",
+        node.ObservedAt != default && node.Reachable ? (node.DatabaseInRecovery ? "备库" : CurrentActiveNodeId is { } current && node.NodeId != current ? "旧库（待重建）" : "主库") + (fresh && !unavailable ? "" : "（上次）") : "未核实",
         fresh && node.Reachable && node.DatabaseInRecovery && node.ReplicationStreaming == false ? "复制中断" :
             fresh && node.Reachable && node.ReplayLagBytes != long.MaxValue ? node.ReplayLagBytes.ToString(System.Globalization.CultureInfo.InvariantCulture) : "未核实",
-        fresh && node.KeyMaterialReady ? "已核实" : "未核实", fresh && node.CertificateReady ? "已核实" : "未核实",
+        node.KeyMaterialReady ? fresh && !unavailable ? "已核实" : "已核实（上次）" : node.Reachable && node.ObservedAt != default ? "未就绪" : "未核实",
+        node.CertificateReady ? fresh && !unavailable ? "已核实" : "已核实（上次）" : node.Reachable && node.ObservedAt != default ? "未就绪" : "未核实",
         node.ObservedAt == default ? "尚未返回" : node.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("HH:mm:ss") + (fresh ? "" : "（已过期）"),
-        isCurrent: fresh);
+        isCurrent: fresh && !unavailable);
 }

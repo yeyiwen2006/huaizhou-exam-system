@@ -60,12 +60,16 @@ public sealed partial class ServiceManagementViewModel
         (_availability is null || !_availability.SynchronousProtectionVerified);
     private bool RoleTransitionPending => _knownPendingRequests.Values.Any(request => request.Target.ServerId == ServerId.Trim() &&
         request.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild);
+    private string? CurrentActiveNodeId => _businessSession is { NodeId: not null } business &&
+        ConfiguredManagementTargets.Any(target => target.NodeId == business.NodeId) &&
+        (_displayState is null || business.ServerEpoch > _displayState.ServerEpoch)
+        ? business.NodeId : _displayState?.ActiveNodeId;
     public string HighAvailabilityVersionText => RoleTransitionPending
         ? "接管或重建仍在核对；保留操作前角色，完成后同时更新两个节点。" +
             (_displayState is { } displayed ? $" 上次核实的活动节点：{displayed.ActiveNodeId}" : "")
         : _availability is { State: { } state, VerifiedAt: { } time }
         ? $"活动节点：{state.ActiveNodeId}；核实于 {time.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}"
-        : _displayState is { } previous ? $"当前活动节点未核实；上次观察的活动节点：{previous.ActiveNodeId}" : "当前活动节点未核实";
+        : CurrentActiveNodeId is { } active ? $"当前活动节点：{active}；正在刷新运行状态。" : "当前活动节点未核实";
     public string HighAvailabilityReason { get => _haReason; set => SetProperty(ref _haReason, value); }
     public string HighAvailabilityTarget { get => _haTarget; set { if (SetProperty(ref _haTarget, value)) UpdateCommands(); } }
     public ManagementNodeRow? SelectedNode
@@ -85,12 +89,11 @@ public sealed partial class ServiceManagementViewModel
     {
         get
         {
-            var primary = _displayState?.Nodes.Values.FirstOrDefault(n => n.NodeId == _displayState.ActiveNodeId);
-            var standby = _displayState?.Nodes.Values.FirstOrDefault(n => n.NodeId != _displayState.ActiveNodeId);
-            var peerRole = standby?.Role switch
-            { DeploymentNodeRole.Isolated => "隔离节点", DeploymentNodeRole.Rebuilding => "重建节点", _ => "备机" };
+            var active = CurrentActiveNodeId;
+            var standby = ConfiguredManagementTargets.FirstOrDefault(n => n.NodeId != active);
+            var peerRole = Nodes.FirstOrDefault(n => n.NodeId == standby?.NodeId)?.Role == "隔离" ? "隔离节点" : "备机";
             var configured = string.Join("；", ConfiguredManagementTargets.Select(t => $"{t.NodeId} · {t.Address}"));
-            return $"当前管理服务器：主机 {primary?.NodeId ?? "待核实"}；{peerRole} {standby?.NodeId ?? "待核实"}" +
+            return $"当前管理服务器：主机 {active ?? "待核实"}；{peerRole} {(active is null ? "待核实" : standby?.NodeId ?? "未配置")}" +
                 (configured.Length == 0 ? "" : $"\n已配置：{configured}");
         }
     }
@@ -125,7 +128,7 @@ public sealed partial class ServiceManagementViewModel
                 var connection = _connection; var generation = _generation;
                 // A slow log or operation query must not starve the independent HA observation.
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(polling.Token, _lifetime.Token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(20));
+                deadline.CancelAfter(TimeSpan.FromSeconds(50));
                 _ = RefreshPeerStatusAsync();
                 try { await ObserveHighAvailabilityAsync(connection, generation, deadline.Token); }
                 catch (OperationCanceledException) when (polling.IsCancellationRequested) { break; }
@@ -152,7 +155,7 @@ public sealed partial class ServiceManagementViewModel
     private async Task ReadHighAvailabilityAsync(IManagementConnection connection, long generation)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(25));
+        deadline.CancelAfter(TimeSpan.FromSeconds(50));
         var token = deadline.Token;
         var expected = _availability;
         try
@@ -185,20 +188,20 @@ public sealed partial class ServiceManagementViewModel
 
     private bool CanVerifyHighAvailabilityTarget(ManagementOperationKind kind)
     {
-        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
+        if (kind != ManagementOperationKind.Rebuild)
             return CanIssueHighAvailability(kind);
-        // The current node may have no authority proof after isolation. Permit only
-        // authentication and a read on the configured target; issuing the operation
-        // still requires fresh target evidence and explicit operator confirmation.
-        return SelectedNode is { } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
+        // Displaying an isolated old copy does not require that copy to have the
+        // active node's database state. Execution still checks the active authority.
+        return SelectedNode is { IsPlaceholder: false } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
             ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
-            IsHighAvailabilityTargetRoutable(selected.NodeId);
+            IsHighAvailabilityTargetRoutable(selected.NodeId) && selected.NodeId != CurrentActiveNodeId &&
+            (selected.Role is "隔离" or "重建" || selected.Recovery.StartsWith("旧库", StringComparison.Ordinal));
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>
         state.ActiveNodeId != node.NodeId && (kind == ManagementOperationKind.Rebuild
             ? node.Role is DeploymentNodeRole.Isolated or DeploymentNodeRole.Rebuilding ||
-                node.Role == DeploymentNodeRole.Standby && (!node.Reachable || !node.DatabaseInRecovery)
+                node.Role == DeploymentNodeRole.Standby && (!node.Reachable || !(LocalObservation(node.NodeId)?.State.DatabaseInRecovery ?? node.DatabaseInRecovery))
             : node.Role == DeploymentNodeRole.Standby && node.Reachable && node.DatabaseInRecovery &&
                 _time.GetUtcNow() - node.ObservedAt < HighAvailabilityStatus.ObservationLifetime && node.ObservedAt <= _time.GetUtcNow().AddSeconds(5));
 
@@ -245,14 +248,16 @@ public sealed partial class ServiceManagementViewModel
         OnPropertyChanged(nameof(HighAvailabilityVersionText));
     }
 
-    private void ApplyHighAvailability(HighAvailabilityStatus status, bool proofAlreadyPersisted, bool completedRoleTransition = false)
+    private void ApplyHighAvailability(HighAvailabilityStatus status, bool proofAlreadyPersisted, bool completedRoleTransition = false,
+        ManagementTarget? observedTarget = null)
     {
-        var target = _connection?.Target;
+        var target = observedTarget ?? _connection?.Target;
         if (target is null) throw new InvalidDataException("当前管理连接尚未建立。");
         ValidateHighAvailabilityStatus(status, target);
         if (status.State is { } reported)
         {
-            var knownEpoch = proofAlreadyPersisted ? _highestObservedServerEpoch : ReadKnownServerEpoch(target);
+            var knownEpoch = Math.Max(_businessSession?.ServerEpoch ?? 0,
+                proofAlreadyPersisted ? _highestObservedServerEpoch : ReadKnownServerEpoch(target));
             if (reported.ServerEpoch < knownEpoch)
             {
                 // State versions are node-local, but a deployment epoch identifies the active
@@ -345,6 +350,19 @@ public sealed partial class ServiceManagementViewModel
         return _highestObservedServerEpoch;
     }
 
+    private void ApplyLocalAuthority(HighAvailabilityStatus status, ManagementTarget target)
+    {
+        // The active node's local response already carries the complete role decision.
+        // A peer database/certificate check is unnecessary for displaying that decision.
+        if (status.State is not { } state || state.ActiveNodeId != target.NodeId ||
+            CurrentActiveNodeId is { } active && active != target.NodeId && state.ServerEpoch <= (_businessSession?.ServerEpoch ?? 0) ||
+            state.ServerEpoch < Math.Max(_highestObservedServerEpoch, _businessSession?.ServerEpoch ?? 0)) return;
+        if (_availability is { SynchronousProtectionVerified: true, State: { } prior, VerifiedAt: { } observed } &&
+            prior.ServerEpoch == state.ServerEpoch && prior.Version >= state.Version &&
+            _time.GetUtcNow() - observed < HighAvailabilityStatus.ObservationLifetime) return;
+        ApplyHighAvailability(status, proofAlreadyPersisted: true, observedTarget: target);
+    }
+
     private async Task ExpireProtectionAsync(HighAvailabilityStatus expected, CancellationTokenSource expiry)
     {
         try
@@ -390,15 +408,17 @@ public sealed partial class ServiceManagementViewModel
                 observed = observed with { Role = node.Role };
                 var fresh = (local is not null || _availability is not null) && _time.GetUtcNow() - observed.ObservedAt < HighAvailabilityStatus.ObservationLifetime &&
                     observed.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
-                rows.Add(LocalNodeRow(observed, fresh, local?.AuthenticationRequired == true));
+                rows.Add(LocalNodeRow(observed, fresh, local?.AuthenticationRequired == true,
+                    unavailable: local?.Unavailable == true));
             }
         }
         foreach (var target in ConfiguredManagementTargets)
             if (rows.Count < 2 && rows.All(n => n.NodeId != target.NodeId))
                 rows.Add(LocalObservation(target.NodeId) is { } local
-                    ? LocalNodeRow(local.State, _time.GetUtcNow() - local.State.ObservedAt < HighAvailabilityStatus.ObservationLifetime, local.AuthenticationRequired,
-                        "角色待核实")
-                    : PlaceholderNode(target.NodeId));
+                    ? LocalNodeRow(local.State, _time.GetUtcNow() - local.State.ObservedAt < HighAvailabilityStatus.ObservationLifetime,
+                        local.AuthenticationRequired, CurrentActiveNodeId is null ? "角色待核实" : null, local.Unavailable)
+                    : new(target.NodeId, CurrentActiveNodeId is null ? "角色待核实" : target.NodeId == CurrentActiveNodeId ? "主机" : "备机",
+                        "待查询", "未核实", "未核实", "未核实", "未核实", "尚未返回", true));
         if (rows.Count == 0) rows.Add(PlaceholderNode(string.IsNullOrWhiteSpace(NodeId) ? "主机（待连接）" : NodeId.Trim()));
         if (rows.Count == 1) rows.Add(PlaceholderNode("另一节点（待核实）"));
         rows.Sort((left, right) => StringComparer.Ordinal.Compare(left.NodeId, right.NodeId));
@@ -423,12 +443,13 @@ public sealed partial class ServiceManagementViewModel
 
     private string NodeStatusText(bool primary)
     {
-        var node = _displayState?.Nodes.Values.FirstOrDefault(n => primary ? n.NodeId == _displayState.ActiveNodeId : n.NodeId != _displayState.ActiveNodeId);
+        var active = CurrentActiveNodeId;
+        var node = _displayState?.Nodes.Values.FirstOrDefault(n => primary ? n.NodeId == active : n.NodeId != active);
         if (node is null)
         {
-            var configured = ConfiguredManagementTargets.ElementAtOrDefault(primary ? 0 : 1);
+            var configured = active is null ? null : ConfiguredManagementTargets.FirstOrDefault(n => primary ? n.NodeId == active : n.NodeId != active);
             return configured is null ? "节点角色与运行状态待查询。" :
-                $"已配置节点 {configured.NodeId}\n角色待核实；{GetNodeProcessStatusText(configured.NodeId)}。";
+                $"{configured.NodeId} · {Nodes.FirstOrDefault(row => row.NodeId == configured.NodeId)?.Role}\n{GetNodeProcessStatusText(configured.NodeId)}。";
         }
         var row = Nodes.FirstOrDefault(n => n.NodeId == node.NodeId);
         var observed = node.ObservedAt == default ? "尚无观察" : node.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss");

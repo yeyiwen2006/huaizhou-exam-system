@@ -260,12 +260,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         if (!IsSignedIn || _connection is null || _readBusy) return;
         StartPolling();
-        using (var reconciliationWait = BeginRead())
-        {
-            try { await ReconcileKnownRequestsAsync().WaitAsync(reconciliationWait.Token); }
-            catch (OperationCanceledException) when (reconciliationWait.IsCancellationRequested) { return; }
-            finally { EndRead(reconciliationWait); }
-        }
+        _ = ReconcileKnownRequestsAsync();
         if (!IsSignedIn || _connection is null || _readBusy) return;
         var connection = _connection; var generation = _generation;
         using var reads = BeginRead();
@@ -286,7 +281,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 throw new System.IO.InvalidDataException();
             ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch, statusSequence);
             statusApplied = true;
-            await availabilityRead;
+            try { await availabilityRead; } catch { /* Node roles and health are refreshed independently. */ }
             if (reads.IsCancellationRequested || !Current(connection, generation)) return;
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
@@ -382,7 +377,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 if (!Current(connection, generation) || !IsSignedIn) return;
                 // A human may need more than the proof lifetime to confirm. Re-read the selected node,
                 // and require another confirmation if the active node, epoch or selection changed.
-                await ObserveHighAvailabilityAsync(connection, generation, _lifetime.Token);
+                if (kind != ManagementOperationKind.Rebuild)
+                    await ObserveHighAvailabilityAsync(connection, generation, _lifetime.Token);
                 if (!Current(connection, generation) || _availability?.State is not { } after ||
                     after.ActiveNodeId != before.ActiveNodeId || after.ServerEpoch != before.ServerEpoch ||
                     after.Version != before.Version || HighAvailabilityTarget.Trim() != targetNode ||

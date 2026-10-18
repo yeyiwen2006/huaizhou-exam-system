@@ -9,7 +9,7 @@ public sealed record HighAvailabilityStatus(string ServerId, string NodeId,
 {
     // An observation includes several bounded network reads. Mutations always read
     // authority again and validate the expected epoch/version before their effects.
-    public static TimeSpan ObservationLifetime => TimeSpan.FromSeconds(30);
+    public static TimeSpan ObservationLifetime => TimeSpan.FromSeconds(60);
     // The database mode is retained for compatibility with existing journals.
     // Only current independent acknowledgements can advertise two durable copies.
     public ProtectionMode? EffectiveProtectionMode => State is null ? null :

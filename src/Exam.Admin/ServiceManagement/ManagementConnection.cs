@@ -122,9 +122,9 @@ public sealed class ManagementConnection : IManagementConnection
         var endpoint = target.Validate();
         _session = new HttpClient(transport?.Invoke() ?? new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false })
-        { BaseAddress = endpoint, Timeout = TimeSpan.FromSeconds(20) };
+        { BaseAddress = endpoint, Timeout = TimeSpan.FromSeconds(45) };
         _reads = new(endpoint, target.ServerId, target.NodeId, () => _credential, transport?.Invoke(),
-            readTimeout ?? TimeSpan.FromSeconds(20));
+            readTimeout ?? TimeSpan.FromSeconds(45));
         _writes = new(endpoint, target.ServerId, target.NodeId, () => _credential, transport?.Invoke(),
             writeTimeout ?? TimeSpan.FromMinutes(65));
     }
@@ -182,7 +182,7 @@ public sealed class ManagementConnection : IManagementConnection
     private async Task<ManagementEnvelope<T>> SessionAsync<T>(HttpRequestMessage request, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         using var response = await _session.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
         if ((int)response.StatusCode is >= 300 and < 400 || response.Content.Headers.ContentLength > 65536)
             throw new HttpRequestException("拒绝重定向或过大的管理会话响应。");

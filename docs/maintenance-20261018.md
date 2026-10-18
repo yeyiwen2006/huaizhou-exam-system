@@ -1,5 +1,24 @@
 # 主备、换机与客户端维护说明（2026-10-18）
 
+## 最新追加：接管后的角色显示、管理会话与旧主重建入口
+
+本次以最新远端 `526eed6` 为基线，保留其原请求续办修复。考务登录已经返回活动节点和代次，页面立即据此对应主机和备机；活动节点的独立状态响应可更新完整角色，不再等待跨节点保护检查。旧主保留可写旧数据库时显示“旧库（待重建）”。连接失败保留上次观察并标注，避免一次超时清空整行已知信息。
+
+旧主仅在换取管理会话时向新主认证一次，后续刷新不重复查询账号数据库或每分钟重新认证。会话最长24小时，退出或管理服务重启失效。管理请求期限从20秒放宽为45秒，观察有效期从30秒放宽为60秒。
+
+原请求在后台继续查询，终态到达自动解除占用，其他节点刷新不等待原请求。重建使用新主返回的代次和版本，经旧主自己的管理会话提交；不要求旧数据库先具有新主状态，也不在确认后重复整套前置查询。服务端执行前仍核对当前权威和目标，禁止重建活动主机。实际复制仍需要两节点的数据库复制连接可用。
+
+本次验证：主备工作区、独立会话和传输回归45项通过；另有管理HTTP回归9项通过。包含完整状态查询失败时保留正确角色、旧库提示及向旧节点提交重建请求的合成回归。正式解决方案锁定还原与Release构建通过，0警告、0错误。现场重建未执行。
+
+新主负责人更新时须同时更新 `Exam.Management`、`Exam.Server` 及其随附依赖，并重启相应服务；仅更新考务端无法消除旧版管理服务的重复认证。沿用现有部署配置、数据库、证书、部署选择及确认目录。两台机器的程序版本应一致，旧主业务服务在实际重建成功前保持停止。
+
+```powershell
+dotnet test tests/Unit/Exam.AdminUnitTests/Exam.AdminUnitTests.csproj -c Release --no-restore --filter 'FullyQualifiedName~PeerBusinessSessionTests|FullyQualifiedName~ManagementPeerWorkspaceTests|FullyQualifiedName~ManagementTransportTests'
+dotnet test tests/Unit/Exam.AdminUnitTests/Exam.AdminUnitTests.csproj -c Release --no-restore --filter 'FullyQualifiedName~ManagementHttpTests'
+dotnet restore Huaizhou.ExamSystem.sln --locked-mode
+dotnet build Huaizhou.ExamSystem.sln -c Release --no-restore
+```
+
 整理来源：远端 main 基线 `a843c5b`、本轮问题描述、当前源码及隔离合成回归。
 
 脱敏声明：本文不含真实考生、账号、地址、配置凭据或考试材料。测试身份及数据均为合成样例。
