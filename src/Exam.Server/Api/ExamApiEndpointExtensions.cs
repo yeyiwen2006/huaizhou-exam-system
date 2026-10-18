@@ -520,7 +520,17 @@ public static class ExamApiEndpointExtensions
             CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(
                 context, configuration, context.TraceIdentifier,
-                () => service.ReadEventsAsync(examId, afterRosterVersion, 100, cancellationToken)));
+                async () =>
+                {
+                    var events = await service.ReadEventsAsync(examId, afterRosterVersion, 100, cancellationToken);
+                    // Delivering a notification persists its delivery fence. An empty poll has
+                    // no such effect and must not create a fence or interrupt peer catch-up.
+                    if (events.Count > 0)
+                        await context.RequestServices.GetRequiredService<Exam.Application.HighAvailability.IBusinessConfirmation>()
+                            .ConfirmAsync(cancellationToken);
+                    return events;
+                }))
+            .WithMetadata(new ConfirmationBeforeResult());
 
         return group;
     }
