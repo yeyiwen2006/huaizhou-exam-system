@@ -114,7 +114,11 @@ public static class BusinessConfirmationRegistration
         services.AddSingleton(provider => new PostgresStandbyConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
             new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
             configuration["Confirmation:PrimaryNodeId"] ?? identity.NodeId, identity.ServerEpoch, Resources(),
-            provider.GetRequiredService<IPackageKeyUnwrapper>(), TimelineConnection(), configuration["Backup:PostgresBinDirectory"]));
+            provider.GetRequiredService<IPackageKeyUnwrapper>(), TimelineConnection(), configuration["Backup:PostgresBinDirectory"])
+        {
+            VerifiedStartupProbe = provider.GetRequiredService<Exam.Infrastructure.ServiceManagement.PostgresRecoveryReadinessProbe>(),
+            StartupMaterialsReady = () => provider.GetRequiredService<BusinessRecoveryGuard>().Snapshot.MaterialsReady
+        });
         services.AddSignalR(options => options.AddFilter<ConfirmationHubFilter>());
         if (!isolatedTestRuntime) services.AddHostedService<ReplicaMaintenanceWorker>();
         string Resources() => Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveResources(

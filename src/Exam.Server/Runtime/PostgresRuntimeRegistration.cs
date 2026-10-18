@@ -72,6 +72,7 @@ public static class PostgresRuntimeRegistration
         services.AddSingleton<PostgresMigrationRunner>();
         services.AddSingleton<PostgresReadinessProbe>();
         services.AddSingleton<BusinessRecoveryGuard>();
+        services.AddSingleton<PostgresRecoveryReadinessProbe>();
         services.AddHostedService<BusinessRecoveryWorker>();
         services.AddSingleton(provider => new NodeAuthorityGuard(dataSource, configuration, identity,
             provider.GetRequiredService<HttpClient>(), provider.GetRequiredService<IHostApplicationLifetime>()));

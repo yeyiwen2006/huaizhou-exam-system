@@ -187,6 +187,8 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
     private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
     private readonly PostgresRecoveryReadinessProbe _readiness = new(source, unwrapper);
     private bool _recoveryVerified;
+    public PostgresRecoveryReadinessProbe? VerifiedStartupProbe { get; init; }
+    public Func<bool>? StartupMaterialsReady { get; init; }
     public async Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token)
     {
         FileConfirmationStore.Validate(record);
@@ -208,13 +210,21 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
                 throw new IOException("备节点资源尚未持久追平。");
             if (!_recoveryVerified)
             {
-                var config = new ServiceConfiguration(serverId, standbyNodeId, "127.0.0.1", 1, resourcesDirectory, true, 1);
-                var checks = await _readiness.RunAsync(config, token);
-                if (checks.Count == 0 || checks.Any(c => c.BlocksWrites && !c.Passed))
-                    throw new IOException("备节点资源、解锁或持久数据核对失败。");
+                if (StartupMaterialsReady is { } ready && VerifiedStartupProbe is { } startup)
+                {
+                    if (!ready() || !await startup.VerifyConfirmationResourcesAsync(token))
+                        throw new IOException("备节点启动核对或新增资源核对尚未通过。");
+                }
+                else
+                {
+                    var config = new ServiceConfiguration(serverId, standbyNodeId, "127.0.0.1", 1, resourcesDirectory, true, 1);
+                    var checks = await _readiness.RunAsync(config, token);
+                    if (checks.Count == 0 || checks.Any(c => c.BlocksWrites && !c.Passed))
+                        throw new IOException("备节点资源、解锁或持久数据核对失败。");
+                }
                 _recoveryVerified = true;
             }
-            else if (!await _readiness.VerifyConfirmationResourcesAsync(token))
+            else if (!await (VerifiedStartupProbe ?? _readiness).VerifyConfirmationResourcesAsync(token))
                 throw new IOException("备节点新增或变更的试题资源核对失败。");
             await VerifyPositionAsync(source, record, standbyNodeId, token);
             if (_resources.Read() != record.ResourcesDigest)

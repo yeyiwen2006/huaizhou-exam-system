@@ -29,11 +29,11 @@ public sealed class BusinessRecoveryGuard
 public sealed class BusinessRecoveryWorker(
     NpgsqlDataSource source, IPackageKeyUnwrapper unwrapper, BusinessRecoveryGuard guard,
     IConfiguration configuration, TimeProvider timeProvider, BusinessServiceConfiguration? managedConfiguration = null,
-    NodeAuthorityGuard? authority = null) : BackgroundService
+    NodeAuthorityGuard? authority = null, PostgresRecoveryReadinessProbe? sharedProbe = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var probe = new PostgresRecoveryReadinessProbe(source, unwrapper);
+        var probe = sharedProbe ?? new PostgresRecoveryReadinessProbe(source, unwrapper);
         var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
         var local = new ServiceConfiguration(identity.ServerId, identity.NodeId, "127.0.0.1", 1, "unused-by-database-probe", false, 1);
         IReadOnlyList<StartupCheckResult>? verifiedChecks = null;
