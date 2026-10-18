@@ -524,7 +524,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, Local.NodeId, token,
             Local.ConnectionString, _options.PostgresBinDirectory);
         await using var connection = await source.OpenConnectionAsync(token);
-        await using var check = new NpgsqlCommand("SELECT pg_is_in_recovery() AND NOT pg_is_wal_replay_paused() AND pg_last_wal_receive_lsn()=pg_last_wal_replay_lsn()", connection);
+        await using var check = new NpgsqlCommand("SELECT pg_is_in_recovery() AND NOT pg_is_wal_replay_paused() AND pg_last_wal_receive_lsn() IS NOT NULL AND pg_last_wal_replay_lsn() >= pg_last_wal_receive_lsn()", connection);
         if ((bool)(await check.ExecuteScalarAsync(token) ?? false) is false) throw new IOException("提升前备库尚未完成实际重放。");
         await using var promote = new NpgsqlCommand("SELECT pg_promote(true,60)", connection) { CommandTimeout = 65 };
         if ((bool)(await promote.ExecuteScalarAsync(token) ?? false) is false) throw new IOException("备用库未在限定时间完成提升。");

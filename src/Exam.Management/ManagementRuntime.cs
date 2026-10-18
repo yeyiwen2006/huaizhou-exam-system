@@ -33,6 +33,7 @@ public sealed class ManagementRuntime(
     public string NodeId { get; } = nodeId;
     public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
     public Action<ManagementOperation, Exception>? RecordFailure { get; init; }
+    public IStartupReadinessProbe? StatusInspection { get; init; }
     public Func<CancellationToken, Task<BackupMaintenanceStatus?>>? ReadAutomaticBackupStatus { get; init; }
     public async Task<BackupInfo> GetBackupInfoAsync(string sourceDirectory, CancellationToken token)
     {
@@ -201,7 +202,7 @@ public sealed class ManagementRuntime(
             var configuration = await GetConfigurationAsync(token);
             if (kind == ManagementOperationKind.Checks)
             {
-                var checks = await preflight.RunAsync(configuration, token);
+                var checks = await (StatusInspection ?? preflight).RunAsync(configuration, token);
                 if (checks.Count == 0) throw new IOException("状态检测未返回结果。");
                 return operation with { Phase = ManagementOperationPhase.Completed, Checks = checks };
             }

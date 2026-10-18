@@ -255,6 +255,13 @@ public static class ManagementEntryPoint
                     "", "", Required("Backup:AllowedBackupRoot"), "", "", "", TimeSpan.FromSeconds(5)),
                     new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token))
             {
+                // Manual status checks inspect local metadata. Full startup/restore auditing
+                // and the primary-only write guards remain on their original paths.
+                StatusInspection = new CompositeStartupReadinessProbe([
+                    new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var inspectionMinimum) ? inspectionMinimum : 1024L * 1024 * 1024),
+                    new DeferredReadinessProbe(() => new NodeCertificateStartupReadinessProbe(NodeCertificate())),
+                    new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(SelectedConnection(), CurrentEpoch(), inspectStandby: true))
+                ]),
                 RecordFailure = (operation, error) => new ProtectedRuntimeLogWriter(managementLog, "management").Write(
                     error.Message.Contains("pg_hba.conf", StringComparison.OrdinalIgnoreCase)
                         ? "Exam.Management.Rebuild.PgHbaDenied" : "Exam.Management.Operation.Failed", "Error", 7001),

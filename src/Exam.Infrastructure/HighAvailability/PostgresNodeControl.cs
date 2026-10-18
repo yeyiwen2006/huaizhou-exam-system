@@ -49,7 +49,7 @@ public sealed class PostgresNodeHealthProbe(
                            WHEN pg_is_in_recovery() AND NOT pg_is_wal_replay_paused() AND
                                 pg_last_wal_receive_lsn() IS NOT NULL AND
                                 pg_last_wal_replay_lsn() IS NOT NULL THEN
-                               pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
+                               GREATEST(0, pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()))
                            WHEN pg_is_in_recovery() THEN 9223372036854775807
                            ELSE 0
                        END,
@@ -114,7 +114,7 @@ public sealed class PostgresFailoverPlatform(
                          SELECT pg_is_in_recovery() AND
                                 pg_last_wal_receive_lsn() IS NOT NULL AND
                                 pg_last_wal_replay_lsn() IS NOT NULL AND
-                                pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() AND
+                                pg_last_wal_replay_lsn() >= pg_last_wal_receive_lsn() AND
                                 EXISTS
                                 (
                                     SELECT 1
