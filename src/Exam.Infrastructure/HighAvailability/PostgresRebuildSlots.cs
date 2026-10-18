@@ -32,19 +32,31 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
 
     private async Task RetireSupersededSlotsAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
+        try { await RetireSupersededSlotsCoreAsync(plan, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is NpgsqlException or IOException or TimeoutException)
+        {
+            // Cleanup cannot turn an already installed, verified standby into a failed
+            // rebuild. Retain every unproven slot and report cleanup for later retry.
+            try { _recordProbeFailure?.Invoke("Exam.Management.Rebuild.SlotCleanupDeferred", error); }
+            catch { /* Diagnostic storage cannot invalidate the verified rebuild either. */ }
+        }
+    }
+
+    private async Task RetireSupersededSlotsCoreAsync(FailoverExecutionPlan plan, CancellationToken token)
+    {
         var currentOwner = DurableJsonFile.Read<SlotOwner>(OwnerPath(RebuildSlot(plan)), 8192);
         if (currentOwner is null) return; // Legacy slots have no ownership evidence and are never guessed disposable.
         var source = StateSource(_options.Nodes[plan.After.ActiveNodeId]);
         var local = StateSource(Local);
         await using var receiver = local.CreateCommand("SELECT slot_name FROM pg_stat_wal_receiver WHERE status='streaming'");
-        if ((string?)await receiver.ExecuteScalarAsync(token) != currentOwner.SlotName)
-            throw new IOException("新备机尚未核实使用本次复制槽，保留所有旧槽。");
+        if ((string?)await receiver.ExecuteScalarAsync(token) != currentOwner.SlotName) return;
         await using var sender = source.CreateCommand("""
             SELECT EXISTS(SELECT 1 FROM pg_replication_slots s JOIN pg_stat_replication r ON r.pid=s.active_pid
                 WHERE s.slot_name=$1 AND s.slot_type='physical' AND r.application_name=$2 AND r.state='streaming')
             """);
         sender.Parameters.AddWithValue(currentOwner.SlotName); sender.Parameters.AddWithValue(Local.NodeId);
-        if (await sender.ExecuteScalarAsync(token) is not true) throw new IOException("源节点未确认新槽的合法消费者。");
+        if (await sender.ExecuteScalarAsync(token) is not true) return;
         foreach (var directory in Directory.EnumerateDirectories(_options.RebuildRoot))
         {
             var owner = DurableJsonFile.Read<SlotOwner>(OwnerPath(directory), 8192);

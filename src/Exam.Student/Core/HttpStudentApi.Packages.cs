@@ -77,6 +77,8 @@ public sealed partial class HttpStudentApi : IExamPackageApi
             throw;
         }
         using var response = received;
+        if ((int)response.StatusCode >= 500 && await TryReconnectAsync(identityGeneration, generation, ct))
+            throw new DownloadEndpointChangedException();
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType != "application/vnd.huaizhou.exam-package" ||
             (response.Content.Headers.ContentLength is { } advertised && advertised != descriptor.PackageLength))
         {

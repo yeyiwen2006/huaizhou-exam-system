@@ -44,6 +44,8 @@ public sealed partial class AdminApiClient : IDisposable
     private void ResetConnectionState()
     {
         _generation++;
+        _identityGeneration++;
+        _routeGeneration++;
         _serverId = null;
         _nodeId = null;
         _serverEpoch = 0;
@@ -56,6 +58,12 @@ public sealed partial class AdminApiClient : IDisposable
             throw new OperationCanceledException("连接已更换，已忽略旧连接的响应；写操作结果请在原服务器核对。");
     }
 
+    private void EnsureCurrentRoute(long generation)
+    {
+        if (generation != _routeGeneration)
+            throw new OperationCanceledException("业务连接已切换，沿原请求核对当前主机。");
+    }
+
     private void ValidateEnvelope<T>(ApiEnvelope<T> envelope)
     {
         if (string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) ||
@@ -63,7 +71,8 @@ public sealed partial class AdminApiClient : IDisposable
             throw new AdminApiException("INVALID_SERVER_IDENTITY", "响应缺少有效的服务器身份或代次。", HttpStatusCode.BadGateway);
         if (_serverId is not null &&
             (!StringComparer.Ordinal.Equals(_serverId, envelope.ServerId) || envelope.ServerEpoch < _serverEpoch ||
-             (envelope.ServerEpoch == _serverEpoch && !StringComparer.Ordinal.Equals(_nodeId, envelope.NodeId))))
+             (envelope.ServerEpoch == _serverEpoch && !StringComparer.Ordinal.Equals(_nodeId, envelope.NodeId)) ||
+             _trustedRoutes is { } routes && routes.Nodes.SingleOrDefault(node => node.Address == _httpClient.BaseAddress)?.NodeId != envelope.NodeId))
             throw new AdminApiException("STALE_SERVER_IDENTITY", "响应来自不同服务器或过期节点代次，已拒绝使用。", HttpStatusCode.BadGateway);
         _serverId = envelope.ServerId;
         _nodeId = envelope.NodeId;
@@ -74,8 +83,10 @@ public sealed partial class AdminApiClient : IDisposable
     {
         _messageHandler = messageHandler;
         _httpClient = CreateClient();
-        _mutations = new(pendingDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HuaizhouExam", "Admin", "BusinessRequests"));
+        var directory = pendingDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HuaizhouExam", "Admin", "BusinessRequests");
+        _mutations = new(directory);
+        _routingFile = Path.Combine(directory, "trusted-routes.bin");
     }
 
     public bool IsConfigured => _httpClient.BaseAddress is not null &&
@@ -94,6 +105,7 @@ public sealed partial class AdminApiClient : IDisposable
         var normalized = NormalizeAddress(baseAddress);
         ArgumentException.ThrowIfNullOrWhiteSpace(operatorToken);
         ArgumentException.ThrowIfNullOrWhiteSpace(operatorId);
+        if (_trustedRoutes?.Nodes.Any(node => node.Address == normalized) != true) _trustedRoutes = null;
         var configuredClient = CreateClient();
         configuredClient.BaseAddress = normalized;
         configuredClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);
@@ -119,12 +131,22 @@ public sealed partial class AdminApiClient : IDisposable
     public async Task CheckConnectionAsync(CancellationToken cancellationToken = default)
     {
         EnsureConfigured();
-        var generation = Generation;
+        var generation = _routeGeneration;
+        var identity = _identityGeneration;
         var client = _httpClient;
-        using var response = await client.GetAsync("health/ready", cancellationToken);
-        EnsureCurrentConnection(generation);
+        HttpResponseMessage received;
+        try { received = await client.GetAsync("health/ready", cancellationToken); }
+        catch (Exception error) when (CanReconnect(error) && !cancellationToken.IsCancellationRequested && identity == _identityGeneration)
+        {
+            if (!await TryReconnectBusinessAsync(generation, cancellationToken)) throw;
+            received = await _httpClient.GetAsync("health/ready", cancellationToken); generation = _routeGeneration;
+        }
+        using var response = received;
+        EnsureCurrentRoute(generation);
         if (!response.IsSuccessStatusCode)
         {
+            if (await TryReconnectBusinessAsync(generation, cancellationToken))
+            { await CheckConnectionAsync(cancellationToken); return; }
             throw new AdminApiException("SERVICE_NOT_READY", $"服务器就绪检查失败：HTTP {(int)response.StatusCode}。", response.StatusCode);
         }
 
@@ -263,6 +285,20 @@ public sealed partial class AdminApiClient : IDisposable
             cancellationToken);
 
     private async Task<T> SendAsync<T>(
+        HttpMethod method, string relativeUri, object? payload, CancellationToken cancellationToken, bool preserveRequestId = false)
+        where T : class
+    {
+        var generation = _routeGeneration; var identity = _identityGeneration;
+        try { return await SendCoreAsync<T>(method, relativeUri, payload, cancellationToken, preserveRequestId); }
+        catch (Exception error) when (CanReconnect(error) && !cancellationToken.IsCancellationRequested && identity == _identityGeneration)
+        {
+            if (!await TryReconnectBusinessAsync(generation, cancellationToken)) throw;
+            // The mutation journal reuses the same request ID and exact business content.
+            return await SendCoreAsync<T>(method, relativeUri, payload, cancellationToken, preserveRequestId);
+        }
+    }
+
+    private async Task<T> SendCoreAsync<T>(
         HttpMethod method,
         string relativeUri,
         object? payload,
@@ -277,7 +313,7 @@ public sealed partial class AdminApiClient : IDisposable
             if (!string.Equals(_account.Username, _operatorId, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("当前登录账号与业务请求操作者不一致。");
         }
-        var generation = Generation;
+        var generation = _routeGeneration;
         var client = _httpClient;
         using var request = new HttpRequestMessage(method, relativeUri);
         PendingBusinessMutationStore.Mutation? mutation = null;
@@ -303,7 +339,7 @@ public sealed partial class AdminApiClient : IDisposable
         }
 
         using var response = await client.SendAsync(request, cancellationToken);
-        EnsureCurrentConnection(generation);
+        EnsureCurrentRoute(generation);
         ApiEnvelope<T>? envelope = null;
         try
         {
@@ -316,7 +352,7 @@ public sealed partial class AdminApiClient : IDisposable
             if (response.IsSuccessStatusCode)
                 throw new AdminApiException("INVALID_RESPONSE", "服务器成功响应不是有效的业务封套。", response.StatusCode);
         }
-        EnsureCurrentConnection(generation);
+        EnsureCurrentRoute(generation);
         if (envelope is not null) ValidateEnvelope(envelope);
         if (!response.IsSuccessStatusCode || envelope?.Error is not null)
         {
@@ -348,9 +384,7 @@ public sealed partial class AdminApiClient : IDisposable
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private HttpClient CreateClient() => _messageHandler is null
-        ? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, Proxy = new RadminDirectProxy(HttpClient.DefaultProxy) })
-        : new HttpClient(_messageHandler, disposeHandler: false);
+    private HttpClient CreateClient() => CreateRoutedClient(_trustedRoutes);
 
     public void Dispose()
     {

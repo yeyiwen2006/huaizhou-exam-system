@@ -7,6 +7,7 @@ public sealed record TrustedServerNode(string Host, int Port, string NodeId, str
 {
     public string? OriginHost { get; init; }
     public int? OriginPort { get; init; }
+    public string? PublicCertificateSha256 { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public bool UsesPublicHttps => OriginHost is not null;
     [System.Text.Json.Serialization.JsonIgnore]
@@ -41,7 +42,8 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
             topology = topology with { Nodes = topology.Nodes.Select(node =>
             {
                 var previous = saved.Nodes.SingleOrDefault(item => item.NodeId == node.NodeId);
-                return previous is { UsesPublicHttps: true } && previous.OriginAddress == node.Address &&
+                return previous is { UsesPublicHttps: true } && (previous.OriginAddress == node.Address ||
+                    previous.Address == node.Address && previous.OriginAddress == node.OriginAddress) &&
                     previous.CertificateSha256 == node.CertificateSha256 ? previous : node;
             }).ToArray() };
             if (topology.ServerId != saved.ServerId || topology.Nodes.Any(node =>
@@ -53,14 +55,15 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
                 !saved.Nodes.Any(previous => previous.NodeId == node.NodeId))).ToArray() };
         }
         else if (!topology.Nodes.Any(node => node.Address == registeredAddress) &&
-            connectedNodeId is not null && ServerTrust.PinnedCertificateThumbprint is null &&
+            connectedNodeId is not null &&
             Uri.CheckHostName(record.Host) == UriHostNameType.Dns)
         {
-            // Only the user-selected endpoint of this successful standard-TLS connection may
+            // Only the user-selected endpoint of this successful TLS connection may
             // be an alias. Never learn another public route from a server response.
             topology = topology with { Nodes = topology.Nodes.Select(node => node.NodeId == connectedNodeId
                 ? node with { Host = DeviceStore.NormalizeHost(record.Host), Port = record.Port,
-                    OriginHost = node.Host, OriginPort = node.Port }
+                    OriginHost = node.Host, OriginPort = node.Port,
+                    PublicCertificateSha256 = ServerTrust.PinnedCertificateThumbprint }
                 : node).ToArray() };
         }
         try { topology.Validate(); }
@@ -70,7 +73,8 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
             record.Topology is { } originalTopology && !topology.Extends(originalTopology))
             throw new StudentIdentityException("批准的主备信任信息与原设备登记不一致，原记录已保留。");
         var original = topology.Nodes.Single(node => node.Address == registeredAddress);
-        if (record.Topology is null && ServerTrust.PinnedCertificateThumbprint is { } pin && original.CertificateSha256 != pin)
+        if (record.Topology is null && !original.UsesPublicHttps &&
+            ServerTrust.PinnedCertificateThumbprint is { } pin && original.CertificateSha256 != pin)
             throw new StudentIdentityException("批准的证书指纹与已核对的激活连接不一致，原记录已保留。");
         return topology;
     }
@@ -83,7 +87,8 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
 
     private static bool SameNode(TrustedServerNode left, TrustedServerNode right) =>
         left.NodeId == right.NodeId && left.Address == right.Address &&
-        left.CertificateSha256 == right.CertificateSha256 && left.OriginAddress == right.OriginAddress;
+        left.CertificateSha256 == right.CertificateSha256 && left.OriginAddress == right.OriginAddress &&
+        left.PublicCertificateSha256 == right.PublicCertificateSha256;
 
     public void Validate()
     {
@@ -91,6 +96,8 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
             Nodes.Any(node => node is null || Uri.CheckHostName(node.Host) == UriHostNameType.Unknown || node.Port is < 1 or > 65535 ||
                 string.IsNullOrWhiteSpace(node.NodeId) || node.CertificateSha256 is null ||
                 ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) != node.CertificateSha256 ||
+                node.PublicCertificateSha256 is { } publicPin && (!node.UsesPublicHttps ||
+                    ServerEndpointConfig.NormalizeThumbprint(publicPin) != publicPin) ||
                 (node.OriginHost is null) != (node.OriginPort is null) ||
                 node.UsesPublicHttps && (Uri.CheckHostName(node.Host) != UriHostNameType.Dns ||
                     Uri.CheckHostName(node.OriginHost) == UriHostNameType.Unknown || node.OriginPort is < 1 or > 65535)) ||

@@ -247,12 +247,25 @@ public partial class PdfQuestionView : UserControl
         }
         if (_abstainButton is not null && _optionGeometry.Count > 0)
         {
-            var first = _optionGeometry[0].Button;
+            var first = _optionGeometry.FirstOrDefault(option => Equals(option.Button.Content, "A")).Button
+                ?? _optionGeometry[0].Button;
             var canvas = (Canvas)first.Parent;
             // 多页宽度可能不同；页面在 PagesHost 中居中，先补上该页相对最宽页的偏移。
-            var left = (_pageOverlays.Max(page => page.Width) - canvas.Width) / 2 + Canvas.GetLeft(first);
-            _abstainButton.Margin = new Thickness(left, 4, 0, 4);
+            var pageOffset = (_pageOverlays.Max(page => page.Width) - canvas.Width) / 2;
+            var left = pageOffset + Canvas.GetLeft(first);
             _abstainButton.FontSize = first.FontSize + .5 * 96 / 72; // 比普通选项按钮增加 0.5 磅。
+            var last = _optionGeometry.FirstOrDefault(option => Equals(option.Button.Content, "D")).Button;
+            if (_optionGeometry.Count == 4 && Equals(first.Content, "A") && last is not null &&
+                _optionGeometry.All(option => ReferenceEquals(option.Button.Parent, canvas)) &&
+                _optionGeometry.Max(option => option.CenterY) - _optionGeometry.Min(option => option.CenterY) < diameter / 2)
+            {
+                // 只有四选项同排时居中；竖排、两行和跨页仍与 A 的圆圈左端对齐。
+                _abstainButton.Margin = new Thickness(0);
+                _abstainButton.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                left = pageOffset + (Canvas.GetLeft(first) + Canvas.GetLeft(last) + diameter) / 2
+                    - _abstainButton.DesiredSize.Width / 2;
+            }
+            _abstainButton.Margin = new Thickness(Math.Max(0, left), 4, 0, 4);
         }
     }
 

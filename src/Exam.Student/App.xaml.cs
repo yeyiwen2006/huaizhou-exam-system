@@ -43,6 +43,7 @@ public partial class App : Application
         }
 
         var shell = new MainWindow();
+        shell.Loaded += OnShellLoaded;
         MainWindow = shell;
         shell.Show();
         try
@@ -60,6 +61,12 @@ public partial class App : Application
                 "服务器连接尚未就绪", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    private static void OnShellLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is MainWindow shell) shell.Loaded -= OnShellLoaded;
+        ExamDesktopSession.WindowReady();
     }
 
     private void OnDispatcherUnhandledException(object sender,
@@ -90,7 +97,7 @@ public partial class App : Application
 }
 
 /// <summary>
-/// 正式入口始终使用 HTTPS 客户端；每次启动由考生填写服务器地址，默认使用 443 端口。
+/// 正式入口始终使用 HTTPS 客户端；启动优先恢复可信活动地址，首次填写默认使用 443 端口。
 /// </summary>
 public sealed class AppServices
 {

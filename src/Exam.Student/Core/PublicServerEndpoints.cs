@@ -41,7 +41,8 @@ public sealed record PublicServerEndpoints(string ServerId, IReadOnlyList<Public
                 return node with
                 {
                     Host = DeviceStore.NormalizeHost(route.Host), Port = route.Port,
-                    OriginHost = node.Host, OriginPort = node.Port
+                    OriginHost = node.Host, OriginPort = node.Port,
+                    PublicCertificateSha256 = node.NodeId == selected.NodeId ? ServerTrust.PinnedCertificateThumbprint : null
                 };
             }).ToArray()
         };
@@ -61,7 +62,9 @@ public sealed record PublicServerEndpoints(string ServerId, IReadOnlyList<Public
             return node with
             {
                 Host = DeviceStore.NormalizeHost(route.Host), Port = route.Port,
-                OriginHost = node.OriginHost ?? node.Host, OriginPort = node.OriginPort ?? node.Port
+                OriginHost = node.OriginHost ?? node.Host, OriginPort = node.OriginPort ?? node.Port,
+                PublicCertificateSha256 = node.Host == DeviceStore.NormalizeHost(route.Host) && node.Port == route.Port
+                    ? node.PublicCertificateSha256 : null
             };
         }).ToArray() };
     }

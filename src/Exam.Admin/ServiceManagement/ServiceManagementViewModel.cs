@@ -156,7 +156,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public void Activate()
     {
         if (_disposed) return;
+        var returning = !_active;
         _active = true;
+        if (returning && Message == "查询已暂停，返回后可重新刷新状态与日志。") Message = string.Empty;
         if (!IsSignedIn && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
         StartPolling();
     }
@@ -164,6 +166,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public void SetBusinessSession(AdminSessionSnapshot? session)
     {
         if (session is not null && _businessSession?.Matches(session) == true) return;
+        if (session is not null && _businessSession?.SameAuthentication(session) == true)
+        { _businessSession = session; return; }
         ResetSession();
         _businessSession = session;
         RestartBackupMonitoring();
@@ -554,7 +558,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 operation.Restore is { IsolationStaged: true } && operation.RecoveryActivation is null &&
                 operation.Checks?.Any(c => c.Name == "recovery-confirmed-state" && !c.Passed && c.BlocksWrites) == true);
         if (operation.Status is { } status) ApplyStatus(status, reply.Envelope.EpochVerified, reply.Envelope.ServerEpoch);
-        if (operation.HighAvailability is { } availability) ApplyHighAvailability(availability);
+        if (operation.HighAvailability is { } availability) ApplyHighAvailability(availability, proofAlreadyPersisted: false,
+            completedRoleTransition: operation.Phase == ManagementOperationPhase.Completed &&
+                operation.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild);
         if (operation.Checks is not null) SetChecks(operation.Checks);
         if (operation.Phase == ManagementOperationPhase.Completed && operation.Backup is { } backup)
         {

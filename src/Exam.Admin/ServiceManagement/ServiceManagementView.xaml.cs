@@ -19,12 +19,14 @@ public partial class ServiceManagementView : UserControl
     }
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (!ReferenceEquals(e.OriginalSource, this)) return;
         _viewModel.ConfirmAsync = request => Window.GetWindow(this) is { } owner
             ? ConfirmDialog.ShowAsync(owner, request.Title, request.Body, isDanger: request.Dangerous) : Task.FromResult(false);
         _viewModel.Activate();
     }
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        if (!ReferenceEquals(e.OriginalSource, this)) return;
         _viewModel.ConfirmAsync = _ => Task.FromResult(false);
         _viewModel.Deactivate();
     }

@@ -21,7 +21,9 @@ public static class ServerTrust
         try { host = DeviceStore.NormalizeHost(stream.TargetHostName.Trim('[', ']')); }
         catch (ArgumentException) { return false; }
         var node = topology.Nodes.SingleOrDefault(node => DeviceStore.NormalizeHost(node.Host) == host);
-        return node is not null && (node.UsesPublicHttps ? errors == SslPolicyErrors.None :
+        return node is not null && (node.UsesPublicHttps ? node.PublicCertificateSha256 is { } pin
+            ? string.Equals(pin, certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase)
+            : errors == SslPolicyErrors.None :
             string.Equals(node.CertificateSha256, certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase));
     }
 

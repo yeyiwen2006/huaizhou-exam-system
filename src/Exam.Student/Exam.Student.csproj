@@ -16,6 +16,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <StartupObject>Exam.Student.StudentEntryPoint</StartupObject>
     <!-- 原版题目显示使用 Windows.Data.Pdf（WinRT 投影），要求 Windows 10 19041+ -->
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>

@@ -39,7 +39,7 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         var observed = await platform.ObserveAsync(token);
         var before = observed.State;
         if (observed.ServerId != serverId || observed.NodeId != nodeId || before is null ||
-            observed.VerifiedAt is null || clock.UtcNow - observed.VerifiedAt > TimeSpan.FromSeconds(10) ||
+            observed.VerifiedAt is null || clock.UtcNow - observed.VerifiedAt > HighAvailabilityStatus.ObservationLifetime ||
             observed.VerifiedAt - clock.UtcNow > TimeSpan.FromSeconds(5))
             throw new DomainRuleException(ErrorCodes.ReplicaUnavailable, "当前主备状态无法核实，请重新查询。", true);
         if (request.ExpectedEpoch != before.ServerEpoch)
@@ -60,9 +60,9 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
                     isolation.ConfirmedBy != operation.ActorId ||
                     string.IsNullOrWhiteSpace(isolation.Reason) || isolation.Reason.Length > 500)
                     throw new DomainRuleException(ErrorCodes.NotActiveServer, "须确认原主机断电或业务网络隔离，且仅可接管本机备节点。");
-                if (!target.Reachable || !target.DatabaseInRecovery || target.ReplayLagBytes != 0 ||
+                if (!target.Reachable || !target.DatabaseInRecovery ||
                     !target.KeyMaterialReady || !target.CertificateReady ||
-                    clock.UtcNow - target.ObservedAt > TimeSpan.FromSeconds(10) || target.ObservedAt > clock.UtcNow.AddSeconds(5))
+                    clock.UtcNow - target.ObservedAt > HighAvailabilityStatus.ObservationLifetime || target.ObservedAt > clock.UtcNow.AddSeconds(5))
                     throw new DomainRuleException(ErrorCodes.ReplicaUnavailable, "备节点复制、解锁材料或证书未核实。", true);
                 nodes[active] = nodes[active] with { Role = DeploymentNodeRole.Isolated, Reachable = false };
                 nodes[nodeId] = target with { Role = DeploymentNodeRole.Primary, DatabaseInRecovery = false };
@@ -101,7 +101,14 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         operation = operation with { FailoverPlan = plan, UpdatedAt = clock.UtcNow };
         await journal.SaveAsync(operation, token); // Durable intent precedes every external effect.
         await platform.ExecuteAsync(plan, token);
-        if (!await platform.ReconcileAsync(plan, token)) throw new IOException("主备操作尚未完成实际状态核对。");
+        // A restarted pool or promotion checkpoint can lag the completed external
+        // action briefly. Reconcile the same durable intent; never repeat promotion.
+        using (var verification = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            verification.CancelAfter(TimeSpan.FromSeconds(45));
+            while (!await platform.ReconcileAsync(plan, verification.Token))
+                await Task.Delay(TimeSpan.FromSeconds(1), verification.Token);
+        }
         return await CompletedAsync(operation, plan, token);
     }
 
@@ -129,7 +136,7 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
     {
         var observed = await platform.ObserveAsync(token);
         if (observed.State is not { } state || observed.VerifiedAt is not { } time ||
-            clock.UtcNow - time > TimeSpan.FromSeconds(10) || time > clock.UtcNow.AddSeconds(5) ||
+            clock.UtcNow - time > HighAvailabilityStatus.ObservationLifetime || time > clock.UtcNow.AddSeconds(5) ||
             !FailoverStateHistory.Covers(state, plan.After) ||
             state.Version == plan.After.Version && plan.Kind == ManagementOperationKind.Reprotect && !observed.SynchronousProtectionVerified)
             throw new IOException("主备操作完成状态的最新实际证据尚未核实。");

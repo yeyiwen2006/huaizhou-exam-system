@@ -9,7 +9,19 @@ using Exam.Infrastructure.ServiceManagement;
 namespace Exam.Infrastructure.HighAvailability;
 
 /// <summary>A protected head, independent of PostgreSQL. A pending head never proves success.</summary>
-public sealed record ConfirmationHead(DurableConfirmation Record, bool Confirmed);
+public sealed record ConfirmationHead(DurableConfirmation Record, bool Confirmed)
+{
+    // A concurrent producer may advance the peer after we captured the primary.
+    // Compare the captured durable boundary, never chase an exactly equal latest head.
+    public bool Covers(DurableConfirmation boundary) => Confirmed &&
+        Record.ServerId == boundary.ServerId && Record.PrimaryNodeId == boundary.PrimaryNodeId &&
+        Record.StandbyNodeId == boundary.StandbyNodeId && Record.Epoch == boundary.Epoch &&
+        Record.SystemIdentifier == boundary.SystemIdentifier && Record.DatabaseName == boundary.DatabaseName &&
+        Record.Timeline == boundary.Timeline && Record.StateVersion >= boundary.StateVersion &&
+        Record.Mode == ProtectionMode.SynchronousDualNode && boundary.Mode == ProtectionMode.SynchronousDualNode &&
+        Record.ResourcesDigest == boundary.ResourcesDigest &&
+        FileConfirmationStore.Lsn(Record.FlushLsn) >= FileConfirmationStore.Lsn(boundary.FlushLsn);
+}
 
 public sealed class FileConfirmationStore(string directory)
 {

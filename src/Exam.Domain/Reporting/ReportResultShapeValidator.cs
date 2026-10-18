@@ -51,7 +51,7 @@ public static class ReportResultShapeValidator
         }
 
         for (var index = 0; index < result.Subjects.Count; index++)
-            CheckSubject(result.Subjects[index], index, totals, result.CommonSampleCount);
+            CheckSubject(result.Subjects[index], index, totals);
 
         Require(result.ClassAverages.Count == classes.Count);
         var seenClasses = new HashSet<string>(StringComparer.Ordinal);
@@ -70,7 +70,8 @@ public static class ReportResultShapeValidator
                 var subject = row.Subjects[index];
                 Require(subject is not null &&
                     subject.SubjectId == result.Subjects[index].Subject.SubjectId);
-                CheckMean(subject.Mean, row.SampleCount);
+                CheckMean(subject.Mean, totals.Values.Count(student => student.Participant.ClassNumber == row.ClassNumber &&
+                    !student.Subjects[index].Score.IsZero));
                 Require((subject.Rank is null) == (subject.Mean is null));
             }
         }
@@ -79,20 +80,21 @@ public static class ReportResultShapeValidator
     }
 
     private static void CheckSubject(SubjectTables table, int subjectIndex,
-        IReadOnlyDictionary<string, StudentTotalRow> totals, int commonSampleCount)
+        IReadOnlyDictionary<string, StudentTotalRow> totals)
     {
         Require(table.Scores is not null && table.Answers is not null &&
             table.QuestionScores is not null && table.QuestionMeans is not null &&
             table.Scores.Count == totals.Count && table.Answers.Count == totals.Count &&
             table.QuestionScores.Count == totals.Count &&
             table.QuestionMeans.Count == table.Subject.Questions.Count);
-        CheckMean(table.SubjectMean, commonSampleCount);
+        var subjectSampleCount = totals.Values.Count(row => !row.Subjects[subjectIndex].Score.IsZero);
+        CheckMean(table.SubjectMean, subjectSampleCount);
         for (var index = 0; index < table.QuestionMeans.Count; index++)
         {
             var mean = table.QuestionMeans[index];
             Require(mean is not null &&
                 mean.QuestionId == table.Subject.Questions[index].QuestionId);
-            CheckMean(mean.Mean, commonSampleCount);
+            CheckMean(mean.Mean, subjectSampleCount);
         }
 
         var scores = new Dictionary<string, SubjectScoreRow>(StringComparer.Ordinal);

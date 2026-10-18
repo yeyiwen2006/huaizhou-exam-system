@@ -19,6 +19,15 @@ public partial class LoginPage : UserControl
         _navigation = navigation;
         InitializeComponent();
         DataContext = App.Services.Session;
+        try
+        {
+            var saved = App.Services.DeviceStore.Load();
+            var active = saved?.Topology?.Nodes.SingleOrDefault(node => node.NodeId == saved.ActiveNodeId)?.Address;
+            if (active is not null) HostInput.Text = active.AbsoluteUri;
+            else if (saved is not null) HostInput.Text = new UriBuilder(Uri.UriSchemeHttps, saved.Host, saved.Port).Uri.AbsoluteUri;
+            else if (App.ServerConfig is { } config) HostInput.Text = new UriBuilder(Uri.UriSchemeHttps, config.Host, config.Port).Uri.AbsoluteUri;
+        }
+        catch (DeviceStoreException) { ErrorBanner.Show("本机连接记录无法读取，请联系监考人员核对；原记录已保留。"); }
     }
 
     private async void OnExitSystem(object sender, RoutedEventArgs e)

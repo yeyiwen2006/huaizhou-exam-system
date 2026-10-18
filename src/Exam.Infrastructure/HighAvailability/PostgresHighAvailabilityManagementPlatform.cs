@@ -142,6 +142,12 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             if (selected?.Epoch == epoch)
                 return PathBoundary.ResolveWithinRoot(node.ConfirmationDirectory, selected.ConfirmationDirectory,
                     "确认目录超出节点根目录。");
+            // Reconciliation still verifies the previous epoch after the new selection is
+            // durable. Subsequent promotions must not fall back to the initial head.
+            var historical = PathBoundary.ResolveWithinRoot(node.ConfirmationDirectory,
+                Path.Combine(node.ConfirmationDirectory, "epochs", epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), node.NodeId),
+                "历史确认目录超出节点根目录。");
+            if (Directory.Exists(historical)) return historical;
         }
         return node.ConfirmationDirectory;
     }
@@ -232,7 +238,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             var materials = await materialsTasks[node.NodeId];
             archiveChecks.AddRange(materials.Checks.Where(c => c.Name == "wal-archiving"));
             var materialsVerified = node.NodeId == Local.NodeId || materials.Proof is { } proof &&
-                proof.Epoch == state.ServerEpoch && _time.GetUtcNow() - proof.ObservedAt <= TimeSpan.FromSeconds(10) &&
+                proof.Epoch == state.ServerEpoch && _time.GetUtcNow() - proof.ObservedAt <= HighAvailabilityStatus.ObservationLifetime &&
                 proof.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
             var role = state.Nodes[node.NodeId].Role;
             // Observe local database health after the peer probes, keeping its timestamp current
@@ -304,7 +310,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     {
         var primary = await ReadHeadAsync(_options.Nodes[primaryId], state.ServerEpoch, token);
         var standby = await ReadHeadAsync(_options.Nodes[standbyId], state.ServerEpoch, token);
-        if (primary is not { Confirmed: true } || standby != primary || primary.Record.ServerId != state.ServerId ||
+        if (primary is not { Confirmed: true } || standby?.Covers(primary.Record) != true || primary.Record.ServerId != state.ServerId ||
             primary.Record.Epoch != state.ServerEpoch || primary.Record.StateVersion != state.Version ||
             primary.Record.PrimaryNodeId != primaryId || primary.Record.StandbyNodeId != standbyId ||
             primary.Record.Mode != ProtectionMode.SynchronousDualNode)
@@ -316,7 +322,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     {
         var primary = _options.Nodes[state.ActiveNodeId]; var standby = _options.Nodes.Values.Single(n => n.NodeId != primary.NodeId);
         if (nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady) ||
-            nodes[primary.NodeId].DatabaseInRecovery || !nodes[standby.NodeId].DatabaseInRecovery || nodes[standby.NodeId].ReplayLagBytes != 0)
+            nodes[primary.NodeId].DatabaseInRecovery || !nodes[standby.NodeId].DatabaseInRecovery)
             throw new IOException("实际节点复制或材料核对未通过。");
         var head = await RequireMatchingHeadsAsync(state, primary.NodeId, standby.NodeId, token);
         if (_localResourceDigest.Read() != head.Record.ResourcesDigest)
@@ -351,7 +357,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         else if (operation.Kind == ManagementOperationKind.Reprotect)
         {
             if (reference.Value.Recovery || !before.Nodes.TryGetValue(request.TargetNodeId, out var standby) ||
-                !standby.Reachable || !standby.DatabaseInRecovery || standby.ReplayLagBytes != 0 || !standby.KeyMaterialReady || !standby.CertificateReady)
+                !standby.Reachable || !standby.DatabaseInRecovery || !standby.KeyMaterialReady || !standby.CertificateReady)
                 throw new IOException("重建备库尚未追平或材料未核实。");
             var standbyIdentity = await ReadAsync(_options.Nodes[request.TargetNodeId], token);
             if (standbyIdentity is null || !standbyIdentity.Value.Recovery || standbyIdentity.Value.System != reference.Value.System ||
@@ -576,7 +582,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         await confirmation.ConfirmReplicationAsync(token);
         var head = Confirmation(primary, plan.After.ServerEpoch).Read();
         var independent = await peer.ReadAsync(token);
-        if (head is not { Confirmed: true } || independent != head) throw new IOException("恢复保护尚无双侧最新持久确认。");
+        if (head is not { Confirmed: true } || independent?.Covers(head.Record) != true) throw new IOException("恢复保护尚无双侧持久确认。");
     }
     private Uri PeerAddress(FailoverNodeDeployment node, string path)
     {
@@ -767,6 +773,6 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         return actual is { Recovery: true } && actual.Value.System == plan.SystemIdentifier && actual.Value.Database == plan.DatabaseName &&
             FailoverStateHistory.Covers(actual.Value.State, plan.After) &&
             (requireMarker && actual.Value.State.Version > plan.After.Version ||
-                FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) == plan.ResourcesDigest);
+                _localResourceDigest.Read() == plan.ResourcesDigest);
     }
 }

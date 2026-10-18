@@ -221,7 +221,7 @@ public sealed class LocalManagementClient : IDisposable
         if (availability.SynchronousProtectionVerified && (state is null || state.Nodes.Count != 2 ||
             availability.VerifiedAt is null || state.Nodes.Values.Count(n => n.Role == DeploymentNodeRole.Standby) != 1 ||
             state.Nodes.Values.Any(n => !n.Reachable || !n.KeyMaterialReady || !n.CertificateReady ||
-                n.Role == DeploymentNodeRole.Primary && n.DatabaseInRecovery || n.Role == DeploymentNodeRole.Standby && (!n.DatabaseInRecovery || n.ReplayLagBytes != 0)) ||
+                n.Role == DeploymentNodeRole.Primary && n.DatabaseInRecovery || n.Role == DeploymentNodeRole.Standby && !n.DatabaseInRecovery) ||
             availability.Checks.Any(c => c.BlocksWrites && !c.Passed) ||
             !availability.Checks.Any(c => c.Name == "synchronous-protection" && c.Passed)))
             throw new HttpRequestException("主备响应缺少完整同步保护证据。");

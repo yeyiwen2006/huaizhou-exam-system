@@ -39,6 +39,7 @@ public partial class MainWindow : Window
 
         _viewModel.Connection.PropertyChanged += OnConnectionPropertyChanged;
         _viewModel.BusinessSessionChanged += OnBusinessSessionChanged;
+        Management.ActiveNodeVerified += OnActiveNodeVerified;
         ShowLoginPage();
     }
 
@@ -73,7 +74,8 @@ public partial class MainWindow : Window
         {
             OnBusinessSessionChanged();
             _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
-            if (!_viewModel.Connection.IsConnected) { Management.Deactivate(); ShowLoginPage(); }
+            if (!_viewModel.Connection.IsConnected && _router.Route != AdminWorkspaceRoute.LocalManagement)
+            { Management.Deactivate(); ShowLoginPage(); }
             else if (_router.Route != AdminWorkspaceRoute.LocalManagement) ShowMainArea();
             return;
         }
@@ -88,7 +90,22 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnBusinessSessionChanged() => Management.SetBusinessSession(_viewModel.CaptureBusinessSession());
+    private void OnBusinessSessionChanged()
+    {
+        var session = _viewModel.CaptureBusinessSession();
+        // Management has its own authenticated sessions and must remain usable while
+        // the business endpoint goes away during takeover or a service restart.
+        if (session is null && _router.Route == AdminWorkspaceRoute.LocalManagement) return;
+        Management.SetBusinessSession(session);
+    }
+
+    private async void OnActiveNodeVerified(string serverId, string nodeId, long epoch)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(35));
+        try { await _viewModel.ReconnectToActiveNodeAsync(serverId, nodeId, epoch, deadline.Token); }
+        catch (Exception error) when (error is System.IO.IOException or System.Net.Http.HttpRequestException or OperationCanceledException or
+            System.Security.Cryptography.CryptographicException) { /* Business requests retain their original IDs and retry the trusted route. */ }
+    }
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
 
@@ -101,7 +118,11 @@ public partial class MainWindow : Window
             if (await Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "确认退出登录",
                 "确定退出当前考务账号并返回登录页面吗？", confirmText: "确定", cancelText: "取消") &&
                 _viewModel.Connection.LogoutCommand.CanExecute(null))
+            {
+                await Management.LogoutAsync();
+                Management.SetBusinessSession(null);
                 _viewModel.Connection.LogoutCommand.Execute(null);
+            }
         }
         finally { _confirmingLogout = false; }
     }
@@ -245,6 +266,7 @@ public partial class MainWindow : Window
     {
         _viewModel.Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _viewModel.BusinessSessionChanged -= OnBusinessSessionChanged;
+        Management.ActiveNodeVerified -= OnActiveNodeVerified;
         _viewModel.Monitoring.CollectionCompleted -= OnCollectionCompleted;
         DetachLogin();
         if (_managementPage is not null) { _managementPage.BackRequested -= ReturnToBusiness; _managementPage.Detach(); }

@@ -1,10 +1,11 @@
 param(
     [string]$PublishDir = '',
-    [int]$StartupTimeoutSeconds = 120
+    [int]$StartupTimeoutSeconds = 120,
+    [switch]$DedicatedInteractiveTestAccount
 )
 
 # Student client smoke test: launches the published Exam.Student.exe exactly the way
-# it will run on a fresh exam machine (standard account, isolated per-user data directory,
+# it will run on a fresh exam machine (a dedicated standard test account,
 # no .NET SDK/runtime installed on PATH) and verifies the startup, DPI manifest and
 # deployment-config scenarios:
 #   1. no server.json            -> app starts, activation page warns about missing config
@@ -17,6 +18,8 @@ param(
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File deploy\student\smoke-test-student.ps1
+# The guardian switches the interactive desktop. Run only in a disposable test
+# Windows account: changing LOCALAPPDATA does not isolate Windows known folders.
 # Note: Windows Defender may delay the very first start of a freshly built exe; if a
 # scenario times out, simply run the script again before drawing conclusions.
 
@@ -51,28 +54,53 @@ $sqliteCandidates = @(
 ) | Where-Object { Test-Path $_ }
 Assert-True (@($sqliteCandidates).Count -gt 0) "native SQLite missing"
 Assert-True (Test-Path (Join-Path $PublishDir 'PresentationFramework.dll')) "self-contained runtime missing"
+Assert-True $DedicatedInteractiveTestAccount.IsPresent "use -DedicatedInteractiveTestAccount in a fresh Windows test account; this test switches desktops"
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $PublishDir 'server.json'))) "use an unconfigured test publish directory; existing server.json must be preserved"
+
+# Process.MainWindowHandle enumerates only the caller's desktop. The production
+# launcher is now a guardian; find its own child window on the named exam desktop.
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class ExamDesktopSmoke {
+    private delegate bool EnumWindow(IntPtr hwnd, IntPtr state);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr OpenDesktopW(string name, uint flags, bool inherit, uint access);
+    [DllImport("user32.dll")] private static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll")] private static extern bool EnumDesktopWindows(IntPtr desktop, EnumWindow callback, IntPtr state);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowTextW(IntPtr hwnd, StringBuilder text, int length);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+    public static IntPtr Find(string desktopName, uint processId) {
+        IntPtr desktop=OpenDesktopW(desktopName, 0, false, 0x0041), result=IntPtr.Zero;
+        if(desktop==IntPtr.Zero) return result;
+        try { EnumDesktopWindows(desktop, (hwnd, state) => {
+            uint pid; GetWindowThreadProcessId(hwnd, out pid);
+            if(pid==processId && IsWindowVisible(hwnd)) { result=hwnd; return false; }
+            return true;
+        }, IntPtr.Zero); return result; } finally { CloseDesktop(desktop); }
+    }
+    public static string Title(IntPtr hwnd) { var text=new StringBuilder(512); GetWindowTextW(hwnd,text,text.Capacity); return text.ToString(); }
+    public static void Close(IntPtr hwnd) { if(!PostMessageW(hwnd,0x0010,IntPtr.Zero,IntPtr.Zero)) throw new InvalidOperationException("Cannot close test window"); }
+}
+'@
 
 # ---------------------------------------------------------------------------
 # Launch scenarios with isolated per-user state.
 # ---------------------------------------------------------------------------
 function Invoke-Scenario([string]$name, [string[]]$configLines) {
-    $stateDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exam-smoke-" + $name + "-" + [System.IO.Path]::GetRandomFileName())
-    New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     $configPath = Join-Path $PublishDir 'server.json'
     $configPlaced = $false
+    $child = $null
+    $process = $null
     try {
         if ($configLines) {
             [System.IO.File]::WriteAllLines($configPath, $configLines)
             $configPlaced = $true
         }
 
-        $previousLocalAppData = $env:LOCALAPPDATA
-        $env:LOCALAPPDATA = $stateDir
-        try {
-            $process = Start-Process -FilePath $exe -WorkingDirectory $PublishDir -PassThru
-        } finally {
-            $env:LOCALAPPDATA = $previousLocalAppData
-        }
+        $process = Start-Process -FilePath $exe -WorkingDirectory $PublishDir -WindowStyle Hidden -PassThru
 
         $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
         $title = ''
@@ -80,7 +108,16 @@ function Invoke-Scenario([string]$name, [string[]]$configLines) {
             Start-Sleep -Milliseconds 500
             if ($process.HasExited) { break }
             $process.Refresh()
-            if ($process.MainWindowTitle) { $title = $process.MainWindowTitle; break }
+            $children = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId=" + $process.Id))
+            foreach ($candidate in $children) {
+                if ($candidate.ExecutablePath -ne [System.IO.Path]::GetFullPath($exe)) { continue }
+                $match = [regex]::Match($candidate.CommandLine, '--exam-desktop (HuaizhouExam-[a-f0-9]{32}) ' + $process.Id + ' ')
+                if (-not $match.Success) { continue }
+                $child = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
+                $window = [ExamDesktopSmoke]::Find($match.Groups[1].Value, $candidate.ProcessId)
+                if ($window -ne [IntPtr]::Zero) { $title = [ExamDesktopSmoke]::Title($window); break }
+            }
+            if ($title) { break }
         }
 
         if ($process.HasExited) {
@@ -89,19 +126,16 @@ function Invoke-Scenario([string]$name, [string[]]$configLines) {
         }
         if (-not $title) {
             $failures.Add("$name : no main window within $StartupTimeoutSeconds s")
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             return
         }
         if ($title -eq 'Exam.Student') {
             $failures.Add("$name : window title is the exe-name fallback, WPF shell did not initialize")
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             return
         }
 
-        $process.CloseMainWindow() | Out-Null
+        [ExamDesktopSmoke]::Close($window)
         if (-not $process.WaitForExit(30000)) {
             $failures.Add("$name : app did not close on CloseMainWindow within 30 s")
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             return
         }
         if ($process.ExitCode -ne 0) {
@@ -110,8 +144,11 @@ function Invoke-Scenario([string]$name, [string[]]$configLines) {
         }
         Write-Host "PASS $name (window: $title)"
     } finally {
-        if ($configPlaced -and (Test-Path $configPath)) { Remove-Item $configPath -Force }
-        try { if (Test-Path $stateDir) { Remove-Item $stateDir -Recurse -Force } } catch { }
+        # End only the child positively identified under this launcher. Let its
+        # guardian restore the original desktop before it exits.
+        if ($null -ne $child -and -not $child.HasExited) { $child.Kill(); $child.WaitForExit(10000) | Out-Null }
+        if ($null -ne $process -and -not $process.HasExited) { $process.WaitForExit(10000) | Out-Null }
+        if ($configPlaced -and (Test-Path -LiteralPath $configPath)) { Remove-Item -LiteralPath $configPath -Force }
     }
 }
 

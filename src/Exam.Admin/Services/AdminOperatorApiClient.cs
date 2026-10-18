@@ -23,10 +23,21 @@ public sealed partial class AdminApiClient
     public async Task<OperatorAccount> LoginAsync(string baseAddress, string username, string password,
         CancellationToken cancellationToken = default)
     {
-        var session = await SendAnonymousAsync<OperatorSession>(baseAddress, "api/v1/operators/login",
-            new LoginOperatorRequest(username, password), cancellationToken);
-        Configure(baseAddress, session.Token, session.Account.Username);
+        var address = await ResolveLoginRouteAsync(NormalizeAddress(baseAddress), cancellationToken);
+        ApiEnvelope<OperatorSession>? authenticated = null;
+        var session = await SendAnonymousAsync<OperatorSession>(address.AbsoluteUri, "api/v1/operators/login",
+            new LoginOperatorRequest(username, password), cancellationToken, envelope =>
+            {
+                if (string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) || envelope.ServerEpoch < 1 ||
+                    _trustedRoutes is { } routes && (envelope.ServerId != routes.ServerId || envelope.ServerEpoch < routes.Epoch ||
+                        routes.Nodes.Single(node => node.Address == address).NodeId != envelope.NodeId))
+                    throw new System.IO.IOException("登录节点与可信主备身份不一致。");
+                authenticated = envelope;
+            });
+        Configure(address.AbsoluteUri, session.Token, session.Account.Username);
+        _serverId = authenticated!.ServerId; _nodeId = authenticated.NodeId; _serverEpoch = authenticated.ServerEpoch;
         _account = session.Account;
+        await LearnRoutesAsync(cancellationToken);
         return session.Account;
     }
 
@@ -55,7 +66,8 @@ public sealed partial class AdminApiClient
         await SendAsync<OperatorAccount>(HttpMethod.Put, "api/v1/operators/status",
             new SetOperatorStatusRequest(username, status), cancellationToken);
 
-    private async Task<T> SendAnonymousAsync<T>(string baseAddress, string path, object body, CancellationToken cancellationToken)
+    private async Task<T> SendAnonymousAsync<T>(string baseAddress, string path, object body, CancellationToken cancellationToken,
+        Action<ApiEnvelope<T>>? verify = null)
         where T : class
     {
         var address = NormalizeAddress(baseAddress);
@@ -69,6 +81,7 @@ public sealed partial class AdminApiClient
             throw new AdminApiException(envelope?.Error?.Code ?? $"HTTP_{(int)response.StatusCode}",
                 envelope?.Error?.Message ?? $"服务器请求失败：HTTP {(int)response.StatusCode}。",
                 response.StatusCode);
+        verify?.Invoke(envelope);
         return envelope.Result;
     }
 }

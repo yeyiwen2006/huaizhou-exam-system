@@ -81,13 +81,13 @@ public sealed partial class ServiceManagementViewModel
         return target is null ? null : _localNodeHealth.GetValueOrDefault(target.Key);
     }
 
-    private ManagementNodeRow LocalNodeRow(NodeState node, bool fresh, bool authenticationRequired = false) => new(node.NodeId,
-        node.Role switch { DeploymentNodeRole.Primary => "主机", DeploymentNodeRole.Standby => "备机", DeploymentNodeRole.Isolated => "隔离", _ => "重建" },
+    private ManagementNodeRow LocalNodeRow(NodeState node, bool fresh, bool authenticationRequired = false, string? role = null) => new(node.NodeId,
+        role ?? (node.Role switch { DeploymentNodeRole.Primary => "主机", DeploymentNodeRole.Standby => "备机", DeploymentNodeRole.Isolated => "隔离", _ => "重建" }),
         fresh ? authenticationRequired ? "待认证" : node.Reachable ? "可连接" : "不可连接" : "未核实",
         fresh && node.Reachable ? node.DatabaseInRecovery ? "备库" : "主库" : "未核实",
         fresh && node.Reachable && node.DatabaseInRecovery && node.ReplicationStreaming == false ? "复制中断" :
             fresh && node.Reachable && node.ReplayLagBytes != long.MaxValue ? node.ReplayLagBytes.ToString(System.Globalization.CultureInfo.InvariantCulture) : "未核实",
         fresh && node.KeyMaterialReady ? "已核实" : "未核实", fresh && node.CertificateReady ? "已核实" : "未核实",
         node.ObservedAt == default ? "尚未返回" : node.ObservedAt.ToOffset(TimeSpan.FromHours(8)).ToString("HH:mm:ss") + (fresh ? "" : "（已过期）"),
-        IsCurrent: fresh);
+        isCurrent: fresh);
 }

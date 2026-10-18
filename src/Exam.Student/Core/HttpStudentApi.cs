@@ -98,6 +98,7 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
                 ? CreateClient(CreateDefaultHandler(device.Topology)) : null;
             if (identityChanged)
             {
+                Interlocked.Exchange(ref _nextFailedPeerProbe, 0);
                 _identityGeneration++;
                 _connectionGeneration++;
                 _serverEpoch = device.ServerEpoch;
@@ -315,16 +316,52 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         long identityGeneration;
         long generation;
         lock (_connectionGate) { identityGeneration = _identityGeneration; generation = _connectionGeneration; }
-        async Task<ApiEnvelope<T>> AttemptAsync()
+        async Task<ApiEnvelope<T>> ObserveOnceAsync(CancellationToken attemptToken)
         {
             var started = time?.GetTimestamp() ?? 0;
-            var response = await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+            var response = await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, attemptToken);
             if (time is not null)
             {
                 var received = time.GetTimestamp();
                 observeTime?.Invoke(time.GetElapsedTime(started, received), received);
             }
             return response;
+        }
+        async Task<ApiEnvelope<T>> AttemptAsync()
+        {
+            bool hasPeer;
+            lock (_connectionGate) hasPeer = _device?.Topology?.Nodes.Any(node => node.Address != _server) == true;
+            if (typeof(T) != typeof(ServerTimeSnapshot) || !hasPeer) return await ObserveOnceAsync(ct);
+            // Keep a slow, valid clock read alive while one credential-free, single-flight
+            // probe checks whether the known peer has become active at a newer epoch.
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var reading = ObserveOnceAsync(pending.Token);
+            Task<bool>? probing = null;
+            try
+            {
+                await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(2), pending.Token));
+                if (reading.IsCompleted) return await reading;
+                probing = TryReconnectAsync(identityGeneration, generation, pending.Token);
+                await Task.WhenAny(reading, probing);
+                if (reading.IsCompleted) pending.Cancel();
+                bool changed;
+                try { changed = await probing; }
+                catch (OperationCanceledException) when (pending.IsCancellationRequested && !ct.IsCancellationRequested) { changed = false; }
+                if (changed || !IsCurrentEndpoint(generation))
+                {
+                    pending.Cancel();
+                    return await ObserveOnceAsync(ct);
+                }
+                return await reading;
+            }
+            finally
+            {
+                pending.Cancel();
+                // Drain the canceled old read after a verified route change. Its late
+                // response must not become an unobserved exception or a second result.
+                try { await reading; } catch { }
+                if (probing is not null) { try { await probing; } catch { } }
+            }
         }
         ApiEnvelope<T> result;
         try
@@ -347,14 +384,10 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         HttpMethod method, string path, byte[]? body, bool authenticated, long identityGeneration, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        // A silent former primary must not stall the small read-only time probe for 30 seconds.
+        // A slow link retains a bounded read; the known peer can be checked sooner.
         if (typeof(T) == typeof(ServerTimeSnapshot))
         {
-            bool publicEndpoint;
-            lock (_connectionGate)
-                publicEndpoint = _server is not null && (ServerTrust.PublicEndpoints?.Contains(_server) == true ||
-                    _device?.Topology?.Nodes.Any(node => node.Address == _server && node.UsesPublicHttps) == true);
-            deadline.CancelAfter(TimeSpan.FromSeconds(publicEndpoint ? 15 : 2));
+            deadline.CancelAfter(TimeSpan.FromSeconds(15));
         }
         try { return await SendOnceCoreAsync<T>(method, path, body, authenticated, identityGeneration, deadline.Token); }
         catch (OperationCanceledException error) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)

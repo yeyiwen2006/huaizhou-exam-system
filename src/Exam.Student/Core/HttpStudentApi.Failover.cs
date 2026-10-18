@@ -8,6 +8,7 @@ namespace Exam.Student.Core;
 
 public sealed partial class HttpStudentApi
 {
+    private long _nextFailedPeerProbe;
     public Task<ApiEnvelope<ActivatedServerTopology>> GetTrustedTopologyAsync(CancellationToken ct = default) =>
         SendAsync<ActivatedServerTopology>(HttpMethod.Get, "/api/v1/student/server-topology", null, true, ct);
     public sealed class IdentityRejectedException(string message) : HttpRequestException(message);
@@ -54,12 +55,13 @@ public sealed partial class HttpStudentApi
                 confirmedNodeId = _device?.ActiveNodeId;
             }
             if (topology is null) return false;
+            if (Environment.TickCount64 < Interlocked.Read(ref _nextFailedPeerProbe)) return false;
             foreach (var node in topology.Nodes.Where(node => node.Address != failed))
             {
                 try
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    deadline.CancelAfter(TimeSpan.FromSeconds(node.UsesPublicHttps ? 15 : 4));
+                    deadline.CancelAfter(TimeSpan.FromSeconds(15));
                     // No credentials, redirect following, discovery or promotion during probing.
                     using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(node.Address, "/api/v1/commands/time"));
                     using var response = await SendTrustedAsync(request, deadline.Token);
@@ -83,12 +85,14 @@ public sealed partial class HttpStudentApi
                         _serverEpoch = envelope.ServerEpoch;
                         _connectionGeneration++;
                         changed = true;
+                        Interlocked.Exchange(ref _nextFailedPeerProbe, 0);
                     }
                     return true;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
                 catch (Exception error) when (error is HttpRequestException and not IdentityRejectedException or System.Text.Json.JsonException) { }
             }
+            Interlocked.Exchange(ref _nextFailedPeerProbe, Environment.TickCount64 + 3000);
             return false;
         }
         finally

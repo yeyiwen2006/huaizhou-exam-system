@@ -39,7 +39,8 @@ public static class ReportCalculator
                 subjectRanksByCandidate[subject.SubjectId][row.Student.Participant.CandidateId]))))).ToArray();
 
         var subjectTables = subjects.Select(subject => BuildSubjectTables(subject,
-            subjectRankings[subject.SubjectId], commonSample)).ToArray();
+            subjectRankings[subject.SubjectId], students.Where(student =>
+                !student.Grades[subject.SubjectId].FinalScore.IsZero).ToArray())).ToArray();
         var classes = BuildClassAverages(subjects, students, commonSample);
 
         return new(Freeze(totals), Freeze(subjectTables), classes,
@@ -48,7 +49,7 @@ public static class ReportCalculator
     }
 
     private static SubjectTables BuildSubjectTables(ReportSubject subject,
-        IReadOnlyList<RankedStudent> ranking, IReadOnlyList<Student> commonSample)
+        IReadOnlyList<RankedStudent> ranking, IReadOnlyList<Student> subjectSample)
     {
         var scores = ranking.Select(row => new SubjectScoreRow(row.Student.Participant,
             row.Student.Grades[subject.SubjectId].FinalScore, row.Rank));
@@ -71,13 +72,13 @@ public static class ReportCalculator
                     Compare(questions[question.QuestionId].Score, question.MaximumScore) == 0))),
                 grade.FinalScore);
         });
-        var sampleQuestions = commonSample.Select(student => student.Grades[subject.SubjectId].Questions
+        var sampleQuestions = subjectSample.Select(student => student.Grades[subject.SubjectId].Questions
             .ToDictionary(question => question.QuestionId, StringComparer.Ordinal)).ToArray();
         var questionMeans = subject.Questions.Select(question => new QuestionMean(question.QuestionId,
             Mean(sampleQuestions.Select(grades => grades[question.QuestionId].Score).ToArray())));
 
         return new(subject, Freeze(scores), Freeze(answers), Freeze(questionScores),
-            Mean(commonSample.Select(student => student.Grades[subject.SubjectId].FinalScore).ToArray()),
+            Mean(subjectSample.Select(student => student.Grades[subject.SubjectId].FinalScore).ToArray()),
             Freeze(questionMeans));
     }
 
@@ -90,7 +91,7 @@ public static class ReportCalculator
             .Select(group => new ClassMeanData(group.Key,
                 commonSample.Where(student => student.Participant.ClassNumber == group.Key).ToArray(),
                 subjects.ToDictionary(subject => subject.SubjectId,
-                    subject => Mean(commonSample.Where(student => student.Participant.ClassNumber == group.Key)
+                    subject => Mean(group.Where(student => !student.Grades[subject.SubjectId].FinalScore.IsZero)
                         .Select(student => student.Grades[subject.SubjectId].FinalScore).ToArray()),
                     StringComparer.Ordinal),
                 Mean(commonSample.Where(student => student.Participant.ClassNumber == group.Key)

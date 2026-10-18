@@ -37,6 +37,15 @@ public static class OperatorAccountEndpoints
                 () => accounts.GetAsync(ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context), cancellationToken)))
             .WithMetadata(new ReadOnlyObservation());
 
+        group.MapGet("/server-topology", (HttpContext context, IConfiguration configuration) =>
+        {
+            ExamApiAccessMiddleware.RequireAuthenticatedOperatorId(context);
+            var topology = StudentFailoverConfiguration.Read(configuration);
+            return topology is null ? ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
+                Exam.Contracts.Common.ErrorCodes.NotFound, "未配置主备连接信息。", StatusCodes.Status404NotFound)
+                : ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, topology);
+        }).WithMetadata(new ReadOnlyObservation());
+
         group.MapGet("", async ([FromServices] PostgresOperatorAccounts accounts, HttpContext context,
                 IConfiguration configuration, CancellationToken cancellationToken) =>
             await ApiEndpointResults.ExecuteRuleAsync(context, configuration, context.TraceIdentifier, async () =>

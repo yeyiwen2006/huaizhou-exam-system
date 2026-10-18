@@ -26,7 +26,6 @@ internal static class ReportResultConsistencyValidator
             .ToArray();
         Require(sample.Length == result.CommonSampleCount);
         CheckMean(result.TotalMean, sample.Select(row => row.TotalScore));
-        var sampleIds = sample.Select(row => row.Participant.CandidateId).ToHashSet(StringComparer.Ordinal);
 
         var previousOrder = 0;
         foreach (var table in result.Subjects)
@@ -45,6 +44,8 @@ internal static class ReportResultConsistencyValidator
                 table.Subject.MaximumScore);
             CheckRanking(table.Scores, row => row.Score, row => row.Rank,
                 row => row.Participant.ExamNumber);
+            var sampleIds = table.Scores.Where(row => !row.Score.IsZero)
+                .Select(row => row.Participant.CandidateId).ToHashSet(StringComparer.Ordinal);
             CheckMean(table.SubjectMean, table.Scores.Where(row => sampleIds.Contains(row.Participant.CandidateId))
                 .Select(row => row.Score));
             for (var rowIndex = 0; rowIndex < table.Scores.Count; rowIndex++)
@@ -80,7 +81,9 @@ internal static class ReportResultConsistencyValidator
             CheckClassRank(result.ClassAverages, row, item => item.TotalMean, row.TotalRank);
             for (var index = 0; index < row.Subjects.Count; index++)
             {
-                CheckMean(row.Subjects[index].Mean, classSample.Select(student => student.Subjects[index].Score));
+                CheckMean(row.Subjects[index].Mean, result.StudentTotals
+                    .Where(student => student.Participant.ClassNumber == row.ClassNumber)
+                    .Select(student => student.Subjects[index].Score).Where(score => !score.IsZero));
                 CheckClassRank(result.ClassAverages, row, item => item.Subjects[index].Mean,
                     row.Subjects[index].Rank);
             }

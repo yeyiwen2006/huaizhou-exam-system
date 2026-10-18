@@ -76,11 +76,14 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
             progress.OldResourcesIdentity, progress.ResourcesIdentity, plan.ContentHash);
         await SelectAsync(plan, token);
         await _postgres.StartAsync(token);
-        var deadline = _time.GetUtcNow().AddSeconds(30);
+        // Base backup/resources were verified before installation. Startup waits only
+        // for fixed database identity/state and a cached resource inventory, not a full
+        // resource rehash every poll or a moving zero-lag target under exam traffic.
+        var deadline = _time.GetUtcNow().AddMinutes(5);
         while (!await VerifyRebuiltLocalAsync(plan, token, requireMarker: false))
         {
             if (_time.GetUtcNow() >= deadline) throw new IOException("重建节点未核实为正确备用库。");
-            await Task.Delay(200, token);
+            await Task.Delay(TimeSpan.FromSeconds(1), token);
         }
         await _business.StartAsync(token);
         if (_business.Status != BusinessServiceStatus.Running) throw new IOException("备用确认服务尚未启动。");

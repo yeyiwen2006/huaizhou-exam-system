@@ -93,6 +93,19 @@ public sealed class ParticipationService(
                     now,
                     candidateIdsByExam);
                 transaction.SaveSession(session);
+                // Register an actual participant's replacement as soon as its identity
+                // is authenticated. The old device may already be offline; its next
+                // heartbeat or the new device's package download is not a prerequisite.
+                foreach (var examId in examIds)
+                {
+                    var participation = transaction.FindParticipation(examId, candidateIdsByExam[examId]);
+                    if (!IsActualParticipation(participation) ||
+                        participation!.BusinessState == ParticipationBusinessState.Submitted ||
+                        participation.AuthorizedDeviceId == request.DeviceId) continue;
+                    if (transaction.FindConflict(participation.ParticipationId) is null)
+                        transaction.SaveConflict(new DeviceConflict(participation.ParticipationId,
+                            participation.AuthorizedDeviceId, request.DeviceId, now));
+                }
                 return ToSessionResult(session);
             });
         }, cancellationToken).ConfigureAwait(false);

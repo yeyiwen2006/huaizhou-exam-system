@@ -198,6 +198,7 @@ public sealed partial class ServiceManagementViewModel
             if (_pending is null) OperationText = $"节点 {original.Target.NodeId} 有待查询的原请求：{original.RequestId}";
         }
         NotifyPending();
+        OnPropertyChanged(nameof(HighAvailabilityVersionText));
     }
 
     private void SetPeerLoginTarget(ManagementTarget? target)
@@ -293,7 +294,7 @@ public sealed partial class ServiceManagementViewModel
             { MarkNodeSessionUnavailable(candidate, unauthorized: reply.IsUnauthorized); Message = "目标节点暂未返回有效主备状态，当前管理连接继续保留。"; return false; }
             ValidateHighAvailabilityStatus(status, candidate.Target);
             if (status.State is not { } state || status.VerifiedAt is not { } observed ||
-                _time.GetUtcNow() - observed >= TimeSpan.FromSeconds(10) || observed > _time.GetUtcNow().AddSeconds(5) ||
+                _time.GetUtcNow() - observed >= HighAvailabilityStatus.ObservationLifetime || observed > _time.GetUtcNow().AddSeconds(5) ||
                 !state.Nodes.TryGetValue(selected, out var node) || !IsHighAvailabilityTarget(kind, state, node) ||
                 state.ServerEpoch < ReadKnownServerEpoch(candidate.Target) ||
                 _protectionEvidence is { } previousProof && previousProof.TargetKey == candidate.Target.Key && (state.ServerEpoch < previousProof.Epoch ||

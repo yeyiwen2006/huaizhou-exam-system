@@ -57,6 +57,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Home.ExamReplacedFromArchive += OnExamReplacedFromArchive;
         Exam.ExamSaved += OnExamSaved;
         _api.ConfigurationChanged += OnConfigurationChanged;
+        _api.TrustedEndpointChanged += OnTrustedEndpointChanged;
         BackToHomeCommand = new RelayCommand(() => SelectedPage = HomePage);
         ShowHiddenExamsCommand = new RelayCommand(() => SelectedPage = HiddenExamsPage);
         ShowImportProgressCommand = new RelayCommand(ShowImportProgress);
@@ -176,6 +177,15 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
+
+    private void OnTrustedEndpointChanged(object? sender, EventArgs e)
+    {
+        Connection.ShowCurrentEndpoint();
+        BusinessSessionChanged?.Invoke();
+    }
+
+    public Task<bool> ReconnectToActiveNodeAsync(string serverId, string nodeId, long epoch, CancellationToken token) =>
+        _api.ReconnectToActiveNodeAsync(serverId, nodeId, epoch, token);
 
     private void OnPaperPublicationChanged(string examId, long? paperVersion)
     {
@@ -311,6 +321,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _api.ConfigurationChanged -= OnConfigurationChanged;
+        _api.TrustedEndpointChanged -= OnTrustedEndpointChanged;
         Home.ExamReplacedFromArchive -= OnExamReplacedFromArchive;
         Home.Dispose();
         Monitoring.Dispose();
@@ -347,6 +358,10 @@ public sealed class ConnectionViewModel : BindableBase
     {
         _api = api;
         var configured = configuredServerUrl ?? Environment.GetEnvironmentVariable("EXAM_ADMIN_SERVER_URL");
+        if (string.IsNullOrWhiteSpace(configured))
+            try { configured = api.SuggestedServerAddress; }
+            catch (Exception error) when (error is System.IO.IOException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException)
+            { _status = "已保存的连接记录无法读取，请填写服务器地址重新核对。"; }
         if (!string.IsNullOrWhiteSpace(configured)) _serverAddress = configured.Trim();
         ConnectCommand = new AsyncRelayCommand(LoginAsync, onError: error => SetError("登录", error));
         RegisterCommand = new AsyncRelayCommand(RegisterAsync, onError: error => SetError("注册", error));
@@ -447,7 +462,13 @@ public sealed class ConnectionViewModel : BindableBase
         finally { ClearPasswords(); }
         IsRegistering = false;
         IsConnected = true;
-        Status = $"已登录服务器 {BuildServerAddress()}";
+        ShowCurrentEndpoint();
+    }
+
+    internal void ShowCurrentEndpoint()
+    {
+        if (_api.CurrentEndpoint is { } endpoint) ServerAddress = endpoint.AbsoluteUri;
+        Status = "已连接当前活动服务器，会话与未确认请求继续保留。";
     }
 
     private async Task RegisterAsync()

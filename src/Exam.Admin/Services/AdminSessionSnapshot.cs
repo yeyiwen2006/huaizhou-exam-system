@@ -11,6 +11,8 @@ public sealed class AdminSessionSnapshot
     public string Username { get; }
     public long Generation { get; }
     internal string Credential { get; }
+    internal bool SameAuthentication(AdminSessionSnapshot other) => ServerId == other.ServerId &&
+        Username == other.Username && Credential == other.Credential;
     internal bool Matches(AdminSessionSnapshot other) => Generation == other.Generation && Endpoint == other.Endpoint &&
         ServerId == other.ServerId && Username == other.Username && Credential == other.Credential;
 }
