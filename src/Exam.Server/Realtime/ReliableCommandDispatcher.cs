@@ -68,9 +68,11 @@ public sealed class ReliableCommandDispatcher(
                 return;
             }
 
-            foreach (var delivery in result.Value ?? [])
+            var deliveries = result.Value ?? [];
+            if (deliveries.Count > 0 && confirmation is not null)
+                await confirmation.ConfirmAsync(cancellationToken);
+            foreach (var delivery in deliveries)
             {
-                if (confirmation is not null) await confirmation.ConfirmAsync(cancellationToken);
                 await hub.Clients.Client(connection.ConnectionId)
                     .SendAsync("Command", delivery, cancellationToken);
             }

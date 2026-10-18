@@ -11,6 +11,14 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExce
         {
             await next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Navigation, a client deadline or a disconnected client can cancel a read or
+            // stop waiting for a committed request. Neither means the business action failed.
+            // Do not try to send an error envelope over the canceled connection.
+            if (!context.Response.HasStarted)
+                context.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
+        }
         catch (DomainRuleException exception)
         {
             var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>()

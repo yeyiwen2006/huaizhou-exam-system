@@ -128,7 +128,7 @@ public static class ExamApiEndpointExtensions
                 "application/vnd.huaizhou.exam-package",
                 fileDownloadName: $"{resource.ResourceId}.epkg",
                 enableRangeProcessing: false);
-        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        }).WithMetadata(new ReadOnlyObservation());
         return group;
     }
 
@@ -365,18 +365,21 @@ public static class ExamApiEndpointExtensions
             HttpContext context,
             IConfiguration configuration,
             CancellationToken cancellationToken) =>
-            ApiEndpointResults.FromCommand(
-                context,
-                configuration,
-                context.TraceIdentifier,
-                await service.GetDueForDeviceAsync(
+        {
+            var result = await service.GetDueForDeviceAsync(
                     participationId,
                     entryVersion,
                     deviceId,
                     authorizationVersion,
                     serverId,
                     serverEpoch,
-                    cancellationToken)));
+                    cancellationToken);
+            // An empty poll neither releases a command nor records a delivery attempt.
+            if (result.IsSuccess && result.Value is { Count: > 0 })
+                await context.RequestServices.GetRequiredService<Exam.Application.HighAvailability.IBusinessConfirmation>()
+                    .ConfirmAsync(cancellationToken);
+            return ApiEndpointResults.FromCommand(context, configuration, context.TraceIdentifier, result);
+        }).WithMetadata(new ConfirmationBeforeResult());
 
         group.MapPost("/{eventId}/resend", async (
             string eventId,

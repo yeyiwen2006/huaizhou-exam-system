@@ -34,10 +34,15 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     public async Task<bool> VerifyConfirmationResourcesAsync(CancellationToken token)
     {
         await using var connection = await source.OpenConnectionAsync(token);
+        // For unchanged materials, one revision read is enough. A repeatable-read
+        // transaction is needed only when bytes/metadata must actually be inspected.
+        var revision = await ReadResourceRevisionAsync(connection, null, token);
+        if (revision is not null && StringComparer.Ordinal.Equals(revision, _verifiedResourceRevision))
+            return true;
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, token);
         await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY; SET LOCAL row_security=off", connection, transaction))
             await readOnly.ExecuteNonQueryAsync(token);
-        var revision = await ReadResourceRevisionAsync(connection, transaction, token);
+        revision = await ReadResourceRevisionAsync(connection, transaction, token);
         if (revision is null || !StringComparer.Ordinal.Equals(revision, _verifiedResourceRevision))
         {
             // Revision and bytes are read in the same snapshot. Cache only a fully successful result.
@@ -50,7 +55,7 @@ public sealed class PostgresRecoveryReadinessProbe(NpgsqlDataSource source, IPac
     }
 
     private async Task<string?> ReadResourceRevisionAsync(NpgsqlConnection connection,
-        NpgsqlTransaction transaction, CancellationToken token)
+        NpgsqlTransaction? transaction, CancellationToken token)
     {
         if (_hasResourceRevision is null)
         {

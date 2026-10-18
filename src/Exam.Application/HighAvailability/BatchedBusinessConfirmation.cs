@@ -1,3 +1,6 @@
+using Exam.Contracts.Common;
+using Exam.Domain.Common;
+
 namespace Exam.Application.HighAvailability;
 
 /// <summary>Shares a new durability fence among requests already waiting when that fence starts.</summary>
@@ -47,7 +50,15 @@ public sealed class BatchedBusinessConfirmation(
                 await inner.ConfirmAsync(deadline.Token).ConfigureAwait(false);
                 batch.TrySetResult();
             }
-            catch (OperationCanceledException error) { batch.TrySetCanceled(error.CancellationToken); }
+            catch (OperationCanceledException error) when (stoppingToken.IsCancellationRequested)
+            { batch.TrySetCanceled(error.CancellationToken); }
+            catch (OperationCanceledException)
+            {
+                // The fence deadline does not undo the committed request. Report a retryable
+                // pending confirmation so the caller retains and retries its original request.
+                batch.TrySetException(new DomainRuleException(ErrorCodes.ServiceRecovering,
+                    "持久确认暂未完成，请保留原请求重试。", retryable: true));
+            }
             catch (Exception error) { batch.TrySetException(error); }
             // Observe failures even when every caller has already stopped waiting.
             if (batch.Task.IsFaulted) _ = batch.Task.Exception;

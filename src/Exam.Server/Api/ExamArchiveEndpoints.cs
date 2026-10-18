@@ -16,8 +16,9 @@ public static class ExamArchiveEndpoints
     public static RouteGroupBuilder MapExamArchiveApi(this RouteGroupBuilder api)
     {
         api.MapGet("/exams/{examId}/archive", ExportAsync)
-            .WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
-        api.MapPost("/exam-archives/preview", PreviewAsync).DisableAntiforgery();
+            .WithMetadata(new ReadOnlyObservation());
+        api.MapPost("/exam-archives/preview", PreviewAsync).DisableAntiforgery()
+            .WithMetadata(new ReadOnlyPostQuery());
         api.MapPost("/exam-archives/import", ImportAsync).DisableAntiforgery();
         return api;
     }

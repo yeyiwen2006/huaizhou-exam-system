@@ -27,7 +27,7 @@ public static class ReportApiEndpoints
             context.Response.Headers.CacheControl = "no-store";
             return new CurrentReportResult(reports, examId, published.Status.SnapshotId!,
                 ApiEndpointResults.Success(context, configuration, context.TraceIdentifier, published));
-        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        }).WithMetadata(new ReadOnlyObservation());
         group.MapGet("/{examId}/xlsx", async (string examId, string snapshotId, [FromServices] ReportExportService exporter,
             [FromServices] ReportPublicationService reports, [FromServices] ServerNodeEnvelope identity,
             HttpContext context, CancellationToken cancellationToken) =>
@@ -44,13 +44,13 @@ public static class ReportApiEndpoints
                     response.Headers["X-Exam-Report-Snapshot"] = snapshotId;
                     response.Headers["X-Exam-Workbook-Sha256"] = digest;
                 });
-        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        }).WithMetadata(new ReadOnlyObservation());
         return group;
     }
 
-    // The durable-confirmation filter runs first. Re-read the authoritative snapshot after that
-    // potentially slow peer exchange, before starting headers/body, without holding a database lock
-    // while producing or transmitting the report. Download headers are issued only after validation.
+    // Reports only read already durable inputs. Re-read the authoritative snapshot before
+    // sending headers/body so a version change during calculation/export cannot release stale
+    // results. Reading a report does not need a new write confirmation with the standby.
     private sealed class CurrentReportResult(ReportPublicationService reports, string examId, string snapshotId,
         IResult result, Action<HttpResponse>? configureResponse = null) : IResult
     {

@@ -106,7 +106,7 @@ public static class PublicationUploadEndpoints
                     "MATERIALS_NOT_FOUND",$"该考试没有版本 {version} 的源材料归档。",StatusCodes.Status404NotFound);
             return Results.Stream(archive,"application/zip",
                 fileDownloadName:$"{examId}-materials-v{version}.zip",enableRangeProcessing:false);
-        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        }).WithMetadata(new ReadOnlyObservation());
 
         // Complete answer material is operator-only and never part of grading status or student resources.
         api.MapGet("/exams/{examId}/grading-materials", async (string examId,
@@ -131,7 +131,7 @@ public static class PublicationUploadEndpoints
                 return ApiEndpointResults.Error(context, configuration, context.TraceIdentifier,
                     "PUBLICATION_NOT_READY", "当前规则源材料不可用，禁止返回旧版替代。", StatusCodes.Status503ServiceUnavailable);
             }
-        }).WithMetadata(new ConfirmationBeforeResult()).AddEndpointFilter<ConfirmationBeforeResult>();
+        }).WithMetadata(new ReadOnlyObservation());
 
         api.MapGet("/exams/{examId}/grading-history", async (string examId,
             [FromServices] Npgsql.NpgsqlDataSource dataSource, HttpContext context,

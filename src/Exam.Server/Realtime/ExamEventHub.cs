@@ -261,9 +261,12 @@ public sealed class ExamEventHub(
             throw new HubException($"{result.ErrorCode}: {result.Message}");
         }
 
-        foreach (var delivery in result.Value ?? [])
+        var deliveries = result.Value ?? [];
+        // All delivery attempts above belong to the same batch; one fence covers them.
+        if (deliveries.Count > 0 && confirmation is not null)
+            await confirmation.ConfirmAsync(cancellationToken);
+        foreach (var delivery in deliveries)
         {
-            if (confirmation is not null) await confirmation.ConfirmAsync(cancellationToken);
             await Clients.Caller.SendAsync("Command", delivery, cancellationToken);
         }
     }
