@@ -39,7 +39,7 @@ public sealed partial class ServiceManagementViewModel
         set
         {
             if (!SetProperty(ref _selectedNode, value)) return;
-            HighAvailabilityTarget = value is { IsPlaceholder: false } && _displayState?.Nodes.ContainsKey(value.NodeId) == true
+            HighAvailabilityTarget = value is not null && IsHighAvailabilityTargetRoutable(value.NodeId)
                 ? value.NodeId : string.Empty;
             UpdateCommands();
         }
@@ -126,6 +126,17 @@ public sealed partial class ServiceManagementViewModel
             selected.Role == (kind == ManagementOperationKind.Takeover ? "备机" : "隔离") &&
             state.Nodes.TryGetValue(selected.NodeId, out var node) && IsHighAvailabilityTargetRoutable(node.NodeId) &&
             IsHighAvailabilityTarget(kind, state, node);
+    }
+
+    private bool CanVerifyHighAvailabilityTarget(ManagementOperationKind kind)
+    {
+        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
+            return CanIssueHighAvailability(kind);
+        // This permits only the target's own read-only verification. Final mutation gates
+        // still require fresh full evidence and the operator's isolation confirmation.
+        return SelectedNode is { } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
+            ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
+            IsHighAvailabilityTargetRoutable(selected.NodeId);
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>

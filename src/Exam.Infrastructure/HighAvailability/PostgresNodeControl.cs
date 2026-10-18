@@ -151,7 +151,10 @@ public sealed record StagedNodeRebuildOptions(
     string PostgresBinDirectory,
     string StagingRoot,
     IReadOnlyDictionary<string, PostgresNodeConnection> Nodes,
-    TimeSpan Timeout);
+    TimeSpan Timeout)
+{
+    public string? PrecreatedReplicationSlot { get; init; }
+}
 
 public sealed class StagedPostgresNodeRebuilder(
     StagedNodeRebuildOptions options,
@@ -182,8 +185,9 @@ public sealed class StagedPostgresNodeRebuilder(
         Directory.CreateDirectory(target);
         // The slot survives pg_basebackup until the rebuilt standby is actually started.
         // A temporary stream slot leaves a WAL recycling gap during verification/resource copy.
-        var replicationSlot = "exam_rebuild_" + Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes(nodeId + "\0" + target))).ToLowerInvariant()[..40];
+        var replicationSlot = options.PrecreatedReplicationSlot ?? SlotName(nodeId, target);
+        if (replicationSlot.Length is < 1 or > 63 || replicationSlot.Any(c => !char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c) && c != '_'))
+            throw new IOException("重建复制槽名称无效。");
         var managementConnection = new NpgsqlConnectionStringBuilder(source.ConnectionString);
         var connection = string.IsNullOrWhiteSpace(source.ReplicationConnectionString)
             ? managementConnection : new NpgsqlConnectionStringBuilder(source.ReplicationConnectionString);
@@ -204,10 +208,12 @@ public sealed class StagedPostgresNodeRebuilder(
             },
             ["PGSSLROOTCERT"] = connection.RootCertificate ?? string.Empty
         };
+        List<string> arguments = ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast",
+            "--compress=server-gzip:level=1", "--slot=" + replicationSlot, "--no-password", "--no-clean"];
+        if (options.PrecreatedReplicationSlot is null) arguments.Add("--create-slot");
         var result = await processRunner.RunAsync(
             Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),
-            ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast",
-                "--compress=server-gzip:level=1", "--slot=" + replicationSlot, "--create-slot", "--no-password", "--no-clean"],
+            arguments,
             environment,
             options.Timeout,
             cancellationToken);
@@ -219,4 +225,7 @@ public sealed class StagedPostgresNodeRebuilder(
             throw new IOException($"备机重建基础备份失败：{result.StandardError.Trim()}");
         }
     }
+
+    internal static string SlotName(string nodeId, string target) => "exam_rebuild_" + Convert.ToHexString(SHA256.HashData(
+        Encoding.UTF8.GetBytes(nodeId + "\0" + target))).ToLowerInvariant()[..40];
 }

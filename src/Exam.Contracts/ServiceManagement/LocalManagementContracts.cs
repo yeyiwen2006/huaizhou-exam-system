@@ -53,4 +53,6 @@ public sealed record ManagementOperation(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryWorkingDirectory = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryActivationPhase? RecoveryActivation = null,
     HighAvailabilityStatus? HighAvailability = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FailoverExecutionPlan? FailoverPlan = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FailoverExecutionPlan? FailoverPlan = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ServerDeploymentState? FailoverCompletedState = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverFailureVerified = false);

@@ -181,11 +181,11 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
     public async ValueTask<IReadOnlyList<CachedOperatorCredential>> ListActiveCredentialsAsync(CancellationToken cancellationToken = default)
     {
         await using var command = dataSource.CreateCommand(
-            "SELECT username, password_hash, is_administrator FROM exam.operator_accounts WHERE status = 'active' ORDER BY username_key;");
+            "SELECT username, password_hash, is_administrator, (extract(epoch FROM updated_at)*1000000)::bigint FROM exam.operator_accounts WHERE status = 'active' ORDER BY username_key;");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<CachedOperatorCredential>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            result.Add(new CachedOperatorCredential(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2)));
+            result.Add(new CachedOperatorCredential(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetInt64(3)));
         return result;
     }
 
@@ -222,4 +222,4 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
     private static ParticipationRuleException Rule(string code, string message) => new(code, message);
 }
 
-public sealed record CachedOperatorCredential(string Username, string PasswordHash, bool IsAdministrator);
+public sealed record CachedOperatorCredential(string Username, string PasswordHash, bool IsAdministrator, long AuthorizationVersion = 0);

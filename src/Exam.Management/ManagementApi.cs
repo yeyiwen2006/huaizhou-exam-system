@@ -62,7 +62,7 @@ public static class ManagementApi
                     await WriteAsync(context, runtime, new { loggedOut = true });
                     return;
                 }
-                var session = sessions.Authenticate(token);
+                var session = await sessions.AuthenticateAsync(token, context.RequestAborted);
                 if (session is null)
                 {
                     await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "请先用考务账号登录服务管理，或登录已失效。"), 401);

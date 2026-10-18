@@ -88,7 +88,7 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     public async Task<bool> HasUnverifiedOperationsAsync(CancellationToken cancellationToken)
     {
         Check(_directory);
-        foreach (var path in Directory.EnumerateFiles(_directory, "*.json"))
+        foreach (var path in OperationFiles())
         {
             Check(path);
             // FindAsync also verifies the canonical filename and the complete persisted record.
@@ -117,7 +117,7 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
         Check(_directory);
         var entries = new List<ManagementAuditEntry>();
         var scanned = 0;
-        foreach (var path in Directory.EnumerateFiles(_directory, "*.json"))
+        foreach (var path in OperationFiles())
         {
             if (++scanned > 10000) throw new InvalidDataException("操作记录过多，须通过受保护维护流程归档后查询。");
             Check(path);
@@ -138,6 +138,20 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
             .Take(limit).ToArray();
     }
 
+    private IEnumerable<string> OperationFiles()
+    {
+        foreach (var path in Directory.EnumerateFiles(_directory, "*.json"))
+        {
+            if (Path.GetFileName(path).Equals("node-selection.json", StringComparison.OrdinalIgnoreCase))
+            {
+                // Only the known, valid legacy selection is not owned by this journal.
+                _ = new HighAvailability.FileFailoverDeploymentSelection(path).Read();
+                continue;
+            }
+            yield return path;
+        }
+    }
+
     private string Resolve(string requestId)
     {
         if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 200)
@@ -154,6 +168,22 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     private static void Validate(ManagementOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        if (operation.FailoverFailureVerified &&
+            (operation.Kind != ManagementOperationKind.Rebuild || operation.Phase != ManagementOperationPhase.Failed ||
+             operation.FailoverPlan is not { Kind: ManagementOperationKind.Rebuild } || operation.Error is null ||
+             operation.FailoverCompletedState is not null))
+            throw new InvalidDataException("重建失败结案缺少绑定的持久意图。");
+        if (operation.FailoverCompletedState is { } completed &&
+            (operation.Phase != ManagementOperationPhase.Completed || operation.FailoverPlan is not { } plan ||
+             operation.HighAvailability?.State is not { } current ||
+             !JsonSerializer.SerializeToUtf8Bytes(completed, JsonDefaults.Create()).AsSpan().SequenceEqual(
+                 JsonSerializer.SerializeToUtf8Bytes(plan.After, JsonDefaults.Create())) ||
+             !Exam.Contracts.HighAvailability.FailoverStateHistory.Covers(current, completed)))
+            throw new InvalidDataException("历史主备完成状态与持久意图不一致。");
+        if (operation.FailoverPlan is { } intent &&
+            (intent.RequestId != operation.RequestId || intent.ContentHash != operation.ContentHash || intent.Kind != operation.Kind ||
+             intent.Before.ServerId != operation.ServerId || intent.After.ServerId != operation.ServerId))
+            throw new InvalidDataException("主备意图与操作身份不一致。");
         if (operation.RecoveryActivation is { } activation &&
             (!Enum.IsDefined(activation) || operation.Kind != ManagementOperationKind.Restore ||
              operation.RecoveryWorkingDirectory is null || operation.Restore is not { IsolationStaged: true, RecoveryVerified: true } ||

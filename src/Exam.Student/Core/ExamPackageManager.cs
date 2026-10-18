@@ -333,6 +333,14 @@ public sealed partial class ExamPackageManager : IDisposable
             {
                 if (!SameCommand(previous.Delivery, delivery))
                     throw new InvalidDataException("相同指令标识对应了不同内容。");
+                // Business identity and acknowledgement stay fixed across failover. Only
+                // replace the envelope after current authorization and content were verified.
+                if (previous.Delivery.Server != delivery.Server)
+                {
+                    previous = previous with { Delivery = delivery };
+                    Save(_state with { Commands = _state.Commands.Select(item =>
+                        item.Delivery.EventId == delivery.EventId ? previous : item).ToArray() });
+                }
                 if (delivery.EventType == CommandEventType.Start && !ExamEnded && CanApplyStart(delivery) &&
                     previous.Acknowledgement.ProcessingResult == CommandProcessingResult.Applied &&
                     UnlockedPayload is null && !await UnlockCoreAsync(ct)) return false;

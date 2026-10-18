@@ -38,6 +38,16 @@ public sealed partial class ServiceManagementViewModel
     public bool CanEnterManagementCredentials => !IsBusy && ShowManagementLogin;
     private bool HasUnresolvedManagementRequests => _pending is not null || !_knownPendingRequests.IsEmpty;
 
+    private bool HasConflictingManagementRequests(ManagementOperationKind kind)
+    {
+        if (kind != ManagementOperationKind.Takeover) return HasUnresolvedManagementRequests;
+        var target = HighAvailabilityTarget.Trim();
+        // Retain the isolated peer's read-only request for later audit. Never move it
+        // to another node, discard it, or ignore an unresolved mutating operation.
+        return _knownPendingRequests.Values.Append(_pending).Any(request => request is not null &&
+            (request.Kind != ManagementOperationKind.Checks || request.Target.NodeId == target));
+    }
+
     private ManagementTarget CurrentTarget()
     {
         var root = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
@@ -260,10 +270,10 @@ public sealed partial class ServiceManagementViewModel
 
     private async Task<bool> RouteHighAvailabilityToSelectedNodeAsync(ManagementOperationKind kind)
     {
-        if (_routingConnection || IsBusy || !IsSignedIn || _connection is null || HasUnresolvedManagementRequests) return false;
+        if (_routingConnection || IsBusy || !IsSignedIn || _connection is null || HasConflictingManagementRequests(kind)) return false;
         var selected = HighAvailabilityTarget.Trim();
         var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == selected);
-        if (target is null || !CanIssueHighAvailability(kind))
+        if (target is null || !CanVerifyHighAvailabilityTarget(kind))
         { Message = kind == ManagementOperationKind.Rebuild ? "请选择角色为隔离且已配置管理地址的节点。" : "请选择已核实且已配置管理地址的备用节点。"; return false; }
         _routingConnection = true; IsBusy = true;
         var version = _managementSessionVersion;

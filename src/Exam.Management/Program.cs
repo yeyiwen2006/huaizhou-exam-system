@@ -62,7 +62,8 @@ public static class ManagementEntryPoint
                     Required(section.Path + ":ResourcesDirectory"), Required(section.Path + ":CertificateThumbprint"),
                     Required(section.Path + ":ConfirmationDirectory"), Required(section.Path + ":BusinessHttpsUrl"))
                     { ReplicationConnectionString = section["ReplicationConnectionString"] }, StringComparer.Ordinal);
-            var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes, configuration["HighAvailability:SelectionPath"] ?? Path.Combine(Required("Management:OperationDirectory"), "node-selection.json"),
+            var options = new HighAvailabilityManagementOptions(serverId, nodeId, nodes,
+                FileFailoverDeploymentSelection.ResolvePath(k => configuration[k], nodeId) ?? throw new IOException("主备部署选择路径未配置。"),
                 configuration["HighAvailability:RebuildRoot"] ?? "", configuration["Backup:PostgresBinDirectory"] ?? "",
                 configuration["HighAvailability:PostgresDataDirectory"] ?? "", configuration["HighAvailability:PostgresServiceName"] ?? "",
                 Required("Management:BusinessServiceName"), configuration["Confirmation:PeerToken"] ?? "", configuration["HighAvailability:PostgresConfigurationPath"] ?? "",
@@ -82,7 +83,8 @@ public static class ManagementEntryPoint
                         error is Npgsql.PostgresException { SqlState: "28P01" or "28000" } ? "AuthenticationFailed" : "Unavailable";
                     new ProtectedRuntimeLogWriter(Path.Combine(Required("Management:OperationDirectory"), "management-runtime.jsonl"), "management")
                         .Write("Exam.Management.Database." + (observedNode == nodeId ? "Local." : "Peer.") + kind, "Error", 7002);
-                }), journal, new SystemClock());
+                }, readSelection: () => FileFailoverDeploymentSelection.ReadConfigured(k => configuration[k], serverId, nodeId)),
+                journal, new SystemClock());
         });
         builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>(),
             () => provider.GetRequiredService<DurableFailoverCoordinator>()));

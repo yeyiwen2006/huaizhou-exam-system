@@ -15,6 +15,7 @@ public interface IHighAvailabilityManagementPlatform
     Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token);
     // Reconciliation can finish an already-proven publication, but must not repeat promotion/rebuild.
     Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token);
+    Task<bool> VerifyFailedBeforeInstallationAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
 }
 
 /// <summary>Uses the same cross-process durable journal as local management. No production state lives in memory.</summary>
@@ -115,7 +116,12 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
             plan.After.Version != plan.Before.Version + 1 ||
             !plan.After.Audit.Any(a => a.Action == Action(operation) && a.ActorId == operation.ActorId))
             throw new InvalidDataException("主备持久意图的请求绑定损坏。");
-        if (!await platform.ReconcileAsync(plan, token)) return null;
+        if (!await platform.ReconcileAsync(plan, token))
+        {
+            if (!await platform.VerifyFailedBeforeInstallationAsync(plan, token)) return null;
+            return operation with { Phase = ManagementOperationPhase.Failed, FailoverFailureVerified = true,
+                Error = new(ErrorCodes.ServiceRecovering, "重建准备已安全终结；已发布的权威状态、旧数据及审计保留。请刷新状态后发起新的重建请求。") };
+        }
         return await CompletedAsync(operation, plan, token);
     }
 
@@ -124,11 +130,11 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         var observed = await platform.ObserveAsync(token);
         if (observed.State is not { } state || observed.VerifiedAt is not { } time ||
             clock.UtcNow - time > TimeSpan.FromSeconds(10) || time > clock.UtcNow.AddSeconds(5) ||
-            state.ServerEpoch != plan.After.ServerEpoch || state.Version != plan.After.Version ||
-            state.ActiveNodeId != plan.After.ActiveNodeId || state.ProtectionMode != plan.After.ProtectionMode ||
-            plan.Kind == ManagementOperationKind.Reprotect && !observed.SynchronousProtectionVerified)
+            !FailoverStateHistory.Covers(state, plan.After) ||
+            state.Version == plan.After.Version && plan.Kind == ManagementOperationKind.Reprotect && !observed.SynchronousProtectionVerified)
             throw new IOException("主备操作完成状态的最新实际证据尚未核实。");
-        return operation with { Phase = ManagementOperationPhase.Completed, Error = null, HighAvailability = observed };
+        return operation with { Phase = ManagementOperationPhase.Completed, Error = null, HighAvailability = observed,
+            FailoverCompletedState = plan.After };
     }
 
     public static string Action(ManagementOperation operation) => $"F02:{operation.Kind}:{operation.RequestId}";

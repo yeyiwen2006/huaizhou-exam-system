@@ -11,7 +11,7 @@ using Exam.Contracts.Submissions;
 namespace Exam.Student.Core;
 
 /// <summary>Authenticated HTTPS transport. TLS validation is never bypassed and redirects are disabled.</summary>
-public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, IDisposable
+public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, IServerTimeSampleApi, IDisposable
 {
     private HttpClient _client;
     private readonly bool _usesDefaultTransport;
@@ -173,6 +173,14 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     public Task<ApiEnvelope<ServerTimeSnapshot>> GetServerTimeAsync(CancellationToken ct = default) =>
         SendAsync<ServerTimeSnapshot>(HttpMethod.Get, "/api/v1/commands/time", null, false, ct);
 
+    public async Task<ServerTimeSample> GetServerTimeSampleAsync(TimeProvider time, CancellationToken ct)
+    {
+        TimeSpan elapsed = default; long received = 0;
+        var result = await SendAsync<ServerTimeSnapshot>(HttpMethod.Get, "/api/v1/commands/time", null, false, ct,
+            time, (duration, timestamp) => { elapsed = duration; received = timestamp; });
+        return new(result, elapsed, received);
+    }
+
     public Task<ApiEnvelope<Exam.Contracts.Administration.DevicePresenceLease>> OpenPresenceAsync(
         Exam.Contracts.Administration.OpenDevicePresenceRequest request, CancellationToken ct = default) =>
         SendAsync<Exam.Contracts.Administration.DevicePresenceLease>(HttpMethod.Post, "/api/v1/student/presence/open", request, true, ct);
@@ -299,27 +307,39 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
     }
 
     private async Task<ApiEnvelope<T>> SendAsync<T>(
-        HttpMethod method, string path, object? body, bool authenticated, CancellationToken ct)
+        HttpMethod method, string path, object? body, bool authenticated, CancellationToken ct,
+        TimeProvider? time = null, Action<TimeSpan, long>? observeTime = null)
     {
         // Freeze bytes once: retries must not invent request IDs or rebuild final answers.
         var bytes = body is null ? null : JsonSerializer.SerializeToUtf8Bytes(body, body.GetType(), _json);
         long identityGeneration;
         long generation;
         lock (_connectionGate) { identityGeneration = _identityGeneration; generation = _connectionGeneration; }
+        async Task<ApiEnvelope<T>> AttemptAsync()
+        {
+            var started = time?.GetTimestamp() ?? 0;
+            var response = await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+            if (time is not null)
+            {
+                var received = time.GetTimestamp();
+                observeTime?.Invoke(time.GetElapsedTime(started, received), received);
+            }
+            return response;
+        }
         ApiEnvelope<T> result;
         try
         {
-            result = await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+            result = await AttemptAsync();
         }
         catch (Exception error) when (error is HttpRequestException and not UntrustedServerException and not IdentityRejectedException ||
             error is OperationCanceledException && !ct.IsCancellationRequested)
         {
             if (!await TryReconnectAsync(identityGeneration, generation, ct)) throw;
-            return await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+            return await AttemptAsync();
         }
         if (result.Error?.Code is ErrorCodes.NotActiveServer or ErrorCodes.ServiceRecovering or ErrorCodes.StaleServerEpoch or ErrorCodes.ReplicaUnavailable &&
             await TryReconnectAsync(identityGeneration, generation, ct))
-            return await SendOnceAsync<T>(method, path, bytes, authenticated, identityGeneration, ct);
+            return await AttemptAsync();
         return result;
     }
 

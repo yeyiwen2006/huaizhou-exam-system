@@ -77,6 +77,15 @@ public static class ReplicaResourceTransfer
     public const long MaximumBytes = 2L * 1024 * 1024 * 1024;
     public const int MaximumEntries = 100000;
 
+    public static async Task RecoverAsync(string target, string owner, Func<CancellationToken, Task> verifyStandby, CancellationToken token)
+    {
+        var full = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar);
+        if (!File.Exists(full + ".replica-swap.json")) return;
+        PathBoundary.RejectExistingReparsePoints(Path.GetDirectoryName(full)!, full);
+        using var guard = new FileStream(full + ".replica-transfer.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        await new ReplicaResourceExchange(full, owner).RecoverAsync(verifyStandby, token);
+    }
+
     public static async Task<ReplicaResourceState> ReadStateAsync(Stream input, CancellationToken token)
     {
         using var memory = new MemoryStream();
@@ -132,17 +141,21 @@ public static class ReplicaResourceTransfer
 
     // Callers hold the receiver's confirmation lock and verify that its database is still a standby.
     public static async Task ReceiveAsync(Stream input, string target, string expectedDigest,
-        Func<CancellationToken, Task> verifyStandby, CancellationToken token)
+        Func<CancellationToken, Task> verifyStandby, CancellationToken token, string owner = "")
     {
         if (expectedDigest.Length != 64 || expectedDigest.Any(c => !Uri.IsHexDigit(c)))
             throw new IOException("资源版本无效。");
         var full = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar);
+        PathBoundary.RejectExistingReparsePoints(Path.GetDirectoryName(full)!, full);
+        using var transferLock = new FileStream(full + ".replica-transfer.lock", FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.None);
+        var exchange = new ReplicaResourceExchange(full, owner);
+        await exchange.RecoverAsync(verifyStandby, token);
         if (!Directory.Exists(full)) throw new IOException("资源接收目录须预先部署。");
         PathBoundary.RejectExistingReparsePoints(full, full);
         var suffix = Guid.NewGuid().ToString("N");
         var archive = full + ".incoming-" + suffix + ".zip";
         var staged = full + ".incoming-" + suffix;
-        var previous = full + ".replica-previous-" + suffix;
         try
         {
             await using (var output = new FileStream(archive, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
@@ -158,6 +171,9 @@ public static class ReplicaResourceTransfer
                 Directory.CreateDirectory(staged);
                 using var zip = new ZipArchive(output, ZipArchiveMode.Read, leaveOpen: true);
                 if (zip.Entries.Count > MaximumEntries) throw new IOException("资源清单超限。");
+                var required = zip.Entries.Sum(entry => checked(entry.Length));
+                if (required > MaximumBytes || new DriveInfo(Path.GetPathRoot(full)!).AvailableFreeSpace < required + 16L * 1024 * 1024)
+                    throw new IOException("资源接收暂存空间不足或快照超限。");
                 var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 long expanded = 0;
                 foreach (var entry in zip.Entries)
@@ -196,24 +212,22 @@ public static class ReplicaResourceTransfer
                 throw new IOException("接收资源与活动节点版本不同。");
             // A lost success response may resend the same snapshot. Keep the current copy
             // and its previous-version directory instead of accumulating identical copies.
-            var alreadyCurrent = FileConfirmationStore.ResourcesDigest(full, persist: true) == expectedDigest;
+            var previousDigest = FileConfirmationStore.ResourcesDigest(full, persist: true);
+            var alreadyCurrent = previousDigest == expectedDigest;
             // Complete potentially slow hashing before the final role and cancellation check.
             await verifyStandby(token);
             token.ThrowIfCancellationRequested();
             if (alreadyCurrent) return;
-            MoveDirectory(full, previous);
-            try { MoveDirectory(staged, full); }
-            catch { if (!Directory.Exists(full)) MoveDirectory(previous, full); throw; }
-            // Retain the replaced replica resources for diagnosis; never merge them into the active node.
+            await exchange.ExchangeAsync(suffix, expectedDigest, previousDigest, verifyStandby, token);
         }
         finally
         {
             if (File.Exists(archive)) File.Delete(archive);
-            if (Directory.Exists(staged)) Directory.Delete(staged, recursive: true);
+            if (Directory.Exists(staged) && !exchange.Holds(suffix)) Directory.Delete(staged, recursive: true);
         }
     }
 
-    private static void MoveDirectory(string source, string target)
+    internal static void MoveDirectory(string source, string target)
     {
         if (OperatingSystem.IsWindows())
         {

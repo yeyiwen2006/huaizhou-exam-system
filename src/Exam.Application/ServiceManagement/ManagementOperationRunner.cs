@@ -58,13 +58,18 @@ public sealed class ManagementOperationRunner(
                 accepted = checkpoint;
         }
         await store.SaveAsync(accepted, cancellationToken); // No side effect before this durable write.
+        // Once accepted, HA work belongs to the durable journal rather than an HTTP/page
+        // lifetime. Process loss is reconciled from checkpoints; normal disconnects do not cancel it.
+        using var durableDeadline = HighAvailability.DurableFailoverCoordinator.IsFailover(kind)
+            ? new CancellationTokenSource(TimeSpan.FromMinutes(90)) : null;
+        var executionToken = durableDeadline?.Token ?? cancellationToken;
         _executing.TryAdd(requestId, 0);
         try
         {
             ManagementOperation result;
             try
             {
-                result = await execute(accepted, cancellationToken);
+                result = await execute(accepted, executionToken);
                 var pendingConfirmation = kind == ManagementOperationKind.Restore &&
                     result is { Phase: ManagementOperationPhase.NeedsVerification, Restore.IsolationStaged: true,
                         RecoveryActivation: null } &&
@@ -138,7 +143,9 @@ public sealed class ManagementOperationRunner(
         catch (Exception) { return ForQuery(operation); }
         if (observed is null) return ForQuery(operation);
         var failedWithoutIntent = HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind) &&
-            operation.FailoverPlan is null && observed.Phase == ManagementOperationPhase.Failed && observed.Error is not null;
+            observed.Phase == ManagementOperationPhase.Failed && observed.Error is not null &&
+            (operation.FailoverPlan is null || operation.Kind == ManagementOperationKind.Rebuild &&
+                observed.FailoverFailureVerified && observed.FailoverPlan == operation.FailoverPlan);
         if (observed.RequestId != operation.RequestId || observed.ServerId != operation.ServerId ||
             observed.NodeId != operation.NodeId || observed.ActorId != operation.ActorId || observed.Kind != operation.Kind ||
             observed.ContentHash != operation.ContentHash || observed.RequestJson != operation.RequestJson ||

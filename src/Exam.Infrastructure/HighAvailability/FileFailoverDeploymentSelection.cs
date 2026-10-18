@@ -68,9 +68,14 @@ public sealed class FileFailoverDeploymentSelection(string path)
     public static FailoverDeploymentSelection? ReadConfigured(Func<string, string?> configuration,
         string serverId, string nodeId)
     {
-        var path = configuration("HighAvailability:SelectionPath");
+        var path = ResolvePath(configuration, nodeId);
         if (string.IsNullOrWhiteSpace(path)) return null;
         var value = new FileFailoverDeploymentSelection(path).Read();
+        // Older defaults placed this file beside the operation journal. Read it only
+        // when no newer selection exists; the next controlled write uses the shared path.
+        if (value is null && string.IsNullOrWhiteSpace(configuration("HighAvailability:SelectionPath")) &&
+            configuration("Management:OperationDirectory") is { Length: > 0 } operations)
+            value = new FileFailoverDeploymentSelection(Path.Combine(operations, "node-selection.json")).Read();
         if (value is not null && (value.ServerId != serverId || value.NodeId != nodeId))
             throw new IOException("主备部署选择与受保护节点身份不符。");
         if (value is not null)
@@ -80,12 +85,18 @@ public sealed class FileFailoverDeploymentSelection(string path)
             if (!Path.IsPathFullyQualified(root)) throw new IOException("节点确认根目录须为绝对路径。");
             var expected = Path.Combine(root, "epochs", value.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), nodeId);
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (!Path.GetFullPath(value.ConfirmationDirectory).Equals(Path.GetFullPath(expected), comparison))
+            if (!Path.GetFullPath(value.ConfirmationDirectory).Equals(Path.GetFullPath(expected), comparison) &&
+                !Path.GetFullPath(value.ConfirmationDirectory).Equals(Path.GetFullPath(root), comparison))
                 throw new IOException("持久部署选择的确认目录与受保护节点配置不一致。");
             PathBoundary.ResolveWithinRoot(root, expected, "持久部署确认目录超出节点根目录。");
         }
         return value;
     }
+
+    public static string? ResolvePath(Func<string, string?> configuration, string nodeId) =>
+        configuration("HighAvailability:SelectionPath") is { Length: > 0 } explicitPath ? explicitPath :
+        configuration($"HighAvailability:Nodes:{nodeId}:ConfirmationDirectory") is { Length: > 0 } root
+            ? Path.Combine(root, "node-selection.json") : null;
 
     public static IReadOnlyDictionary<string, string?> ReadConfigurationOverrides(Func<string, string?> configuration,
         string serverId, string nodeId)

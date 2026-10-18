@@ -151,7 +151,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public RelayCommand CancelWaitCommand { get; }
     public RelayCommand SaveConnectionCommand { get; }
     private AsyncRelayCommand OperationCommand(ManagementOperationKind kind) =>
-        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && !HasUnresolvedManagementRequests && CanIssueHighAvailability(kind), OnError);
+        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && !HasConflictingManagementRequests(kind) && CanVerifyHighAvailabilityTarget(kind), OnError);
 
     public void Activate()
     {
@@ -253,6 +253,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task RefreshAsync()
     {
         if (!IsSignedIn || _connection is null || _readBusy) return;
+        await ReconcileKnownRequestsAsync();
+        if (!IsSignedIn || _connection is null || _readBusy) return;
         var connection = _connection; var generation = _generation;
         using var reads = BeginRead();
         StartHighAvailabilityPolling();
@@ -332,10 +334,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public async Task RequestAsync(ManagementOperationKind kind)
     {
-        if (!IsSignedIn || _connection is null || IsBusy || HasUnresolvedManagementRequests) return;
+        if (!IsSignedIn || _connection is null || IsBusy || HasConflictingManagementRequests(kind)) return;
         if (kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild &&
             !await RouteHighAvailabilityToSelectedNodeAsync(kind)) return;
-        if (_connection?.Actor is not { } actor || !IsSignedIn || IsBusy || HasUnresolvedManagementRequests) return;
+        if (_connection?.Actor is not { } actor || !IsSignedIn || IsBusy || HasConflictingManagementRequests(kind)) return;
         var connection = _connection; var generation = _generation;
         var id = Guid.NewGuid().ToString("N");
         IsBusy = true; // One gate covers all writes, including a confirmation dialog.
@@ -410,6 +412,38 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (id.Length == 0) id = _pending?.RequestId ?? _knownPendingRequests.Values.FirstOrDefault()?.RequestId ?? string.Empty;
         if (!await RoutePendingQueryAsync(id)) return;
         await QueryRequestAsync(id);
+    }
+
+    private async Task ReconcileKnownRequestsAsync()
+    {
+        var version = _managementSessionVersion;
+        var generation = _generation;
+        using var wait = BeginRead();
+        var pending = _knownPendingRequests.Values.Append(_pending).OfType<PendingManagementRequest>()
+            .DistinctBy(request => request.Target.Key).ToArray();
+        try { await Task.WhenAll(pending.Select(async request =>
+        {
+            try
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(wait.Token);
+                deadline.CancelAfter(TimeSpan.FromSeconds(3));
+                var connection = await EnsureTargetSessionAsync(request.Target, deadline.Token);
+                if (connection?.Actor != request.Actor) return;
+                var reply = await connection.FindAsync(request.RequestId, deadline.Token);
+                if (deadline.IsCancellationRequested || version != _managementSessionVersion || generation != _generation ||
+                    reply.IsUnauthorized || reply.Envelope.Result is not { } operation) return;
+                ValidatePendingOperation(operation, request);
+                if (ReferenceEquals(connection, _connection)) Apply(reply, request, connection, generation);
+                else if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)
+                {
+                    _store.Clear(request);
+                    _knownPendingRequests.TryRemove(request.Target.Key, out _);
+                    NotifyPending();
+                }
+            }
+            catch (Exception) { /* Keep the exact original request until its owner can verify it. */ }
+        })); }
+        finally { EndRead(wait); }
     }
 
     private async Task QueryRequestAsync(string id)
@@ -498,12 +532,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         { _missingOriginal = reply.StatusCode == HttpStatusCode.NotFound; UpdateCommands();
             Message = _missingOriginal ? $"未找到请求 {request.RequestId}，原请求保留，请核对编号后再次查询处理状态。"
                 : SafeError(reply.StatusCode) + "；原请求保留，请查询处理状态。"; return; }
-        if (operation.ActorId != request.Actor || operation.RequestId != request.RequestId || operation.Kind != request.Kind ||
-            operation.ServerId != request.Target.ServerId || operation.NodeId != request.Target.NodeId || operation.ContentHash != request.BodyHash)
-            throw new System.IO.InvalidDataException("操作身份与原请求不一致。");
-        if (!Enum.IsDefined(operation.Phase) || operation.Phase == ManagementOperationPhase.Failed && operation.Error is null ||
-            operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.Completed or ManagementOperationPhase.Staged && operation.Error is not null)
-            throw new System.IO.InvalidDataException("操作阶段证据无效。");
+        ValidatePendingOperation(operation, request);
         if (operation.Kind == ManagementOperationKind.Restore)
         {
             // A delayed checkpoint must not move the current restore backwards after its final response.
@@ -549,6 +578,16 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _store.Clear(request); _knownPendingRequests.TryRemove(request.Target.Key, out _);
             _pending = null; CanResumeRestore = false; LoadCurrentPendingRequest();
         }
+    }
+
+    private static void ValidatePendingOperation(ManagementOperation operation, PendingManagementRequest request)
+    {
+        if (operation.ActorId != request.Actor || operation.RequestId != request.RequestId || operation.Kind != request.Kind ||
+            operation.ServerId != request.Target.ServerId || operation.NodeId != request.Target.NodeId || operation.ContentHash != request.BodyHash)
+            throw new System.IO.InvalidDataException("操作身份与原请求不一致。");
+        if (!Enum.IsDefined(operation.Phase) || operation.Phase == ManagementOperationPhase.Failed && operation.Error is null ||
+            operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.Completed or ManagementOperationPhase.Staged && operation.Error is not null)
+            throw new System.IO.InvalidDataException("操作阶段证据无效。");
     }
 
     private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null, IsolationEvidence? confirmedIsolation = null, bool confirmedRebuild = false)

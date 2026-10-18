@@ -6,11 +6,13 @@ namespace Exam.Infrastructure.HighAvailability;
 /// Reuses verified file contents while names/metadata and the directory change notification
 /// remain unchanged. Startup, failover and restore retain their independent full checks.
 /// </summary>
-internal sealed class ResourceDirectoryDigestCache(string root, Func<string, string> compute) : IDisposable
+internal sealed class ResourceDirectoryDigestCache(string root, Func<string, string> compute,
+    int maximumEntries = ReplicaResourceTransfer.MaximumEntries) : IDisposable
 {
     private sealed record Entry(string Path, long Length, long Created, long Written, FileAttributes Attributes);
     private readonly object _gate = new();
     private FileSystemWatcher? _watcher;
+    private string? _rootIdentity;
     private long _changes;
     private long _verifiedChanges = -1;
     private bool _watcherFailed;
@@ -49,7 +51,11 @@ internal sealed class ResourceDirectoryDigestCache(string root, Func<string, str
 
     private void EnsureWatcher()
     {
-        if (_watcher is not null && !Volatile.Read(ref _watcherFailed)) return;
+        if (!Path.IsPathFullyQualified(root) || !Directory.Exists(root))
+            throw new IOException("资源目录不可读。");
+        PathBoundary.RejectExistingReparsePoints(root, root);
+        var identity = ResourceDirectoryIdentity.Read(root);
+        if (_watcher is not null && !Volatile.Read(ref _watcherFailed) && _rootIdentity == identity) return;
         _watcher?.Dispose();
         _watcher = null;
         _digest = null;
@@ -70,6 +76,7 @@ internal sealed class ResourceDirectoryDigestCache(string root, Func<string, str
         {
             watcher.EnableRaisingEvents = true;
             _watcher = watcher;
+            _rootIdentity = identity;
         }
         catch { watcher.Dispose(); throw; }
     }
@@ -82,7 +89,8 @@ internal sealed class ResourceDirectoryDigestCache(string root, Func<string, str
         var entries = new List<Entry>();
         void Visit(string path)
         {
-            if (entries.Count >= 100000) throw new IOException("资源清单超过容量限制。");
+            // Inventory includes the root sentinel; the wire limit counts only children.
+            if (entries.Count > maximumEntries) throw new IOException("资源清单超过容量限制。");
             PathBoundary.RejectExistingReparsePoints(root, path);
             var attributes = File.GetAttributes(path);
             var directory = (attributes & FileAttributes.Directory) != 0;

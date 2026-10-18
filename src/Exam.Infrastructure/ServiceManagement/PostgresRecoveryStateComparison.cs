@@ -94,7 +94,7 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
             Append(count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         // Sequences are outside MVCC; the caller keeps both business hosts stopped throughout this check.
-        var sequenceNames = new List<string>();
+        var sequenceNames = new List<(string Name, long Increment, long Minimum, long Maximum, bool Cycle)>();
         await using (var sequences = new NpgsqlCommand("""
             SELECT sequencename, start_value::text, increment_by::text, min_value::text, max_value::text, cycle::text, cache_size::text
             FROM pg_sequences WHERE schemaname='exam' ORDER BY sequencename COLLATE "C"
@@ -102,17 +102,57 @@ public sealed class PostgresRecoveryStateComparison(string originalConnection, s
         await using (var rows = await sequences.ExecuteReaderAsync(token))
             while (await rows.ReadAsync(token))
             {
-                sequenceNames.Add(rows.GetString(0));
+                sequenceNames.Add((rows.GetString(0), long.Parse(rows.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
+                    long.Parse(rows.GetString(3), System.Globalization.CultureInfo.InvariantCulture),
+                    long.Parse(rows.GetString(4), System.Globalization.CultureInfo.InvariantCulture), rows.GetString(5) == "true"));
                 for (var i = 0; i < 7; i++) Append(rows.GetString(i));
             }
         if (sequenceNames.Count > 512) throw new InvalidDataException("业务序列清单无效。");
-        foreach (var name in sequenceNames)
+        foreach (var definition in sequenceNames)
         {
+            var name = definition.Name;
             var quoted = '"' + name.Replace("\"", "\"\"", StringComparison.Ordinal) + '"';
             await using var sequence = new NpgsqlCommand($"SELECT last_value::text, is_called::text FROM exam.{quoted}", connection, transaction);
             await using var row = await sequence.ExecuteReaderAsync(token);
             if (!await row.ReadAsync(token)) throw new InvalidDataException("业务序列不可核实。");
-            Append(name); Append(row.GetString(0)); Append(row.GetString(1));
+            var last = row.GetString(0); var called = row.GetString(1);
+            await row.DisposeAsync();
+            Append(name);
+            await using var ownership = new NpgsqlCommand("""
+                SELECT n.nspname, t.relname, a.attname, a.atttypid::regtype::text, a.attidentity::text
+                FROM pg_depend d JOIN pg_class s ON s.oid=d.objid
+                JOIN pg_namespace sn ON sn.oid=s.relnamespace
+                JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace n ON n.oid=t.relnamespace
+                JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=d.refobjsubid
+                WHERE sn.nspname='exam' AND s.relname=$1 AND s.relkind='S'
+                  AND d.classid='pg_class'::regclass AND d.refclassid='pg_class'::regclass AND d.deptype IN ('a','i')
+                """, connection, transaction);
+            ownership.Parameters.AddWithValue(name);
+            string? ownerSchema = null, ownerTable = null, ownerColumn = null, ownerType = null;
+            await using (var owner = await ownership.ExecuteReaderAsync(token))
+            {
+                if (await owner.ReadAsync(token))
+                {
+                    ownerSchema = owner.GetString(0); ownerTable = owner.GetString(1); ownerColumn = owner.GetString(2);
+                    ownerType = owner.GetString(3);
+                    for (var i = 0; i < 5; i++) Append(owner.GetString(i));
+                    if (await owner.ReadAsync(token)) throw new InvalidDataException("业务序列归属不唯一。");
+                }
+            }
+            if (definition.Increment > 0 && !definition.Cycle && ownerSchema == "exam" &&
+                ownerType is "smallint" or "integer" or "bigint")
+            {
+                static string Quote(string value) => '"' + value.Replace("\"", "\"\"", StringComparison.Ordinal) + '"';
+                var next = decimal.Parse(last, System.Globalization.CultureInfo.InvariantCulture) + (called == "true" ? definition.Increment : 0);
+                await using var maximum = new NpgsqlCommand($"SELECT max({Quote(ownerColumn!)})::numeric FROM exam.{Quote(ownerTable!)}", connection, transaction);
+                var used = await maximum.ExecuteScalarAsync(token);
+                if (next < definition.Minimum || next > definition.Maximum || used is decimal value && next <= value)
+                    throw new InvalidDataException("恢复序列的下一编号不安全。");
+                // WAL may pre-log future sequence values. Compare definitions/ownership and
+                // business rows exactly, while verifying each copy can allocate safely.
+                Append("safe-owned-positive-sequence");
+            }
+            else { Append(last); Append(called); }
         }
         await transaction.CommitAsync(token);
         return digest.GetHashAndReset();

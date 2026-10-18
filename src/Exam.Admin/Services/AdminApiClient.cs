@@ -23,7 +23,7 @@ public sealed partial class AdminApiClient : IDisposable
     private readonly JsonSerializerOptions _json = JsonDefaults.Create();
     private string _operatorId = string.Empty;
     private long _generation;
-    private readonly Dictionary<string, string> _pendingMutations = new(StringComparer.Ordinal);
+    private readonly PendingBusinessMutationStore _mutations;
     private string? _serverId;
     private string? _nodeId;
     private long _serverEpoch;
@@ -47,7 +47,6 @@ public sealed partial class AdminApiClient : IDisposable
         _serverId = null;
         _nodeId = null;
         _serverEpoch = 0;
-        _pendingMutations.Clear();
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -71,10 +70,12 @@ public sealed partial class AdminApiClient : IDisposable
         _serverEpoch = envelope.ServerEpoch;
     }
 
-    public AdminApiClient(HttpMessageHandler? messageHandler = null)
+    public AdminApiClient(HttpMessageHandler? messageHandler = null, string? pendingDirectory = null)
     {
         _messageHandler = messageHandler;
         _httpClient = CreateClient();
+        _mutations = new(pendingDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HuaizhouExam", "Admin", "BusinessRequests"));
     }
 
     public bool IsConfigured => _httpClient.BaseAddress is not null &&
@@ -269,10 +270,17 @@ public sealed partial class AdminApiClient : IDisposable
         where T : class
     {
         EnsureConfigured();
+        if (payload is not null && !preserveRequestId && _serverId is null)
+        {
+            _account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get,
+                "api/v1/operators/me", null, cancellationToken);
+            if (!string.Equals(_account.Username, _operatorId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("当前登录账号与业务请求操作者不一致。");
+        }
         var generation = Generation;
         var client = _httpClient;
         using var request = new HttpRequestMessage(method, relativeUri);
-        string? mutationKey = null;
+        PendingBusinessMutationStore.Mutation? mutation = null;
         if (payload is not null && preserveRequestId)
         {
             // Prepared grading revisions own a durable request ID. The generic mutation cache must
@@ -288,16 +296,9 @@ public sealed partial class AdminApiClient : IDisposable
             // Keep the same requestId after a lost response/5xx. Only a definitive result
             // completes a mutation. Keys contain a digest, never the roster or token.
             body.Remove("requestId");
-            mutationKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-                method.Method + " " + relativeUri + " " + body.ToJsonString(_json))));
-            if (!_pendingMutations.TryGetValue(mutationKey, out var requestId))
-            {
-                if (_pendingMutations.Count >= 128)
-                    throw new InvalidOperationException("未确认的写操作过多，请先核对原服务器结果，不再发送新的写请求。");
-                requestId = Guid.NewGuid().ToString("N");
-                _pendingMutations.Add(mutationKey, requestId);
-            }
-            body["requestId"] = requestId;
+            mutation = _mutations.GetOrCreate(_serverId!, _operatorId.ToUpperInvariant(), _serverEpoch,
+                method.Method, relativeUri, body.ToJsonString(_json));
+            body["requestId"] = mutation.RequestId;
             request.Content = JsonContent.Create(body, options: _json);
         }
 
@@ -321,17 +322,18 @@ public sealed partial class AdminApiClient : IDisposable
         {
             var error = envelope?.Error;
             // Only an official, non-retryable 4xx is a definitive rejection.
-            if (mutationKey is not null && error is { Retryable: false } &&
+            if (mutation is not null && error is { Retryable: false } &&
                 (int)response.StatusCode is >= 400 and < 500 &&
-                response.StatusCode is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests))
-                _pendingMutations.Remove(mutationKey);
+                response.StatusCode is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) &&
+                error.Code is not (ErrorCodes.NotActiveServer or ErrorCodes.StaleServerEpoch or ErrorCodes.ServiceRecovering))
+                _mutations.Complete(mutation);
             throw new AdminApiException(error?.Code ?? $"HTTP_{(int)response.StatusCode}",
                 error?.Message ?? $"服务器请求失败：HTTP {(int)response.StatusCode}。", response.StatusCode);
         }
 
         var result = envelope?.Result ?? throw new AdminApiException("EMPTY_RESPONSE",
             "服务器返回成功状态，但未包含结果。", response.StatusCode);
-        if (mutationKey is not null) _pendingMutations.Remove(mutationKey);
+        if (mutation is not null) _mutations.Complete(mutation);
         return result;
     }
 

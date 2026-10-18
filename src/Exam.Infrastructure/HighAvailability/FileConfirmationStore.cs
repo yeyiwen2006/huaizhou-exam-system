@@ -29,6 +29,19 @@ public sealed class FileConfirmationStore(string directory)
         return new(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
+    public async Task<FileStream> LockAsync(CancellationToken token)
+    {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            try { return Lock(); }
+            catch (IOException error) when ((error.HResult & 0xffff) is 11 or 32 or 33 &&
+                                           started.Elapsed < TimeSpan.FromSeconds(2))
+            { await Task.Delay(10, token); }
+        }
+    }
+
     public ConfirmationHead? Read()
     {
         Check();
@@ -47,7 +60,7 @@ public sealed class FileConfirmationStore(string directory)
         catch (FileNotFoundException) { return null; }
     }
 
-    // Caller holds Lock throughout the primary/standby handshake, preventing crossed heads.
+    // Caller holds Lock for the local read/compare/write only. Never hold it during peer I/O.
     public Task SaveAsync(ConfirmationHead head, CancellationToken token) => SaveAsync(head, token, null);
 
     internal async Task SaveAsync(ConfirmationHead head, CancellationToken token, VerifiedTimelineContinuation? continuation)
@@ -121,7 +134,7 @@ public sealed class FileConfirmationStore(string directory)
         {
             foreach (var item in Directory.EnumerateFileSystemEntries(path).Order(StringComparer.Ordinal))
             {
-                if (++count > 100000) throw new IOException("资源清单超过容量限制。");
+                if (++count > ReplicaResourceTransfer.MaximumEntries) throw new IOException("资源清单超过容量限制。");
                 PathBoundary.RejectExistingReparsePoints(root, item);
                 var name = Encoding.UTF8.GetBytes(Path.GetRelativePath(root, item).Replace('\\', '/'));
                 digest.AppendData(BitConverter.GetBytes(name.Length)); digest.AppendData(name);

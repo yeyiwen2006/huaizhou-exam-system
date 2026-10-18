@@ -171,6 +171,14 @@ public sealed class LocalManagementClient : IDisposable
             throw new HttpRequestException("管理结果与原请求绑定不一致。");
         if (operation is null) return;
         RequireHighAvailability(operation.HighAvailability);
+        var completed = operation.FailoverCompletedState;
+        if (completed is not null && (operation.Phase != ManagementOperationPhase.Completed ||
+            operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect) ||
+            operation.HighAvailability?.State is not { } current || completed.ServerId != _serverId ||
+            !FailoverStateHistory.Covers(current, completed) ||
+            !completed.Audit.Any(entry => entry.Action == $"F02:{operation.Kind}:{requestId}" && entry.ActorId == operation.ActorId &&
+                entry.ServerEpoch == completed.ServerEpoch)))
+            throw new HttpRequestException("历史主备完成证据与当前权威或原请求不一致。");
         if (!Enum.IsDefined(operation.Kind) || !Enum.IsDefined(operation.Phase) ||
             operation.Phase == ManagementOperationPhase.Staged &&
                 (operation.Kind != ManagementOperationKind.Restore || operation.Restore is not
@@ -186,10 +194,12 @@ public sealed class LocalManagementClient : IDisposable
                 ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild =>
                     operation.HighAvailability is { State: not null, VerifiedAt: not null } ha &&
                     (operation.Kind != ManagementOperationKind.Rebuild
-                        ? ha.State.ActiveNodeId == _nodeId
-                        : ha.State.Nodes.TryGetValue(_nodeId, out var rebuilt) && rebuilt.Role == DeploymentNodeRole.Standby && rebuilt.DatabaseInRecovery),
-                ManagementOperationKind.Reprotect => operation.HighAvailability is { State.ProtectionMode: ProtectionMode.SynchronousDualNode,
-                    VerifiedAt: not null, SynchronousProtectionVerified: true },
+                        ? (completed ?? ha.State).ActiveNodeId == _nodeId
+                        : (completed ?? ha.State).Nodes.TryGetValue(_nodeId, out var rebuilt) && rebuilt.Role == DeploymentNodeRole.Standby &&
+                          (completed is not null || rebuilt.DatabaseInRecovery)),
+                ManagementOperationKind.Reprotect => completed is { ProtectionMode: ProtectionMode.SynchronousDualNode } ||
+                    operation.HighAvailability is { State.ProtectionMode: ProtectionMode.SynchronousDualNode,
+                        VerifiedAt: not null, SynchronousProtectionVerified: true },
                 _ => false
             })))
             throw new HttpRequestException("管理操作阶段与实际结果不一致。");

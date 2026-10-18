@@ -54,10 +54,19 @@ public static class ReplicaResourceEndpoints
             if (!Authenticate(context, configuration)) { context.Response.StatusCode = 401; return; }
             try
             {
-                var state = await ReadStateAsync(context, configuration, context.Request.Method == "GET");
+                var state = await ReadStateAsync(context, configuration, false);
                 VerifyReceiver(context, state);
+                var resourceDirectory = Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveResources(
+                    k => configuration[k], state.ServerId, state.NodeId, state.Epoch)
+                    ?? throw new IOException("本机复制资源目录未配置。");
+                using var guard = await new FileConfirmationStore(configuration["Confirmation:Directory"] ??
+                    throw new IOException("本机确认目录未配置。")).LockAsync(context.RequestAborted);
+                await ReplicaResourceTransfer.RecoverAsync(resourceDirectory,
+                    $"{state.ServerId}/{state.NodeId}/{state.ActiveNodeId}/{state.Epoch}/{state.SystemIdentifier}",
+                    async token => VerifyReceiver(context, await ReadStateAsync(context, configuration, false)), context.RequestAborted);
                 if (context.Request.Method == "GET")
                 {
+                    state = await ReadStateAsync(context, configuration, true);
                     await context.Response.WriteAsJsonAsync(state, JsonDefaults.Create(), context.RequestAborted);
                     return;
                 }
@@ -69,12 +78,10 @@ public static class ReplicaResourceEndpoints
                 var directory = Exam.Infrastructure.ServiceManagement.FileRecoveryDeploymentSelection.ResolveResources(
                     k => configuration[k], identity.ServerId, identity.NodeId, identity.ServerEpoch)
                     ?? throw new IOException("本机复制资源目录未配置。");
-                using var guard = new FileConfirmationStore(configuration["Confirmation:Directory"] ??
-                    throw new IOException("本机确认目录未配置。")).Lock();
                 await ReplicaResourceTransfer.ReceiveAsync(context.Request.Body, directory,
                     context.Request.Headers["X-Exam-Resources-Digest"].ToString(),
                     async token => VerifyReceiver(context, await ReadStateAsync(context, configuration, false)),
-                    context.RequestAborted);
+                    context.RequestAborted, $"{state.ServerId}/{state.NodeId}/{state.ActiveNodeId}/{state.Epoch}/{state.SystemIdentifier}");
                 context.Response.StatusCode = 204;
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }

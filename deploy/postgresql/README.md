@@ -51,6 +51,8 @@ Backup__ProtectedConfigurationDirectory
 
 ## 尚需真实环境完成的验收
 
+2026-10-18 主备审计修复、最小必要确认策略、升级注意事项和隔离验证结果见 [主备审计修复记录](../../docs/operations/ha-audit-repair-20261018.md)。
+
 本目录能在单机上检查配置、脚本参数和数据库行为，但不能代替两台独立 Windows 主机。S20/S21 必须在实际网络上记录隔离方式、复制等待、接管耗时、客户端恢复、旧主重建和 300 会话数据一致性；没有该记录时不得把“双机接管已通过”写入发布结论。
 
 配置生成、统一空间/复制监测、调用既有 本机管理/主备管理 管理命令、保留策略及失败处置见 [部署维护 运维入口](../../docs/operations/postgresql-maintenance.md)。归档部署需要复制完整 `scripts` 目录，包含共享 `Postgresql.Operations.psm1`；旧脚本调用增加集群标识/TLS 参数要求，不能只更新单个文件。

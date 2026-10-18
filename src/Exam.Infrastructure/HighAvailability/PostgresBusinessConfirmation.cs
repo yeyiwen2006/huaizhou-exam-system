@@ -96,11 +96,12 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
     private async Task ConfirmCoreAsync(CancellationToken token, TimeSpan peerBudget, bool maintenance)
     {
         await _gate.WaitAsync(token);
+        FileStream? locked = null;
         try
         {
-            using var locked = store.Lock();
-            var previous = store.Read();
             var resources = _resources.Read();
+            locked = await store.LockAsync(token);
+            var previous = store.Read();
             await using var connection = await source.OpenConnectionAsync(token);
             await using (var transaction = await connection.BeginTransactionAsync(token))
             {
@@ -134,7 +135,12 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             }
             var continuation = previous is not null && previous.Record.Timeline != record.Timeline
                 ? await VerifiedTimelineContinuation.ReadAsync(source, previous.Record, record.Timeline, timelineConnection, postgresBinDirectory, token) : null;
-            await store.SaveAsync(new(record, false), token, continuation);
+            if (_resources.Read() != resources) throw new IOException("确认期间资源发生变化。");
+            // Publish local durability before any network wait. Independent management and
+            // business producers share only this short local critical section.
+            await store.SaveAsync(new(record, true), token, continuation);
+            var local = new ConfirmationHead(record, true);
+            locked.Dispose(); locked = null;
             if (peer is not null && Environment.TickCount64 >= Interlocked.Read(ref _nextPeerAttempt))
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -165,14 +171,17 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
                 }
             }
             token.ThrowIfCancellationRequested();
-            // A local-only head differs from the peer's older head and cannot claim dual protection.
-            if (_resources.Read() != resources)
-                throw new IOException("确认期间资源发生变化。");
-            await store.SaveAsync(new(record, true), token);
+            if (record.Mode == ProtectionMode.SynchronousDualNode)
+            {
+                locked = await store.LockAsync(token);
+                // A later local commit wins. An old ACK never replaces a newer boundary.
+                if (store.Read() == local && _resources.Read() == resources)
+                    await store.SaveAsync(new(record, true), token);
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认尚未完成，保留原请求重试。", retryable: true); }
-        finally { _gate.Release(); }
+        finally { locked?.Dispose(); _gate.Release(); }
     }
 
     public void Dispose() => _resources.Dispose();
