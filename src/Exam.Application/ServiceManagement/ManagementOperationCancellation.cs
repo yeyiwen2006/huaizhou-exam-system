@@ -20,6 +20,7 @@ public sealed partial class ManagementOperationRunner
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "只能取消当前账号在此节点发起的操作。");
         if (!Cancelable(operation)) throw new DomainRuleException(ErrorCodes.InvalidInput, "仅接管和重建支持取消。");
+        operation = await CompleteChangeAsync(operation, token);
         if (Settled(operation)) return operation;
         // This small, independent intent does not wait for the execution journal lock.
         // It also survives a lost HTTP response or a management host restart.
@@ -46,7 +47,8 @@ public sealed partial class ManagementOperationRunner
         catch (Exception error) { try { recordFailure?.Invoke(operation, error); } catch { } }
         if (result is not null && (result.RequestId != operation.RequestId || result.ActorId != operation.ActorId ||
             result.ServerId != serverId || result.NodeId != nodeId || result.ContentHash != operation.ContentHash ||
-            result.Kind != operation.Kind || result.Phase != ManagementOperationPhase.Canceled))
+            result.Kind != operation.Kind || !(result.Phase == ManagementOperationPhase.Canceled ||
+                operation.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild && result.Phase == ManagementOperationPhase.Completed)))
             throw new InvalidOperationException("取消结果未保留原操作身份。");
         return (result ?? operation with { Phase = ManagementOperationPhase.NeedsVerification,
             Error = new ApiError(ErrorCodes.ServiceRecovering, "正在结束本次操作，已生效的角色和数据保留。") }) with

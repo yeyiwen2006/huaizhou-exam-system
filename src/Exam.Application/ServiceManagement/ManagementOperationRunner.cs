@@ -11,8 +11,10 @@ public sealed partial class ManagementOperationRunner(
     string serverId, string nodeId, IManagementOperationStore store, IClock clock,
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? reconcile = null,
     Action<ManagementOperation, Exception>? recordFailure = null,
-    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? cancel = null)
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? cancel = null,
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? completeChange = null)
 {
+    private readonly SemaphoreSlim _completionWrites = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _reconcilingFailover = new(StringComparer.Ordinal);
 
@@ -122,8 +124,7 @@ public sealed partial class ManagementOperationRunner(
             }
             result = result with { UpdatedAt = clock.UtcNow };
             // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.
-            await store.SaveAsync(result, CancellationToken.None);
-            return result;
+            return await SaveFinalAsync(result, CancellationToken.None);
         }
         finally { _cancellations.TryRemove(requestId, out _); _executing.TryRemove(requestId, out _); }
     }
@@ -134,6 +135,7 @@ public sealed partial class ManagementOperationRunner(
             ?? throw new DomainRuleException(ErrorCodes.NotFound, "未找到本机管理操作。");
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
+        operation = await CompleteChangeAsync(operation, cancellationToken);
         if (_executing.ContainsKey(requestId) || reconcile is null ||
             operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
             return await CancellationProjectionAsync(operation, cancellationToken);
@@ -180,7 +182,7 @@ public sealed partial class ManagementOperationRunner(
                     await using var guard = await store.AcquireAsync(cleanup.Token);
                     var current = await store.FindAsync(original.RequestId, cleanup.Token);
                     if (current is not null && current.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification)
-                        await store.SaveAsync(await CancellationResultAsync(current, cleanup.Token), CancellationToken.None);
+                        await SaveFinalAsync(await CancellationResultAsync(current, cleanup.Token), CancellationToken.None);
                 }
                 catch (Exception cleanupError) { try { recordFailure?.Invoke(original, cleanupError); } catch { } }
             }
@@ -197,7 +199,7 @@ public sealed partial class ManagementOperationRunner(
         if (await store.IsCancellationRequestedAsync(operation.RequestId, token))
         {
             var canceled = await CancellationResultAsync(operation, token);
-            await store.SaveAsync(canceled, CancellationToken.None);
+            await SaveFinalAsync(canceled, CancellationToken.None);
             return await CancellationProjectionAsync(canceled, token);
         }
         ManagementOperation? observed;
@@ -222,8 +224,30 @@ public sealed partial class ManagementOperationRunner(
                observed.Restore is { IsolationStaged: true, BusinessReady: false })))
             throw new InvalidOperationException("操作核对结果未保留原请求绑定。");
         observed = observed with { UpdatedAt = clock.UtcNow };
-        await store.SaveAsync(observed, token);
-        return observed;
+        return await SaveFinalAsync(observed, token);
+    }
+
+    private async Task<ManagementOperation> CompleteChangeAsync(ManagementOperation operation, CancellationToken token)
+    {
+        if (completeChange is null || operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild) || operation.FailoverPlan is null ||
+            operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed) return operation;
+        var completed = await completeChange(operation, token);
+        return completed is null ? operation : await SaveFinalAsync(completed with
+            { UpdatedAt = operation.Phase == ManagementOperationPhase.Canceled ? operation.UpdatedAt : clock.UtcNow }, token);
+    }
+
+    private async Task<ManagementOperation> SaveFinalAsync(ManagementOperation result, CancellationToken token)
+    {
+        await _completionWrites.WaitAsync(token);
+        try
+        {
+            // A late startup failure or canceled HTTP wait cannot overwrite a proven takeover.
+            var current = await store.FindAsync(result.RequestId, token);
+            if (current is { Phase: ManagementOperationPhase.Completed, Kind: ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild }) return current;
+            await store.SaveAsync(result, token);
+            return result;
+        }
+        finally { _completionWrites.Release(); }
     }
 
     private ManagementOperation ForQuery(ManagementOperation operation)

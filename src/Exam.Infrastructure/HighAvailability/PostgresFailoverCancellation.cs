@@ -5,6 +5,20 @@ namespace Exam.Infrastructure.HighAvailability;
 
 public sealed partial class PostgresHighAvailabilityManagementPlatform
 {
+    public async Task<bool> IsChangeCommittedAsync(FailoverExecutionPlan plan, CancellationToken token)
+    {
+        if (plan.Kind == ManagementOperationKind.Rebuild)
+            return HasRebuildCompletion(plan) && await VerifyRebuiltLocalAsync(plan, token);
+        if (plan.Kind != ManagementOperationKind.Takeover || plan.After.ActiveNodeId != Local.NodeId) return false;
+        var selected = _readSelection();
+        if (selected is null || selected.ServerId != plan.After.ServerId || selected.ActiveNodeId != Local.NodeId ||
+            selected.Epoch < plan.After.ServerEpoch) return false;
+        var actual = await ReadAsync(Local, token);
+        return actual is { Recovery: false } && actual.Value.System == plan.SystemIdentifier &&
+            actual.Value.Database == plan.DatabaseName && FailoverStateHistory.Covers(actual.Value.State, plan.After) &&
+            actual.Value.State.ServerEpoch >= plan.After.ServerEpoch;
+    }
+
     public async Task<bool> CancelAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
         if (plan.Kind == ManagementOperationKind.Rebuild)
@@ -21,6 +35,6 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         if (actual.Value.Recovery && SameState(actual.Value.State, plan.Before)) return true;
         // Promotion is irreversible. Publish/select only the promotion already made;
         // this path cannot issue pg_promote or automatically switch the primary back.
-        return !actual.Value.Recovery && await ReconcileAsync(plan, token);
+        return false; // A promoted primary cannot be reported as a canceled takeover.
     }
 }

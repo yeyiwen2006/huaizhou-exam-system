@@ -12,7 +12,9 @@ public sealed partial class ServiceManagementViewModel
     private PendingManagementRequest? CancelableRequest() => _highAvailabilityOperation is { } operation &&
         operation.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild &&
         operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled) &&
-        !operation.CancellationRequested
+        !operation.CancellationRequested && !(operation.Kind == ManagementOperationKind.Takeover &&
+            _availability?.State is { } state && state.ActiveNodeId == operation.NodeId &&
+            state.Nodes.Values.Any(node => node.NodeId != operation.NodeId && node.Role == Exam.Contracts.HighAvailability.DeploymentNodeRole.Isolated))
         ? _knownPendingRequests.Values.FirstOrDefault(request => request.RequestId == operation.RequestId)
             ?? (_pending?.RequestId == operation.RequestId ? _pending : null) : null;
 

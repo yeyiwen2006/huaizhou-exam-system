@@ -318,7 +318,7 @@ public sealed partial class ServiceManagementViewModel
         _reads?.Cancel(); _reads = null; _readBusy = false;
         _polling?.Cancel(); _availabilityPolling?.Cancel(); _restoreProgress?.Cancel();
         _connection = candidate; _configurationVersion = null; _operation = null; _restoreOperation = null;
-        CanResumeRestore = false; _missingOriginal = false; Checks.Clear(); Logs.Clear();
+        CanResumeRestore = false; _missingOriginal = false; Checks.Clear();
         SetCurrentPendingRequest(pending);
         LoadProtectionWarning(candidate.Target);
         RestartBackupMonitoring();

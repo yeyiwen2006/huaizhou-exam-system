@@ -319,32 +319,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);
-            var audit = await connection.AuditAsync(50, reads.Token);
-            if (reads.IsCancellationRequested) return;
-            if (!Accept(connection, generation, audit.IsUnauthorized)) return;
-            var logs = await connection.LogsAsync(50, reads.Token);
-            if (reads.IsCancellationRequested) return;
-            if (!Accept(connection, generation, logs.IsUnauthorized)) return;
-            Logs.Clear();
-            if (audit.Envelope.Result is { } entries && audit.Envelope.Error is null)
-            {
-                if (entries.Count > 50 || entries.Any(e => !Enum.IsDefined(e.Kind) || !Enum.IsDefined(e.Phase) || e.UpdatedAt == default))
-                    throw new System.IO.InvalidDataException("限定操作日志无效。");
-                foreach (var entry in entries) Logs.Add(new(entry.UpdatedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"), "操作", KindText(entry.Kind), PhaseText(entry.Phase),
-                    entry.ErrorCode is not null || entry.Phase == ManagementOperationPhase.Failed ? "未完成" : entry.Phase == ManagementOperationPhase.Completed ? "成功" : "—", entry.RequestId));
-            }
-            if (logs.Envelope.Result is { } runtime && logs.Envelope.Error is null)
-            {
-                if (runtime.Count > 50 || runtime.Any(e => e.Source is not ("business" or "management") ||
-                    e.Level is not ("Warning" or "Error" or "Critical") || e.Timestamp == default || e.Category is null ||
-                    e.Category.Length is < 1 or > 200 || !e.Category.StartsWith("Exam.", StringComparison.Ordinal) ||
-                    e.Category.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '+'))))
-                    throw new System.IO.InvalidDataException("限定运行日志无效。");
-                foreach (var entry in runtime) Logs.Add(new(entry.Timestamp.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
-                    entry.Source == "business" ? "业务服务" : "服务器管理", "运行记录",
-                    entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, "—", entry.EventId.ToString(CultureInfo.InvariantCulture)));
-            }
-            Message = audit.Envelope.Error is null && logs.Envelope.Error is null ? "服务器状态和限定日志已刷新。" : "状态已刷新；部分限定日志暂不可用。";
+            await RefreshClusterLogsAsync(reads.Token);
+            Message = "主备服务器状态与日志已刷新。";
         }
         catch (OperationCanceledException)
         {
@@ -435,6 +411,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _knownPendingRequests[request.Target.Key] = request;
             _pending = request; _lastRequestId = request.RequestId; RequestIdToQuery = request.RequestId; NotifyPending();
             RememberFailoverProgress(request);
+            StartPolling();
             if (kind == ManagementOperationKind.Restore) await ExecuteRestoreAsync(request, connection, generation);
             else
             {
@@ -492,7 +469,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 var reply = await connection.FindAsync(request.RequestId, deadline.Token);
                 if (deadline.IsCancellationRequested || version != _managementSessionVersion || generation != _generation) return;
                 if (ReferenceEquals(connection, _connection))
+                {
                     Apply(reply, request, connection, generation);
+                    if (reply.Envelope.Result is { } settled) ReleaseTerminalWait(connection, settled);
+                }
                 else if (reply.IsUnauthorized) MarkNodeSessionUnavailable(connection, true);
                 else if (reply.Envelope.Result is { } operation)
                 {
@@ -503,6 +483,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                     _knownPendingRequests.TryRemove(request.Target.Key, out _);
                     NotifyPending();
                     PublishSettledRoleSnapshot();
+                    _ = RefreshClusterLogsAsync(_lifetime.Token);
                 }
             }
             catch (Exception) { /* Keep the exact original request until its owner can verify it. */ }
@@ -647,6 +628,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             _store.Clear(request); _knownPendingRequests.TryRemove(request.Target.Key, out _);
             _pending = null; CanResumeRestore = false; LoadCurrentPendingRequest();
             PublishSettledRoleSnapshot();
+            _ = RefreshClusterLogsAsync(_lifetime.Token);
         }
     }
 
@@ -787,7 +769,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         _connection = null; IsSignedIn = false; IsBusy = false;
         _highAvailabilityOperation = null; OnPropertyChanged(nameof(DisplayMessage));
         _readBusy = false; _pending = null; _operation = null; _missingOriginal = false; CanResumeRestore = false;
-        _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
+        _configurationVersion = null; Checks.Clear(); Logs.Clear(); _nodeAuditLogs.Clear(); _nodeRuntimeLogs.Clear(); MarkUnknown(); NotifyPending();
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));
         return released;
     }
@@ -808,7 +790,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             while (_active && IsSignedIn && HasUnresolvedManagementRequests && !polling.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(10), _time, polling.Token);
-                if (!_readBusy && !IsBusy && !polling.IsCancellationRequested)
+                if (!polling.IsCancellationRequested && (!_readBusy && !IsBusy ||
+                    _knownPendingRequests.Values.Any(request => request.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)))
                 {
                     if (_pending is { Kind: ManagementOperationKind.Restore } restore)
                         await QueryRequestAsync(restore.RequestId);

@@ -77,8 +77,17 @@ public sealed class ManagementRuntime(
             throw new DomainRuleException("PLATFORM_NOT_SUPPORTED",
                 unsupportedOperationsMessage ?? "Linux 当前支持业务服务启停、配置、状态、日志和备份；主备切换及隔离恢复需要 Windows 管理宿主。");
     }
-    public Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token) =>
-        readAudit is null ? throw new InvalidOperationException("受保护操作日志未配置。") : readAudit(limit, token);
+    public async Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken token)
+    {
+        if (readAudit is null) throw new InvalidOperationException("受保护操作日志未配置。");
+        var entries = await readAudit(limit, token);
+        var changed = false;
+        foreach (var entry in entries.Where(entry => entry.Phase == ManagementOperationPhase.Canceled &&
+            entry.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
+            if (await journal.FindAsync(entry.RequestId, token) is { } original)
+                changed |= (await Operations.FindAsync(original.RequestId, original.ActorId, token)).Phase != entry.Phase;
+        return changed ? await readAudit(limit, token) : entries;
+    }
     public Task<IReadOnlyList<ProtectedRuntimeLogEntry>> ReadRuntimeLogsAsync(int limit, CancellationToken token) =>
         readRuntimeLogs is null ? throw new InvalidOperationException("受保护运行日志未配置。") : readRuntimeLogs(limit, token);
     private readonly object _operationsGate = new();
@@ -86,7 +95,8 @@ public sealed class ManagementRuntime(
     public ManagementOperationRunner Operations
     {
         get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync, RecordFailure,
-            (operation, token) => Failover.CancelAsync(operation, token)); }
+            (operation, token) => Failover.CancelAsync(operation, token),
+            (operation, token) => Failover.CompleteCommittedChangeAsync(operation, token)); }
     }
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)

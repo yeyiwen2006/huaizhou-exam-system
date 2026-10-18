@@ -17,6 +17,7 @@ public interface IHighAvailabilityManagementPlatform
     Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token);
     Task<bool> VerifyFailedBeforeInstallationAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
     Task<bool> CancelAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
+    Task<bool> IsChangeCommittedAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
 }
 
 /// <summary>Uses the same cross-process durable journal as local management. No production state lives in memory.</summary>
@@ -118,7 +119,8 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         if (!IsFailover(operation.Kind)) return null;
         if (operation.FailoverPlan is not { } plan)
             return operation with { Phase = ManagementOperationPhase.Failed,
-                Error = new(ErrorCodes.ServiceRecovering, "主备持久意图尚未写入，未执行主备副作用；请重新读取状态后确认。") };
+                Error = operation.Error is { Code: not ErrorCodes.ServiceRecovering } cause ? cause :
+                    new(ErrorCodes.ServiceRecovering, "操作准备未完成，尚未开始接管或数据库替换；可以重新发起操作。") };
         if (plan.RequestId != operation.RequestId || plan.ContentHash != operation.ContentHash || plan.Kind != operation.Kind ||
             plan.Before.ServerId != serverId || plan.After.ServerId != serverId ||
             plan.After.Version != plan.Before.Version + 1 ||
@@ -149,8 +151,22 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
     public async Task<ManagementOperation?> CancelAsync(ManagementOperation operation, CancellationToken token)
     {
         if (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)) return null;
+        if (await CompleteCommittedChangeAsync(operation, token) is { } completed) return completed;
         if (operation.FailoverPlan is { } plan && !await platform.CancelAsync(plan, token)) return null;
+        if (await CompleteCommittedChangeAsync(operation, token) is { } applied) return applied;
         return operation with { Phase = ManagementOperationPhase.Canceled, Error = null };
+    }
+
+    public async Task<ManagementOperation?> CompleteCommittedChangeAsync(ManagementOperation operation, CancellationToken token)
+    {
+        if (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild) || operation.FailoverPlan is not { } plan ||
+            !await platform.IsChangeCommittedAsync(plan, token)) return null;
+        var observed = await platform.ObserveLocalAsync(token);
+        if (observed.State is not { } current || !FailoverStateHistory.Covers(current, plan.After)) return null;
+        // Role publication and the protected active-node selection define takeover success.
+        // Business startup may continue using the original task after this result is recorded.
+        return operation with { Phase = ManagementOperationPhase.Completed, Error = null,
+            HighAvailability = observed, FailoverCompletedState = plan.After, FailoverWorkInProgress = false, CancellationRequested = false };
     }
 
     public static string Action(ManagementOperation operation) => $"F02:{operation.Kind}:{operation.RequestId}";

@@ -7,6 +7,7 @@ using Exam.Application.ServiceManagement;
 using Exam.Contracts.Common;
 using Exam.Contracts.HighAvailability;
 using Exam.Contracts.ServiceManagement;
+using Exam.Domain.Common;
 using Exam.Infrastructure.Postgres.HighAvailability;
 using Exam.Infrastructure.Postgres.Resources;
 using Exam.Infrastructure.ServiceManagement;
@@ -401,8 +402,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             throw new IOException("本机不是当前活动主库。");
         else if (operation.Kind == ManagementOperationKind.Rebuild)
         {
-            if (reference.Value.Recovery || !SameState(reference.Value.State, before)) throw new IOException("重建源不是当前活动主库。");
-            ValidateRebuildPaths();
+            if (reference.Value.Recovery || !SameState(reference.Value.State, before))
+                throw new DomainRuleException(ErrorCodes.NotActiveServer, "重建源尚未成为当前活动主机，请刷新后重试。", true);
+            try { ValidateRebuildPaths(); }
+            catch (IOException error) { throw new DomainRuleException(ErrorCodes.InvalidInput, error.Message); }
         }
         return new(operation.RequestId, operation.ContentHash, operation.Kind, before, after,
             reference.Value.System, reference.Value.Database, reference.Value.Timeline,
@@ -504,7 +507,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         }
         if (plan.Kind == ManagementOperationKind.Rebuild)
         {
-            if (ReadRebuildProgress(plan) is { Phase: "Installing" } progress)
+            if (ReadRebuildProgress(plan) is { Phase: "Installing" or "Applied" } progress)
                 await InstallPreparedRebuildAsync(progress, token);
             if (!await VerifyRebuiltLocalAsync(plan, token)) return false;
             await SelectAsync(plan, token);
@@ -765,8 +768,14 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         string systemIdentifier, CancellationToken token)
     {
         using var request = ResourceSourceRequest(node, "source", state, systemIdentifier);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        response.EnsureSuccessStatusCode();
+        HttpResponseMessage response;
+        try { response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token); }
+        catch (HttpRequestException)
+        { throw new DomainRuleException(ErrorCodes.ReplicaUnavailable, "无法连接当前主机的资源服务，重建尚未开始；请确认当前主机业务服务已恢复。", true); }
+        using var responseLifetime = response;
+        if (!response.IsSuccessStatusCode)
+            throw new DomainRuleException(ErrorCodes.ReplicaUnavailable,
+                $"当前主机的资源服务暂不可用（HTTP {(int)response.StatusCode}），重建尚未开始，可以在业务恢复后重试。", true);
         await using var body = await response.Content.ReadAsStreamAsync(token);
         var proof = await ReplicaResourceTransfer.ReadStateAsync(body, token);
         if (proof.ServerId != state.ServerId || proof.NodeId != state.ActiveNodeId || proof.NodeId != node.NodeId ||

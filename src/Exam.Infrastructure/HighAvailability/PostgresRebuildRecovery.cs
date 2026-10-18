@@ -55,7 +55,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
     {
         var plan = progress.Plan;
         ValidateRebuildPaths();
-        if (progress.Phase is not ("Prepared" or "Installing") || progress.DatabaseIdentity is null || progress.ResourcesIdentity is null)
+        if (progress.Phase is not ("Prepared" or "Installing" or "Applied") || progress.DatabaseIdentity is null || progress.ResourcesIdentity is null)
             throw new IOException("重建缺少已核验暂存目录证据。");
         var source = await ReadAsync(_options.Nodes[plan.After.ActiveNodeId], token);
         if (source is null || source.Value.Recovery || source.Value.System != plan.SystemIdentifier ||
@@ -93,6 +93,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
             if (_time.GetUtcNow() >= deadline) throw new IOException("重建节点未核实为正确备用库。");
             await Task.Delay(TimeSpan.FromSeconds(1), token);
         }
+        // A verified installed standby is already a successful rebuild. Starting its
+        // confirmation listener continues independently of the cancelable copy phase.
+        await SaveRebuildProgressAsync(progress with { Phase = "Applied" }, token);
+        await WriteRebuildMarkerAsync(plan, token);
         await _business.StartAsync(token);
         if (_business.Status != BusinessServiceStatus.Running) throw new IOException("备用确认服务尚未启动。");
         await SaveRebuildProgressAsync(progress with { Phase = "Completed" }, token);
