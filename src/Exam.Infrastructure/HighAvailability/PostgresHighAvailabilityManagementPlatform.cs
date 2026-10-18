@@ -393,11 +393,12 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     public async Task<FailoverExecutionPlan> PrepareAsync(ManagementOperation operation, HighAvailabilityRequest request,
         ServerDeploymentState before, ServerDeploymentState after, CancellationToken token)
     {
-        var target = await ReadAsync(Local, token);
-        if (operation.Kind != ManagementOperationKind.Rebuild && target is null)
-            throw new IOException("本机数据库身份未核实。");
-        var reference = operation.Kind == ManagementOperationKind.Rebuild ? await ReadAsync(_options.Nodes[before.ActiveNodeId], token) : target;
+        // Rebuild uses the active source and must work even when the isolated old
+        // database is unavailable. Its local probe was unused and only added a timeout.
+        var reference = await ReadAsync(operation.Kind == ManagementOperationKind.Rebuild
+            ? _options.Nodes[before.ActiveNodeId] : Local, token);
         if (reference is null) throw new IOException("操作数据源的实际身份未核实。");
+        string? resourcesDigest = null;
         if (operation.Kind == ManagementOperationKind.Takeover)
         {
             if (!reference.Value.Recovery || !SameState(reference.Value.State, before)) throw new IOException("本机不是预期的备用库快照。");
@@ -405,7 +406,8 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             await using var source = ManagementProbeConnection.Create(Local.ConnectionString, 5);
             await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, Local.NodeId, token,
                 Local.ConnectionString, _options.PostgresBinDirectory);
-            if (FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) != head.Record.ResourcesDigest)
+            resourcesDigest = _localResourceDigest.Read();
+            if (resourcesDigest != head.Record.ResourcesDigest)
                 throw new IOException("本机资源未覆盖最新已确认边界。");
         }
         else if (operation.Kind == ManagementOperationKind.Reprotect)
@@ -416,7 +418,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             var standbyIdentity = await ReadAsync(_options.Nodes[request.TargetNodeId], token);
             if (standbyIdentity is null || !standbyIdentity.Value.Recovery || standbyIdentity.Value.System != reference.Value.System ||
                 standbyIdentity.Value.Database != reference.Value.Database || !SameState(standbyIdentity.Value.State, before) ||
-                (await ReadHeadAsync(Other, before.ServerEpoch, token))?.Record.ResourcesDigest != FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory))
+                (await ReadHeadAsync(Other, before.ServerEpoch, token))?.Record.ResourcesDigest != (resourcesDigest = _localResourceDigest.Read()))
                 throw new IOException("重建备库集群、状态或资源与当前主库不一致。");
         }
         else if (operation.Kind == ManagementOperationKind.Emergency && (reference.Value.Recovery || !SameState(reference.Value.State, before)))
@@ -432,7 +434,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             reference.Value.System, reference.Value.Database, reference.Value.Timeline,
             operation.Kind == ManagementOperationKind.Rebuild
                 ? await ReadSourceResourcesAsync(_options.Nodes[before.ActiveNodeId], before, reference.Value.System, token)
-                : FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory));
+                : resourcesDigest ?? _localResourceDigest.Read());
     }
 
     public async Task ExecuteAsync(FailoverExecutionPlan plan, CancellationToken token)
@@ -532,7 +534,8 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
                 await InstallPreparedRebuildAsync(progress, token);
             if (!await VerifyRebuiltLocalAsync(plan, token)) return false;
             await SelectAsync(plan, token);
-            await _business.StartAsync(token); // Finish the durable plan's non-active confirmation listener only.
+            if (_business.Status != BusinessServiceStatus.Running)
+                await _business.StartAsync(token); // Finish this plan's non-active confirmation listener if needed.
             await RetireSupersededSlotsAsync(plan, token);
             return _business.Status == BusinessServiceStatus.Running;
         }
@@ -642,8 +645,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             primary.ConnectionString, _options.PostgresBinDirectory);
         await confirmation.ConfirmReplicationAsync(token);
         var head = Confirmation(primary, plan.After.ServerEpoch).Read();
-        var independent = await peer.ReadAsync(token);
-        if (head is not { Confirmed: true } || independent?.Covers(head.Record) != true) throw new IOException("恢复保护尚无双侧持久确认。");
+        // A dual head is persisted only after the peer durably ACKs that exact record.
+        // Querying the same peer again adds no evidence to this completed exchange.
+        if (head is not { Confirmed: true, Record.Mode: ProtectionMode.SynchronousDualNode })
+            throw new IOException("恢复保护尚无双侧持久确认。");
     }
     private Uri PeerAddress(FailoverNodeDeployment node, string path)
     {

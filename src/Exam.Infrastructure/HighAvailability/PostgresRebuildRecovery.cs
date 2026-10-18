@@ -107,7 +107,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         await _business.StartAsync(token);
         if (_business.Status != BusinessServiceStatus.Running) throw new IOException("备用确认服务尚未启动。");
         await SaveRebuildProgressAsync(progress with { Phase = "Completed" }, token);
-        await WriteRebuildMarkerAsync(plan, token);
+        // The same durable marker was written at Applied, before starting the listener.
         await RetireSupersededSlotsAsync(plan, token);
     }
 

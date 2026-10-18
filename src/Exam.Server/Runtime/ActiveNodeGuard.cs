@@ -18,34 +18,29 @@ public sealed class ActiveNodeGuard(
             if (authority is not null && !await authority.CheckAsync(cancellationToken))
                 return new(false, ErrorCodes.NotActiveServer, "本机旧代次已隔离，须从当前活动服务器补齐后作为备机加入。");
             await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-            await using (var writable = new NpgsqlCommand(
-                             "SELECT NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off';",
-                             connection))
-            {
-                if ((bool)(await writable.ExecuteScalarAsync(cancellationToken) ?? false) is false)
-                {
-                    return new(false, ErrorCodes.NotActiveServer, "当前 PostgreSQL 处于备库或只读状态。");
-                }
-            }
-
+            // Writable role, active node and epoch belong to one request decision.
+            // Read them together instead of making two database round trips.
             await using var command = new NpgsqlCommand(
                 """
-                SELECT active_node_id, server_epoch
-                  FROM exam.server_state
-                 WHERE server_id = @server_id;
+                SELECT NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off',
+                       s.active_node_id, s.server_epoch
+                  FROM (VALUES (1)) AS local_probe(value)
+                  LEFT JOIN exam.server_state s ON s.server_id = @server_id;
                 """,
                 connection);
             command.Parameters.AddWithValue("server_id", identity.ServerId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
+            if (!await reader.ReadAsync(cancellationToken) || !reader.GetBoolean(0))
+                return new(false, ErrorCodes.NotActiveServer, "当前 PostgreSQL 处于备库或只读状态。");
+            if (reader.IsDBNull(1))
             {
                 return allowUninitializedState
                     ? new(true, string.Empty, null)
                     : new(false, ErrorCodes.NotActiveServer, "未建立该逻辑服务器的权威主备状态。");
             }
 
-            var activeNodeId = reader.GetString(0);
-            var serverEpoch = reader.GetInt64(1);
+            var activeNodeId = reader.GetString(1);
+            var serverEpoch = reader.GetInt64(2);
             if (!string.Equals(activeNodeId, identity.NodeId, StringComparison.Ordinal))
             {
                 return new(false, ErrorCodes.NotActiveServer, "当前节点不是权威活动节点。");

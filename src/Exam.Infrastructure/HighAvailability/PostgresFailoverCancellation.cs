@@ -8,7 +8,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
     public async Task<bool> IsChangeCommittedAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
         if (plan.Kind == ManagementOperationKind.Rebuild)
-            return HasRebuildCompletion(plan) && await VerifyRebuiltLocalAsync(plan, token);
+            return await VerifyRebuiltLocalAsync(plan, token); // Includes the bound completion marker.
         if (plan.Kind != ManagementOperationKind.Takeover || plan.After.ActiveNodeId != Local.NodeId) return false;
         var selected = _readSelection();
         if (selected is null || selected.ServerId != plan.After.ServerId ||

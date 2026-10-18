@@ -45,6 +45,10 @@ public sealed class FileFailoverDeploymentSelection(string path)
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("主备部署选择目录须由部署人员预建。");
         PathBoundary.RejectExistingReparsePoints(value.ConfirmationDirectory, value.ConfirmationDirectory);
         Directory.CreateDirectory(value.ConfirmationDirectory);
+        token.ThrowIfCancellationRequested();
+        // Reconciliation may select the same durable plan again. Keep all identity/path
+        // checks above, but do not replace and flush an unchanged selection file.
+        if (previous == value) return;
         var temporary = Path.Combine(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
