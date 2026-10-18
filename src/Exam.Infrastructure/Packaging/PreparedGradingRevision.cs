@@ -5,6 +5,7 @@ using Exam.Contracts.Common;
 using Exam.Contracts.Grading;
 using Exam.Contracts.Importing;
 using Exam.Contracts.Versioning;
+using Exam.Domain.Exams;
 using Exam.Domain.Scoring;
 
 namespace Exam.Infrastructure.Packaging;
@@ -15,6 +16,7 @@ public interface IGradingRevisionClient
     string? ServerId { get; }
     Task<ExamVersionSnapshot> GetExamAsync(string examId, CancellationToken ct = default);
     Task<string> GetGradingOperatorAsync(CancellationToken ct = default);
+    Task<GradingMaterialSnapshot> GetGradingMaterialsAsync(string examId, CancellationToken ct = default);
     Task<ExamVersionSnapshot> SendGradingRevisionAsync(PublishGradingRulesRequest request, CancellationToken ct = default);
     Task<GradingStatusReport> GetGradingStatusAsync(string examId, CancellationToken ct = default);
 }
@@ -76,11 +78,60 @@ public sealed class PreparedGradingRevision : IDisposable
             throw new InvalidDataException("该考试尚未发布完整的试卷和规则版本。");
         var manifest = await ExamImportWorkspace.ReadUtf8Async(Path.Combine(source, "manifest.json"), ct);
         var answers = await ExamImportWorkspace.ReadUtf8Async(Path.Combine(source, "server-only", "answer-key.json"), ct);
+        var rules = ImportedGradingRules.Create(manifest, answers);
+        if (rules.ExamId != examId || !rules.Matches(snapshot.Paper.Structure))
+        {
+            var current = await api.GetGradingMaterialsAsync(examId, ct);
+            var currentRules = ImportedGradingRules.Create(current.ManifestJson, current.AnswerKeyJson);
+            if (current.ExamId != examId || current.PaperVersion != snapshot.Versions.PaperVersion ||
+                current.GradingVersion != snapshot.Versions.GradingVersion || current.RuleSetId != snapshot.Grading.RuleSetId ||
+                currentRules.ExamId != examId || !currentRules.Matches(snapshot.Paper.Structure))
+                throw new InvalidDataException("读取材料期间试卷或规则版本已变化，请重新检查。");
+            (manifest, answers) = ImportPipeline.BindPackageToSelectedExam(manifest, answers, examId,
+                JsonSerializer.Deserialize<ExamManifest>(current.ManifestJson, ImportJson.Create())!.ExamName);
+            manifest = BindPublishedCatalog(manifest, current.ManifestJson);
+        }
         if (api.Generation != generation || string.IsNullOrWhiteSpace(serverId) || api.ServerId != serverId)
             throw new InvalidOperationException("核对期间服务器连接改变，请在原服务器重新核对。");
         return new(new(serverId, examId, snapshot.Versions.PaperVersion, snapshot.Versions.GradingVersion,
             snapshot.Paper.Structure, actor, reason, Guid.NewGuid().ToString("N"), RuleSetId(manifest, answers),
             Hash(manifest), Hash(answers)), manifest, answers);
+    }
+
+    private static string BindPublishedCatalog(string manifestJson, string publishedJson)
+    {
+        var json = ImportJson.Create();
+        var source = JsonSerializer.Deserialize<ExamManifest>(manifestJson, json)!;
+        var published = JsonSerializer.Deserialize<ExamManifest>(publishedJson, json)!;
+        if (source.Subjects.Count != published.Subjects.Count || source.Groups.Count != published.Groups.Count)
+            throw new InvalidDataException("答案修订不能改变已发布试卷的科目或题组数量。");
+        var subjects = new Dictionary<string, string>(StringComparer.Ordinal);
+        var groups = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var subject in source.Subjects)
+        {
+            var matches = published.Subjects.Where(s => ExamSettingsRules.NameKey(s.Name) ==
+                ExamSettingsRules.NameKey(subject.Name)).ToArray();
+            if (matches.Length != 1 || subjects.Values.Contains(matches[0].SubjectId, StringComparer.Ordinal))
+                throw new InvalidDataException("答案修订的科目与已发布试卷不一致。");
+            subjects.Add(subject.SubjectId, matches[0].SubjectId);
+        }
+        foreach (var group in source.Groups)
+        {
+            var matches = published.Groups.Where(g => g.SubjectId == subjects[group.SubjectId] &&
+                g.Order == group.Order && ExamSettingsRules.NameKey(g.Name) == ExamSettingsRules.NameKey(group.Name) &&
+                g.Type == group.Type && g.QuestionCount == group.QuestionCount && g.AllowAbstain == group.AllowAbstain).ToArray();
+            if (matches.Length != 1 || groups.Values.Contains(matches[0].GroupId, StringComparer.Ordinal))
+                throw new InvalidDataException("答案修订的题组与已发布试卷不一致。");
+            groups.Add(group.GroupId, matches[0].GroupId);
+        }
+        // First publication binds source identifiers to server identifiers. Repeat only
+        // that mapping here; the operator's new answers, totals and scoring stay intact.
+        return JsonSerializer.Serialize(source with
+        {
+            Subjects = source.Subjects.Select(s => s with { SubjectId = subjects[s.SubjectId] }).ToArray(),
+            Groups = source.Groups.Select(g => g with { SubjectId = subjects[g.SubjectId], GroupId = groups[g.GroupId] }).ToArray(),
+            Questions = source.Questions.Select(q => q with { SubjectId = subjects[q.SubjectId], GroupId = groups[q.GroupId] }).ToArray()
+        }, json);
     }
 
     public async Task<ExamVersionSnapshot> PublishAsync(IGradingRevisionClient api, CancellationToken ct = default)
