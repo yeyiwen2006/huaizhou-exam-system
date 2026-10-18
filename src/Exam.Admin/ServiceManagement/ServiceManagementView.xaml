@@ -22,20 +22,22 @@
             </Style.Triggers>
         </Style>
     </UserControl.Resources>
-    <DockPanel>
-        <Border DockPanel.Dock="Top" Style="{StaticResource TopBar}">
+    <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+        <Border Style="{StaticResource TopBar}" Padding="28,24">
             <DockPanel>
-                <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack"/>
+                <Button DockPanel.Dock="Right" Content="返回考务" Style="{StaticResource Btn.Secondary}" Click="OnBack" VerticalAlignment="Center"/>
                 <Button x:Name="RefreshServersButton" DockPanel.Dock="Right" Content="刷新"
-                        Style="{StaticResource Btn.Secondary}" Margin="0,0,8,0"
+                        Style="{StaticResource Btn.Secondary}" Margin="0,0,8,0" VerticalAlignment="Center"
                         Command="{Binding RefreshCommand}"/>
                 <StackPanel Margin="0,0,16,0">
                     <TextBlock Text="服务器管理" Style="{StaticResource PageTitle}"/>
-                    <TextBlock Text="{Binding TargetText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding TargetText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"
+                               Margin="0,8,0,0" LineHeight="20"/>
                 </StackPanel>
             </DockPanel>
         </Border>
-        <Border DockPanel.Dock="Top" Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
+        <Border Background="{DynamicResource Brush.Background}" Padding="28,12,28,0">
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
@@ -43,7 +45,6 @@
                 <TextBlock Text="{Binding RecoveryLoginNotice}" Style="{StaticResource Management.Message}"/>
             </StackPanel>
         </Border>
-        <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="{StaticResource Padding.Page}">
                 <Border Style="{StaticResource Management.Section}" Visibility="{Binding ShowManagementLogin, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
@@ -187,13 +188,12 @@
                                 <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="Auto"/>
                                 <DataGridTextColumn Header="请求编号或事件编号" Binding="{Binding Identifier}" Width="Auto"/>
                                 <DataGridTextColumn Header="类别" Binding="{Binding Kind}" Width="*" MinWidth="260"/>
-                                <DataGridTextColumn Header="阶段或事件级别" Binding="{Binding Phase}" Width="140"/>
-                                <DataGridTextColumn Header="结果" Binding="{Binding Code}" Width="100"/>
+                                <DataGridTextColumn Header="结果或事件级别" Binding="{Binding ResultOrEventLevel}" Width="Auto"/>
                             </DataGrid.Columns>
                         </DataGrid>
                     </StackPanel>
                 </Border>
             </StackPanel>
-        </ScrollViewer>
-    </DockPanel>
+        </StackPanel>
+    </ScrollViewer>
 </UserControl>

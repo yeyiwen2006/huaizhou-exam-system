@@ -24,8 +24,13 @@ public sealed partial class ServiceManagementViewModel
                     _nodeAuditLogs[target.Key] = entries.Select(entry => new NodeLog(entry.AcceptedAt,
                         new(entry.AcceptedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
                             "操作", KindText(entry.Kind), PhaseText(entry.Phase),
-                            entry.ErrorCode is not null || entry.Phase == ManagementOperationPhase.Failed ? "未完成" :
-                                entry.Phase == ManagementOperationPhase.Completed ? "成功" : entry.Phase == ManagementOperationPhase.Canceled ? "已取消" : "—",
+                            entry.Phase switch
+                            {
+                                ManagementOperationPhase.Completed => "成功",
+                                ManagementOperationPhase.Failed => "失败",
+                                ManagementOperationPhase.Canceled => "已取消",
+                                _ => "—"
+                            },
                             entry.RequestId, target.NodeId))).ToArray();
             }
             catch { /* Retain this node's prior rows while other nodes continue refreshing. */ }
