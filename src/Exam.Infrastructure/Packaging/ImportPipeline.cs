@@ -161,7 +161,7 @@ public class ImportPipeline(IExamPublicationClient api) : IExamImportService
             foreach (var question in manifest.Questions.OrderBy(q => q.QuestionNo))
             {
                 ct.ThrowIfCancellationRequested();
-                progress?.Report($"正在编译第 {compiled.Count + 1}/{manifest.Questions.Count} 题（已完成 {compiled.Count} 题）…");
+                progress?.Report($"正在编译第 {compiled.Count + 1}/{manifest.Questions.Count} 题…");
                 var result = await compile(new TeXCompileRequest(workspace.PackageRoot,
                     question.Source, workspace.CompilationRoot), ct);
                 if (!result.Succeeded)
