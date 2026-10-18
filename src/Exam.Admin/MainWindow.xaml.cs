@@ -255,7 +255,7 @@ public partial class MainWindow : Window
                 var subject = examName is null ? "本场考试" : $"“{examName}”考试";
                 await Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "本场考试全部答卷已成功回收",
                     $"{subject}的 {notification.ParticipantCount} 名实际参加考试考生答卷已全部保存（{notification.CompletedAt.ToOffset(TimeSpan.FromHours(8)):yyyy-MM-dd HH:mm:ss}）。\n如果之后又有考生进入考试，系统会重新统计；成绩在考试结束后生成。",
-                    confirmText: "知道了", cancelText: "关闭");
+                    confirmText: "知道了", cancelText: null);
             }
         }
         finally { _showingCollectionNotification = false; }

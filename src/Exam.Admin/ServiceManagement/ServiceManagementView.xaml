@@ -145,7 +145,42 @@
                     <StackPanel>
                         <TextBlock Text="操作与事件日志" Style="{StaticResource SectionTitle}" Margin="0,0,0,12"/>
                         <TextBlock Text="合并显示主备节点最近的操作和事件，按时间排列。" Style="{StaticResource CaptionText}" Margin="0,0,0,12"/>
-                        <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="320">
+                        <DataGrid x:Name="OperationLogsGrid" ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="320">
+                            <DataGrid.Template>
+                                <ControlTemplate TargetType="DataGrid">
+                                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                                        <ScrollViewer x:Name="DG_ScrollViewer" Focusable="False"
+                                                      CanContentScroll="True"
+                                                      HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                                      VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                            <ScrollViewer.Template>
+                                                <ControlTemplate TargetType="ScrollViewer">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                        <DataGridColumnHeadersPresenter x:Name="PART_ColumnHeadersPresenter"/>
+                                                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Grid.Row="1"
+                                                                                CanContentScroll="{TemplateBinding CanContentScroll}"/>
+                                                        <!-- Keep the header fixed while the vertical track reaches the table's top edge. -->
+                                                        <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" Grid.RowSpan="2"
+                                                                   Orientation="Vertical" Maximum="{TemplateBinding ScrollableHeight}"
+                                                                   ViewportSize="{TemplateBinding ViewportHeight}"
+                                                                   Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                                                                   Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                                                        <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Row="2"
+                                                                   Orientation="Horizontal" Maximum="{TemplateBinding ScrollableWidth}"
+                                                                   ViewportSize="{TemplateBinding ViewportWidth}"
+                                                                   Value="{Binding HorizontalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                                                                   Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"/>
+                                                    </Grid>
+                                                </ControlTemplate>
+                                            </ScrollViewer.Template>
+                                            <ItemsPresenter SnapsToDevicePixels="True"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </ControlTemplate>
+                            </DataGrid.Template>
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="140"/>
                                 <DataGridTextColumn Header="节点" Binding="{Binding Node}" Width="95"/>

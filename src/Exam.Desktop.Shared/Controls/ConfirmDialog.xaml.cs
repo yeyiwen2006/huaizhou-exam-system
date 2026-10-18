@@ -24,7 +24,7 @@ public partial class ConfirmDialog : Window
         string title,
         object body,
         string confirmText = "确定",
-        string cancelText = "取消",
+        string? cancelText = "取消",
         bool isDanger = false)
     {
         var dialog = new ConfirmDialog
@@ -44,6 +44,12 @@ public partial class ConfirmDialog : Window
             : body;
         dialog.ConfirmButton.Content = confirmText;
         dialog.CancelButton.Content = cancelText;
+        if (string.IsNullOrWhiteSpace(cancelText))
+        {
+            dialog.CancelButton.Visibility = Visibility.Collapsed;
+            dialog.ActionsPanel.HorizontalAlignment = HorizontalAlignment.Center;
+            dialog.ConfirmButton.Margin = new Thickness(0);
+        }
         if (isDanger)
         {
             dialog.ConfirmButton.Style = (Style)dialog.FindResource("Btn.Danger");

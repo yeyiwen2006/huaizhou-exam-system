@@ -28,7 +28,7 @@
                         Grid.Row="1"
                         Margin="0,12,0,0" />
 
-        <StackPanel Grid.Row="2"
+        <StackPanel x:Name="ActionsPanel" Grid.Row="2"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="0,20,0,0">
