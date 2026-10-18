@@ -160,7 +160,9 @@ public partial class PdfQuestionView : UserControl
                 var halfHeight = Math.Max(Math.Abs(region.CenterY - (cover?.Y ?? region.Y)),
                     Math.Abs((cover is null ? region.Y + region.Height : cover.Y + cover.Height) - region.CenterY)) * page.DisplayHeight;
                 // 以字母中心为圆心，半径覆盖原标签最远角；不能仅按宽高最大值取半径，点号可能在右下角。
-                var coverDiameter = 2 * Math.Sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
+                // 直径至少为字母可见高度的两倍，避免无点标签的圆钮明显缩小。
+                var coverDiameter = Math.Max(2 * Math.Sqrt(halfWidth * halfWidth + halfHeight * halfHeight),
+                    2 * region.Height * page.DisplayHeight);
                 _optionGeometry.Add((button, (region.CenterX * page.Width - crop.X) * page.DisplayWidth / page.Width,
                     (region.CenterY * page.Height - crop.Y) * page.DisplayHeight / page.Height, coverDiameter));
             }
@@ -233,10 +235,10 @@ public partial class PdfQuestionView : UserControl
     /// <summary>以原始字形中心定位实心按钮，同时遮住完整原标签。</summary>
     private void UpdateOptionGeometry()
     {
-        foreach (var (button, centerX, centerY, coverDiameter) in _optionGeometry)
+        // 同题所有选项共用最大圆径，额外留 0.5 DIP 半径吸收抗锯齿边缘。
+        var diameter = _optionGeometry.Count == 0 ? 0 : _optionGeometry.Max(option => option.CoverDiameter) + 1;
+        foreach (var (button, centerX, centerY, _) in _optionGeometry)
         {
-            // 半径只额外留 0.5 DIP 吸收抗锯齿边缘，恰好盖住原标签，不另设最小圆径。
-            var diameter = coverDiameter + 1;
             button.Width = diameter;
             button.Height = diameter;
             button.FontSize = diameter * .55;
