@@ -145,7 +145,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         try
         {
             var endpoint = PeerAddress(node, "replication/v1/readiness");
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
             using var request = PeerRequest(HttpMethod.Get, endpoint, node.NodeId);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false, null, []);

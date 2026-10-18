@@ -5,7 +5,10 @@ using Npgsql;
 
 namespace Exam.Server.Runtime;
 
-public sealed record BusinessRecoverySnapshot(bool Ready, IReadOnlyList<StartupCheckResult> Checks, DateTimeOffset? VerifiedAt);
+public sealed record BusinessRecoverySnapshot(bool Ready, IReadOnlyList<StartupCheckResult> Checks, DateTimeOffset? VerifiedAt)
+{
+    public bool MaterialsReady { get; init; }
+}
 
 public sealed class BusinessRecoveryGuard
 {
@@ -15,7 +18,11 @@ public sealed class BusinessRecoveryGuard
     {
         var valid = checks.Count > 0 && checks.All(c => c is not null && !string.IsNullOrWhiteSpace(c.Name) && c.Message is not null) &&
             checks.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() == checks.Count;
-        _snapshot = new(valid && checks.All(c => c.Passed || !c.BlocksWrites), Array.AsReadOnly(checks.ToArray()), verifiedAt);
+        _snapshot = new(valid && checks.All(c => c.Passed || !c.BlocksWrites), Array.AsReadOnly(checks.ToArray()), verifiedAt)
+        {
+            MaterialsReady = valid && checks.Any(c => c.Name != "managed-protection") &&
+                checks.All(c => c.Name == "managed-protection" || c.Passed || !c.BlocksWrites)
+        };
     }
 }
 
@@ -29,6 +36,8 @@ public sealed class BusinessRecoveryWorker(
         var probe = new PostgresRecoveryReadinessProbe(source, unwrapper);
         var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
         var local = new ServiceConfiguration(identity.ServerId, identity.NodeId, "127.0.0.1", 1, "unused-by-database-probe", false, 1);
+        IReadOnlyList<StartupCheckResult>? verifiedChecks = null;
+        object? verifiedSelection = null;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -41,7 +50,9 @@ public sealed class BusinessRecoveryWorker(
                 var selection = FileRecoveryDeploymentSelection.ReadConfigured(key => configuration[key],
                     identity.ServerId, identity.NodeId, identity.ServerEpoch);
                 IReadOnlyList<StartupCheckResult> checks;
-                if (selection is { ConnectionReference: "ExamRecovery" })
+                if (verifiedChecks is not null && Equals(verifiedSelection, selection))
+                    checks = verifiedChecks;
+                else if (selection is { ConnectionReference: "ExamRecovery" })
                 {
                     var working = new RecoveryWorkingCopy(selection.RequestId, selection.ActorId, selection.BackupId,
                         selection.WorkingDirectory, selection.WorkingDirectory, timeProvider.GetUtcNow());
@@ -66,6 +77,10 @@ public sealed class BusinessRecoveryWorker(
                         identity.NodeId, identity.ServerEpoch) != selection) throw new IOException("恢复部署选择发生变化。");
                 }
                 else checks = await probe.RunAsync(local, stoppingToken);
+                // A standby cannot open business writes. Recheck that small authority query,
+                // without rescanning every examination and submission after startup succeeded.
+                if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites))
+                { verifiedChecks = checks; verifiedSelection = selection; }
                 if (managedConfiguration is not null)
                     checks = checks.Append(await managedConfiguration.CheckProtectionAsync(source, stoppingToken)).ToArray();
                 guard.Observe(checks, timeProvider.GetUtcNow());

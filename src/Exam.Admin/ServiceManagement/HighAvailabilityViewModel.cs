@@ -213,6 +213,9 @@ public sealed partial class ServiceManagementViewModel
         _protectionEvidence = new(target.Key, state.ServerEpoch, state.Version, time, _lastDegraded);
         ProtectionText = status.SynchronousProtectionVerified
             ? "双节点保护正常：数据库、试题资源与最新持久确认已同步。"
+            : state.Nodes.Count == 2 && state.Nodes.Values.All(node => node.Reachable)
+                ? (state.ActiveNodeId == target.NodeId ? "" : "当前为备用节点。") +
+                    "主备数据库已连接；双侧持久确认尚未通过，当前按主机可靠保存继续业务。"
             : state.ActiveNodeId == target.NodeId
                 ? "单节点运行：本机可靠保存后即可继续业务，复制恢复后自动补齐；当前新数据可能只有一份。"
                 : "当前为备用节点。原主故障时，请确认原主已断电或隔离全部业务网络，再点击“接管为主服务器”。";

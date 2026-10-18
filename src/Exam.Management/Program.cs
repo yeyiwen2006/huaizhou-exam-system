@@ -73,7 +73,10 @@ public static class ManagementEntryPoint
             };
             var journal = new FileManagementOperationStore(Required("Management:OperationDirectory"));
             return new(serverId, nodeId, new PostgresHighAvailabilityManagementPlatform(options,
-                provider.GetRequiredService<HttpClient>(), recordProbeFailure: (observedNode, error) =>
+                provider.GetRequiredService<HttpClient>(), localMaterials: new RunningBusinessMaterialProbe(
+                    provider.GetRequiredService<HttpClient>(), new Uri(nodes[nodeId].BusinessHttpsUrl),
+                    serverId, nodeId, CurrentEpoch, () => configuration["Confirmation:PeerToken"] ?? ""),
+                recordProbeFailure: (observedNode, error) =>
                 {
                     var kind = error is TimeoutException or Npgsql.NpgsqlException { InnerException: TimeoutException } ? "Timeout" :
                         error is Npgsql.PostgresException { SqlState: "28P01" or "28000" } ? "AuthenticationFailed" : "Unavailable";

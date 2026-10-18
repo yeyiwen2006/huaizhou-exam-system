@@ -385,7 +385,7 @@ public sealed partial class ServiceManagementViewModel
         BusinessServiceStatus.Stopped => "服务器已停止",
         BusinessServiceStatus.Faulted => "服务器程序运行异常",
         BusinessServiceStatus.Running when status.Readiness == BusinessReadiness.Ready => "服务器程序正常运行",
-        BusinessServiceStatus.Running when status.Readiness == BusinessReadiness.NotReady => "服务器程序运行异常",
+        BusinessServiceStatus.Running when status.Readiness == BusinessReadiness.NotReady => "服务器程序已启动，业务尚未就绪",
         _ => "服务器程序状态未确认"
     };
     private string? GetNodeProcessStatusText(string nodeId)
@@ -394,7 +394,11 @@ public sealed partial class ServiceManagementViewModel
         if (target is null) return "管理状态待查询";
         if (!_nodeStatuses.TryGetValue(target.Key, out var value) || value.Status is null) return "管理状态待查询";
         var fresh = !value.Unavailable && _time.GetUtcNow() - value.ObservedAt < TimeSpan.FromSeconds(30);
-        return fresh ? ProcessStatusText(value.Status) :
+        var standby = fresh && value.Status is { ProcessStatus: BusinessServiceStatus.Running, Readiness: BusinessReadiness.NotReady } &&
+            _displayState?.Nodes.GetValueOrDefault(nodeId) is { Role: DeploymentNodeRole.Standby,
+                Reachable: true, DatabaseInRecovery: true, KeyMaterialReady: true, CertificateReady: true } &&
+            Nodes.Any(row => row.NodeId == nodeId && row.IsCurrent);
+        return standby ? "服务器程序已启动（备机待命）" : fresh ? ProcessStatusText(value.Status) :
             $"上次程序状态：{ProcessStatusText(value.Status)}；当前未核实（{value.ObservedAt.ToOffset(TimeSpan.FromHours(8)):HH:mm:ss}）";
     }
     private void MarkNodeSessionUnavailable(IManagementConnection connection, bool unauthorized)

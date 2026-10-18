@@ -19,14 +19,12 @@ public static class HighAvailabilityDeployment
     public static async Task<HighAvailabilityMaterialProof> ReadMaterialsAsync(HttpContext context, IConfiguration configuration)
     {
         var identity = configuration.GetSection(ServerIdentityOptions.SectionName).Get<ServerIdentityOptions>() ?? new();
-        var resources = FileRecoveryDeploymentSelection.ResolveResources(k => configuration[k], identity.ServerId, identity.NodeId, identity.ServerEpoch) ?? "";
-        var connection = FileRecoveryDeploymentSelection.ResolveConnection(k => configuration[k], identity.ServerId, identity.NodeId, identity.ServerEpoch);
         var cert = new ServerCertificateSource(configuration["PackageSecurity:CertificateThumbprint"],
             configuration["PackageSecurity:CertificatePath"], configuration["PackageSecurity:CertificatePassword"]);
-        var service = new ServiceConfiguration(identity.ServerId, identity.NodeId, "127.0.0.1", 1, resources, true, 1);
+        var service = new ServiceConfiguration(identity.ServerId, identity.NodeId, "127.0.0.1", 1, "startup-snapshot", true, 1);
         var certificate = await new NodeCertificateStartupReadinessProbe(cert).RunAsync(service, context.RequestAborted);
-        var keys = await new ConfiguredRecoveryReadinessProbe(connection, cert).RunAsync(service, context.RequestAborted);
-        return new(identity.ServerId, identity.NodeId, identity.ServerEpoch, keys.Count > 0 && keys.All(c => c.Passed || !c.BlocksWrites),
+        var startup = context.RequestServices.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
+        return new(identity.ServerId, identity.NodeId, identity.ServerEpoch, startup.MaterialsReady,
             certificate.Count > 0 && certificate.All(c => c.Passed || !c.BlocksWrites), DateTimeOffset.UtcNow);
     }
 }
