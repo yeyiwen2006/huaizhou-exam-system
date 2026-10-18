@@ -167,7 +167,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         if (session is not null && _businessSession?.Matches(session) == true) return;
         if (session is not null && _businessSession?.SameAuthentication(session) == true)
-        { _businessSession = session; return; }
+        { _businessSession = session; _ = FollowBusinessManagementAsync(session); return; }
         ResetSession();
         _businessSession = session;
         RestartBackupMonitoring();

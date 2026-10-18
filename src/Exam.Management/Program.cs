@@ -89,9 +89,12 @@ public static class ManagementEntryPoint
         builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>(),
             () => provider.GetRequiredService<DurableFailoverCoordinator>()));
         // 考务账号登录：以数据库为准，数据库不可用时按本机加密缓存核对。
-        builder.Services.AddSingleton(_ => new ManagementOperatorSessions(
+        builder.Services.AddSingleton(_ => new PeerBusinessSessionAuthenticator(SelectedConfiguration, serverId, nodeId, CurrentEpoch));
+        builder.Services.AddSingleton(provider => new ManagementOperatorSessions(
             () => FileRecoveryDeploymentSelection.ResolveConnection(SelectedConfiguration, serverId, nodeId, CurrentEpoch()),
-            configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache")));
+            configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache"),
+            authenticatePeerBusinessSession: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().AuthenticateAsync,
+            localBusinessSessionAllowed: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().LocalBusinessSessionAllowed));
         builder.Services.AddHostedService(_ => new AutomaticBackupWorker(configuration, SelectedConfiguration));
 
         ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)

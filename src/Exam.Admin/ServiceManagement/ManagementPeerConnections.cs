@@ -153,6 +153,10 @@ public sealed partial class ServiceManagementViewModel
         foreach (var target in targets)
             if (ReadPendingRequest(target) is { } pending) _knownPendingRequests[target.Key] = pending;
         var attempts = targets.Select(target => StartNodeAuthentication(target, authenticate, username)).ToList();
+        // The business client already verified the active node. A pending request on
+        // the isolated peer must not make that peer the page's current authority.
+        var preferred = Array.FindIndex(targets, target => target.NodeId == _businessSession?.NodeId);
+        if (preferred >= 0 && await attempts[preferred].WaitAsync(token) is { } active) return active;
         while (attempts.Count > 0)
         {
             var finished = await Task.WhenAny(attempts).WaitAsync(token);
@@ -174,6 +178,28 @@ public sealed partial class ServiceManagementViewModel
     {
         if (_connection is null) return;
         SetCurrentPendingRequest(ReadPendingRequest(_connection.Target));
+    }
+
+    private async Task FollowBusinessManagementAsync(AdminSessionSnapshot session)
+    {
+        if (!IsSignedIn || IsBusy || _routingConnection || _businessSession?.Matches(session) != true ||
+            session.NodeId is null || _connection?.Target.NodeId == session.NodeId) return;
+        var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == session.NodeId);
+        if (target is null) return;
+        var version = _managementSessionVersion;
+        _routingConnection = true;
+        try
+        {
+            var connection = await EnsureTargetSessionAsync(target, _lifetime.Token);
+            if (connection is null || _disposed || version != _managementSessionVersion ||
+                _businessSession?.Matches(session) != true || IsBusy) return;
+            SelectCurrentConnection(connection, ReadPendingRequest(target));
+            Message = "服务器管理已跟随当前活动节点，原节点的请求继续分别核对。";
+            await RefreshAsync();
+        }
+        catch (Exception)
+        { if (!_disposed && version == _managementSessionVersion) Message = "当前活动节点的管理连接暂不可用，原连接和请求继续保留。"; }
+        finally { if (version == _managementSessionVersion) { _routingConnection = false; StartPolling(); } }
     }
 
     private PendingManagementRequest? ReadPendingRequest(ManagementTarget target)

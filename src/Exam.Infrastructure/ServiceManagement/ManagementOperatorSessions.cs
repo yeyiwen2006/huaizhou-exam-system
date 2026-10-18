@@ -19,15 +19,21 @@ public sealed class ManagementOperatorSessions(
     string cachePath,
     TimeSpan? databaseTimeout = null,
     Func<CancellationToken, Task<IReadOnlyList<CachedOperatorCredential>>>? loadFromDatabase = null,
-    Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null)
+    Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null,
+    Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerBusinessSession = null,
+    Func<bool>? localBusinessSessionAllowed = null,
+    TimeProvider? time = null)
 {
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Huaizhou.Exam.Management.OperatorCache.v1");
-    private sealed record Session(AuthenticatedOperator Operator, CachedOperatorCredential Credential, DateTimeOffset VerifiedAt);
+    private sealed record Session(AuthenticatedOperator Operator, CachedOperatorCredential? Credential, DateTimeOffset VerifiedAt,
+        string? PeerBusinessToken = null);
     private readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, CachedOperatorCredential>? _onlineCredentials;
     private static readonly TimeSpan OfflineLifetime = TimeSpan.FromHours(24);
     private readonly SemaphoreSlim _cacheGate = new(1, 1);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemaphoreSlim _peerSessionGate = new(1, 1);
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     /// <summary>登录成功返回会话令牌；用户名或口令不对、账号未启用时返回 null。</summary>
     public async Task<(string Token, AuthenticatedOperator Operator)?> LoginAsync(string? username, string? password,
@@ -50,8 +56,18 @@ public sealed class ManagementOperatorSessions(
         if (string.IsNullOrWhiteSpace(token) || token.Length > 256) return null;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(databaseTimeout ?? TimeSpan.FromSeconds(5));
-        var account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token)
-            .ConfigureAwait(false);
+        AuthenticatedOperator? account = null;
+        if (localBusinessSessionAllowed?.Invoke() != false)
+            account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token)
+                .ConfigureAwait(false);
+        if (account is null && authenticatePeerBusinessSession is not null)
+        {
+            account = await authenticatePeerBusinessSession(token, cancellationToken).ConfigureAwait(false);
+            if (account is null) return null;
+            var managementToken = OperatorPasswordHasher.NewSessionToken();
+            _sessions[OperatorPasswordHasher.TokenDigest(managementToken)] = new(account, null, _time.GetUtcNow(), token);
+            return (managementToken, account);
+        }
         if (account is null) return null;
         var credentials = await TryRefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false);
         var match = credentials?.FirstOrDefault(item =>
@@ -73,7 +89,7 @@ public sealed class ManagementOperatorSessions(
         var digest = OperatorPasswordHasher.TokenDigest(token);
         if (!_sessions.TryGetValue(digest, out var session)) return null;
         var known = Volatile.Read(ref _onlineCredentials);
-        if (known is not null && (!known.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(session.Operator.Username), out var credential) ||
+        if (session.PeerBusinessToken is null && known is not null && (!known.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(session.Operator.Username), out var credential) ||
             credential != session.Credential))
         { _sessions.TryRemove(digest, out _); return null; }
         return session.Operator;
@@ -82,11 +98,27 @@ public sealed class ManagementOperatorSessions(
     public async Task<AuthenticatedOperator?> AuthenticateAsync(string? token, CancellationToken cancellationToken = default)
     {
         if (Authenticate(token) is null) return null;
+        var digest = OperatorPasswordHasher.TokenDigest(token!);
+        if (_sessions.TryGetValue(digest, out var delegated) && delegated.PeerBusinessToken is not null)
+        {
+            // A page refresh reuses this result. Only one lightweight authority read per minute,
+            // shared by concurrent requests; an isolated node never uses its stale account copy.
+            await _peerSessionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (!_sessions.TryGetValue(digest, out delegated)) return null;
+                if (_time.GetUtcNow() - delegated.VerifiedAt < TimeSpan.FromMinutes(1)) return delegated.Operator;
+                var verified = await authenticatePeerBusinessSession!(delegated.PeerBusinessToken!, cancellationToken).ConfigureAwait(false);
+                if (verified != delegated.Operator) { _sessions.TryRemove(digest, out _); return null; }
+                _sessions.TryUpdate(digest, delegated with { VerifiedAt = _time.GetUtcNow() }, delegated);
+                return verified;
+            }
+            finally { _peerSessionGate.Release(); }
+        }
         // Small account metadata only; never scan exam data or depend on the other node.
         var credentials = await TryRefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false);
         var account = Authenticate(token);
         if (account is null) return null;
-        var digest = OperatorPasswordHasher.TokenDigest(token!);
         if (!_sessions.TryGetValue(digest, out var session)) return null;
         if (credentials is not null) _sessions.TryUpdate(digest, session with { VerifiedAt = DateTimeOffset.UtcNow }, session);
         else if (DateTimeOffset.UtcNow - session.VerifiedAt > OfflineLifetime)
@@ -124,8 +156,8 @@ public sealed class ManagementOperatorSessions(
         var current = credentials.ToDictionary(item => Exam.Contracts.Operators.OperatorRules.Key(item.Username), StringComparer.Ordinal);
         Volatile.Write(ref _onlineCredentials, current);
         foreach (var pair in _sessions)
-            if (!current.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(pair.Value.Operator.Username), out var credential) ||
-                credential != pair.Value.Credential) _sessions.TryRemove(pair.Key, out _);
+            if (pair.Value.PeerBusinessToken is null && (!current.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(pair.Value.Operator.Username), out var credential) ||
+                credential != pair.Value.Credential)) _sessions.TryRemove(pair.Key, out _);
         try { await WriteCacheAsync(credentials, cancellationToken).ConfigureAwait(false); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
         {

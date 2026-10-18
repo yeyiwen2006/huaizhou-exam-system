@@ -75,14 +75,6 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         owner.SourceNodeId == plan.After.ActiveNodeId && owner.SystemIdentifier == plan.SystemIdentifier && owner.DatabaseName == plan.DatabaseName &&
         Path.GetFileName(directory) == owner.ContentHash && owner.SlotName == StagedPostgresNodeRebuilder.SlotName(Local.NodeId, Path.Combine(directory, Local.NodeId));
 
-    private async Task RetireAbortedSlotAsync(FailoverExecutionPlan plan, CancellationToken token)
-    {
-        var directory = RebuildSlot(plan);
-        var owner = DurableJsonFile.Read<SlotOwner>(OwnerPath(directory), 8192);
-        if (owner is null || owner.Retired || !OwnedByPlan(owner, plan, directory)) return;
-        await DropOwnedSlotAsync(owner, directory, StateSource(_options.Nodes[owner.SourceNodeId]), token);
-    }
-
     private static async Task DropOwnedSlotAsync(SlotOwner owner, string directory, NpgsqlDataSource source, CancellationToken token)
     {
         await using var identity = source.CreateCommand("SELECT system_identifier::text FROM pg_control_system()");

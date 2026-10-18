@@ -42,14 +42,12 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         }
         if (DirectoryIdentity(_options.PostgresDataDirectory) != progress.OldDatabaseIdentity ||
             DirectoryIdentity(Local.ResourcesDirectory) != progress.OldResourcesIdentity) return false;
-        var actual = await ReadAsync(_options.Nodes[plan.After.ActiveNodeId], token);
-        if (actual is null || actual.Value.Recovery || actual.Value.System != plan.SystemIdentifier ||
-            actual.Value.Database != plan.DatabaseName ||
-            !SameState(actual.Value.State, plan.Before) && !FailoverStateHistory.Covers(actual.Value.State, plan.After)) return false;
-        // Published authority and the quarantined preparation are retained. Nothing is
-        // rolled back to an older state and no old writable business host is restarted.
+        // Unchanged original directories and no running preparer prove installation
+        // never started. Closing this failed attempt neither changes authority nor
+        // starts business, and must not depend on reaching the source database.
         await SaveRebuildProgressAsync(progress with { Phase = "Aborted" }, token);
-        await RetireAbortedSlotAsync(plan, token);
+        // Keep the owned slot and preparation for audit. A later successful rebuild
+        // retires superseded slots after verifying its own receiver.
         return true;
     }
 

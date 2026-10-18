@@ -120,6 +120,8 @@ public sealed partial class ServiceManagementViewModel
             {
                 await Task.Delay(TimeSpan.FromSeconds(3), _time, polling.Token);
                 if (polling.IsCancellationRequested || !_active || !IsSignedIn || _connection is null) continue;
+                if (_businessSession is { } business) await FollowBusinessManagementAsync(business);
+                if (polling.IsCancellationRequested || _connection is null) continue;
                 var connection = _connection; var generation = _generation;
                 // A slow log or operation query must not starve the independent HA observation.
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(polling.Token, _lifetime.Token);
@@ -183,13 +185,7 @@ public sealed partial class ServiceManagementViewModel
 
     private bool CanVerifyHighAvailabilityTarget(ManagementOperationKind kind)
     {
-        if (kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
-            return CanIssueHighAvailability(kind);
-        // This permits only the target's own read-only verification. Final mutation gates
-        // still require fresh full evidence and the operator's isolation confirmation.
-        return SelectedNode is { } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
-            ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
-            IsHighAvailabilityTargetRoutable(selected.NodeId);
+        return CanIssueHighAvailability(kind);
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>
@@ -250,10 +246,10 @@ public sealed partial class ServiceManagementViewModel
             }
             _highestObservedServerEpoch = reported.ServerEpoch;
         }
-        if ((!RoleTransitionPending || completedRoleTransition) && status.VerifiedAt is { } verified &&
+        if ((_displayState is null || !RoleTransitionPending || completedRoleTransition) && status.VerifiedAt is { } verified &&
             _time.GetUtcNow() - verified < HighAvailabilityStatus.ObservationLifetime && verified <= _time.GetUtcNow().AddSeconds(5) &&
             status.State is { } display && (_displayState is null || _displayServerId != target.ServerId || display.ServerEpoch > _displayState.ServerEpoch ||
-            display.ServerEpoch == _displayState.ServerEpoch && (display.Version > _displayState.Version ||
+            display.ServerEpoch == _displayState.ServerEpoch && (_displayTargetKey != target.Key || display.Version > _displayState.Version ||
                 display.Version == _displayState.Version && (_displayVerifiedAt is null || status.VerifiedAt >= _displayVerifiedAt))))
         {
             _displayState = display; _displayServerId = target.ServerId; _displayTargetKey = target.Key; _displayVerifiedAt = status.VerifiedAt;

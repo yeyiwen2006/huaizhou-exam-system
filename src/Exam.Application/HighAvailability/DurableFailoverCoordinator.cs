@@ -123,12 +123,12 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
             plan.After.Version != plan.Before.Version + 1 ||
             !plan.After.Audit.Any(a => a.Action == Action(operation) && a.ActorId == operation.ActorId))
             throw new InvalidDataException("主备持久意图的请求绑定损坏。");
-        if (!await platform.ReconcileAsync(plan, token))
+        if (operation.Kind == ManagementOperationKind.Rebuild && await platform.VerifyFailedBeforeInstallationAsync(plan, token))
         {
-            if (!await platform.VerifyFailedBeforeInstallationAsync(plan, token)) return null;
             return operation with { Phase = ManagementOperationPhase.Failed, FailoverFailureVerified = true,
                 Error = new(ErrorCodes.ServiceRecovering, "重建准备已安全终结；已发布的权威状态、旧数据及审计保留。请刷新状态后发起新的重建请求。") };
         }
+        if (!await platform.ReconcileAsync(plan, token)) return null;
         return await CompletedAsync(operation, plan, token);
     }
 
