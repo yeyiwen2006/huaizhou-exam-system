@@ -9,10 +9,13 @@ public sealed class ProtectedRuntimeLogWriter
 {
     private const long MaximumBytes = 8 * 1024 * 1024;
     private readonly string _path;
+    private readonly string _source;
     private readonly object _gate = new();
 
-    public ProtectedRuntimeLogWriter(string path)
+    public ProtectedRuntimeLogWriter(string path, string source = "business")
     {
+        if (source is not ("business" or "management")) throw new ArgumentException("受保护日志来源无效。");
+        _source = source;
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("受保护日志路径无效。");
         _path = Path.GetFullPath(path);
         Check();
@@ -21,7 +24,7 @@ public sealed class ProtectedRuntimeLogWriter
     public void Write(string category, string level, int eventId)
     {
         if (level is not ("Warning" or "Error" or "Critical") || !ValidCategory(category)) return;
-        var entry = new ProtectedRuntimeLogEntry(DateTimeOffset.UtcNow, "business", level, category, eventId);
+        var entry = new ProtectedRuntimeLogEntry(DateTimeOffset.UtcNow, _source, level, category, eventId);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, JsonDefaults.Create());
         lock (_gate)
         {

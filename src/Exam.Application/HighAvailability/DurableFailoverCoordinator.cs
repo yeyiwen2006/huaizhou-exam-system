@@ -19,7 +19,7 @@ public interface IHighAvailabilityManagementPlatform
 
 /// <summary>Uses the same cross-process durable journal as local management. No production state lives in memory.</summary>
 public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
-    IHighAvailabilityManagementPlatform platform, IManagementOperationStore journal, IClock clock)
+    IHighAvailabilityManagementPlatform platform, IManagementOperationStore journal, IClock clock) : IDisposable
 {
     public static bool IsFailover(ManagementOperationKind kind) => kind is ManagementOperationKind.Takeover or
         ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect;
@@ -132,4 +132,5 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
     }
 
     public static string Action(ManagementOperation operation) => $"F02:{operation.Kind}:{operation.RequestId}";
+    public void Dispose() { if (platform is IDisposable disposable) disposable.Dispose(); }
 }

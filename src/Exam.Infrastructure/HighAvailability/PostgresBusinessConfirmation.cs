@@ -70,6 +70,9 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
     IDurableConfirmationPeer? peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _peerGate = new();
+    private CancellationTokenSource? _maintenancePeer;
+    private int _foregroundWaiters;
     private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
     private long _nextPeerAttempt;
     public async Task MaintainReplicationAsync(CancellationToken token)
@@ -77,9 +80,20 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         // Reuse the same content-and-change-verified inventory as business confirmation.
         // An unchanged maintenance tick must not hash and flush every resource again.
         if (peer is not null) await peer.SynchronizeResourcesAsync(resourcesDirectory, _resources.Read(), token);
-        await ConfirmAsync(token);
+        await ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: true);
     }
     public async Task ConfirmAsync(CancellationToken token)
+    {
+        // Background repair yields its network wait to a business request. Its longer
+        // peer deadline must not extend the foreground local-durability path.
+        lock (_peerGate) { _foregroundWaiters++; _maintenancePeer?.Cancel(); }
+        try { await ConfirmCoreAsync(token, TimeSpan.FromMilliseconds(750), maintenance: false); }
+        finally { lock (_peerGate) _foregroundWaiters--; }
+    }
+    public Task ConfirmReplicationAsync(CancellationToken token) =>
+        ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: false);
+
+    private async Task ConfirmCoreAsync(CancellationToken token, TimeSpan peerBudget, bool maintenance)
     {
         await _gate.WaitAsync(token);
         try
@@ -124,7 +138,13 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             if (peer is not null && Environment.TickCount64 >= Interlocked.Read(ref _nextPeerAttempt))
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(TimeSpan.FromMilliseconds(750));
+                deadline.CancelAfter(peerBudget);
+                if (maintenance)
+                    lock (_peerGate)
+                    {
+                        if (_foregroundWaiters != 0) deadline.Cancel();
+                        else _maintenancePeer = deadline;
+                    }
                 var dual = record with { Mode = ProtectionMode.SynchronousDualNode };
                 try
                 {
@@ -138,6 +158,10 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
                     // Only peer work is recoverable here. Local I/O, ownership, WAL and resource failures
                     // remain outside this catch and still refuse success.
                     Interlocked.Exchange(ref _nextPeerAttempt, Environment.TickCount64 + 3000);
+                }
+                finally
+                {
+                    if (maintenance) lock (_peerGate) _maintenancePeer = null;
                 }
             }
             token.ThrowIfCancellationRequested();

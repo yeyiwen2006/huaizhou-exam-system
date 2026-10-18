@@ -54,7 +54,7 @@ public static class ManagementEntryPoint
         var port = configuration.GetValue<int>("Management:HttpsPort");
         if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler
-            { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(5) });
+            { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(20) });
         builder.Services.AddSingleton<DurableFailoverCoordinator>(provider =>
         {
             var nodes = configuration.GetSection("HighAvailability:Nodes").GetChildren().ToDictionary(section => section.Key,
@@ -73,7 +73,13 @@ public static class ManagementEntryPoint
             };
             var journal = new FileManagementOperationStore(Required("Management:OperationDirectory"));
             return new(serverId, nodeId, new PostgresHighAvailabilityManagementPlatform(options,
-                provider.GetRequiredService<HttpClient>()), journal, new SystemClock());
+                provider.GetRequiredService<HttpClient>(), recordProbeFailure: (observedNode, error) =>
+                {
+                    var kind = error is TimeoutException or Npgsql.NpgsqlException { InnerException: TimeoutException } ? "Timeout" :
+                        error is Npgsql.PostgresException { SqlState: "28P01" or "28000" } ? "AuthenticationFailed" : "Unavailable";
+                    new ProtectedRuntimeLogWriter(Path.Combine(Required("Management:OperationDirectory"), "management-runtime.jsonl"), "management")
+                        .Write("Exam.Management.Database." + (observedNode == nodeId ? "Local." : "Peer.") + kind, "Error", 7002);
+                }), journal, new SystemClock());
         });
         builder.Services.AddSingleton(provider => CreateRuntime(provider.GetRequiredService<HttpClient>(),
             () => provider.GetRequiredService<DurableFailoverCoordinator>()));
@@ -85,6 +91,16 @@ public static class ManagementEntryPoint
 
         ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)
         {
+            var managementLog = Path.Combine(Required("Management:OperationDirectory"), "management-runtime.jsonl");
+            async Task<IReadOnlyList<ProtectedRuntimeLogEntry>> RuntimeLogs(int limit, CancellationToken token)
+            {
+                var entries = new List<ProtectedRuntimeLogEntry>();
+                foreach (var (path, source) in new[] { (Required("Management:ProtectedBusinessLogPath"), "business"), (managementLog, "management") })
+                    try { entries.AddRange(await ProtectedRuntimeLogReader.ReadAsync(path, source, limit, token)); }
+                    catch (FileNotFoundException) { }
+                if (entries.Count == 0) throw new FileNotFoundException("受保护日志尚不可用。");
+                return entries.OrderByDescending(entry => entry.Timestamp).Take(limit).ToArray();
+            }
             var process = new DeferredBusinessHost(() => OperatingSystem.IsLinux()
                 ? new SystemdBusinessHost(Required("Management:BusinessServiceName"))
                 : new WindowsServiceBusinessHost(Required("Management:BusinessServiceName")));
@@ -228,13 +244,15 @@ public static class ManagementEntryPoint
                 },
                 readAudit: (limit, token) => new FileManagementOperationStore(Required("Management:OperationDirectory"))
                     .ReadAuditAsync(limit, token),
-                readRuntimeLogs: (limit, token) => ProtectedRuntimeLogReader.ReadAsync(
-                    Required("Management:ProtectedBusinessLogPath"), "business", limit, token), failover: failover,
+                readRuntimeLogs: RuntimeLogs, failover: failover,
                 supportsAdvancedOperations: OperatingSystem.IsWindows(), checkReadinessOnStatus: true,
                 readBackupInfo: (directory, token) => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     "", "", Required("Backup:AllowedBackupRoot"), "", "", "", TimeSpan.FromSeconds(5)),
                     new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token))
             {
+                RecordFailure = (operation, error) => new ProtectedRuntimeLogWriter(managementLog, "management").Write(
+                    error.Message.Contains("pg_hba.conf", StringComparison.OrdinalIgnoreCase)
+                        ? "Exam.Management.Rebuild.PgHbaDenied" : "Exam.Management.Operation.Failed", "Error", 7001),
                 ReadAutomaticBackupStatus = token => AutomaticBackupStatusFile.ReadAsync(
                     configuration.GetValue<bool>("Backup:Automatic:Enabled"), SelectedConfiguration("Backup:Automatic:StateDirectory"), token)
             };

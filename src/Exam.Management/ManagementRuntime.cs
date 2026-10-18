@@ -32,6 +32,7 @@ public sealed class ManagementRuntime(
     public string ServerId { get; } = serverId;
     public string NodeId { get; } = nodeId;
     public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
+    public Action<ManagementOperation, Exception>? RecordFailure { get; init; }
     public Func<CancellationToken, Task<BackupMaintenanceStatus?>>? ReadAutomaticBackupStatus { get; init; }
     public async Task<BackupInfo> GetBackupInfoAsync(string sourceDirectory, CancellationToken token)
     {
@@ -83,7 +84,7 @@ public sealed class ManagementRuntime(
     private ManagementOperationRunner? _operations;
     public ManagementOperationRunner Operations
     {
-        get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync); }
+        get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync, RecordFailure); }
     }
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)

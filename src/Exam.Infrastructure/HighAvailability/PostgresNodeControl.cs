@@ -2,6 +2,8 @@ using Exam.Application.HighAvailability;
 using System.Security.Cryptography;
 using System.Text;
 using Exam.Contracts.HighAvailability;
+using Exam.Contracts.Common;
+using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 using Npgsql;
 
@@ -14,9 +16,10 @@ public sealed record PostgresNodeConnection(string NodeId, string ConnectionStri
 
 public sealed class PostgresNodeHealthProbe(
     IReadOnlyDictionary<string, PostgresNodeConnection> nodes,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null) : IDisposable
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _sources = new(StringComparer.Ordinal);
 
     public async Task<NodeState> ObserveAsync(
         string nodeId,
@@ -32,11 +35,14 @@ public sealed class PostgresNodeHealthProbe(
 
         try
         {
-            var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
-            { CommandTimeout = 5, Pooling = false };
-            settings.Timeout = Math.Clamp(settings.Timeout, 3, 15);
-            await using var connection = new NpgsqlConnection(settings.ConnectionString);
-            await connection.OpenAsync(cancellationToken);
+            var source = _sources.GetOrAdd(nodeId, _ => new Lazy<NpgsqlDataSource>(() =>
+            {
+                var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
+                { CommandTimeout = 5, Pooling = true, MinPoolSize = 0, MaxPoolSize = 2, ApplicationName = "Exam.Management.Health" };
+                settings.Timeout = Math.Clamp(settings.Timeout, 3, 15);
+                return NpgsqlDataSource.Create(settings.ConnectionString);
+            })).Value;
+            await using var connection = await source.OpenConnectionAsync(cancellationToken);
             const string sql = """
                 SELECT pg_is_in_recovery(),
                        CASE
@@ -46,7 +52,8 @@ public sealed class PostgresNodeHealthProbe(
                                pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
                            WHEN pg_is_in_recovery() THEN 9223372036854775807
                            ELSE 0
-                       END;
+                       END,
+                       EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE status='streaming');
                 """;
             await using var command = new NpgsqlCommand(sql, connection);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -61,7 +68,7 @@ public sealed class PostgresNodeHealthProbe(
                 replayLag,
                 keyMaterialReady,
                 certificateReady,
-                _timeProvider.GetUtcNow());
+                _timeProvider.GetUtcNow()) { ReplicationStreaming = inRecovery ? reader.GetBoolean(2) : null };
         }
         catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
         {
@@ -76,6 +83,9 @@ public sealed class PostgresNodeHealthProbe(
                 _timeProvider.GetUtcNow());
         }
     }
+
+    public void Dispose()
+    { foreach (var source in _sources.Values) if (source.IsValueCreated) source.Value.Dispose(); _sources.Clear(); }
 }
 
 public interface IPostgresNodeRebuilder
@@ -203,6 +213,9 @@ public sealed class StagedPostgresNodeRebuilder(
             cancellationToken);
         if (result.ExitCode != 0)
         {
+            if (result.StandardError.Contains("pg_hba.conf", StringComparison.OrdinalIgnoreCase))
+                throw new DomainRuleException(ErrorCodes.ReplicaUnavailable,
+                    "物理复制连接被 pg_hba.conf 规则拒绝，请核对复制账号及来源地址；原备库已保留。");
             throw new IOException($"备机重建基础备份失败：{result.StandardError.Trim()}");
         }
     }

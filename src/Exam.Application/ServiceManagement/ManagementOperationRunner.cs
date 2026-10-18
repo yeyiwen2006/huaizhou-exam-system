@@ -9,7 +9,8 @@ namespace Exam.Application.ServiceManagement;
 
 public sealed class ManagementOperationRunner(
     string serverId, string nodeId, IManagementOperationStore store, IClock clock,
-    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? reconcile = null)
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? reconcile = null,
+    Action<ManagementOperation, Exception>? recordFailure = null)
 {
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
 
@@ -76,6 +77,7 @@ public sealed class ManagementOperationRunner(
             catch (DomainRuleException error)
             {
                 await PreserveCheckpointAsync();
+                try { recordFailure?.Invoke(accepted, error); } catch { }
                 result = accepted with { Phase = accepted.Phase is ManagementOperationPhase.Staged or ManagementOperationPhase.NeedsVerification ||
                         accepted.FailoverPlan is not null || error.Code == ErrorCodes.PersistenceFailed
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
@@ -88,9 +90,11 @@ public sealed class ManagementOperationRunner(
                         ? ManagementOperationPhase.NeedsVerification : ManagementOperationPhase.Failed,
                     Error = new ApiError(ErrorCodes.InvalidInput, "管理请求字段无效。") };
             }
-            catch (Exception)
+            catch (Exception error)
             {
                 await PreserveCheckpointAsync();
+                try { recordFailure?.Invoke(accepted, error); }
+                catch { /* Diagnostic failure must not prevent the durable operation result. */ }
                 // Includes cancellation after acceptance. SCM/tools may have taken effect; never repeat automatically.
                 result = accepted with { Phase = kind == ManagementOperationKind.Checks
                         ? ManagementOperationPhase.Failed : ManagementOperationPhase.NeedsVerification,

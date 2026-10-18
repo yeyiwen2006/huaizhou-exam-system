@@ -30,7 +30,7 @@ public sealed record HighAvailabilityManagementOptions(string ServerId, string L
 }
 
 /// <summary>Actual PostgreSQL state, independent confirmation heads and configured local service controls.</summary>
-public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabilityManagementPlatform
+public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabilityManagementPlatform, IDisposable
 {
     private readonly HighAvailabilityManagementOptions _options;
     private readonly HttpClient _http;
@@ -39,13 +39,17 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
     private readonly IManagedBusinessHost _business, _postgres;
     private readonly TimeProvider _time;
     private readonly Action _verifyDeployment;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _stateSources = new(StringComparer.Ordinal);
+    private readonly PostgresNodeHealthProbe _healthProbe;
+    private readonly Action<string, Exception>? _recordProbeFailure;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _probeFailureTimes = new(StringComparer.Ordinal);
     private FailoverNodeDeployment Local => _options.Nodes[_options.LocalNodeId];
     private FailoverNodeDeployment Other => _options.Nodes.Values.Single(n => n.NodeId != _options.LocalNodeId);
 
     public PostgresHighAvailabilityManagementPlatform(HighAvailabilityManagementOptions options, HttpClient http,
         IStartupReadinessProbe? localMaterials = null, IExternalProcessRunner? processes = null,
         IManagedBusinessHost? business = null, IManagedBusinessHost? postgres = null, TimeProvider? time = null,
-        Action? verifyDeployment = null)
+        Action? verifyDeployment = null, Action<string, Exception>? recordProbeFailure = null)
     {
         if (options.Nodes.Count is < 1 or > 2 || !options.Nodes.ContainsKey(options.LocalNodeId) ||
             options.Nodes.Any(p => p.Key != p.Value.NodeId || string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 200 ||
@@ -60,6 +64,9 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         if (options.Nodes.Values.Select(Endpoint).Distinct().Count() != options.Nodes.Count)
             throw new ArgumentException("两个节点不能引用同一数据库监听端点。");
         _options = options; _http = http; _time = time ?? TimeProvider.System;
+        _recordProbeFailure = recordProbeFailure;
+        _healthProbe = new(options.Nodes.ToDictionary(pair => pair.Key,
+            pair => new PostgresNodeConnection(pair.Key, pair.Value.ConnectionString)), _time);
         _processes = processes ?? new ExternalProcessRunner();
         _business = business ?? new WindowsServiceBusinessHost(options.BusinessServiceName);
         _postgres = postgres ?? new WindowsServiceBusinessHost(options.PostgresServiceName, timeout: TimeSpan.FromMinutes(2));
@@ -79,7 +86,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
     {
         try
         {
-            await using var source = ManagementProbeConnection.Create(node.ConnectionString, 5);
+            var source = StateSource(node);
             var state = await new PostgresFailoverStateStore(source).LoadAsync(_options.ServerId, token);
             if (state is null || state.Nodes.Count != _options.Nodes.Count || !state.Nodes.Keys.Order().SequenceEqual(_options.Nodes.Keys.Order()) ||
                 state.ServerEpoch <= 0 || state.Version <= 0 || !Enum.IsDefined(state.ProtectionMode) ||
@@ -94,7 +101,26 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             return (state, row.GetBoolean(0), row.GetString(1), row.GetString(2), row.GetInt32(3));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return null; }
+        catch (Exception error)
+        {
+            var now = _time.GetUtcNow();
+            if (_recordProbeFailure is not null && (!_probeFailureTimes.TryGetValue(node.NodeId, out var prior) || now - prior >= TimeSpan.FromSeconds(30)))
+            {
+                _probeFailureTimes[node.NodeId] = now;
+                try { _recordProbeFailure(node.NodeId, error); } catch { }
+            }
+            return null;
+        }
+    }
+
+    private NpgsqlDataSource StateSource(FailoverNodeDeployment node) => _stateSources.GetOrAdd(node.NodeId,
+        _ => new Lazy<NpgsqlDataSource>(() => ManagementProbeConnection.Create(node.ConnectionString, 5))).Value;
+
+    public void Dispose()
+    {
+        _healthProbe.Dispose();
+        foreach (var source in _stateSources.Values) if (source.IsValueCreated) source.Value.Dispose();
+        _stateSources.Clear();
     }
 
     private string ConfirmationDirectory(FailoverNodeDeployment node, long epoch)
@@ -143,8 +169,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
                 [new("failover-state", false, "本机数据库主备状态不可读取。", true)]);
         var state = local.Value.State;
         var materials = await MaterialsAsync(Local, token);
-        var probe = new PostgresNodeHealthProbe(new Dictionary<string, PostgresNodeConnection>
-            { [Local.NodeId] = new(Local.NodeId, Local.ConnectionString) }, _time);
+        var probe = _healthProbe;
         var health = await probe.ObserveAsync(Local.NodeId, state.Nodes[Local.NodeId].Role,
             materials.Keys, materials.Certificate, token);
         var nodes = state.Nodes.ToDictionary(p => p.Key, p => p.Value with
@@ -160,8 +185,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var otherNode = _options.Nodes.Values.SingleOrDefault(n => n.NodeId != Local.NodeId);
         var localRead = ReadAsync(Local, token);
         var otherRead = otherNode is null ? null : ReadAsync(otherNode, token);
-        var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString));
-        var probe = new PostgresNodeHealthProbe(connections, _time);
+        var probe = _healthProbe;
         // Independent peer timeouts must not accumulate behind the local observation.
         var materialsTasks = _options.Nodes.Values.ToDictionary(n => n.NodeId, n => MaterialsAsync(n, token));
         var peerTasks = _options.Nodes.Values.Where(n => n.NodeId != Local.NodeId).ToDictionary(n => n.NodeId,
@@ -264,10 +288,10 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         var head = await RequireMatchingHeadsAsync(state, primary.NodeId, standby.NodeId, token);
         if (FileConfirmationStore.ResourcesDigest(Local.ResourcesDirectory) != head.Record.ResourcesDigest)
             throw new IOException("双节点资源未覆盖最新确认。");
-        await using var source = ManagementProbeConnection.Create(standby.ConnectionString, 5);
+        var source = StateSource(standby);
         await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, standby.NodeId, token,
             standby.ConnectionString, _options.PostgresBinDirectory);
-        await using var active = ManagementProbeConnection.Create(primary.ConnectionString, 5);
+        var active = StateSource(primary);
         await using var sync = active.CreateCommand("SELECT count(*) FROM pg_stat_replication WHERE application_name=$1 AND state='streaming'");
         sync.Parameters.AddWithValue(standby.NodeId);
         if ((long)(await sync.ExecuteScalarAsync(token) ?? 0L) != 1) throw new IOException("流复制未按配置节点生效。");
@@ -332,7 +356,29 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
             await PublishAsync(plan, token); await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token);
         }
         else if (plan.Kind == ManagementOperationKind.Rebuild)
-        { await _business.StopAsync(token); await PublishAsync(plan, token); await RebuildLocalAsync(plan, token); }
+        {
+            var wasRunning = _business.Status == BusinessServiceStatus.Running;
+            try { await _business.StopAsync(token); await PublishAsync(plan, token); await RebuildLocalAsync(plan, token); }
+            catch (Exception failure)
+            {
+                // Only an actual read-only database belonging to this plan may resume its listener.
+                // A writable old primary or a stopped/replaced database must remain stopped.
+                if (wasRunning && _postgres.Status == BusinessServiceStatus.Running)
+                {
+                    try
+                    {
+                        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        var actual = await ReadAsync(Local, recovery.Token);
+                        if (actual is { Recovery: true } && actual.Value.System == plan.SystemIdentifier &&
+                            actual.Value.Database == plan.DatabaseName && actual.Value.State.ActiveNodeId != Local.NodeId)
+                            await _business.StartAsync(recovery.Token);
+                    }
+                    catch (Exception restartFailure)
+                    { throw new AggregateException("重建失败，旧备机确认服务恢复也未完成。", failure, restartFailure); }
+                }
+                throw;
+            }
+        }
         else if (plan.Kind == ManagementOperationKind.Reprotect)
         { await PublishAsync(plan, token); await SetSynchronousAsync(true, plan, token); await ConfirmSynchronousAsync(plan, token); await SelectAsync(plan, token); }
         else throw new ArgumentException("主备计划类型无效。");
@@ -475,7 +521,7 @@ public sealed class PostgresHighAvailabilityManagementPlatform : IHighAvailabili
         using var confirmation = new PostgresBusinessConfirmation(source, Confirmation(primary, plan.After.ServerEpoch), _options.ServerId,
             primary.NodeId, standby.NodeId, plan.After.ServerEpoch, primary.ResourcesDirectory, peer,
             primary.ConnectionString, _options.PostgresBinDirectory);
-        await confirmation.ConfirmAsync(token);
+        await confirmation.ConfirmReplicationAsync(token);
         var head = Confirmation(primary, plan.After.ServerEpoch).Read();
         var independent = await peer.ReadAsync(token);
         if (head is not { Confirmed: true } || independent != head) throw new IOException("恢复保护尚无双侧最新持久确认。");

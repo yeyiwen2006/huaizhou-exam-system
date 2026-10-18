@@ -23,7 +23,11 @@ public sealed record NodeState(
     long ReplayLagBytes,
     bool KeyMaterialReady,
     bool CertificateReady,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ReplicationStreaming { get; init; }
+}
 
 public sealed record ServerDeploymentState(
     string ServerId,
