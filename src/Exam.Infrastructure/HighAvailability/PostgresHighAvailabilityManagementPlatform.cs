@@ -94,36 +94,44 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     private async Task<(ServerDeploymentState State, bool Recovery, string System, string Database, int Timeline)?> ReadAsync(
         FailoverNodeDeployment node, CancellationToken token)
     {
-        try
+        // A rebuilt database can close a pooled connection just before the next
+        // read. Retry a transient read once before publishing a connection event.
+        for (var attempt = 0; ; attempt++)
         {
-            var source = StateSource(node);
-            var state = await new PostgresFailoverStateStore(source).LoadAsync(_options.ServerId, token);
-            if (state is null || state.Nodes.Count != _options.Nodes.Count || !state.Nodes.Keys.Order().SequenceEqual(_options.Nodes.Keys.Order()) ||
-                state.ServerEpoch <= 0 || state.Version <= 0 || !Enum.IsDefined(state.ProtectionMode) ||
-                !state.Nodes.TryGetValue(state.ActiveNodeId, out var active) || active.Role != DeploymentNodeRole.Primary)
-                return null;
-            await using var command = source.CreateCommand("""
-                SELECT pg_is_in_recovery(),s.system_identifier::text,current_database(),p.timeline_id
-                FROM pg_control_system() s CROSS JOIN pg_control_checkpoint() p
-                """);
-            await using var row = await command.ExecuteReaderAsync(token);
-            if (!await row.ReadAsync(token)) return null;
-            return (state, row.GetBoolean(0), row.GetString(1), row.GetString(2), row.GetInt32(3));
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception error)
-        {
-            // Shutdown/startup rejects ordinary health reads while a controlled
-            // transition is in progress. The operation journal owns its outcome.
-            if (!ShouldRecordDatabaseFailure(error, node.NodeId == Local.NodeId &&
-                Volatile.Read(ref _localDatabaseTransition) > 0)) return null;
-            var now = _time.GetUtcNow();
-            if (_recordProbeFailure is not null && (!_probeFailureTimes.TryGetValue(node.NodeId, out var prior) || now - prior >= TimeSpan.FromSeconds(30)))
+            try
             {
-                _probeFailureTimes[node.NodeId] = now;
-                try { _recordProbeFailure(node.NodeId, error); } catch { }
+                var source = StateSource(node);
+                var state = await new PostgresFailoverStateStore(source).LoadAsync(_options.ServerId, token);
+                if (state is null || state.Nodes.Count != _options.Nodes.Count || !state.Nodes.Keys.Order().SequenceEqual(_options.Nodes.Keys.Order()) ||
+                    state.ServerEpoch <= 0 || state.Version <= 0 || !Enum.IsDefined(state.ProtectionMode) ||
+                    !state.Nodes.TryGetValue(state.ActiveNodeId, out var active) || active.Role != DeploymentNodeRole.Primary)
+                    return null;
+                await using var command = source.CreateCommand("""
+                    SELECT pg_is_in_recovery(),s.system_identifier::text,current_database(),p.timeline_id
+                    FROM pg_control_system() s CROSS JOIN pg_control_checkpoint() p
+                    """);
+                await using var row = await command.ExecuteReaderAsync(token);
+                if (!await row.ReadAsync(token)) return null;
+                return (state, row.GetBoolean(0), row.GetString(1), row.GetString(2), row.GetInt32(3));
             }
-            return null;
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (NpgsqlException error) when (attempt == 0 && error.IsTransient &&
+                ShouldRecordDatabaseFailure(error, node.NodeId == Local.NodeId && Volatile.Read(ref _localDatabaseTransition) > 0))
+            { await Task.Delay(TimeSpan.FromMilliseconds(250), _time, token); }
+            catch (Exception error)
+            {
+                // Shutdown/startup rejects ordinary health reads while a controlled
+                // transition is in progress. The operation journal owns its outcome.
+                if (!ShouldRecordDatabaseFailure(error, node.NodeId == Local.NodeId &&
+                    Volatile.Read(ref _localDatabaseTransition) > 0)) return null;
+                var now = _time.GetUtcNow();
+                if (_recordProbeFailure is not null && (!_probeFailureTimes.TryGetValue(node.NodeId, out var prior) || now - prior >= TimeSpan.FromSeconds(30)))
+                {
+                    _probeFailureTimes[node.NodeId] = now;
+                    try { _recordProbeFailure(node.NodeId, error); } catch { }
+                }
+                return null;
+            }
         }
     }
 
