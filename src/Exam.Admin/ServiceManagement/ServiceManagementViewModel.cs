@@ -12,7 +12,7 @@ namespace Exam.Admin.ServiceManagement;
 
 public sealed record ManagementConfirmation(string Title, string Body, bool Dangerous);
 public sealed record ManagementCheckRow(string Name, string Result, string WriteGate);
-public sealed record ManagementLogRow(string Time, string Source, string Kind, string Phase, string Code, string Identifier);
+public sealed record ManagementLogRow(string Time, string Source, string Kind, string Phase, string Code, string Identifier, string Node = "");
 
 public sealed partial class ServiceManagementViewModel : BindableBase, IDisposable
 {

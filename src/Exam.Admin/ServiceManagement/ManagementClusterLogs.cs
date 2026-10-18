@@ -23,10 +23,10 @@ public sealed partial class ServiceManagementViewModel
                 if (audit.Envelope is { Error: null, Result: { } entries })
                     _nodeAuditLogs[target.Key] = entries.Select(entry => new NodeLog(entry.AcceptedAt,
                         new(entry.AcceptedAt.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
-                            target.NodeId + " · 操作", KindText(entry.Kind), PhaseText(entry.Phase),
+                            "操作", KindText(entry.Kind), PhaseText(entry.Phase),
                             entry.ErrorCode is not null || entry.Phase == ManagementOperationPhase.Failed ? "未完成" :
                                 entry.Phase == ManagementOperationPhase.Completed ? "成功" : entry.Phase == ManagementOperationPhase.Canceled ? "已取消" : "—",
-                            entry.RequestId))).ToArray();
+                            entry.RequestId, target.NodeId))).ToArray();
             }
             catch { /* Retain this node's prior rows while other nodes continue refreshing. */ }
             try
@@ -36,8 +36,8 @@ public sealed partial class ServiceManagementViewModel
                 if (logs.Envelope is { Error: null, Result: { } entries })
                     _nodeRuntimeLogs[target.Key] = entries.Select(entry => new NodeLog(entry.Timestamp,
                         new(entry.Timestamp.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss"),
-                            target.NodeId + (entry.Source == "business" ? " · 业务服务" : " · 服务器管理"), "运行记录",
-                            entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, "—", entry.EventId.ToString()))).ToArray();
+                            entry.Source == "business" ? "业务服务" : "服务器管理", "运行记录",
+                            entry.Level switch { "Warning" => "警告", "Error" => "错误", _ => "严重错误" }, "—", entry.EventId.ToString(), target.NodeId))).ToArray();
             }
             catch { }
         }));
