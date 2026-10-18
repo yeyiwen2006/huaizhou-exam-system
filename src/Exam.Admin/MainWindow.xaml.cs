@@ -29,7 +29,7 @@ public partial class MainWindow : Window
         { Source = new Uri("pack://application:,,,/Exam.Desktop.Shared;component/Themes/Theme.xaml") });
         InitializeComponent();
         _viewModel.Monitoring.CollectionCompleted += OnCollectionCompleted;
-        _viewModel.Import.ConfirmPublicationAsync = message =>
+        _viewModel.ConfirmImportPublicationAsync = message =>
             Exam.Desktop.Shared.Controls.ConfirmDialog.ShowAsync(this, "确认正式发布试卷", message,
                 confirmText: "确认发布", cancelText: "取消", isDanger: true);
         _viewModel.Home.ChooseAddExamAsync = () => ExamArchiveDialogs.ShowAddAsync(this);

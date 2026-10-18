@@ -156,13 +156,6 @@
 
     <Grid>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" DataContext="{Binding Management, RelativeSource={RelativeSource AncestorType=Window}}">
-            <controls:Banner Level="Warning" Margin="12,8,12,4" Padding="12"
-                             IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
-            <controls:Banner Level="Warning" Margin="12,4,12,4" Padding="12"
-                             AutomationProperties.Name="自动备份与磁盘告警" AutomationProperties.LiveSetting="Polite"
-                             IsOpen="{Binding ShowAutomaticBackupWarning}" Message="{Binding AutomaticBackupText}"/>
-        </StackPanel>
         <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
@@ -200,7 +193,7 @@
                               Stroke="{DynamicResource Brush.Text.Secondary}" StrokeThickness="1.5" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding Connection.Status}" Style="{StaticResource CaptionText}" VerticalAlignment="Center" />
                         <Button Content="试卷导入中，查看进度" Style="{StaticResource Btn.Secondary}" Padding="12,0" Margin="16,0,0,0"
-                            Visibility="{Binding Import.IsChecking, Converter={StaticResource BoolToVis}}" Command="{Binding ShowImportProgressCommand}"/>
+                            Visibility="{Binding HasImportActivity, Converter={StaticResource BoolToVis}}" Command="{Binding ShowImportProgressCommand}"/>
                     </StackPanel>
                     <!-- 当前考试：进入某场考试或新建考试时显示，不在主页显示。 -->
                     <Border Grid.Row="2" Margin="-28,12,-28,-12" Padding="28,10"
@@ -829,10 +822,10 @@
                                     <DataGridTextColumn Header="连接状态" Binding="{Binding ConnectionStatus}" Width="90" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前考生" Binding="{Binding Candidate}" Width="110" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="班级" Binding="{Binding ClassText}" Width="75" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="SizeToCells" MinWidth="200" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="考试" Binding="{Binding ExamName}" Width="160" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="准考证号" Binding="{Binding AdmissionNo}" Width="145" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="考试" Binding="{Binding ExamName}" Width="*" MinWidth="215" IsReadOnly="True"/>
                                     <DataGridTextColumn Header="当前页面" Binding="{Binding Page}" Width="110" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="*" MinWidth="140" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="最后有效通信" Binding="{Binding LastSeen}" Width="140" MinWidth="140" IsReadOnly="True"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                             <WrapPanel Margin="0,12,0,0">

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Exam.Admin.Infrastructure;
 using Exam.Admin.Services;
 using Exam.Contracts.Common;
+using Exam.Contracts.HighAvailability;
 using Exam.Contracts.ServiceManagement;
 
 namespace Exam.Admin.ServiceManagement;
@@ -91,20 +92,28 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         get
         {
             if (string.IsNullOrWhiteSpace(Address) || string.IsNullOrWhiteSpace(ServerId) || string.IsNullOrWhiteSpace(NodeId)) return false;
-            try { new ManagementTarget(Address, ServerId, NodeId).Validate(); return true; }
+            try { CurrentTarget().Validate(); return true; }
             catch (ArgumentException) { return false; }
         }
     }
     public bool CanConfigureConnection => IsSignedOut && !IsBusy;
-    public bool CanLogin => CanConfigureConnection && HasConnectionConfiguration;
+    public bool CanLogin => CanEnterManagementCredentials && HasConnectionConfiguration;
     public string ConnectionStatus => !HasConnectionConfiguration
-        ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员，或导入部署人员提供的连接配置。"
+        ? "服务器管理连接尚未配置或配置无效，请联系系统部署人员核对部署配置。"
         : _businessSession is null ? "管理连接已配置；业务服务不可用时，可直接使用已启用的考务账号登录管理。"
         : IsSignedIn ? $"正在使用考务账号 {_businessSession.Username} 管理服务器。"
         : "连接已配置，将使用当前考务账号连接服务器管理。";
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string Message { get => _message; private set => SetProperty(ref _message, value); }
-    public string ServerStatusText { get => _serverStatus; private set => SetProperty(ref _serverStatus, value); }
+    public string ServerStatusText
+    {
+        get => _serverStatus;
+        private set
+        {
+            if (!SetProperty(ref _serverStatus, value)) return;
+            OnPropertyChanged(nameof(PrimaryServerStatusText)); OnPropertyChanged(nameof(StandbyServerStatusText));
+        }
+    }
     public string RequestIdToQuery { get => _requestIdToQuery; set { if (SetProperty(ref _requestIdToQuery, value)) QueryCommand.RaiseCanExecuteChanged(); } }
     public string BindAddress { get => _bind; set => SetProperty(ref _bind, value); }
     public string HttpsPort { get => _port; set => SetProperty(ref _port, value); }
@@ -120,13 +129,11 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string PendingText => _pending is null ? string.Empty : $"请求：{_pending.RequestId} · {KindText(_pending.Kind)} · 待查询处理状态";
     public PendingManagementRequest? Pending => _pending;
     public ManagementOperation? Operation => _operation;
-    public bool IsSignedIn { get => _signedIn; private set { if (SetProperty(ref _signedIn, value)) { OnPropertyChanged(nameof(IsSignedOut)); OnPropertyChanged(nameof(ShowProtectionWarning)); UpdateCommands(); } } }
+    public bool IsSignedIn { get => _signedIn; private set { if (SetProperty(ref _signedIn, value)) { OnPropertyChanged(nameof(IsSignedOut)); OnPropertyChanged(nameof(ShowManagementLogin)); OnPropertyChanged(nameof(ShowProtectionWarning)); UpdateCommands(); } } }
     public bool IsSignedOut => !IsSignedIn;
     public bool IsBusy { get => _busy; private set { if (SetProperty(ref _busy, value)) UpdateCommands(); } }
     public bool CanResumeRestore { get => _canResume; private set { if (SetProperty(ref _canResume, value)) UpdateCommands(); } }
-    public string TargetText => _connection is not null || HasConnectionConfiguration
-        ? $"当前管理服务器：{_connection?.Target.Address ?? Address} · {_connection?.Target.NodeId ?? NodeId}"
-        : "服务器管理连接待配置";
+    public string TargetText => ManagedServersText;
     public ObservableCollection<ManagementCheckRow> Checks { get; } = [];
     public ObservableCollection<ManagementLogRow> Logs { get; } = [];
     public AsyncRelayCommand RefreshCommand { get; }
@@ -144,7 +151,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public RelayCommand CancelWaitCommand { get; }
     public RelayCommand SaveConnectionCommand { get; }
     private AsyncRelayCommand OperationCommand(ManagementOperationKind kind) =>
-        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && _pending is null && CanIssueHighAvailability(kind), OnError);
+        new(() => RequestAsync(kind), () => IsSignedIn && !IsBusy && !HasUnresolvedManagementRequests && CanIssueHighAvailability(kind), OnError);
 
     public void Activate()
     {
@@ -172,20 +179,21 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (_disposed || IsBusy || _businessSession is not { } session || !HasConnectionConfiguration) return;
         ResetSession();
         if (session.ServerId != ServerId.Trim())
-        { Message = "管理连接与当前考务会话不属于同一考试系统，请导入对应服务器的连接配置。"; return; }
-        var target = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
-        var connection = _factory(target); var generation = _generation;
-        _connection = connection; IsBusy = true;
+        { Message = "管理连接与当前考务会话不属于同一考试系统，请联系部署人员核对主备连接配置。"; return; }
+        var target = CurrentTarget(); var generation = _generation;
+        IsBusy = true;
         try
         {
-            await connection.UseBusinessSessionAsync(session, _lifetime.Token);
-            if (!Current(connection, generation) || _businessSession?.Matches(session) != true) return;
-            _pending = _store.Load(target); LoadProtectionWarning(target); _settings?.Save(target);
-            IsSignedIn = true; Message = "已使用当前考务账号连接服务器管理。";
-            if (_pending is { } pending) { _lastRequestId = pending.RequestId; RequestIdToQuery = pending.RequestId; }
-            NotifyPending(); OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConnectionStatus));
+            var connection = await ConnectTargetsAsync(target,
+                (client, token) => client.UseBusinessSessionAsync(session, token), session.Username, _lifetime.Token);
+            if (connection is null || _disposed || generation != _generation || _businessSession?.Matches(session) != true) return;
+            _connection = connection;
+            LoadCurrentPendingRequest(); LoadProtectionWarning(connection.Target); _settings?.Save(target);
+            IsSignedIn = true; RestartBackupMonitoring(); Message = "已使用当前考务账号连接服务器管理。";
+            OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConnectionStatus));
         }
-        catch { if (Current(connection, generation)) ResetSession(); throw; }
+        catch (Exception) when (generation != _generation || _disposed) { return; }
+        catch { ResetSession(); throw; }
         finally { if (generation == _generation) IsBusy = false; }
         if (IsSignedIn) await RefreshAsync();
         StartPolling();
@@ -203,28 +211,25 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task LoginAsync(string password)
     {
         if (_disposed || IsBusy) return;
+        if (_peerLoginTarget is not null) { await LoginPendingPeerAsync(password); return; }
         if (!CanLogin) { Message = ConnectionStatus; return; }
         ResetSession();
         var generation = _generation;
-        var target = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
-        target.Validate();
-        var connection = _factory(target);
-        _connection = connection;
+        var target = CurrentTarget(); target.Validate();
+        var username = Username;
         IsBusy = true;
         try
         {
-            await connection.LoginAsync(Username, password, _lifetime.Token);
-            if (!Current(connection, generation)) return;
-            // Read before allowing writes. A damaged pending file blocks this node instead of silently losing its request.
-            _pending = _store.Load(target);
-            if (_pending is { } pending) { _lastRequestId = pending.RequestId; RequestIdToQuery = pending.RequestId; }
-            LoadProtectionWarning(target);
-            _settings?.Save(target);
-            IsSignedIn = true;
-            Message = "已建立独立管理会话。";
-            NotifyPending(); OnPropertyChanged(nameof(TargetText));
+            var connection = await ConnectTargetsAsync(target,
+                (client, token) => client.LoginAsync(username, password, token), username, _lifetime.Token);
+            if (connection is null || _disposed || generation != _generation) return;
+            _connection = connection;
+            LoadCurrentPendingRequest(); LoadProtectionWarning(connection.Target); _settings?.Save(target);
+            IsSignedIn = true; RestartBackupMonitoring(); Message = "已建立独立管理会话。";
+            OnPropertyChanged(nameof(TargetText));
         }
-        catch { if (Current(connection, generation)) ResetSession(); throw; }
+        catch (Exception) when (generation != _generation || _disposed) { return; }
+        catch { ResetSession(); throw; }
         finally { if (generation == _generation) IsBusy = false; }
         if (IsSignedIn) await RefreshAsync();
         StartPolling();
@@ -232,13 +237,17 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public async Task LogoutAsync()
     {
-        var old = _connection;
-        ResetSession(dispose: false);
+        var old = ResetSession(dispose: false);
+        var version = _managementSessionVersion;
         Message = "服务器管理会话已清除。";
-        if (old is null) return;
-        try { using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20)); await old.LogoutAsync(deadline.Token); }
-        catch { Message = "本机会话已清除；服务端撤销未确认，管理宿主重启也会使旧会话失效。"; }
-        finally { old.Dispose(); }
+        if (old.Length == 0) return;
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await Task.WhenAll(old.Select(connection => connection.LogoutAsync(deadline.Token).WaitAsync(deadline.Token)));
+        }
+        catch { if (version == _managementSessionVersion) Message = "本机会话已清除；部分节点的服务端撤销未确认，管理宿主重启也会使旧会话失效。"; }
+        finally { foreach (var connection in old) connection.Dispose(); }
     }
 
     public async Task RefreshAsync()
@@ -246,20 +255,25 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (!IsSignedIn || _connection is null || _readBusy) return;
         var connection = _connection; var generation = _generation;
         using var reads = BeginRead();
+        StartHighAvailabilityPolling();
+        var availabilityRead = ObserveHighAvailabilityAsync(connection, generation, reads.Token);
+        var statusSequence = BeginNodeStatusObservation(connection.Target);
+        _ = RefreshPeerStatusAsync(force: true);
+        var statusApplied = false;
         Message = "正在刷新状态与日志…";
         try
         {
             var status = await connection.StatusAsync(reads.Token);
             if (reads.IsCancellationRequested) return;
             if (!Accept(connection, generation, status.IsUnauthorized)) return;
-            if (status.Envelope.Error is not null) { MarkUnknown(); Message = SafeError(status.StatusCode); return; }
+            if (status.Envelope.Error is not null) { MarkNodeStatusUnavailable(connection.Target, statusSequence); ServerStatusText = "服务器程序状态未确认"; Message = SafeError(status.StatusCode); return; }
             var value = status.Envelope.Result ?? throw new System.IO.InvalidDataException();
             if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null)
                 throw new System.IO.InvalidDataException();
-            ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch);
-            var availability = await connection.HighAvailabilityAsync(reads.Token);
-            if (reads.IsCancellationRequested || !Accept(connection, generation, availability.IsUnauthorized)) return;
-            ApplyHighAvailabilityReply(availability);
+            ApplyStatus(value, status.Envelope.EpochVerified, status.Envelope.ServerEpoch, statusSequence);
+            statusApplied = true;
+            await availabilityRead;
+            if (reads.IsCancellationRequested || !Current(connection, generation)) return;
             // Preserve a user's form, including after a conflict or pending write. Explicit reload is separate.
             if (_configurationVersion is null && _pending?.Kind != ManagementOperationKind.Configure && value.Configuration is not null)
                 LoadConfiguration(value.Configuration);
@@ -294,13 +308,18 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         {
             if (Current(connection, generation) && ReferenceEquals(_reads, reads))
             {
-                MarkUnknown();
+                if (!statusApplied) { MarkNodeStatusUnavailable(connection.Target, statusSequence); ServerStatusText = "服务器程序状态未确认"; }
                 // A transport timeout does not cancel our token. Only the cancel command reports user cancellation.
                 if (!reads.IsCancellationRequested) Message = "刷新状态与日志超时，请检查连接后重试。";
             }
         }
-        catch { if (Current(connection, generation)) MarkUnknown(); throw; }
-        finally { EndRead(reads); }
+        catch { if (Current(connection, generation) && !statusApplied) { MarkNodeStatusUnavailable(connection.Target, statusSequence); ServerStatusText = "服务器程序状态未确认"; } throw; }
+        finally
+        {
+            // Even a failed status or log request must observe the independent HA task.
+            try { await availabilityRead; } catch { }
+            EndRead(reads);
+        }
     }
 
     public async Task ReloadConfigurationAsync()
@@ -313,7 +332,9 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
 
     public async Task RequestAsync(ManagementOperationKind kind)
     {
-        if (!IsSignedIn || _connection?.Actor is not { } actor || IsBusy || _pending is not null) return;
+        if (!IsSignedIn || _connection is null || IsBusy || HasUnresolvedManagementRequests) return;
+        if (kind == ManagementOperationKind.Takeover && !await RouteTakeoverToSelectedNodeAsync()) return;
+        if (_connection?.Actor is not { } actor || !IsSignedIn || IsBusy || HasUnresolvedManagementRequests) return;
         var connection = _connection; var generation = _generation;
         var id = Guid.NewGuid().ToString("N");
         IsBusy = true; // One gate covers all writes, including a confirmation dialog.
@@ -325,14 +346,42 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 backup = await ReadRestoreBackupAsync(connection, generation);
                 if (backup is null) return;
             }
-            var body = BuildBody(kind, connection.Target, actor, id, backup);
+            IsolationEvidence? isolation = null;
+            if (kind == ManagementOperationKind.Takeover)
+            {
+                if (!CanIssueHighAvailability(kind) || _availability?.State is not { } before)
+                    throw new ArgumentException("请刷新主备状态后选择可用备机。");
+                var targetNode = HighAvailabilityTarget.Trim();
+                var note = HighAvailabilityReason.Trim();
+                if (note.Length > 500) throw new ArgumentException("备注最多500字。");
+                var confirmationText = $"准备变为主服务器的节点：{targetNode}\n当前主机：{before.ActiveNodeId}\n" +
+                    "确认表示你已在现场将当前主机的全部业务网络隔离，且会在恢复处理完成前保持隔离。\n" +
+                    "系统将记录本次隔离确认，并提升所选备机、启动业务服务。" +
+                    (note.Length == 0 ? "" : $"\n备注：{note}");
+                if (!await ConfirmAsync(new("确认隔离旧主并接管", confirmationText, true))) return;
+                if (!Current(connection, generation) || !IsSignedIn) return;
+                // A human may need more than the proof lifetime to confirm. Re-read the selected node,
+                // and require another confirmation if the active node, epoch or selection changed.
+                await ObserveHighAvailabilityAsync(connection, generation, _lifetime.Token);
+                if (!Current(connection, generation) || _availability?.State is not { } after ||
+                    after.ActiveNodeId != before.ActiveNodeId || after.ServerEpoch != before.ServerEpoch ||
+                    after.Version != before.Version || HighAvailabilityTarget.Trim() != targetNode ||
+                    HighAvailabilityReason.Trim() != note || !CanIssueHighAvailability(kind))
+                {
+                    Message = "主备状态或本次目标已变化，请核对后重新发起接管。";
+                    return;
+                }
+                isolation = new(before.ActiveNodeId, false, true, actor, "考务员通过接管确认对话，确认旧主全部业务网络已隔离并将保持隔离。");
+            }
+            var body = BuildBody(kind, connection.Target, actor, id, backup, isolation);
             var request = PendingManagementRequest.Create(connection.Target, actor, kind, id, body);
             var confirmation = kind == ManagementOperationKind.Restore
                 ? new ManagementConfirmation("确认按此备份恢复", RestoreConfirmationBody(request, backup!), true)
                 : new ManagementConfirmation("确认" + KindText(kind), ConfirmationBody(kind, request), kind is not ManagementOperationKind.Checks);
-            if (!await ConfirmAsync(confirmation)) return;
+            if (kind != ManagementOperationKind.Takeover && !await ConfirmAsync(confirmation)) return;
             if (!Current(connection, generation) || !IsSignedIn) return;
             _store.Save(request); // Failure here must prevent network side effects.
+            _knownPendingRequests[request.Target.Key] = request;
             _pending = request; _lastRequestId = request.RequestId; RequestIdToQuery = request.RequestId; NotifyPending();
             if (kind == ManagementOperationKind.Restore) await ExecuteRestoreAsync(request, connection, generation);
             else
@@ -350,7 +399,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public async Task QueryAsync()
     {
         var id = string.IsNullOrWhiteSpace(RequestIdToQuery) ? _lastRequestId : RequestIdToQuery.Trim();
-        if (id.Length == 0) id = _pending?.RequestId ?? string.Empty;
+        if (id.Length == 0) id = _pending?.RequestId ?? _knownPendingRequests.Values.FirstOrDefault()?.RequestId ?? string.Empty;
+        if (!await RoutePendingQueryAsync(id)) return;
         await QueryRequestAsync(id);
     }
 
@@ -488,11 +538,12 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         {
             _polling?.Cancel();
             if (operation.Configuration is not null && operation.Phase == ManagementOperationPhase.Completed) LoadConfiguration(operation.Configuration);
-            _store.Clear(request); _pending = null; CanResumeRestore = false; NotifyPending();
+            _store.Clear(request); _knownPendingRequests.TryRemove(request.Target.Key, out _);
+            _pending = null; CanResumeRestore = false; LoadCurrentPendingRequest();
         }
     }
 
-    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null)
+    private string BuildBody(ManagementOperationKind kind, ManagementTarget target, string actor, string id, BackupInfo? backup = null, IsolationEvidence? confirmedIsolation = null)
     {
         object body = kind switch
         {
@@ -502,7 +553,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Restore => new RestoreRequest(id,
                 backup?.BackupId ?? throw new InvalidOperationException("备份信息尚未读取。"), backup.SourceDirectory, actor),
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
-                BuildHighAvailabilityRequest(kind, target, actor, id),
+                BuildHighAvailabilityRequest(kind, target, actor, id, confirmedIsolation),
             _ => new ManagementServiceRequest(id, target.ServerId, target.NodeId)
         };
         return JsonSerializer.Serialize(body, JsonDefaults.Create());
@@ -533,7 +584,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationKind.Backup => $"\n备份目录：{fields.GetProperty("destinationDirectory")}",
             ManagementOperationKind.Restore => $"\n备份：{fields.GetProperty("backupId")}\n来源：{fields.GetProperty("sourceDirectory")}",
             ManagementOperationKind.Takeover or ManagementOperationKind.Emergency or ManagementOperationKind.Rebuild or ManagementOperationKind.Reprotect =>
-                $"\n目标节点：{fields.GetProperty("targetNodeId")}\n原因：{fields.GetProperty("reason")}" +
+                $"\n目标节点：{fields.GetProperty("targetNodeId")}\n备注：{fields.GetProperty("reason")}" +
                 (kind == ManagementOperationKind.Takeover ? $"\n原主机：{fields.GetProperty("isolation").GetProperty("isolatedNodeId")}；断电确认：{YesNo(fields.GetProperty("isolation").GetProperty("hostPoweredOff").GetBoolean())}；业务网络隔离确认：{YesNo(fields.GetProperty("isolation").GetProperty("businessNetworkIsolated").GetBoolean())}" : ""),
             _ => string.Empty
         };
@@ -557,21 +608,11 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         BindAddress = value.BindAddress; HttpsPort = value.HttpsPort.ToString(CultureInfo.InvariantCulture); DataDirectory = value.DataDirectory;
         HighAvailabilityEnabled = value.HighAvailabilityEnabled; _configurationVersion = value.Version; OnPropertyChanged(nameof(ConfigurationVersionText));
     }
-    private void ApplyStatus(ManagementStatus value, bool verified, long? epoch)
+    private void ApplyStatus(ManagementStatus value, bool verified, long? epoch, long? observationSequence = null)
     {
+        if (_connection is null || !RememberNodeStatus(_connection.Target, value, observationSequence)) return;
         ApplyAutomaticBackupStatus(value.AutomaticBackup);
-        if (!Enum.IsDefined(value.ProcessStatus) || !Enum.IsDefined(value.Readiness) || value.Checks is null ||
-            value.Readiness == BusinessReadiness.Ready && (value.ProcessStatus != BusinessServiceStatus.Running ||
-                value.Checks.Count == 0 || value.Checks.Any(c => c.BlocksWrites && !c.Passed)))
-            throw new System.IO.InvalidDataException("业务就绪证据不一致。");
-        ServerStatusText = value.ProcessStatus switch
-        {
-            BusinessServiceStatus.Stopped => "服务器已停止",
-            BusinessServiceStatus.Faulted => "服务器程序运行异常",
-            BusinessServiceStatus.Running when value.Readiness == BusinessReadiness.Ready => "服务器程序正常运行",
-            BusinessServiceStatus.Running when value.Readiness == BusinessReadiness.NotReady => "服务器程序运行异常",
-            _ => "服务器程序状态未确认"
-        };
+        ServerStatusText = ProcessStatusText(value);
         SetChecks(value.Checks);
     }
     private void SetChecks(IReadOnlyList<StartupCheckResult> checks)
@@ -598,7 +639,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         if (!Current(connection, generation)) return false;
         if (!unauthorized) return true;
-        ResetSession(); Message = "管理会话已失效。原请求保留，请重新连接后查询处理状态。"; return false;
+        HandleUnauthorizedNode(connection); return false;
     }
     private CancellationTokenSource BeginRead()
     {
@@ -614,17 +655,20 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     private void StopWaiting()
     {
-        _reads?.Cancel(); _restoreProgress?.Cancel();
+        _reads?.Cancel(); _restoreProgress?.Cancel(); _routingCancellation?.Cancel();
         if (_restoreWriteInFlight is not null) RestoreText = RestoreStatus(_restoreOperation, false);
     }
-    private void ResetSession(bool dispose = true)
+    private IManagementConnection[] ResetSession(bool dispose = true)
     {
         _generation++; _lifetime.Cancel(); _lifetime.Dispose(); _lifetime = new(); _reads?.Cancel();
+        _backupMonitoring?.Cancel();
         _polling?.Cancel(); _availabilityPolling?.Cancel(); _restoreProgress?.Cancel(); _restoreWriteInFlight = null; _restoreOperation = null; RestoreText = string.Empty;
-        if (dispose) _connection?.Dispose(); _connection = null; IsSignedIn = false; IsBusy = false;
+        var released = ReleasePeerConnections(dispose);
+        _connection = null; IsSignedIn = false; IsBusy = false;
         _readBusy = false; _pending = null; _operation = null; _missingOriginal = false; CanResumeRestore = false;
         _configurationVersion = null; Checks.Clear(); Logs.Clear(); MarkUnknown(); NotifyPending();
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConfigurationVersionText));
+        return released;
     }
     private void MarkUnknown() { ServerStatusText = "服务器程序状态未确认"; MarkProtectionUnknown(); }
     private void StartPolling()
@@ -651,8 +695,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     }
     private void LoadSettings()
     {
-        try { if (_settings?.Load() is { } target) { Address = target.Address; ServerId = target.ServerId; NodeId = target.NodeId; } }
-        catch { Message = "管理连接配置不可读取，请联系系统部署人员，或重新导入连接配置。"; }
+        try { if (_settings?.Load() is { } target) RememberConfiguredTarget(target); }
+        catch { Message = "管理连接配置不可读取，请联系系统部署人员核对部署文件。"; }
     }
 
     public void ImportConnectionSettings(string path)
@@ -663,7 +707,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             var target = ManagementEndpointSettings.LoadFile(path);
             if (_settings is null) throw new InvalidOperationException("未配置连接记录目录。");
             _settings.Save(target);
-            Address = target.Address; ServerId = target.ServerId; NodeId = target.NodeId;
+            RememberConfiguredTarget(target);
             LoadProtectionWarning();
             Message = "连接配置已导入并保存。";
             if (_businessSession is not null && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
@@ -676,7 +720,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         try
         {
             if (!CanConfigureConnection || !HasConnectionConfiguration || _settings is null) return;
-            _settings.Save(new(Address.Trim(), ServerId.Trim(), NodeId.Trim()));
+            _settings.Save(CurrentTarget());
             LoadProtectionWarning();
             Message = "连接设置已保存，下次打开时自动使用。";
             if (_businessSession is not null && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
@@ -687,6 +731,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     private void ConnectionSettingsChanged()
     {
         RestartBackupMonitoring();
+        UpdateDisplayedNodes();
         if (!IsSignedIn) { _lastRequestId = string.Empty; RequestIdToQuery = string.Empty; OperationText = string.Empty; }
         OnPropertyChanged(nameof(HasConnectionConfiguration)); OnPropertyChanged(nameof(ConnectionStatus));
         OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(CanLogin));
@@ -704,7 +749,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                      QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
         CancelWaitCommand?.RaiseCanExecuteChanged();
         SaveConnectionCommand?.RaiseCanExecuteChanged();
-        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanConfigureConnection)); OnPropertyChanged(nameof(ConnectionStatus));
+        OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanEnterManagementCredentials));
+        OnPropertyChanged(nameof(CanConfigureConnection)); OnPropertyChanged(nameof(ConnectionStatus));
     }
     private static string SafeError(HttpStatusCode status) => status switch
     { HttpStatusCode.Conflict => "配置版本或请求内容冲突。表单已保留，请核对并重新确认", HttpStatusCode.Forbidden => "操作权限或操作者不一致",

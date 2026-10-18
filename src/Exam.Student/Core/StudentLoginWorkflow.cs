@@ -26,7 +26,7 @@ public sealed class StudentLoginWorkflow(DeviceStore store, IStudentApi api)
         var endpoint = ParseServerAddress(serverAddress);
         var host = DeviceStore.NormalizeHost(endpoint.Host);
         var port = endpoint.Port;
-        var record = await Task.Run(() => store.Load(host, port), ct);
+        var record = await Task.Run(() => store.LoadForLogin(host, port, ServerTrust.PublicEndpoints), ct);
         if (record is null)
         {
             record = new DeviceRecord($"dev-{Guid.NewGuid():N}", Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
@@ -57,7 +57,8 @@ public sealed class StudentLoginWorkflow(DeviceStore store, IStudentApi api)
             ServerId = envelope.ServerId, ServerEpoch = envelope.ServerEpoch,
             ClientNumber = number, Status = ActivationStatus.Active, ActivatedAt = result.Session.AuthenticatedAt,
             CredentialVersion = result.Device.CredentialVersion, ActiveNodeId = envelope.NodeId,
-            Topology = TrustedServerTopology.FromActivation(result.Device.Topology, record, envelope.ServerId, ServerTrust.PublicEndpoints),
+            Topology = TrustedServerTopology.FromActivation(result.Device.Topology, record, envelope.ServerId,
+                ServerTrust.PublicEndpoints, envelope.NodeId),
             PendingOperation = null, PendingOperationRequestId = null
         };
         await Task.Run(() => store.Save(record), ct);

@@ -30,9 +30,9 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
     {
         if (!IsFailover(operation.Kind) || request.ServerId != serverId || request.NodeId != nodeId ||
             request.ActorId != operation.ActorId || request.RequestId != operation.RequestId ||
-            string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length > 500 ||
+            request.Reason is null || request.Reason.Length > 500 ||
             string.IsNullOrWhiteSpace(request.TargetNodeId) || request.TargetNodeId.Length > 200)
-            throw new DomainRuleException(ErrorCodes.InvalidInput, "主备请求的目标、操作者或原因无效。");
+            throw new DomainRuleException(ErrorCodes.InvalidInput, "主备请求的目标、操作者或备注无效。");
         var observed = await platform.ObserveAsync(token);
         var before = observed.State;
         if (observed.ServerId != serverId || observed.NodeId != nodeId || before is null ||
@@ -54,7 +54,8 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
             case ManagementOperationKind.Takeover:
                 if (request.TargetNodeId != nodeId || target.Role != DeploymentNodeRole.Standby ||
                     request.Isolation is not { IsSufficient: true } isolation || isolation.IsolatedNodeId != active ||
-                    isolation.ConfirmedBy != operation.ActorId || isolation.Reason != request.Reason)
+                    isolation.ConfirmedBy != operation.ActorId ||
+                    string.IsNullOrWhiteSpace(isolation.Reason) || isolation.Reason.Length > 500)
                     throw new DomainRuleException(ErrorCodes.NotActiveServer, "须确认原主机断电或业务网络隔离，且仅可接管本机备节点。");
                 if (!target.Reachable || !target.DatabaseInRecovery || target.ReplayLagBytes != 0 ||
                     !target.KeyMaterialReady || !target.CertificateReady ||

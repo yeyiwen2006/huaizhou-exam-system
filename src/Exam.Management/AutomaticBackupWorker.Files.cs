@@ -205,7 +205,7 @@ public sealed partial class AutomaticBackupWorker
     [GeneratedRegex("^auto-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$", RegexOptions.CultureInvariant)]
     private static partial Regex AutomaticName();
 
-    private static async Task<Observation> Observe(NpgsqlConnection connection, CancellationToken token)
+    private async Task<Observation> Observe(NpgsqlConnection connection, CancellationToken token)
     {
         const string sql = """
             SELECT json_build_object(
@@ -214,8 +214,9 @@ public sealed partial class AutomaticBackupWorker
               'timeline', (SELECT timeline_id FROM pg_control_checkpoint()),
               'segmentBytes', pg_size_bytes(current_setting('wal_segment_size')),
               'lsn', CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn()::text ELSE pg_current_wal_lsn()::text END,
-              'serverId', (SELECT server_id FROM exam.server_state LIMIT 1),
-              'activeNodeId', (SELECT active_node_id FROM exam.server_state LIMIT 1),
+              'serverId', (SELECT server_id FROM exam.server_state WHERE server_id=$1),
+              'activeNodeId', (SELECT active_node_id FROM exam.server_state WHERE server_id=$1),
+              'serverEpoch', (SELECT server_epoch FROM exam.server_state WHERE server_id=$1),
               'archivingEnabled', current_setting('archive_mode') IN ('on', 'always')
                 AND (current_setting('archive_command') <> '' OR current_setting('archive_library') <> ''),
               'archiveFailure', EXISTS(SELECT 1 FROM pg_stat_archiver WHERE last_failed_time > COALESCE(last_archived_time, '-infinity')),
@@ -232,11 +233,12 @@ public sealed partial class AutomaticBackupWorker
             )::text;
             """;
         await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue(Required("Management:ServerId"));
         var json = (string?)await command.ExecuteScalarAsync(token) ?? throw new MaintenanceDeferred("无法读取数据库维护证据。");
         return JsonSerializer.Deserialize<Observation>(json, AutomaticBackupStatusFile.Json)
             ?? throw new MaintenanceDeferred("数据库维护证据无效。");
     }
     private sealed record Observation(bool Recovery, string SystemId, uint Timeline, ulong SegmentBytes, string Lsn,
-        string ServerId, string ActiveNodeId, bool ArchivingEnabled, bool ArchiveFailure, bool StandbyConnected,
+        string ServerId, string ActiveNodeId, long ServerEpoch, bool ArchivingEnabled, bool ArchiveFailure, bool StandbyConnected,
         int PhysicalSlots, bool SlotsHealthy, int NativeBackupsRunning, IReadOnlyList<string> RequiredPositions);
 }

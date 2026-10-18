@@ -75,15 +75,60 @@ public sealed class DeviceStore
                  (existing.PendingOperationRequestId is not null && record.PendingOperationRequestId is not null &&
                      (existing.PendingOperationRequestId != record.PendingOperationRequestId || existing.PendingOperation != record.PendingOperation)) ||
                  existing.ServerEpoch > record.ServerEpoch || existing.CredentialVersion > record.CredentialVersion ||
-                 existing.Topology is { } topology && (record.Topology is null || !topology.Equivalent(record.Topology))))
+                 existing.Topology is { } topology && (record.Topology is null || !record.Topology.Extends(topology))))
             {
                 throw new DeviceStoreException("设备身份或服务器身份与已有登记不一致，原记录已保留。请联系考务人员恢复。");
             }
 
             var records = document.Records.Where(item => EndpointKey(item.Host, item.Port) != endpoint).Append(record).ToArray();
+            EnsureDistinctEndpoints(records);
             Write(new DeviceDocument(1, endpoint, records));
             return true;
         });
+    }
+
+    public DeviceRecord? LoadForLogin(string host, int port, PublicServerEndpoints? publicEndpoints)
+    {
+        var address = new UriBuilder(Uri.UriSchemeHttps, NormalizeHost(host), port).Uri;
+        if (publicEndpoints is null || !publicEndpoints.Contains(address)) return Load(host, port);
+        publicEndpoints.Validate();
+        var endpoint = EndpointKey(host, port);
+        return Access(document =>
+        {
+            var exact = document.Records.SingleOrDefault(record => Endpoints(record).Contains(endpoint));
+            if (exact is not null && (exact.ServerId != publicEndpoints.ServerId || exact.Topology is null)) return exact;
+            var candidates = exact is not null ? new[] { exact } : document.Records.Where(record =>
+                record.ServerId == publicEndpoints.ServerId && record.Topology is not null).ToArray();
+            if (candidates.Length == 0) return null;
+            if (candidates.Length != 1)
+                throw new StudentIdentityException("该主备环境存在多份设备登记，不能自动替换，请联系考务人员核对。");
+            var saved = candidates[0];
+            // Only local operator configuration may change a public hostname. Preserve the
+            // same logical server, node/origin bindings, device credentials and certificate pins.
+            var topology = publicEndpoints.RebindSavedRoutes(saved.Topology!);
+            var originalNode = saved.Topology!.Nodes.Single(node =>
+                EndpointKey(node.Host, node.Port) == EndpointKey(saved.Host, saved.Port));
+            var mapped = topology.Nodes.Single(node => node.NodeId == originalNode.NodeId);
+            var updated = saved with { Host = mapped.Host, Port = mapped.Port, Topology = topology };
+            if (EndpointKey(saved.Host, saved.Port) == EndpointKey(updated.Host, updated.Port) &&
+                saved.Topology.Equivalent(topology)) return saved;
+            ValidateRecord(updated);
+            var records = document.Records.Where(record => !ReferenceEquals(record, saved)).Append(updated).ToArray();
+            EnsureDistinctEndpoints(records);
+            Write(new DeviceDocument(1, EndpointKey(updated.Host, updated.Port), records));
+            return updated;
+        });
+    }
+
+    private static IEnumerable<string> Endpoints(DeviceRecord record) =>
+        (record.Topology?.Nodes.Select(node => EndpointKey(node.Host, node.Port)) ?? Enumerable.Empty<string>())
+        .Append(EndpointKey(record.Host, record.Port)).Distinct(StringComparer.Ordinal);
+
+    private static void EnsureDistinctEndpoints(IReadOnlyList<DeviceRecord> records)
+    {
+        var endpoints = records.SelectMany(Endpoints).ToArray();
+        if (endpoints.Distinct(StringComparer.Ordinal).Count() != endpoints.Length)
+            throw new DeviceStoreException("可信服务器地址已属于另一份设备登记，原记录已保留。请联系考务人员核对。");
     }
 
     public static string NormalizeHost(string host)
@@ -123,6 +168,10 @@ public sealed class DeviceStore
                 return action(Read());
             }
             catch (DeviceStoreException)
+            {
+                throw;
+            }
+            catch (StudentIdentityException)
             {
                 throw;
             }

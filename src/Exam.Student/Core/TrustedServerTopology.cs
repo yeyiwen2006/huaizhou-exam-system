@@ -18,32 +18,72 @@ public sealed record TrustedServerNode(string Host, int Port, string NodeId, str
 public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<TrustedServerNode> Nodes)
 {
     public static TrustedServerTopology? FromActivation(ActivatedServerTopology? value, DeviceRecord record, string serverId,
-        PublicServerEndpoints? publicEndpoints = null)
+        PublicServerEndpoints? publicEndpoints = null, string? connectedNodeId = null)
     {
         if (value is null) return record.Topology;
         if (value.Nodes is null || value.Nodes.Any(node => node is null))
             throw new StudentIdentityException("主备信任信息不完整，不能替换设备登记。");
         var topology = new TrustedServerTopology(value.ServerId, value.Nodes.Select(node =>
-            new TrustedServerNode(node.Host, node.Port, node.NodeId, node.CertificateSha256)).ToArray());
+            new TrustedServerNode(node.Host, node.Port, node.NodeId,
+                ServerEndpointConfig.NormalizeThumbprint(node.CertificateSha256) ?? node.CertificateSha256)).ToArray());
         try { topology.Validate(); }
         catch (FormatException) { throw new StudentIdentityException("主备信任信息无效，原设备登记已保留。"); }
+        topology = topology with { Nodes = topology.Nodes.Select(node =>
+            node with { Host = DeviceStore.NormalizeHost(node.Host) }).ToArray() };
+        if (connectedNodeId is not null && !topology.Nodes.Any(node => node.NodeId == connectedNodeId))
+            throw new StudentIdentityException("登录响应的节点不在已核对的主备信息中，原登记已保留。");
         if (publicEndpoints is not null) topology = publicEndpoints.Apply(topology, record);
+        var registeredAddress = new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri;
+        if (record.Topology is { } saved)
+        {
+            // Public routes are already trusted local state. A response containing the origin
+            // addresses must not erase them when the deployment file is absent or refreshed.
+            topology = topology with { Nodes = topology.Nodes.Select(node =>
+            {
+                var previous = saved.Nodes.SingleOrDefault(item => item.NodeId == node.NodeId);
+                return previous is { UsesPublicHttps: true } && previous.OriginAddress == node.Address &&
+                    previous.CertificateSha256 == node.CertificateSha256 ? previous : node;
+            }).ToArray() };
+            if (topology.ServerId != saved.ServerId || topology.Nodes.Any(node =>
+                    saved.Nodes.Any(previous => (previous.NodeId == node.NodeId || previous.Address == node.Address) &&
+                        !SameNode(previous, node))))
+                throw new StudentIdentityException("主备节点身份或证书与原登记不一致，原记录已保留。");
+            // A temporarily single-node deployment need not remove an already trusted peer.
+            topology = topology with { Nodes = saved.Nodes.Concat(topology.Nodes.Where(node =>
+                !saved.Nodes.Any(previous => previous.NodeId == node.NodeId))).ToArray() };
+        }
+        else if (!topology.Nodes.Any(node => node.Address == registeredAddress) &&
+            connectedNodeId is not null && ServerTrust.PinnedCertificateThumbprint is null &&
+            Uri.CheckHostName(record.Host) == UriHostNameType.Dns)
+        {
+            // Only the user-selected endpoint of this successful standard-TLS connection may
+            // be an alias. Never learn another public route from a server response.
+            topology = topology with { Nodes = topology.Nodes.Select(node => node.NodeId == connectedNodeId
+                ? node with { Host = DeviceStore.NormalizeHost(record.Host), Port = record.Port,
+                    OriginHost = node.Host, OriginPort = node.Port }
+                : node).ToArray() };
+        }
+        try { topology.Validate(); }
+        catch (FormatException) { throw new StudentIdentityException("主备信任信息冲突，原设备登记已保留。"); }
         if (topology.ServerId != serverId ||
-            !topology.Nodes.Any(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri) ||
-            record.Topology is { } previous && !topology.Extends(previous))
+            !topology.Nodes.Any(node => node.Address == registeredAddress) ||
+            record.Topology is { } originalTopology && !topology.Extends(originalTopology))
             throw new StudentIdentityException("批准的主备信任信息与原设备登记不一致，原记录已保留。");
-        var original = topology.Nodes.Single(node => node.Address == new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri);
+        var original = topology.Nodes.Single(node => node.Address == registeredAddress);
         if (record.Topology is null && ServerTrust.PinnedCertificateThumbprint is { } pin && original.CertificateSha256 != pin)
             throw new StudentIdentityException("批准的证书指纹与已核对的激活连接不一致，原记录已保留。");
         return topology;
     }
 
     // An authenticated existing node may add the second pre-approved endpoint; existing pins and identities stay fixed.
-    private bool Extends(TrustedServerTopology other) => ServerId == other.ServerId &&
-        other.Nodes.All(node => Nodes.Contains(node));
+    public bool Extends(TrustedServerTopology other) => ServerId == other.ServerId &&
+        other.Nodes.All(node => Nodes.Any(candidate => SameNode(candidate, node)));
 
-    public bool Equivalent(TrustedServerTopology other) => ServerId == other.ServerId &&
-        Nodes.OrderBy(node => node.NodeId, StringComparer.Ordinal).SequenceEqual(other.Nodes.OrderBy(node => node.NodeId, StringComparer.Ordinal));
+    public bool Equivalent(TrustedServerTopology other) => Nodes.Count == other.Nodes.Count && Extends(other);
+
+    private static bool SameNode(TrustedServerNode left, TrustedServerNode right) =>
+        left.NodeId == right.NodeId && left.Address == right.Address &&
+        left.CertificateSha256 == right.CertificateSha256 && left.OriginAddress == right.OriginAddress;
 
     public void Validate()
     {

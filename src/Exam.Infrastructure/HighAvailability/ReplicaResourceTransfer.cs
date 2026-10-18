@@ -16,10 +16,16 @@ public sealed partial class HttpConfirmationPeer
 {
     private DurableConfirmation? _latestRequest;
 
-    public async Task SynchronizeResourcesAsync(string directory, CancellationToken token)
+    public Task SynchronizeResourcesAsync(string directory, CancellationToken token) =>
+        _latestRequest is null ? Task.CompletedTask :
+            SynchronizeResourcesAsync(directory, FileConfirmationStore.ResourcesDigest(directory, persist: true), token);
+
+    public async Task SynchronizeResourcesAsync(string directory, string verifiedDigest, CancellationToken token)
     {
         var record = _latestRequest;
         if (record is null) return;
+        if (verifiedDigest is null || verifiedDigest.Length != 64 || verifiedDigest.Any(c => !Uri.IsHexDigit(c)))
+            throw new IOException("源资源版本无效。");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         var address = new Uri(Address(), "/replication/v1/resources");
@@ -34,7 +40,7 @@ public sealed partial class HttpConfirmationPeer
             state.ActiveNodeId != record.PrimaryNodeId || state.Epoch != record.Epoch ||
             state.SystemIdentifier != record.SystemIdentifier || !state.InRecovery)
             throw new IOException("资源接收方不是当前部署的备用节点。");
-        var digest = FileConfirmationStore.ResourcesDigest(directory, persist: true);
+        var digest = verifiedDigest;
         if (state.ResourcesDigest == digest) return;
         var archive = await ReplicaResourceTransfer.CaptureAsync(directory, digest, deadline.Token);
         try
@@ -44,7 +50,7 @@ public sealed partial class HttpConfirmationPeer
             request.Headers.Add("X-Exam-Resources-Digest", digest);
             request.Content = new StreamContent(input);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
-            using var response = await http.SendAsync(request, deadline.Token);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             response.EnsureSuccessStatusCode();
         }
         finally { File.Delete(archive); }
@@ -170,8 +176,10 @@ public static class ReplicaResourceTransfer
                     if (expanded > MaximumBytes) throw new IOException("资源展开后超限。");
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     await using var source = entry.Open();
+                    // Flush once at the complete-file boundary. WriteThrough on every 64 KiB
+                    // chunk made large snapshots wait for thousands of redundant disk flushes.
                     await using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                        65536, FileOptions.WriteThrough);
+                        65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
                     var buffer = new byte[65536]; long entryBytes = 0; int read;
                     while ((read = await source.ReadAsync(buffer, token)) > 0)
                     {
@@ -183,10 +191,16 @@ public static class ReplicaResourceTransfer
                     await destination.FlushAsync(token); destination.Flush(true);
                 }
             }
-            if (FileConfirmationStore.ResourcesDigest(staged, persist: true) != expectedDigest)
+            // Every extracted file has already been flushed to durable storage above.
+            if (FileConfirmationStore.ResourcesDigest(staged) != expectedDigest)
                 throw new IOException("接收资源与活动节点版本不同。");
+            // A lost success response may resend the same snapshot. Keep the current copy
+            // and its previous-version directory instead of accumulating identical copies.
+            var alreadyCurrent = FileConfirmationStore.ResourcesDigest(full, persist: true) == expectedDigest;
+            // Complete potentially slow hashing before the final role and cancellation check.
             await verifyStandby(token);
             token.ThrowIfCancellationRequested();
+            if (alreadyCurrent) return;
             MoveDirectory(full, previous);
             try { MoveDirectory(staged, full); }
             catch { if (!Directory.Exists(full)) MoveDirectory(previous, full); throw; }

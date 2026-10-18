@@ -65,7 +65,7 @@ try {
     # pg_basebackup -R writes postgresql.auto.conf, which overrides a config fragment.
     $env:PGAPPNAME = $StandbyApplicationName
     & $tool --host $PrimaryHost --port $PrimaryPort --username $ReplicationUser `
-        --pgdata $target --write-recovery-conf --wal-method stream --checkpoint fast `
+        --pgdata $target --write-recovery-conf --wal-method stream --checkpoint fast --compress=server-gzip:level=1 `
         --slot $ReplicationSlot --create-slot --no-password --no-clean
     $backupExitCode = $LASTEXITCODE
 }

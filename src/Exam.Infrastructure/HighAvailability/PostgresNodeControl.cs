@@ -1,4 +1,6 @@
 using Exam.Application.HighAvailability;
+using System.Security.Cryptography;
+using System.Text;
 using Exam.Contracts.HighAvailability;
 using Exam.Infrastructure.ServiceManagement;
 using Npgsql;
@@ -27,7 +29,9 @@ public sealed class PostgresNodeHealthProbe(
 
         try
         {
-            await using var connection = new NpgsqlConnection(node.ConnectionString);
+            var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
+            { Timeout = 5, CommandTimeout = 5, Pooling = false };
+            await using var connection = new NpgsqlConnection(settings.ConnectionString);
             await connection.OpenAsync(cancellationToken);
             const string sql = """
                 SELECT pg_is_in_recovery(),
@@ -162,6 +166,10 @@ public sealed class StagedPostgresNodeRebuilder(
         }
 
         Directory.CreateDirectory(target);
+        // The slot survives pg_basebackup until the rebuilt standby is actually started.
+        // A temporary stream slot leaves a WAL recycling gap during verification/resource copy.
+        var replicationSlot = "exam_rebuild_" + Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(nodeId + "\0" + target))).ToLowerInvariant()[..40];
         var connection = new NpgsqlConnectionStringBuilder(source.ConnectionString);
         var environment = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -180,7 +188,8 @@ public sealed class StagedPostgresNodeRebuilder(
         };
         var result = await processRunner.RunAsync(
             Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),
-            ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast", "--no-password"],
+            ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast",
+                "--compress=server-gzip:level=1", "--slot=" + replicationSlot, "--create-slot", "--no-password", "--no-clean"],
             environment,
             options.Timeout,
             cancellationToken);

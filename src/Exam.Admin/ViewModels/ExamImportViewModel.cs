@@ -176,6 +176,7 @@ public sealed class ExamImportViewModel : BindableBase, IDisposable
 
     public void SetCurrentExam(ExamSummary? exam)
     {
+        if (_disposed) return;
         ApplyPaperVersion(exam?.PaperVersion, notify: false);
         if (exam is not null && StringComparer.Ordinal.Equals(_examId, exam.ExamId))
         {

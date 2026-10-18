@@ -26,10 +26,10 @@ public sealed partial class HttpStudentApi
     public bool IsCurrentEndpoint(long generation)
     { lock (_connectionGate) return generation == _connectionGeneration; }
 
-    private void ValidateIdentity(string serverId, string nodeId, long epoch)
+    private void ValidateIdentity(string serverId, string nodeId, long epoch, bool allowStaleStatus = false)
     {
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId) || epoch < 1 ||
-            _trustedServerId is not null && serverId != _trustedServerId || epoch < _serverEpoch ||
+            _trustedServerId is not null && serverId != _trustedServerId || !allowStaleStatus && epoch < _serverEpoch ||
             _device?.Topology is { } topology && topology.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId != nodeId)
             throw new IdentityRejectedException("服务器身份、节点或服务代次不匹配，原登记和答卷已保留。");
     }
@@ -43,6 +43,7 @@ public sealed partial class HttpStudentApi
             TrustedServerTopology? topology;
             Uri? failed;
             long minimumEpoch;
+            string? confirmedNodeId;
             lock (_connectionGate)
             {
                 if (identityGeneration != _identityGeneration) throw new IdentityRejectedException("设备身份已切换，停止原请求。");
@@ -50,6 +51,7 @@ public sealed partial class HttpStudentApi
                 topology = _device?.Topology;
                 failed = _server;
                 minimumEpoch = _serverEpoch;
+                confirmedNodeId = _device?.ActiveNodeId;
             }
             if (topology is null) return false;
             foreach (var node in topology.Nodes.Where(node => node.Address != failed))
@@ -64,13 +66,15 @@ public sealed partial class HttpStudentApi
                     if (!response.IsSuccessStatusCode) continue;
                     var envelope = await response.Content.ReadFromJsonAsync<ApiEnvelope<ServerTimeSnapshot>>(_json, deadline.Token);
                     if (envelope is not { IsSuccess: true, Result: { } result } || envelope.ServerId != topology.ServerId ||
-                        envelope.NodeId != node.NodeId || envelope.ServerEpoch <= minimumEpoch ||
+                        envelope.NodeId != node.NodeId || envelope.ServerEpoch < minimumEpoch ||
+                        envelope.ServerEpoch == minimumEpoch && node.NodeId != confirmedNodeId ||
                         result.Server != new ServerNodeEnvelope(envelope.ServerId, envelope.NodeId, envelope.ServerEpoch)) continue;
                     lock (_connectionGate)
                     {
                         if (identityGeneration != _identityGeneration) throw new IdentityRejectedException("设备身份已切换，停止原请求。");
                         if (failedGeneration != _connectionGeneration) return true;
-                        if (envelope.ServerEpoch <= _serverEpoch) continue;
+                        if (envelope.ServerEpoch < _serverEpoch ||
+                            envelope.ServerEpoch == _serverEpoch && node.NodeId != _device?.ActiveNodeId) continue;
                         var updated = _device! with { ServerEpoch = envelope.ServerEpoch, ActiveNodeId = node.NodeId };
                         (PersistTrustedConnection ?? throw new InvalidOperationException("主备连接缺少受保护持久化入口。"))(updated);
                         _device = updated;

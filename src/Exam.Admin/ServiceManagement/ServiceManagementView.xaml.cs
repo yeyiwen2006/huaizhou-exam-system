@@ -28,20 +28,6 @@ public partial class ServiceManagementView : UserControl
         _viewModel.ConfirmAsync = _ => Task.FromResult(false);
         _viewModel.Deactivate();
     }
-    private void OnImportConnection(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "导入部署人员提供的服务器管理连接配置",
-            Filter = "管理连接配置 (*.json)|*.json", CheckFileExists = true, Multiselect = false
-        };
-        if (dialog.ShowDialog() == true)
-        {
-            _viewModel.ImportConnectionSettings(dialog.FileName);
-        }
-    }
-    private async void OnReload(object sender, RoutedEventArgs e)
-    { try { await _viewModel.ReloadConfigurationAsync(); } catch (Exception error) { _viewModel.ReportError(error); } }
     private async void OnIndependentManagementLogin(object sender, RoutedEventArgs e)
     {
         var password = IndependentManagementPassword.Password;

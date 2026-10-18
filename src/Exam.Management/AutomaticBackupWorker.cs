@@ -79,7 +79,7 @@ public sealed partial class AutomaticBackupWorker(IConfiguration configuration, 
             await using var db = new NpgsqlConnection(builder.ConnectionString);
             await db.OpenAsync(token);
             var before = await Observe(db, token);
-            if (before.Recovery || before.ServerId != server || before.ActiveNodeId != node)
+            if (before.Recovery || before.ServerId != server || before.ActiveNodeId != node || before.ServerEpoch != epoch)
             {
                 status = status with { Message = "本节点不是已核实的活动主库，不执行备份或清理。" };
                 await Publish(); return status;
@@ -124,7 +124,9 @@ public sealed partial class AutomaticBackupWorker(IConfiguration configuration, 
             await Publish();
             try
             {
-                var result = await CleanupPhaseAsync(db, before, paths, catalogue, coordinator, days, token);
+                var result = await WithHeartbeatAsync(
+                    ct => CleanupPhaseAsync(db, before, paths, catalogue, coordinator, days, ct),
+                    async () => { status = status with { CleanupPhase = BackupMaintenancePhase.Running }; await Publish(); }, token);
                 status = status with { CleanupPhase = BackupMaintenancePhase.Completed,
                     RemovedBackups = result.Backups, RemovedWal = result.Wal, ReclaimedBytes = result.Bytes };
             }
@@ -160,7 +162,34 @@ public sealed partial class AutomaticBackupWorker(IConfiguration configuration, 
         return status;
     }
 
-    private bool RequiresStandby => configuration.GetSection("HighAvailability:Nodes").GetChildren().Any();
+    private bool RequiresStandby => configuration.GetSection("HighAvailability:Nodes").GetChildren().Skip(1).Any();
+
+    private async Task<T> WithHeartbeatAsync<T>(Func<CancellationToken, Task<T>> run, Func<Task> publish, CancellationToken token)
+    {
+        await publish();
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var work = run(operation.Token);
+        try
+        {
+            while (!work.IsCompleted)
+            {
+                using var delay = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var tick = Task.Delay(TimeSpan.FromMinutes(1), _time, delay.Token);
+                if (await Task.WhenAny(work, tick) == work) { delay.Cancel(); break; }
+                await tick;
+                await publish();
+            }
+            return await work;
+        }
+        catch
+        {
+            // The existing maintenance lease must outlive any native verification process.
+            // Do not release it after a failed heartbeat until that work has actually stopped.
+            operation.Cancel();
+            try { await work; } catch { }
+            throw;
+        }
+    }
 
     private async Task<(BackupMaintenancePhase Phase, DateTimeOffset? NextAttempt)> BackupPhaseAsync(
         NpgsqlConnection db, Observation before, Paths paths, IReadOnlyList<RetainedBackup> backups,
@@ -192,7 +221,7 @@ public sealed partial class AutomaticBackupWorker(IConfiguration configuration, 
                     if (requestId.GetString() != pending.RequestId || actorId.GetString() != "automatic-backup")
                         throw new MaintenanceDeferred("未完成目录的请求身份不一致，未删除或覆盖该目录。");
                     var id = backupId.GetString()!;
-                    await coordinator.VerifyAvailableBackupAsync(pending.Directory, id, token);
+                    await WithHeartbeatAsync(ct => coordinator.VerifyAvailableBackupAsync(pending.Directory, id, ct), progress, token);
                     var recovered = ReadBackup(pending.Directory, true, requireCompletion: false);
                     if (recovered.SystemIdentifier != before.SystemId) throw new MaintenanceDeferred("未完成备份的原生集群身份不匹配。");
                     RequireSamePrimary(before, await Observe(db, token));
@@ -353,7 +382,8 @@ public sealed partial class AutomaticBackupWorker(IConfiguration configuration, 
     private static void RequireSamePrimary(Observation expected, Observation actual)
     {
         if (actual.Recovery || expected.SystemId != actual.SystemId || expected.Timeline != actual.Timeline ||
-            expected.ServerId != actual.ServerId || expected.ActiveNodeId != actual.ActiveNodeId)
+            expected.ServerId != actual.ServerId || expected.ActiveNodeId != actual.ActiveNodeId ||
+            expected.ServerEpoch != actual.ServerEpoch)
             throw new MaintenanceDeferred("活动主库身份或时间线在维护期间改变，等待下一轮重新核对，未继续清理。");
     }
     private sealed class MaintenanceDeferred(string message) : Exception(message);

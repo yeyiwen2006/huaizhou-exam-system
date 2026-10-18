@@ -25,7 +25,7 @@ public sealed record PublicServerEndpoints(string ServerId, IReadOnlyList<Public
         var endpoint = new UriBuilder(Uri.UriSchemeHttps, record.Host, record.Port).Uri;
         if (!Contains(endpoint))
             return topology;
-        if (topology.ServerId != ServerId || Nodes.Any(route => !topology.Nodes.Any(node =>
+        if (topology.ServerId != ServerId || topology.Nodes.Any(node => !Nodes.Any(route =>
                 node.NodeId == route.NodeId && node.Address ==
                 new UriBuilder(Uri.UriSchemeHttps, route.OriginHost, route.OriginPort).Uri)))
             throw new StudentIdentityException("公网入口返回的主备身份与部署配置不一致，原登记已保留。");
@@ -41,5 +41,23 @@ public sealed record PublicServerEndpoints(string ServerId, IReadOnlyList<Public
                 };
             }).ToArray()
         };
+    }
+
+    internal TrustedServerTopology RebindSavedRoutes(TrustedServerTopology topology)
+    {
+        Validate();
+        if (topology.ServerId != ServerId || topology.Nodes.Any(node => !Nodes.Any(route =>
+                route.NodeId == node.NodeId && new UriBuilder(Uri.UriSchemeHttps, route.OriginHost, route.OriginPort).Uri ==
+                (node.OriginAddress ?? node.Address))))
+            throw new StudentIdentityException("新的公网部署配置与原节点身份不一致，原设备登记已保留。");
+        return topology with { Nodes = topology.Nodes.Select(node =>
+        {
+            var route = Nodes.Single(item => item.NodeId == node.NodeId);
+            return node with
+            {
+                Host = DeviceStore.NormalizeHost(route.Host), Port = route.Port,
+                OriginHost = node.OriginHost ?? node.Host, OriginPort = node.OriginPort ?? node.Port
+            };
+        }).ToArray() };
     }
 }

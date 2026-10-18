@@ -255,7 +255,7 @@ public sealed class AppServices
             : throw new StudentIdentityException("服务器尚未提供可核对的主备信任信息，原设备登记已保留。");
         record = record with
         {
-            Topology = TrustedServerTopology.FromActivation(topology, record, response.ServerId, ServerTrust.PublicEndpoints),
+            Topology = TrustedServerTopology.FromActivation(topology, record, response.ServerId, ServerTrust.PublicEndpoints, response.NodeId),
             ServerEpoch = response.ServerEpoch, ActiveNodeId = response.NodeId
         };
         await Task.Run(() => DeviceStore.Save(record), ct);

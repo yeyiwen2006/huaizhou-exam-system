@@ -23,6 +23,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public const int ActivationPage = 7; // 设备与试场：不与具体考试挂钩，不显示当前考试条。
     public const int AccountsPage = 8;
     private readonly AdminApiClient _api;
+    private readonly IExamImportService? _importService;
+    private readonly Dictionary<string, (ExamSummary Summary, ExamImportViewModel ViewModel)> _examImports = new(StringComparer.Ordinal);
+    private ExamImportViewModel _import;
     private ExamSummary? _currentExam;
     private bool _isCreatingExam;
     private int _selectedPage;
@@ -36,12 +39,13 @@ public sealed class MainViewModel : BindableBase, IDisposable
         IExamArchiveService? archiveService = null, IExamArchiveDirectoryDialog? archiveDirectories = null)
     {
         _api = api;
+        _importService = importService;
         Connection = new ConnectionViewModel(_api);
         Exam = new ExamConfigurationViewModel(_api);
         Roster = new RosterViewModel(new RosterWorkbookService(), new FileDialogService(), _api);
         Activation = new ActivationRoomViewModel(_api);
         Monitoring = new MonitoringViewModel(_api);
-        Import = new ExamImportViewModel(_api, service: importService);
+        _import = CreateImport();
         GradingRevision = new GradingRevisionViewModel(_api);
         Connection.PropertyChanged += OnConnectionPropertyChanged;
         Reports = new Exam.Admin.Reporting.ReportPageViewModel(_api, new FileDialogService());
@@ -51,11 +55,10 @@ public sealed class MainViewModel : BindableBase, IDisposable
         Home.NewExamRequested += NewExam;
         Home.ExamReplacedFromArchive += OnExamReplacedFromArchive;
         Exam.ExamSaved += OnExamSaved;
-        Import.PaperPublicationChanged += OnPaperPublicationChanged;
         _api.ConfigurationChanged += OnConfigurationChanged;
         BackToHomeCommand = new RelayCommand(() => SelectedPage = HomePage);
         ShowHiddenExamsCommand = new RelayCommand(() => SelectedPage = HiddenExamsPage);
-        ShowImportProgressCommand = new RelayCommand(() => SelectedPage = ImportPage);
+        ShowImportProgressCommand = new RelayCommand(ShowImportProgress);
     }
 
     public ExamHomeViewModel Home { get; }
@@ -108,7 +111,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = exam;
         _ = Roster.OpenAsync(exam.ExamId);
         Monitoring.ExamId = exam.ExamId;
-        Import.SetCurrentExam(exam);
+        SelectImport(exam);
         GradingRevision.ExamId = exam.ExamId;
         Reports.ExamId = exam.ExamId;
         Reports.ExamName = exam.Name;
@@ -121,7 +124,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         CurrentExam = null;
         Roster.Reset();
         Monitoring.ExamId = string.Empty;
-        Import.SetCurrentExam(null);
+        SelectImport(null);
         GradingRevision.ExamId = string.Empty;
         Reports.ExamId = string.Empty;
         Reports.ExamName = string.Empty;
@@ -132,12 +135,13 @@ public sealed class MainViewModel : BindableBase, IDisposable
 
     private void OnExamReplacedFromArchive(string examId)
     {
+        ForgetImport(examId);
         GradingRevision.InvalidateForArchiveReplacement(examId);
         if (CurrentExam?.ExamId != examId) return;
         SetCreating(false); CurrentExam = null;
         Exam.InvalidateForArchiveReplacement();
         Roster.Reset(); Monitoring.ExamId = string.Empty;
-        Import.SetCurrentExam(null); GradingRevision.ExamId = string.Empty;
+        SelectImport(null); GradingRevision.ExamId = string.Empty;
         Reports.ExamId = string.Empty; Reports.ExamName = string.Empty;
         SelectedPage = HomePage;
     }
@@ -149,7 +153,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         if (!StringComparer.Ordinal.Equals(Roster.ExamId, detail.Summary.ExamId))
             _ = Roster.OpenAsync(detail.Summary.ExamId);
         Monitoring.ExamId = detail.Summary.ExamId;
-        Import.SetCurrentExam(detail.Summary);
+        SelectImport(detail.Summary);
         GradingRevision.ExamId = detail.Summary.ExamId;
         Reports.ExamId = detail.Summary.ExamId;
         Reports.ExamName = detail.Summary.Name;
@@ -162,7 +166,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
         SetCreating(false);
         CurrentExam = null;
         Roster.Reset();
-        Import.SetCurrentExam(null);
+        ResetImports();
         GradingRevision.ExamId = string.Empty;
         // 收齐提醒不依赖监测页是否打开：更换服务器时必须清掉考试上下文，
         // 否则会拿上一台服务器的旧考试继续轮询并弹出无关的收齐提醒。
@@ -173,9 +177,84 @@ public sealed class MainViewModel : BindableBase, IDisposable
 
     private void OnPaperPublicationChanged(string examId, long? paperVersion)
     {
-        if (CurrentExam?.ExamId != examId) return;
-        CurrentExam = CurrentExam with { PaperVersion = paperVersion };
+        if (_examImports.TryGetValue(examId, out var session))
+            _examImports[examId] = (session.Summary with { PaperVersion = paperVersion }, session.ViewModel);
+        if (CurrentExam?.ExamId == examId)
+            CurrentExam = CurrentExam with { PaperVersion = paperVersion };
         Home.UpdatePaperVersion(examId, paperVersion);
+    }
+
+    // A view belongs to an examination for the whole authenticated session. Navigation only
+    // selects a view; it must not cancel compilation or dispose an immutable checked snapshot.
+    private ExamImportViewModel CreateImport()
+    {
+        var viewModel = new ExamImportViewModel(_api, service: _importService)
+        { ConfirmPublicationAsync = message => ConfirmImportPublicationAsync(message) };
+        viewModel.PaperPublicationChanged += OnPaperPublicationChanged;
+        viewModel.PropertyChanged += OnImportPropertyChanged;
+        return viewModel;
+    }
+
+    private void SelectImport(ExamSummary? exam)
+    {
+        var previous = Import;
+        if (exam is null)
+        {
+            if (previous.ExamId.Length == 0) return;
+            Import = CreateImport();
+        }
+        else
+        {
+            if (!_examImports.TryGetValue(exam.ExamId, out var session))
+                session = (exam, CreateImport());
+            _examImports[exam.ExamId] = (exam, session.ViewModel);
+            Import = session.ViewModel;
+            Import.SetCurrentExam(exam);
+        }
+        if (!ReferenceEquals(previous, Import) &&
+            !_examImports.Values.Any(session => ReferenceEquals(session.ViewModel, previous)))
+            ReleaseImport(previous);
+        OnPropertyChanged(nameof(HasImportActivity));
+    }
+
+    private void ShowImportProgress()
+    {
+        if (!Import.IsBusy)
+        {
+            var running = _examImports.Values.FirstOrDefault(session => session.ViewModel.IsBusy);
+            if (running.ViewModel is not null) OpenExam(running.Summary);
+        }
+        SelectedPage = ImportPage;
+    }
+
+    private void OnImportPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ExamImportViewModel.IsBusy))
+            OnPropertyChanged(nameof(HasImportActivity));
+    }
+
+    private void ReleaseImport(ExamImportViewModel viewModel)
+    {
+        viewModel.PaperPublicationChanged -= OnPaperPublicationChanged;
+        viewModel.PropertyChanged -= OnImportPropertyChanged;
+        viewModel.Dispose();
+    }
+
+    private void ForgetImport(string examId)
+    {
+        if (!_examImports.Remove(examId, out var session)) return;
+        ReleaseImport(session.ViewModel);
+        if (ReferenceEquals(Import, session.ViewModel)) Import = CreateImport();
+        OnPropertyChanged(nameof(HasImportActivity));
+    }
+
+    private void ResetImports()
+    {
+        var previous = _examImports.Values.Select(session => session.ViewModel).Append(Import).Distinct().ToArray();
+        _examImports.Clear();
+        foreach (var viewModel in previous) ReleaseImport(viewModel);
+        Import = CreateImport();
+        OnPropertyChanged(nameof(HasImportActivity));
     }
 
     private void SetCreating(bool value)
@@ -193,7 +272,9 @@ public sealed class MainViewModel : BindableBase, IDisposable
     public RosterViewModel Roster { get; }
     public ActivationRoomViewModel Activation { get; }
     public MonitoringViewModel Monitoring { get; }
-    public ExamImportViewModel Import { get; }
+    public ExamImportViewModel Import { get => _import; private set => SetProperty(ref _import, value); }
+    public bool HasImportActivity => Import.IsBusy || _examImports.Values.Any(session => session.ViewModel.IsBusy);
+    public Func<string, Task<bool>> ConfirmImportPublicationAsync { get; set; } = _ => Task.FromResult(false);
 
     /// <summary>仅修改答案与计分规则的入口（不重新编译、不组包）。</summary>
     public GradingRevisionViewModel GradingRevision { get; }
@@ -227,11 +308,12 @@ public sealed class MainViewModel : BindableBase, IDisposable
     {
         Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _api.ConfigurationChanged -= OnConfigurationChanged;
-        Import.PaperPublicationChanged -= OnPaperPublicationChanged;
         Home.ExamReplacedFromArchive -= OnExamReplacedFromArchive;
         Home.Dispose();
         Monitoring.Dispose();
-        Import.Dispose();
+        foreach (var viewModel in _examImports.Values.Select(session => session.ViewModel).Append(Import).Distinct())
+            ReleaseImport(viewModel);
+        _examImports.Clear();
         GradingRevision.Dispose();
         Roster.Dispose();
         Activation.Dispose();

@@ -16,6 +16,8 @@ public interface IDurableConfirmationPeer
     Task<DurableConfirmation> ConfirmAsync(DurableConfirmation record, CancellationToken token);
     Task<ConfirmationHead?> ReadAsync(CancellationToken token);
     Task SynchronizeResourcesAsync(string directory, CancellationToken token) => Task.CompletedTask;
+    Task SynchronizeResourcesAsync(string directory, string verifiedDigest, CancellationToken token) =>
+        SynchronizeResourcesAsync(directory, token);
 
 }
 
@@ -72,7 +74,9 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
     private long _nextPeerAttempt;
     public async Task MaintainReplicationAsync(CancellationToken token)
     {
-        if (peer is not null) await peer.SynchronizeResourcesAsync(resourcesDirectory, token);
+        // Reuse the same content-and-change-verified inventory as business confirmation.
+        // An unchanged maintenance tick must not hash and flush every resource again.
+        if (peer is not null) await peer.SynchronizeResourcesAsync(resourcesDirectory, _resources.Read(), token);
         await ConfirmAsync(token);
     }
     public async Task ConfirmAsync(CancellationToken token)

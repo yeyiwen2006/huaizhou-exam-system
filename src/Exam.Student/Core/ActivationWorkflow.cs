@@ -68,7 +68,8 @@ public sealed class ActivationWorkflow(DeviceStore store, IStudentApi api)
             ActivationRequestId = result.ActivationRequestId,
             ActivatedAt = result.Status == ActivationStatus.Active ? result.RequestedAt : record.ActivatedAt,
             Topology = result.Status == ActivationStatus.Active
-                ? TrustedServerTopology.FromActivation(result.Topology, record, envelope.ServerId, ServerTrust.PublicEndpoints) : record.Topology,
+                ? TrustedServerTopology.FromActivation(result.Topology, record, envelope.ServerId,
+                    ServerTrust.PublicEndpoints, envelope.NodeId) : record.Topology,
             ActiveNodeId = result.Status == ActivationStatus.Active ? envelope.NodeId : record.ActiveNodeId,
         };
         await SaveAsync(record, ct);
@@ -128,7 +129,8 @@ public sealed class ActivationWorkflow(DeviceStore store, IStudentApi api)
             CredentialVersion = result.CredentialVersion,
             PendingOperation = null,
             PendingOperationRequestId = null,
-            Topology = TrustedServerTopology.FromActivation(result.Topology, record, envelope.ServerId, ServerTrust.PublicEndpoints),
+            Topology = TrustedServerTopology.FromActivation(result.Topology, record, envelope.ServerId,
+                ServerTrust.PublicEndpoints, envelope.NodeId),
             ActiveNodeId = envelope.NodeId,
         };
         await SaveAsync(record, ct);

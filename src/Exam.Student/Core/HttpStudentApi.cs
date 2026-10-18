@@ -86,8 +86,13 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             {
                 if (_trustedServerId is not null && device.ServerId is not null && _trustedServerId != device.ServerId)
                     throw new InvalidOperationException("服务器身份与已验证连接不一致。");
-                if (_device?.Topology is not null && topologyChanged)
-                    throw new InvalidOperationException("主备信任配置不可由连接刷新替换。");
+                if (_device?.Topology is { } existingTopology && topologyChanged &&
+                    (device.Topology is null || !device.Topology.Extends(existingTopology)))
+                {
+                    if (device.Topology is null || ServerTrust.PublicEndpoints is not { } configuredRoutes ||
+                        !configuredRoutes.RebindSavedRoutes(existingTopology).Equivalent(device.Topology))
+                        throw new InvalidOperationException("主备信任配置不可由连接刷新替换。");
+                }
             }
             var replacement = _usesDefaultTransport && (identityChanged || topologyChanged)
                 ? CreateClient(CreateDefaultHandler(device.Topology)) : null;
@@ -102,12 +107,18 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             }
             else
             {
-                if (topologyChanged) _connectionGeneration++;
+                if (topologyChanged)
+                {
+                    _connectionGeneration++;
+                    _server = device.Topology?.Nodes.SingleOrDefault(node => node.NodeId == _nodeId)?.Address ?? _server;
+                }
                 _serverEpoch = Math.Max(_serverEpoch, device.ServerEpoch);
                 _trustedServerId ??= device.ServerId;
                 _nodeId ??= device.Topology?.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId;
             }
-            _device = device with { ServerEpoch = _serverEpoch, ActiveNodeId = _nodeId ?? device.ActiveNodeId };
+            var confirmedNode = identityChanged || _device is null || device.ServerEpoch > _device.ServerEpoch
+                ? device.ActiveNodeId : _device.ActiveNodeId ?? device.ActiveNodeId;
+            _device = device with { ServerEpoch = _serverEpoch, ActiveNodeId = confirmedNode ?? _nodeId };
             if (replacement is not null) { retired = _client; _client = replacement; }
         }
         // Cancel the old pool outside the state lock; its responses are fenced by the generation checks.
@@ -125,7 +136,8 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         {
             _server = endpoint;
             _nodeId = node?.NodeId;
-            _device = _device! with { ActiveNodeId = node?.NodeId };
+            // Preserve the last confirmed primary until the selected login endpoint proves
+            // its role. It may be the old primary after a previous successful takeover.
             _connectionGeneration++;
         }
     }
@@ -364,7 +376,9 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
             {
                 throw new HttpRequestException("连接已切换，已忽略旧连接的响应。");
             }
-            ValidateIdentity(envelope.ServerId, envelope.NodeId, envelope.ServerEpoch);
+            var reconnectableError = !envelope.IsSuccess && envelope.Error?.Code is
+                ErrorCodes.NotActiveServer or ErrorCodes.ServiceRecovering or ErrorCodes.StaleServerEpoch or ErrorCodes.ReplicaUnavailable;
+            ValidateIdentity(envelope.ServerId, envelope.NodeId, envelope.ServerEpoch, reconnectableError);
             if (envelope.IsSuccess)
             {
                 if (string.IsNullOrWhiteSpace(envelope.NodeId) || envelope.Result is null)

@@ -9,6 +9,8 @@ public sealed partial class ServiceManagementViewModel
     private CancellationTokenSource? _backupMonitoring;
     private string _automaticBackupText = "自动备份与磁盘情况尚未核实。";
     private string _lastBackupSummary = string.Empty;
+    private string _lastBackupWarnings = string.Empty;
+    private string _backupTargetKey = string.Empty;
     private bool _showAutomaticBackupWarning;
     private bool _automaticMonitoringEnabled;
     public string AutomaticBackupText { get => _automaticBackupText; private set => SetProperty(ref _automaticBackupText, value); }
@@ -23,6 +25,8 @@ public sealed partial class ServiceManagementViewModel
         {
             ShowAutomaticBackupWarning = false;
             _lastBackupSummary = string.Empty;
+            _lastBackupWarnings = string.Empty;
+            _backupTargetKey = string.Empty;
             AutomaticBackupText = "自动备份与磁盘情况尚未核实。";
             return;
         }
@@ -30,16 +34,21 @@ public sealed partial class ServiceManagementViewModel
         if (!HasConnectionConfiguration || session.ServerId != ServerId.Trim())
         { MarkBackupUnknown("自动备份与磁盘告警尚未接通，请核对服务器管理连接配置。"); return; }
         var polling = _backupMonitoring = new CancellationTokenSource();
-        var target = new ManagementTarget(Address.Trim(), ServerId.Trim(), NodeId.Trim());
-        _lastBackupSummary = string.Empty;
+        var target = _connection?.Target ?? CurrentTarget();
+        if (_backupTargetKey != target.Key)
+        {
+            _lastBackupSummary = string.Empty;
+            _lastBackupWarnings = string.Empty;
+            _backupTargetKey = target.Key;
+        }
         _ = PollBackupStatusAsync(session, target, polling);
     }
 
     private async Task PollBackupStatusAsync(AdminSessionSnapshot session, ManagementTarget target, CancellationTokenSource polling)
     {
         bool CurrentObservation() => !_disposed && !polling.IsCancellationRequested &&
-            _businessSession?.Matches(session) == true && Address.Trim() == target.Address &&
-            ServerId.Trim() == target.ServerId && NodeId.Trim() == target.NodeId;
+            _businessSession?.Matches(session) == true &&
+            SameEndpoint(_connection?.Target ?? CurrentTarget(), target);
         try
         {
             // Let a connection-configuration edit settle before opening a read-only connection.
@@ -78,13 +87,14 @@ public sealed partial class ServiceManagementViewModel
     public void ApplyAutomaticBackupStatus(BackupMaintenanceStatus? value)
     {
         if (value is null)
-        { MarkBackupUnknown("管理宿主未提供自动备份与磁盘状态，请核对修复版管理程序是否已运行。"); return; }
+        { MarkBackupUnknown("当前节点暂未返回自动备份与磁盘状态，请刷新或核对管理服务。"); return; }
         if (value.SchemaVersion != 1 || value.Warnings is null || value.Warnings.Count > 16 ||
             value.Warnings.Any(w => w is null || w.Length > 1000) || !Enum.IsDefined(value.BackupPhase) || !Enum.IsDefined(value.CleanupPhase))
         { MarkBackupUnknown("自动备份状态无效，磁盘和恢复保护情况尚未核实。"); return; }
         if (!value.Enabled)
         {
             _lastBackupSummary = AutomaticBackupText = "此节点未启用自动备份维护。";
+            _lastBackupWarnings = string.Empty;
             ShowAutomaticBackupWarning = false; return;
         }
         var warnings = value.Warnings.ToList();
@@ -98,12 +108,15 @@ public sealed partial class ServiceManagementViewModel
         string When(DateTimeOffset? date) => date?.ToOffset(TimeSpan.FromHours(8)).ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "尚无";
         _lastBackupSummary = $"自动备份：{MaintenancePhase(value.BackupPhase)}；清理：{MaintenancePhase(value.CleanupPhase)}；最近成功：{When(value.LastSuccessfulBackupAt)}。\n" +
             $"可用空间 {Size(value.AvailableBytes)}（阈值 {Size(value.MinimumAvailableBytes)}）；备份 {Size(value.BackupBytes)}；恢复归档 {Size(value.ArchiveBytes)}；pg_wal {Size(value.WalBytes)}；复制保留 {Size(value.ReplicationRetainedBytes)}。";
-        AutomaticBackupText = _lastBackupSummary + (warnings.Count == 0 ? string.Empty : "\n" + string.Join("\n", warnings.Distinct(StringComparer.Ordinal)));
+        _lastBackupSummary += "\n观察时间：" + When(value.ObservedAt) + "。";
+        _lastBackupWarnings = warnings.Count == 0 ? string.Empty : "\n" + string.Join("\n", warnings.Distinct(StringComparer.Ordinal));
+        AutomaticBackupText = _lastBackupSummary + _lastBackupWarnings;
         ShowAutomaticBackupWarning = warnings.Count > 0;
     }
     private void MarkBackupUnknown(string reason)
     {
-        AutomaticBackupText = string.IsNullOrEmpty(_lastBackupSummary) ? reason : _lastBackupSummary + "\n" + reason;
+        AutomaticBackupText = string.IsNullOrEmpty(_lastBackupSummary) ? reason :
+            _lastBackupSummary + _lastBackupWarnings + "\n以上为上次观察结果，当前状态未核实。\n" + reason;
         ShowAutomaticBackupWarning = true;
     }
     private static string Size(long? bytes) => bytes is null || bytes < 0 ? "未核实" :

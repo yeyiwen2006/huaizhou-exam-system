@@ -222,6 +222,7 @@ public sealed class PostgresBackupCoordinator(
                 "--format=plain",
                 "--wal-method=stream",
                 "--checkpoint=fast",
+                "--compress=server-gzip:level=1",
                 "--no-password"
             ],
             BuildPostgresEnvironment(connection),

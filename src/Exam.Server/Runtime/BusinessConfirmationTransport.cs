@@ -97,13 +97,17 @@ public static class BusinessConfirmationRegistration
     {
         services.AddSingleton(_ => new HttpClient(new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(30) });
+        // Peer operations own separate deadlines for small confirmations and large snapshots.
+        // A shared 30-second HttpClient timeout otherwise aborts the two-minute upload early.
+        services.AddSingleton(_ => new ReplicationHttpClient(new HttpClient(new HttpClientHandler
+        { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = Timeout.InfiniteTimeSpan }));
         services.AddSingleton<IBusinessConfirmation>(provider => isolatedTestRuntime
             ? new IsolatedTestConfirmation()
             : new ConfiguredConfirmation(() => new PostgresBusinessConfirmation(provider.GetRequiredService<NpgsqlDataSource>(),
                 new FileConfirmationStore(Required("Confirmation:Directory")), identity.ServerId, identity.NodeId,
                 configuration["Confirmation:StandbyNodeId"] ?? "", identity.ServerEpoch, Resources(),
                 string.IsNullOrWhiteSpace(configuration["Confirmation:StandbyHttpsUrl"]) ? null :
-                    new HttpConfirmationPeer(provider.GetRequiredService<HttpClient>(), new Uri(Required("Confirmation:StandbyHttpsUrl")),
+                    new HttpConfirmationPeer(provider.GetRequiredService<ReplicationHttpClient>().Client, new Uri(Required("Confirmation:StandbyHttpsUrl")),
                         identity.ServerId, Required("Confirmation:StandbyNodeId"), () => configuration["Confirmation:PeerToken"]),
                 TimelineConnection(), configuration["Backup:PostgresBinDirectory"]),
                 provider.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
@@ -166,6 +170,12 @@ public static class BusinessConfirmationRegistration
         });
     }
 
+    private sealed class ReplicationHttpClient(HttpClient client) : IDisposable
+    {
+        public HttpClient Client { get; } = client;
+        public void Dispose() => Client.Dispose();
+    }
+
     private sealed class ConfiguredConfirmation(Func<PostgresBusinessConfirmation> create, CancellationToken stoppingToken) : IBusinessConfirmation, IBusinessReplicationMaintenance, IDisposable
     {
         private IBusinessConfirmation? _inner;
@@ -180,7 +190,16 @@ public static class BusinessConfirmationRegistration
             try { lock (_gate) return (_inner ??= new BatchedBusinessConfirmation(_producer ??= create(), stoppingToken)).ConfirmAsync(token); }
             catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认配置不可用。", retryable: true); }
         }
-        public void Dispose() { lock (_gate) (_inner as IDisposable)?.Dispose(); }
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                // BatchedBusinessConfirmation owns the producer once it exists. Maintenance
+                // may have initialized only the producer, which still owns a directory watcher.
+                if (_inner is IDisposable disposable) disposable.Dispose();
+                else _producer?.Dispose();
+            }
+        }
     }
     // Only isolated test hosts explicitly select this registration. The business executable always uses full confirmation.
     private sealed class IsolatedTestConfirmation : IBusinessConfirmation

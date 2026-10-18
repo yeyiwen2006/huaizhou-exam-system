@@ -15,21 +15,53 @@ namespace Exam.Admin.ServiceManagement;
 
 public sealed record ManagementTarget(string Address, string ServerId, string NodeId)
 {
+    // Optional peer routing comes only from the local deployment file, never from a remote response.
+    public string? PeerAddress { get; init; }
+    public string? PeerNodeId { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ManagementTarget? PeerTarget
+    {
+        get
+        {
+            Validate();
+            return string.IsNullOrWhiteSpace(PeerAddress) ? null :
+                new ManagementTarget(PeerAddress, ServerId, PeerNodeId!)
+                { PeerAddress = Address, PeerNodeId = NodeId };
+        }
+    }
+
     public Uri Validate()
     {
-        if (!Uri.TryCreate(Address.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
-            uri.Host.Length == 0 || uri.Port is < 1 or > 65535 ||
-            uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0 ||
-            string.IsNullOrWhiteSpace(ServerId) || ServerId.Length > 200 ||
+        var uri = ValidateAddress(Address);
+        if (string.IsNullOrWhiteSpace(ServerId) || ServerId.Length > 200 ||
             string.IsNullOrWhiteSpace(NodeId) || NodeId.Length > 200)
-            throw new ArgumentException("请输入服务器管理 HTTPS 根地址和预期服务器、节点标识。");
+            throw new ArgumentException("管理连接缺少预期服务器或节点标识。");
+        var hasPeerAddress = !string.IsNullOrWhiteSpace(PeerAddress);
+        var hasPeerNode = !string.IsNullOrWhiteSpace(PeerNodeId);
+        if (hasPeerAddress != hasPeerNode)
+            throw new ArgumentException("主备管理连接须同时配置对端地址和节点标识。");
+        if (hasPeerAddress)
+        {
+            var peer = ValidateAddress(PeerAddress!);
+            if (PeerNodeId!.Length > 200 || PeerNodeId == NodeId || peer == uri)
+                throw new ArgumentException("主备管理连接须使用两个不同的节点和 HTTPS 地址。");
+        }
+        return uri;
+    }
+
+    private static Uri ValidateAddress(string? address)
+    {
+        if (!Uri.TryCreate(address?.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
+            uri.Host.Length == 0 || uri.Port is < 1 or > 65535 ||
+            uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
+            throw new ArgumentException("管理连接必须是没有路径或凭据的 HTTPS 根地址。");
         return uri;
     }
 
     public string Key => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         Validate().AbsoluteUri + "\n" + ServerId + "\n" + NodeId)));
 }
-
 public sealed record ManagementReply<T>(HttpStatusCode StatusCode, ManagementEnvelope<T> Envelope)
 {
     public bool IsUnauthorized => StatusCode == HttpStatusCode.Unauthorized;
