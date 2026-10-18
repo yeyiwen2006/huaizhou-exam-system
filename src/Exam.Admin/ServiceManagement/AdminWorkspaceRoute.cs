@@ -9,7 +9,7 @@ public sealed class AdminWorkspaceRouter
     public void BusinessConnectionChanged(bool connected)
     {
         _businessConnected = connected;
-        if (!connected || Route != AdminWorkspaceRoute.LocalManagement) ReturnToBusiness();
+        if (Route != AdminWorkspaceRoute.LocalManagement) ReturnToBusiness();
     }
     public void OpenManagement() { Route = AdminWorkspaceRoute.LocalManagement; }
     public void ReturnToBusiness() => Route = _businessConnected ? AdminWorkspaceRoute.BusinessWorkspace : AdminWorkspaceRoute.BusinessLogin;

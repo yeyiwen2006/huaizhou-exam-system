@@ -166,7 +166,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         try
         {
             var endpoint = PeerAddress(node, "replication/v1/readiness");
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(60));
             using var request = PeerRequest(HttpMethod.Get, endpoint, node.NodeId);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 16384) return (false, false, null, []);
@@ -416,8 +416,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         if (plan.Kind == ManagementOperationKind.Takeover)
         {
             await _business.StopAsync(token);
-            await PromoteConfirmedStandbyAsync(plan, token);
-            await PublishAsync(plan, token); await SetSynchronousAsync(false, plan, token); await SelectAsync(plan, token);
+            token.ThrowIfCancellationRequested();
+            using (var transition = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+            {
+                await PromoteConfirmedStandbyAsync(plan, transition.Token);
+                await PublishAsync(plan, transition.Token); await SetSynchronousAsync(false, plan, transition.Token); await SelectAsync(plan, transition.Token);
+            }
+            token.ThrowIfCancellationRequested();
         }
         else if (plan.Kind == ManagementOperationKind.Emergency)
         {
@@ -707,13 +712,16 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         var connections = _options.Nodes.ToDictionary(p => p.Key, p => new PostgresNodeConnection(p.Key, p.Value.ConnectionString)
             { ReplicationConnectionString = p.Value.ReplicationConnectionString });
         var replicationSlot = await CreateOwnedRebuildSlotAsync(plan, token);
-        await new StagedPostgresNodeRebuilder(new(_options.PostgresBinDirectory, slot, connections, TimeSpan.FromMinutes(60))
+        await new StagedPostgresNodeRebuilder(new(_options.PostgresBinDirectory, slot, connections, ManagementTimeouts.RebuildCopy)
             { PrecreatedReplicationSlot = replicationSlot }, _processes)
             .PrepareRebuildAsync(Local.NodeId, source.NodeId, token);
         var database = Path.Combine(slot, Local.NodeId);
         var verification = await _processes.RunAsync(Path.Combine(_options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_verifybackup.exe" : "pg_verifybackup"),
             [database], new Dictionary<string, string>(), TimeSpan.FromMinutes(10), token);
         if (verification.ExitCode != 0) throw new IOException("重建基础备份未通过实际文件校验。");
+        await File.AppendAllTextAsync(Path.Combine(database, "postgresql.auto.conf"),
+            $"\nwal_receiver_timeout = '{(int)ManagementTimeouts.ReplicationInactivity.TotalMilliseconds}ms'\n",
+            new System.Text.UTF8Encoding(false), token);
         RejectLinkedTree(database);
         if (File.Exists(Path.Combine(database, "tablespace_map")) && new FileInfo(Path.Combine(database, "tablespace_map")).Length > 0)
             throw new IOException("重建备份含外部表空间，须按独立受控部署处理，禁止自动启用。");
@@ -738,7 +746,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         }
         progress = progress with { Phase = "Prepared", DatabaseIdentity = DirectoryIdentity(database), ResourcesIdentity = DirectoryIdentity(resources) };
         await SaveRebuildProgressAsync(progress, token);
-        await InstallPreparedRebuildAsync(progress, token);
+        token.ThrowIfCancellationRequested();
+        using (var installation = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+            await InstallPreparedRebuildAsync(progress, installation.Token);
+        token.ThrowIfCancellationRequested();
     }
     private HttpRequestMessage ResourceSourceRequest(FailoverNodeDeployment node, string kind,
         ServerDeploymentState state, string systemIdentifier)

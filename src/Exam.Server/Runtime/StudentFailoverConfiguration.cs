@@ -18,7 +18,7 @@ public sealed class StudentFailoverConfiguration
         if (!identity.IsValid() || nodes is null || nodes.Length is < 1 or > 2 || nodes.Any(node => node is null ||
                 Uri.CheckHostName(node.Host) == UriHostNameType.Unknown || node.Port is < 1 or > 65535 || string.IsNullOrWhiteSpace(node.NodeId) ||
                 node.CertificateSha256?.Length != 64 || !node.CertificateSha256.All(Uri.IsHexDigit)) ||
-            nodes.Select(node => NormalizeHost(node.Host)).Distinct(StringComparer.Ordinal).Count() != nodes.Length ||
+            nodes.Select(node => (NormalizeHost(node.Host), node.Port)).Distinct().Count() != nodes.Length ||
             nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != nodes.Length ||
             !nodes.Any(node => node.NodeId == identity.NodeId))
             throw new InvalidOperationException("可信节点须为一个节点或两个独立节点，地址、端口、身份及证书指纹有效，并包含本机。");

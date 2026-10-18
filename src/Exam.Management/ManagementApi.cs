@@ -43,6 +43,17 @@ public static class ManagementApi
                 }
                 var authorization = context.Request.Headers.Authorization.ToString();
                 var token = authorization.StartsWith("Bearer ", StringComparison.Ordinal) ? authorization[7..] : null;
+                if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/peer-session")
+                {
+                    await BufferRequestAsync(context);
+                    var request = await ReadAsync<ManagementPeerSessionRequest>(context, json);
+                    var result = await sessions.ExchangeManagementSessionAsync(request.SourceNodeId, request.Credential, context.RequestAborted);
+                    if (result is null)
+                    { await WriteAsync(context, runtime, null, new ApiError("UNAUTHORIZED", "管理会话尚未确认。"), 401); return; }
+                    await WriteAsync(context, runtime, new { token = result.Value.Token, username = result.Value.Operator.Username,
+                        isAdministrator = result.Value.Operator.IsAdministrator });
+                    return;
+                }
                 if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/management/v1/session")
                 {
                     var result = await sessions.ExchangeBusinessSessionAsync(token, context.RequestAborted);
@@ -97,6 +108,15 @@ public static class ManagementApi
 
         app.MapGet("/management/v1/service/status", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetStatusAsync(context.RequestAborted)));
+        app.MapGet("/management/v1/identity", async (HttpContext context, ManagementRuntime runtime, ManagementOperatorSessions sessions) =>
+            await WriteAsync(context, runtime, await sessions.AuthenticateAsync(
+                context.Request.Headers.Authorization.ToString()["Bearer ".Length..], context.RequestAborted)));
+        app.MapPost("/management/v1/business-session", async (HttpContext context, ManagementRuntime runtime,
+            ManagementOperatorSessions sessions, ManagementBusinessSessionIssuer issuer) =>
+        {
+            var actor = await sessions.AuthenticateAsync(context.Request.Headers.Authorization.ToString()["Bearer ".Length..], context.RequestAborted);
+            await WriteAsync(context, runtime, await issuer.IssueAsync(actor!, await ReadAsync<ManagementBusinessSessionRequest>(context, json), context.RequestAborted));
+        });
         app.MapGet("/management/v1/service/configuration", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetConfigurationAsync(context.RequestAborted)));
         app.MapGet("/management/v1/service/backup-info", async (HttpContext context, ManagementRuntime runtime) =>
@@ -122,6 +142,8 @@ public static class ManagementApi
         });
         app.MapGet("/management/v1/operations/{requestId}", async (string requestId, HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.FindOperationAsync(requestId, Actor(context), context.RequestAborted)));
+        app.MapPost("/management/v1/operations/{requestId}/cancel", async (string requestId, HttpContext context, ManagementRuntime runtime) =>
+            await WriteOperationAsync(context, runtime, await runtime.Operations.CancelAsync(requestId, Actor(context), context.RequestAborted)));
         foreach (var (route, kind) in new[] { ("start", ManagementOperationKind.Start), ("stop", ManagementOperationKind.Stop), ("checks", ManagementOperationKind.Checks) })
             app.MapPost($"/management/v1/service/{route}", async (HttpContext context, ManagementRuntime runtime) =>
                 await WriteOperationAsync(context, runtime, await runtime.ExecuteServiceAsync(
@@ -189,7 +211,7 @@ public static class ManagementApi
         var observation = result as HighAvailabilityStatus ?? (result as ManagementOperation)?.HighAvailability;
         if (result is ManagementOperation operation) result = operation with { FailoverPlan = null };
         var verified = observation?.VerifiedAt is { } at && observation.State is { ServerEpoch: > 0 } &&
-            DateTimeOffset.UtcNow - at <= TimeSpan.FromSeconds(10) && at <= DateTimeOffset.UtcNow.AddSeconds(5);
+            DateTimeOffset.UtcNow - at <= HighAvailabilityStatus.ObservationLifetime && at <= DateTimeOffset.UtcNow.AddSeconds(5);
         return context.Response.WriteAsJsonAsync(new ManagementEnvelope<object>(runtime.ServerId, runtime.NodeId,
             verified ? observation!.State!.ServerEpoch : null, verified, verified ? observation!.VerifiedAt : null,
             context.TraceIdentifier, result, error), JsonDefaults.CreateServerTransport(), context.RequestAborted);

@@ -19,7 +19,7 @@ public sealed record ManagementConfigurationRequest(
     string RequestId, string ServerId, string NodeId, long ExpectedVersion, ServiceConfiguration Configuration);
 
 public enum ManagementOperationKind { Start, Stop, Configure, Checks, Backup, Restore, Takeover, Emergency, Rebuild, Reprotect }
-public enum ManagementOperationPhase { Accepted, Completed, Failed, NeedsVerification, Staged }
+public enum ManagementOperationPhase { Accepted, Completed, Failed, NeedsVerification, Staged, Canceled }
 public enum BusinessReadiness { Unknown, NotReady, Ready }
 public enum RecoveryActivationPhase { SelectionPending, Selected, StartingBusiness, BusinessReady, RollbackPending, RolledBack }
 
@@ -57,4 +57,5 @@ public sealed record ManagementOperation(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ServerDeploymentState? FailoverCompletedState = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverFailureVerified = false,
     // Transient query projection only; durable journals retain the last proven checkpoint.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverWorkInProgress = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverWorkInProgress = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool CancellationRequested = false);

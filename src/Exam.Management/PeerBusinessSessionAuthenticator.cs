@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Exam.Application.Security;
 using Exam.Contracts.Common;
 using Exam.Contracts.Operators;
+using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.HighAvailability;
 
 namespace Exam.Management;
@@ -23,9 +24,11 @@ public sealed class PeerBusinessSessionAuthenticator : IDisposable
         {
             AllowAutoRedirect = false, UseProxy = false, UseCookies = false,
             ServerCertificateCustomValidationCallback = (request, certificate, _, _) =>
-                certificate is not null && Peer() is { } peer && request.RequestUri?.GetLeftPart(UriPartial.Authority) == peer.Address.GetLeftPart(UriPartial.Authority) &&
+                certificate is not null && Peer() is { } peer && request.RequestUri is { } uri &&
+                (uri.GetLeftPart(UriPartial.Authority) == peer.Address.GetLeftPart(UriPartial.Authority) ||
+                    uri.GetLeftPart(UriPartial.Authority) == ManagementAddress(peer).GetLeftPart(UriPartial.Authority)) &&
                 string.Equals(certificate.Thumbprint, peer.Thumbprint, StringComparison.OrdinalIgnoreCase)
-        });
+        }) { Timeout = ManagementTimeouts.Read };
     }
 
     private RetiredNodeEpoch? Retirement()
@@ -54,7 +57,7 @@ public sealed class PeerBusinessSessionAuthenticator : IDisposable
         var retirement = Retirement();
         if (retirement is not null && (retirement.ServerId != _serverId || retirement.NodeId != _nodeId || retirement.ActiveNodeId != peer.NodeId)) return null;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        deadline.CancelAfter(ManagementTimeouts.Read);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(peer.Address, "api/v1/operators/me"));
@@ -72,4 +75,25 @@ public sealed class PeerBusinessSessionAuthenticator : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    private Uri ManagementAddress((string NodeId, Uri Address, string Thumbprint) peer)
+    {
+        if (Uri.TryCreate(_configuration($"HighAvailability:Nodes:{peer.NodeId}:ManagementHttpsUrl"), UriKind.Absolute, out var configured) &&
+            configured.Scheme == "https" && configured.AbsolutePath == "/" && configured.UserInfo.Length == 0 &&
+            configured.Query.Length == 0 && configured.Fragment.Length == 0) return configured;
+        return new UriBuilder(peer.Address) { Port = int.TryParse(_configuration("Management:HttpsPort"), out var port) ? port : 19443 }.Uri;
+    }
+
+    public async Task<AuthenticatedOperator?> AuthenticateManagementAsync(string sourceNodeId, string credential, CancellationToken token)
+    {
+        if (Peer() is not { } peer || peer.NodeId != sourceNodeId) return null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(ManagementTimeouts.Read);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(ManagementAddress(peer), "management/v1/identity"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        if (!response.IsSuccessStatusCode) return null;
+        var envelope = await response.Content.ReadFromJsonAsync<ManagementEnvelope<AuthenticatedOperator>>(JsonDefaults.Create(), deadline.Token);
+        return envelope is { Error: null, Result: { } account } && envelope.ServerId == _serverId && envelope.NodeId == sourceNodeId ? account : null;
+    }
 }

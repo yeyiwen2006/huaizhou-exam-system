@@ -7,10 +7,11 @@ using Exam.Domain.Common;
 
 namespace Exam.Application.ServiceManagement;
 
-public sealed class ManagementOperationRunner(
+public sealed partial class ManagementOperationRunner(
     string serverId, string nodeId, IManagementOperationStore store, IClock clock,
     Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? reconcile = null,
-    Action<ManagementOperation, Exception>? recordFailure = null)
+    Action<ManagementOperation, Exception>? recordFailure = null,
+    Func<ManagementOperation, CancellationToken, Task<ManagementOperation?>>? cancel = null)
 {
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _reconcilingFailover = new(StringComparer.Ordinal);
@@ -62,11 +63,16 @@ public sealed class ManagementOperationRunner(
         // Once accepted, HA work belongs to the durable journal rather than an HTTP/page
         // lifetime. Process loss is reconciled from checkpoints; normal disconnects do not cancel it.
         using var durableDeadline = HighAvailability.DurableFailoverCoordinator.IsFailover(kind)
-            ? new CancellationTokenSource(TimeSpan.FromMinutes(90)) : null;
+            ? new CancellationTokenSource(ManagementTimeouts.HighAvailabilityOperation) : null;
         var executionToken = durableDeadline?.Token ?? cancellationToken;
         _executing.TryAdd(requestId, 0);
         try
         {
+            if (durableDeadline is not null)
+            {
+                _cancellations[requestId] = durableDeadline;
+                if (await store.IsCancellationRequestedAsync(requestId, CancellationToken.None)) durableDeadline.Cancel();
+            }
             ManagementOperation result;
             try
             {
@@ -108,12 +114,18 @@ public sealed class ManagementOperationRunner(
                         ? "状态检测未完成，可在修复依赖后用新的 requestId 再次检查。"
                         : "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
             }
+            if (result.Phase != ManagementOperationPhase.Completed &&
+                await store.IsCancellationRequestedAsync(requestId, CancellationToken.None))
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                result = await CancellationResultAsync(result, cleanup.Token);
+            }
             result = result with { UpdatedAt = clock.UtcNow };
             // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.
             await store.SaveAsync(result, CancellationToken.None);
             return result;
         }
-        finally { _executing.TryRemove(requestId, out _); }
+        finally { _cancellations.TryRemove(requestId, out _); _executing.TryRemove(requestId, out _); }
     }
 
     public async Task<ManagementOperation> FindAsync(string requestId, string actorId, CancellationToken cancellationToken)
@@ -124,13 +136,13 @@ public sealed class ManagementOperationRunner(
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
         if (_executing.ContainsKey(requestId) || reconcile is null ||
             operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
-            return ForQuery(operation);
+            return await CancellationProjectionAsync(operation, cancellationToken);
         if (HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (_reconcilingFailover.TryAdd(requestId, 0))
                 _ = ReconcileFailoverInBackgroundAsync(operation);
-            return ForQuery(operation);
+            return await CancellationProjectionAsync(operation, cancellationToken);
         }
         await using var guard = await store.AcquireAsync(cancellationToken);
         operation = await store.FindAsync(requestId, cancellationToken)
@@ -146,7 +158,8 @@ public sealed class ManagementOperationRunner(
         // original durable intent owns this work, just as it owns initial execution.
         // Repeated readers share it; disconnecting cannot restart/abort installation.
         await Task.Yield();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(90));
+        using var deadline = new CancellationTokenSource(ManagementTimeouts.HighAvailabilityOperation);
+        _cancellations[original.RequestId] = deadline;
         try
         {
             await using var guard = await store.AcquireAsync(deadline.Token);
@@ -159,9 +172,21 @@ public sealed class ManagementOperationRunner(
         catch (Exception error)
         {
             try { recordFailure?.Invoke(original, error); } catch { }
+            if (await store.IsCancellationRequestedAsync(original.RequestId, CancellationToken.None))
+            {
+                try
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                    await using var guard = await store.AcquireAsync(cleanup.Token);
+                    var current = await store.FindAsync(original.RequestId, cleanup.Token);
+                    if (current is not null && current.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification)
+                        await store.SaveAsync(await CancellationResultAsync(current, cleanup.Token), CancellationToken.None);
+                }
+                catch (Exception cleanupError) { try { recordFailure?.Invoke(original, cleanupError); } catch { } }
+            }
             // Preserve the checkpoint; a later query/restart can continue the same intent.
         }
-        finally { _reconcilingFailover.TryRemove(original.RequestId, out _); }
+        finally { _cancellations.TryRemove(original.RequestId, out _); _reconcilingFailover.TryRemove(original.RequestId, out _); }
     }
 
     private async Task<ManagementOperation> ReconcileUnderLockAsync(ManagementOperation operation, CancellationToken token)
@@ -169,6 +194,12 @@ public sealed class ManagementOperationRunner(
         if (reconcile is null || _executing.ContainsKey(operation.RequestId) ||
             operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
             return ForQuery(operation);
+        if (await store.IsCancellationRequestedAsync(operation.RequestId, token))
+        {
+            var canceled = await CancellationResultAsync(operation, token);
+            await store.SaveAsync(canceled, CancellationToken.None);
+            return await CancellationProjectionAsync(canceled, token);
+        }
         ManagementOperation? observed;
         try { observed = await reconcile(operation, token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }

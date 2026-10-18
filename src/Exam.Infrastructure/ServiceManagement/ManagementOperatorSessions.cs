@@ -22,7 +22,8 @@ public sealed class ManagementOperatorSessions(
     Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticateBusinessSession = null,
     Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerBusinessSession = null,
     Func<bool>? localBusinessSessionAllowed = null,
-    TimeProvider? time = null)
+    TimeProvider? time = null,
+    Func<string, string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerManagementSession = null)
 {
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Huaizhou.Exam.Management.OperatorCache.v1");
     private sealed record Session(AuthenticatedOperator Operator, CachedOperatorCredential? Credential, DateTimeOffset VerifiedAt);
@@ -56,8 +57,10 @@ public sealed class ManagementOperatorSessions(
         deadline.CancelAfter(databaseTimeout ?? TimeSpan.FromSeconds(5));
         AuthenticatedOperator? account = null;
         if (localBusinessSessionAllowed?.Invoke() != false)
-            account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token)
-                .ConfigureAwait(false);
+        {
+            try { account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token).ConfigureAwait(false); }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+        }
         if (account is null && authenticatePeerBusinessSession is not null)
         {
             account = await authenticatePeerBusinessSession(token, cancellationToken).ConfigureAwait(false);
@@ -67,14 +70,18 @@ public sealed class ManagementOperatorSessions(
             return (managementToken, account);
         }
         if (account is null) return null;
-        var credentials = await TryRefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false);
-        var match = credentials?.FirstOrDefault(item =>
-            Exam.Contracts.Operators.OperatorRules.Key(item.Username) == Exam.Contracts.Operators.OperatorRules.Key(account.Username) &&
-            item.IsAdministrator == account.IsAdministrator);
-        return match is null ? null : CreateSession(account, match);
+        return CreateSession(account, null);
     }
 
-    private (string Token, AuthenticatedOperator Operator) CreateSession(AuthenticatedOperator account, CachedOperatorCredential credential)
+    public async Task<(string Token, AuthenticatedOperator Operator)?> ExchangeManagementSessionAsync(string sourceNodeId,
+        string credential, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(credential) || credential.Length > 256 || authenticatePeerManagementSession is null) return null;
+        var account = await authenticatePeerManagementSession(sourceNodeId, credential, token).ConfigureAwait(false);
+        return account is null ? null : CreateSession(account, null);
+    }
+
+    private (string Token, AuthenticatedOperator Operator) CreateSession(AuthenticatedOperator account, CachedOperatorCredential? credential)
     {
         var token = OperatorPasswordHasher.NewSessionToken();
         _sessions[OperatorPasswordHasher.TokenDigest(token)] = new(account, credential, _time.GetUtcNow());

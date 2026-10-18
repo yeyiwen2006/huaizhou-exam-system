@@ -90,6 +90,13 @@ public interface IManagementConnection : IDisposable
         Task.FromException<ManagementReply<BackupInfo>>(new NotSupportedException("该服务器不支持读取备份信息。"));
     Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token);
     Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token);
+    Task<ManagementReply<ManagementOperation>> CancelAsync(string id, CancellationToken token) =>
+        Task.FromException<ManagementReply<ManagementOperation>>(new NotSupportedException("当前管理服务不支持取消操作。"));
+    ManagementSessionSnapshot? CaptureManagementSession() => null;
+    Task UseManagementSessionAsync(ManagementSessionSnapshot session, CancellationToken token) =>
+        Task.FromException(new NotSupportedException("当前管理服务不支持节点会话复用。"));
+    Task<ManagementReply<ManagementBusinessSession>> ExchangeBusinessSessionAsync(string activeNodeId, long epoch, CancellationToken token) =>
+        Task.FromException<ManagementReply<ManagementBusinessSession>>(new NotSupportedException("当前管理服务不支持恢复考务会话。"));
 }
 
 /// <summary>The GUI reuses the management transport and maintains an independent management session.</summary>
@@ -122,11 +129,11 @@ public sealed class ManagementConnection : IManagementConnection
         var endpoint = target.Validate();
         _session = new HttpClient(transport?.Invoke() ?? new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false })
-        { BaseAddress = endpoint, Timeout = TimeSpan.FromSeconds(45) };
+        { BaseAddress = endpoint, Timeout = ManagementTimeouts.Read };
         _reads = new(endpoint, target.ServerId, target.NodeId, () => _credential, transport?.Invoke(),
-            readTimeout ?? TimeSpan.FromSeconds(45));
+            readTimeout ?? ManagementTimeouts.Read);
         _writes = new(endpoint, target.ServerId, target.NodeId, () => _credential, transport?.Invoke(),
-            writeTimeout ?? TimeSpan.FromMinutes(65));
+            writeTimeout ?? ManagementTimeouts.Write);
     }
 
     public async Task LoginAsync(string username, string password, CancellationToken token)
@@ -137,7 +144,12 @@ public sealed class ManagementConnection : IManagementConnection
         using var request = new HttpRequestMessage(HttpMethod.Post, "/management/v1/login")
         { Content = new StringContent(JsonSerializer.Serialize(new LoginOperatorRequest(username.Trim(), password), _json), Encoding.UTF8, "application/json") };
         var reply = await SessionAsync<LoginReply>(request, token);
-        if (reply.Error is not null) throw new UnauthorizedAccessException("管理登录失败，请核对已启用的考务账号及目标服务器。");
+        if (reply.Error is { } error)
+        {
+            if (error.Code is "UNAUTHORIZED" or "INVALID_CREDENTIALS" or "OPERATOR_INVALID_CREDENTIALS" or ErrorCodes.Forbidden)
+                throw new UnauthorizedAccessException("登录失败：用户名或密码不正确，或账号尚未启用。");
+            throw new HttpRequestException("服务器管理暂不可用。");
+        }
         var result = reply.Result;
         if (result is null || string.IsNullOrWhiteSpace(result.Token) || result.Token.Length > 4096 ||
             !string.Equals(result.Username, username.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -182,7 +194,7 @@ public sealed class ManagementConnection : IManagementConnection
     private async Task<ManagementEnvelope<T>> SessionAsync<T>(HttpRequestMessage request, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(45));
+        deadline.CancelAfter(ManagementTimeouts.Read);
         using var response = await _session.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
         if ((int)response.StatusCode is >= 300 and < 400 || response.Content.Headers.ContentLength > 65536)
             throw new HttpRequestException("拒绝重定向或过大的管理会话响应。");
@@ -225,6 +237,27 @@ public sealed class ManagementConnection : IManagementConnection
     public async Task<ManagementReply<ManagementOperation>> ExecuteAsync(ManagementOperationKind kind, string body, CancellationToken token) =>
         Wrap(await _writes.ExecuteAsync(kind, body, token));
     public async Task<ManagementReply<ManagementOperation>> FindAsync(string id, CancellationToken token) => Wrap(await _reads.GetOperationAsync(id, token));
+    public async Task<ManagementReply<ManagementOperation>> CancelAsync(string id, CancellationToken token) => Wrap(await _reads.CancelOperationAsync(id, token));
+    public ManagementSessionSnapshot? CaptureManagementSession() => Actor is not null && _credential is not null ? new(Target, Actor, _credential) : null;
+    public async Task UseManagementSessionAsync(ManagementSessionSnapshot session, CancellationToken token)
+    {
+        if (session.Target.ServerId != Target.ServerId) throw new UnauthorizedAccessException("管理会话不属于当前考试系统。");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/management/v1/peer-session")
+        { Content = new StringContent(JsonSerializer.Serialize(new ManagementPeerSessionRequest(session.Target.NodeId, session.Credential), _json), Encoding.UTF8, "application/json") };
+        var reply = await SessionAsync<LoginReply>(request, token);
+        if (reply.Error is not null || reply.Result is not { } result || string.IsNullOrWhiteSpace(result.Token) ||
+            !string.Equals(result.Username, session.Username, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("该节点暂未确认已有管理身份。");
+        _credential = result.Token; Actor = result.Username;
+    }
+    public async Task<ManagementReply<ManagementBusinessSession>> ExchangeBusinessSessionAsync(string activeNodeId, long epoch, CancellationToken token)
+    {
+        var reply = Wrap(await _reads.ExchangeBusinessSessionAsync(new(activeNodeId, epoch), token));
+        if (reply.Envelope.Result is { } result && (result.ServerId != Target.ServerId || result.NodeId != activeNodeId ||
+            result.ServerEpoch < epoch || !string.Equals(result.Session.Account.Username, Actor, StringComparison.OrdinalIgnoreCase)))
+            throw new UnauthorizedAccessException("恢复的考务身份与当前管理身份不一致。");
+        return reply;
+    }
     private void Clear() { _credential = null; Actor = null; }
     public void Dispose() { Clear(); _session.Dispose(); _reads.Dispose(); _writes.Dispose(); }
     private sealed record LoginReply(string Token, string Username, bool IsAdministrator);

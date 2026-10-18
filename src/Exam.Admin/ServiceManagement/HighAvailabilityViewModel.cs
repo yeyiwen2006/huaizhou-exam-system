@@ -127,7 +127,7 @@ public sealed partial class ServiceManagementViewModel
                 var connection = _connection; var generation = _generation;
                 // A slow log or operation query must not starve the independent HA observation.
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(polling.Token, _lifetime.Token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(50));
+                deadline.CancelAfter(ManagementTimeouts.Read);
                 _ = RefreshPeerStatusAsync();
                 try { await ObserveHighAvailabilityAsync(connection, generation, deadline.Token); }
                 catch (OperationCanceledException) when (polling.IsCancellationRequested) { break; }
@@ -154,7 +154,7 @@ public sealed partial class ServiceManagementViewModel
     private async Task ReadHighAvailabilityAsync(IManagementConnection connection, long generation)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(50));
+        deadline.CancelAfter(ManagementTimeouts.Read);
         var token = deadline.Token;
         var expected = _availability;
         try
@@ -194,7 +194,9 @@ public sealed partial class ServiceManagementViewModel
         return SelectedNode is { IsPlaceholder: false } selected && selected.NodeId == HighAvailabilityTarget.Trim() &&
             ConfiguredManagementTargets.Any(target => target.NodeId == selected.NodeId) &&
             IsHighAvailabilityTargetRoutable(selected.NodeId) && selected.NodeId != CurrentActiveNodeId &&
-            (selected.Role is "隔离" or "重建" || selected.Recovery.StartsWith("旧库", StringComparison.Ordinal));
+            (selected.Role is "隔离" or "重建" || selected.Recovery.StartsWith("旧库", StringComparison.Ordinal) ||
+                selected.Role == "备机" && _highAvailabilityOperation is { Kind: ManagementOperationKind.Rebuild, Phase: ManagementOperationPhase.Canceled } canceled &&
+                canceled.NodeId == selected.NodeId);
     }
 
     private bool IsHighAvailabilityTarget(ManagementOperationKind kind, ServerDeploymentState state, NodeState node) =>

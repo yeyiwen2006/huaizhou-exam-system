@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Exam.Contracts.HighAvailability;
 using Exam.Contracts.Common;
+using Exam.Contracts.ServiceManagement;
 using Exam.Domain.Common;
 using Exam.Infrastructure.ServiceManagement;
 using Npgsql;
@@ -40,6 +41,7 @@ public sealed class PostgresNodeHealthProbe(
                 var settings = new NpgsqlConnectionStringBuilder(node.ConnectionString)
                 { CommandTimeout = 5, Pooling = true, MinPoolSize = 0, MaxPoolSize = 2, ApplicationName = "Exam.Management.Health" };
                 settings.Timeout = ManagementProbeConnection.ConnectionTimeout(settings);
+                settings.CommandTimeout = ManagementProbeConnection.CommandTimeout(settings, settings.CommandTimeout);
                 return NpgsqlDataSource.Create(settings.ConnectionString);
             })).Value;
             await using var connection = await source.OpenConnectionAsync(cancellationToken);
@@ -200,6 +202,7 @@ public sealed class StagedPostgresNodeRebuilder(
             ["PGUSER"] = connection.Username ?? throw new InvalidOperationException("重建源数据库用户不能为空。"),
             ["PGPASSWORD"] = connection.Password ?? string.Empty,
             ["PGAPPNAME"] = nodeId,
+            ["PGOPTIONS"] = $"-c wal_sender_timeout={(int)ManagementTimeouts.ReplicationInactivity.TotalMilliseconds} -c statement_timeout=0",
             ["PGCONNECT_TIMEOUT"] = ManagementProbeConnection.ConnectionTimeout(connection).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["PGSSLMODE"] = connection.SslMode switch
             {
@@ -212,18 +215,34 @@ public sealed class StagedPostgresNodeRebuilder(
         List<string> arguments = ["--pgdata", target, "--write-recovery-conf", "--wal-method=stream", "--checkpoint=fast",
             "--compress=server-gzip:level=1", "--slot=" + replicationSlot, "--no-password", "--no-clean"];
         if (options.PrecreatedReplicationSlot is null) arguments.Add("--create-slot");
-        var result = await processRunner.RunAsync(
+        ExternalProcessResult result;
+        try { result = await processRunner.RunAsync(
             Path.Combine(options.PostgresBinDirectory, OperatingSystem.IsWindows() ? "pg_basebackup.exe" : "pg_basebackup"),
             arguments,
             environment,
             options.Timeout,
-            cancellationToken);
+            cancellationToken); }
+        catch (TimeoutException)
+        {
+            await DurableJsonFile.WriteAsync(Path.Combine(root, "basebackup-failure.json"),
+                new { stage = "database-copy", kind = "timeout", message = "数据库基础备份超过复制期限。" }, CancellationToken.None);
+            throw new DomainRuleException(ErrorCodes.ReplicaUnavailable, "数据库复制超过允许时限，原库未替换。", true);
+        }
         if (result.ExitCode != 0)
         {
+            var detail = result.StandardError;
+            foreach (var credential in new[] { connection.Password, managementConnection.Password })
+                if (!string.IsNullOrEmpty(credential)) detail = detail.Replace(credential, "[redacted]", StringComparison.Ordinal);
+            await DurableJsonFile.WriteAsync(Path.Combine(root, "basebackup-failure.json"),
+                new { stage = "database-copy", exitCode = result.ExitCode, detail }, CancellationToken.None);
             if (result.StandardError.Contains("pg_hba.conf", StringComparison.OrdinalIgnoreCase))
                 throw new DomainRuleException(ErrorCodes.ReplicaUnavailable,
                     "物理复制连接被 pg_hba.conf 规则拒绝，请核对复制账号及来源地址；原备库已保留。");
-            throw new IOException($"备机重建基础备份失败：{result.StandardError.Trim()}");
+            var disconnected = new[] { "connection", "timeout", "could not receive", "could not send", "unexpected EOF", "SSL SYSCALL" }
+                .Any(value => result.StandardError.Contains(value, StringComparison.OrdinalIgnoreCase));
+            throw new DomainRuleException(ErrorCodes.ReplicaUnavailable, disconnected
+                ? "数据库复制连接中断或超时，原库未替换；可在网络恢复后重新重建。"
+                : $"数据库基础备份执行失败（退出码 {result.ExitCode}），原库未替换；具体原因已保存在本机重建诊断记录。", true);
         }
     }
 

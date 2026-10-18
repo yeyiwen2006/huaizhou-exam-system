@@ -77,6 +77,21 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
             ?? throw Rule(OperatorErrorCodes.InvalidCredentials, "用户名或口令不正确。");
         EnsureActive(account);
 
+        return await CreateSessionAsync(connection, account, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<OperatorSession> IssueAuthenticatedSessionAsync(string username, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var account = await FindAsync(connection, null, username, cancellationToken).ConfigureAwait(false)
+            ?? throw Rule(OperatorErrorCodes.InvalidCredentials, "考务账号不存在。");
+        EnsureActive(account);
+        return await CreateSessionAsync(connection, account, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<OperatorSession> CreateSessionAsync(NpgsqlConnection connection, OperatorAccount account,
+        CancellationToken cancellationToken)
+    {
         var token = OperatorPasswordHasher.NewSessionToken();
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO exam.operator_sessions (token_digest, username_key, created_at)

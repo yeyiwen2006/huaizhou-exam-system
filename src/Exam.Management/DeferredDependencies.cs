@@ -42,4 +42,6 @@ internal sealed class DeferredOperationStore(Func<IManagementOperationStore> loa
     public Task<ManagementOperation?> FindAsync(string requestId, CancellationToken cancellationToken) => load().FindAsync(requestId, cancellationToken);
     public Task SaveAsync(ManagementOperation operation, CancellationToken cancellationToken) => load().SaveAsync(operation, cancellationToken);
     public Task<bool> HasUnverifiedOperationsAsync(CancellationToken cancellationToken) => load().HasUnverifiedOperationsAsync(cancellationToken);
+    public Task RequestCancellationAsync(string requestId, string actorId, CancellationToken token) => load().RequestCancellationAsync(requestId, actorId, token);
+    public Task<bool> IsCancellationRequestedAsync(string requestId, CancellationToken token) => load().IsCancellationRequestedAsync(requestId, token);
 }

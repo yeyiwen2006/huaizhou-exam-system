@@ -11,6 +11,7 @@ using Exam.Contracts.Activation;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
 using Exam.Contracts.Operators;
+using Exam.Contracts.ServiceManagement;
 
 namespace Exam.Admin.Services;
 
@@ -86,7 +87,7 @@ public sealed partial class AdminApiClient
                 return route is null || route.PublicAlias ? errors == SslPolicyErrors.None : certificate is not null &&
                     certificate.GetCertHashString(HashAlgorithmName.SHA256).Equals(route.Pin, StringComparison.OrdinalIgnoreCase);
             };
-        return new(handler) { Timeout = TimeSpan.FromSeconds(30), MaxResponseContentBufferSize = 64 * 1024 * 1024 };
+        return new(handler) { Timeout = ManagementTimeouts.Read, MaxResponseContentBufferSize = 64 * 1024 * 1024 };
     }
 
     private async Task LearnRoutesAsync(CancellationToken token)
@@ -130,7 +131,7 @@ public sealed partial class AdminApiClient
             try
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(discovery.Token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(15));
+                deadline.CancelAfter(ManagementTimeouts.Read);
                 using var client = CreateRoutedClient(routes);
                 using var response = await client.GetAsync(new Uri(route.Address, "api/v1/commands/time"), deadline.Token);
                 if (!response.IsSuccessStatusCode) return null;
@@ -188,7 +189,7 @@ public sealed partial class AdminApiClient
             {
                 candidate.BaseAddress = active.Value.Route.Address;
                 candidate.DefaultRequestHeaders.Authorization = _httpClient.DefaultRequestHeaders.Authorization;
-                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(ManagementTimeouts.Read);
                 using var response = await candidate.GetAsync("api/v1/operators/me", deadline.Token);
                 var account = await response.Content.ReadFromJsonAsync<ApiEnvelope<OperatorAccount>>(_json, deadline.Token);
                 if (!response.IsSuccessStatusCode || account is not { IsSuccess: true, Result: { } result } ||

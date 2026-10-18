@@ -111,6 +111,18 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
         return false;
     }
 
+    private sealed record CancellationIntent(string RequestId, string ActorId);
+    public Task RequestCancellationAsync(string requestId, string actorId, CancellationToken token) =>
+        DurableJsonFile.WriteAsync(Resolve(requestId) + ".cancel", new CancellationIntent(requestId, actorId), token);
+
+    public Task<bool> IsCancellationRequestedAsync(string requestId, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var intent = DurableJsonFile.Read<CancellationIntent>(Resolve(requestId) + ".cancel");
+        if (intent is not null && intent.RequestId != requestId) throw new InvalidDataException("取消请求与原操作不一致。");
+        return Task.FromResult(intent is not null);
+    }
+
     public async Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken cancellationToken)
     {
         if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
@@ -168,7 +180,7 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
     private static void Validate(ManagementOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        if (operation.FailoverWorkInProgress)
+        if (operation.FailoverWorkInProgress || operation.CancellationRequested)
             throw new InvalidDataException("正在执行标记仅用于查询，不能替代持久操作阶段。");
         if (operation.FailoverFailureVerified &&
             (operation.Kind != ManagementOperationKind.Rebuild || operation.Phase != ManagementOperationPhase.Failed ||

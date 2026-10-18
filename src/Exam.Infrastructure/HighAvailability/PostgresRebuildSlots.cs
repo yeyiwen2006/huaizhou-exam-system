@@ -17,6 +17,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         var owner = new SlotOwner(_options.ServerId, Local.NodeId, plan.After.ActiveNodeId, plan.SystemIdentifier,
             plan.DatabaseName, plan.RequestId, plan.ContentHash, name, true);
         var source = StateSource(_options.Nodes[owner.SourceNodeId]);
+        await RetireAbortedSlotsAsync(plan, source, token);
         await using var exists = source.CreateCommand("SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name=$1)");
         exists.Parameters.AddWithValue(name);
         if (await exists.ExecuteScalarAsync(token) is true) throw new IOException("重建槽已存在且不属于本次新建流程，禁止复用。");
@@ -40,6 +41,25 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
             // rebuild. Retain every unproven slot and report cleanup for later retry.
             try { _recordProbeFailure?.Invoke("Exam.Management.Rebuild.SlotCleanupDeferred", error); }
             catch { /* Diagnostic storage cannot invalidate the verified rebuild either. */ }
+        }
+    }
+
+    private async Task RetireAbortedSlotsAsync(FailoverExecutionPlan plan, NpgsqlDataSource source, CancellationToken token)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(_options.RebuildRoot))
+        {
+            try
+            {
+                var owner = DurableJsonFile.Read<SlotOwner>(OwnerPath(directory), 8192);
+                if (owner is null || owner.Retired || !OwnedByPlan(owner, plan, directory)) continue;
+                var progress = DurableJsonFile.Read<RebuildProgress>(Path.Combine(directory, "rebuild-progress.json"));
+                if (progress is not { Phase: "Aborted" } || progress.Plan.RequestId != owner.RequestId ||
+                    progress.Plan.ContentHash != owner.ContentHash || ExternalPreparationProcesses.IsRunning(_options.PostgresBinDirectory, directory)) continue;
+                await DropOwnedSlotAsync(owner, directory, source, token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error) when (error is IOException or NpgsqlException or TimeoutException)
+            { try { _recordProbeFailure?.Invoke("Exam.Management.Rebuild.SlotCleanupDeferred", error); } catch { } }
         }
     }
 

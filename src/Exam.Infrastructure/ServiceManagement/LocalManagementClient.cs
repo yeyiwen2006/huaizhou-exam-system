@@ -31,7 +31,7 @@ public sealed class LocalManagementClient : IDisposable
         _serverId = serverId;
         _nodeId = nodeId;
         _token = token ?? throw new ArgumentNullException(nameof(token));
-        _requestTimeout = requestTimeout ?? TimeSpan.FromMinutes(65);
+        _requestTimeout = requestTimeout ?? ManagementTimeouts.Write;
         if (_requestTimeout <= TimeSpan.Zero || _requestTimeout.TotalMilliseconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         // Injected transports are for trusted composition/tests. Production uses normal certificate validation.
@@ -41,6 +41,11 @@ public sealed class LocalManagementClient : IDisposable
 
     public Task<ManagementClientResponse<ManagementStatus>> GetStatusAsync(CancellationToken token = default) =>
         SendAsync<ManagementStatus>(HttpMethod.Get, "service/status", null, token);
+
+    public Task<ManagementClientResponse<ManagementOperation>> CancelOperationAsync(string requestId, CancellationToken token = default) =>
+        SendAsync<ManagementOperation>(HttpMethod.Post, "operations/" + Uri.EscapeDataString(requestId) + "/cancel", "{}", token);
+    public Task<ManagementClientResponse<ManagementBusinessSession>> ExchangeBusinessSessionAsync(ManagementBusinessSessionRequest request, CancellationToken token = default) =>
+        SendAsync<ManagementBusinessSession>(HttpMethod.Post, "business-session", JsonSerializer.Serialize(request, _json), token);
 
     public async Task<ManagementClientResponse<HighAvailabilityStatus>> GetLocalHighAvailabilityAsync(CancellationToken token = default)
     {

@@ -63,6 +63,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         EmergencyCommand = OperationCommand(ManagementOperationKind.Emergency);
         RebuildCommand = OperationCommand(ManagementOperationKind.Rebuild);
         ReprotectCommand = OperationCommand(ManagementOperationKind.Reprotect);
+        CancelHighAvailabilityCommand = new AsyncRelayCommand(CancelHighAvailabilityAsync, CanCancelHighAvailability, OnError);
         QueryCommand = new AsyncRelayCommand(QueryAsync, () => IsSignedIn && !_readBusy &&
             (!string.IsNullOrWhiteSpace(RequestIdToQuery) || _lastRequestId.Length > 0 || _pending is not null), OnError);
         ResumeRestoreCommand = new AsyncRelayCommand(ResumeRestoreAsync, () => IsSignedIn && CanResumeRestore && !IsBusy, OnError);
@@ -109,11 +110,14 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public string Username { get => _username; set => SetProperty(ref _username, value); }
     public string Message { get => _message; private set { if (SetProperty(ref _message, value)) OnPropertyChanged(nameof(DisplayMessage)); } }
     public string DisplayMessage => _highAvailabilityOperation is { } operation ? FailoverProgressText(operation) : Message;
+    public string HighAvailabilityFailureText => _highAvailabilityOperation is { Phase: ManagementOperationPhase.Failed, Error: { } error }
+        ? error.Message : string.Empty;
 
     private static string FailoverProgressText(ManagementOperation operation) =>
+        operation.CancellationRequested ? (operation.Kind == ManagementOperationKind.Takeover ? "正在取消接管" : "正在取消重建") :
         (operation.Kind == ManagementOperationKind.Takeover ? "接管" : "重建") +
         (operation.FailoverWorkInProgress ? "中" : operation.Phase switch
-        { ManagementOperationPhase.Completed => "成功", ManagementOperationPhase.Failed => "失败", _ => "中" });
+        { ManagementOperationPhase.Completed => "成功", ManagementOperationPhase.Failed => "失败", ManagementOperationPhase.Canceled => "已取消", _ => "中" });
 
     private void RememberFailoverProgress(ManagementOperation operation)
     {
@@ -121,10 +125,13 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         if (_highAvailabilityOperation is { } previous &&
             (previous.RequestId != operation.RequestId && previous.AcceptedAt > operation.AcceptedAt ||
              previous.RequestId == operation.RequestId && (previous.UpdatedAt > operation.UpdatedAt ||
-                previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed && !previous.FailoverWorkInProgress &&
-                (operation.FailoverWorkInProgress || operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed))))) return;
+                previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled && !previous.FailoverWorkInProgress &&
+                (operation.FailoverWorkInProgress || operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled))))) return;
         _highAvailabilityOperation = operation;
         OnPropertyChanged(nameof(DisplayMessage));
+        OnPropertyChanged(nameof(HighAvailabilityFailureText));
+        OnPropertyChanged(nameof(CancelHighAvailabilityText));
+        CancelHighAvailabilityCommand.RaiseCanExecuteChanged();
     }
 
     private void RememberFailoverProgress(PendingManagementRequest request) => RememberFailoverProgress(new ManagementOperation(
@@ -191,6 +198,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     public void SetBusinessSession(AdminSessionSnapshot? session)
     {
         if (session is not null && _businessSession?.Matches(session) == true) return;
+        if (session is null && IsSignedIn) return;
+        if (session is not null && IsSignedIn && ConfirmedManagementIdentity() is { } identity && identity.Target.ServerId == session.ServerId &&
+            string.Equals(identity.Username, session.Username, StringComparison.OrdinalIgnoreCase))
+        { _businessSession = session; _ = FollowBusinessManagementAsync(session); _ = RefreshPeerStatusAsync(force: true); return; }
         if (session is not null && _businessSession?.SameAuthentication(session) == true)
         { _businessSession = session; _ = FollowBusinessManagementAsync(session); return; }
         ResetSession();
@@ -200,13 +211,12 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         Username = session?.Username ?? string.Empty;
         Message = session is null ? "主服务器不可用导致无法正常登录时，可在此使用考务账号独立登录管理服务。" : string.Empty;
         OnPropertyChanged(nameof(ConnectionStatus)); UpdateCommands();
-        if (_active && ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
+        if (ReconnectCommand.CanExecute(null)) ReconnectCommand.Execute(null);
     }
 
     public async Task ReconnectAsync()
     {
         if (_disposed || IsBusy || _businessSession is not { } session || !HasConnectionConfiguration) return;
-        ResetSession();
         if (session.ServerId != ServerId.Trim())
         { Message = "管理连接与当前考务会话不属于同一考试系统，请联系部署人员核对主备连接配置。"; return; }
         var target = CurrentTarget(); var generation = _generation;
@@ -222,7 +232,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             OnPropertyChanged(nameof(TargetText)); OnPropertyChanged(nameof(ConnectionStatus));
         }
         catch (Exception) when (generation != _generation || _disposed) { return; }
-        catch { ResetSession(); throw; }
+        catch { throw; }
         finally { if (generation == _generation) IsBusy = false; }
         if (IsSignedIn) await RefreshAsync();
         StartPolling();
@@ -476,7 +486,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             try
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(45));
+                deadline.CancelAfter(ManagementTimeouts.Read);
                 var connection = await EnsureTargetSessionAsync(request.Target, deadline.Token);
                 if (connection?.Actor != request.Actor) return;
                 var reply = await connection.FindAsync(request.RequestId, deadline.Token);
@@ -488,7 +498,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 {
                     ValidatePendingOperation(operation, request);
                     RememberFailoverProgress(operation);
-                    if (operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)) return;
+                    if (operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled)) return;
                     _store.Clear(request);
                     _knownPendingRequests.TryRemove(request.Target.Key, out _);
                     NotifyPending();
@@ -592,8 +602,8 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             // A delayed checkpoint must not move the current restore backwards after its final response.
             if (_restoreOperation is { } previous && previous.RequestId == operation.RequestId &&
                 (operation.UpdatedAt < previous.UpdatedAt ||
-                 previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed &&
-                 operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed))) return;
+                 previous.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled &&
+                 operation.Phase is not (ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled))) return;
             if (operation.Phase == ManagementOperationPhase.Completed && !RestoreCompleted(operation))
                 throw new System.IO.InvalidDataException("恢复完成证据不完整。");
             _restoreOperation = operation;
@@ -628,9 +638,10 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
             ManagementOperationPhase.Staged => "恢复仅完成隔离暂存，业务尚未就绪。",
             ManagementOperationPhase.NeedsVerification => "操作仍待核对；不能创建新请求代替原请求。",
             ManagementOperationPhase.Failed => SafeError(reply.StatusCode),
+            ManagementOperationPhase.Canceled => "操作已取消；已生效的角色和数据保留，可以重新发起适用的操作。",
             _ => "操作已受理，继续查询请求处理状态。"
         };
-        if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed)
+        if (operation.Phase is ManagementOperationPhase.Completed or ManagementOperationPhase.Failed or ManagementOperationPhase.Canceled)
         {
             if (operation.Configuration is not null && operation.Phase == ManagementOperationPhase.Completed) LoadConfiguration(operation.Configuration);
             _store.Clear(request); _knownPendingRequests.TryRemove(request.Target.Key, out _);
@@ -861,7 +872,7 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
     {
         foreach (var command in new[] { RefreshCommand, ReconnectCommand, LogoutCommand, StartCommand, StopCommand, ChecksCommand, ConfigureCommand,
                      BackupCommand, RestoreCommand, TakeoverCommand, EmergencyCommand, RebuildCommand, ReprotectCommand,
-                     QueryCommand, ResumeRestoreCommand, RetryOriginalCommand }) command?.RaiseCanExecuteChanged();
+                     QueryCommand, ResumeRestoreCommand, RetryOriginalCommand, CancelHighAvailabilityCommand }) command?.RaiseCanExecuteChanged();
         CancelWaitCommand?.RaiseCanExecuteChanged();
         SaveConnectionCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(CanLogin)); OnPropertyChanged(nameof(CanEnterManagementCredentials));
@@ -876,6 +887,6 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
         ManagementOperationKind.Configure => "保存配置", ManagementOperationKind.Checks => "状态检测", ManagementOperationKind.Backup => "备份", ManagementOperationKind.Restore => "恢复",
         ManagementOperationKind.Takeover => "接管", ManagementOperationKind.Emergency => "进入单机应急", ManagementOperationKind.Rebuild => "重建旧节点", ManagementOperationKind.Reprotect => "恢复同步保护", _ => "未知操作" };
     private static string PhaseText(ManagementOperationPhase phase) => phase switch { ManagementOperationPhase.Completed => "完成", ManagementOperationPhase.Failed => "失败",
-        ManagementOperationPhase.Accepted => "已受理", ManagementOperationPhase.Staged => "仅隔离暂存", _ => "待核对" };
+        ManagementOperationPhase.Accepted => "已受理", ManagementOperationPhase.Canceled => "已取消", ManagementOperationPhase.Staged => "仅隔离暂存", _ => "待核对" };
     public void Dispose() { if (_disposed) return; _backupMonitoring?.Cancel(); Deactivate(); ResetSession(); _disposed = true; _lifetime.Dispose(); }
 }

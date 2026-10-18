@@ -97,7 +97,7 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(45));
+            deadline.CancelAfter(ManagementTimeouts.Read);
             connection = _factory(node.Target);
             if (!SameEndpoint(connection.Target, node.Target))
                 throw new InvalidDataException("管理连接工厂返回了其他节点的连接。");
@@ -278,17 +278,15 @@ public sealed partial class ServiceManagementViewModel
             var result = await StartBusinessAuthentication(target, session).WaitAsync(token);
             if (!CurrentAttempt()) return null;
             if (result is not null) return result;
-            if (node.AuthenticationError is not UnauthorizedAccessException)
-            {
-                if (requestCredentials) Message = $"节点 {target.NodeId} 的管理连接暂不可用；当前管理连接及原请求继续保留。";
-                return null;
-            }
         }
-        if (requestCredentials)
+        if (ConfirmedManagementIdentity() is { } identity && identity.Target.Key != target.Key)
         {
-            SetPeerLoginTarget(target);
-            Message = $"需要验证节点 {target.NodeId} 的管理身份，请在本页输入当前考务账号的密码。当前管理连接继续保留。";
+            var result = await StartNodeAuthentication(target, (connection, cancellation) => connection.UseManagementSessionAsync(identity, cancellation),
+                identity.Username).WaitAsync(token);
+            if (!CurrentAttempt()) return null;
+            if (result is not null) return result;
         }
+        if (requestCredentials) Message = $"节点 {target.NodeId} 暂时无法连接，其他节点的登录和原请求继续保留。";
         return null;
     }
 
@@ -341,7 +339,7 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             using var deadline = _routingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(50));
+            deadline.CancelAfter(ManagementTimeouts.Read);
             var candidate = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: true);
             if (candidate is null || version != _managementSessionVersion || !IsSignedIn || selected != HighAvailabilityTarget.Trim()) return false;
             if (!string.Equals(candidate.Actor, previous.Actor, StringComparison.OrdinalIgnoreCase))
@@ -415,7 +413,7 @@ public sealed partial class ServiceManagementViewModel
         try
         {
             using var deadline = _routingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(25));
+            deadline.CancelAfter(ManagementTimeouts.Read);
             var candidate = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: true);
             if (candidate is null || deadline.IsCancellationRequested || version != _managementSessionVersion ||
                 generation != _generation || !IsSignedIn) return false;
@@ -476,7 +474,7 @@ public sealed partial class ServiceManagementViewModel
         var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == nodeId);
         if (target is null) return "管理状态待查询";
         if (!_nodeStatuses.TryGetValue(target.Key, out var value) || value.Status is null) return "管理状态待查询";
-        var fresh = !value.Unavailable && _time.GetUtcNow() - value.ObservedAt < TimeSpan.FromSeconds(30);
+        var fresh = !value.Unavailable && _time.GetUtcNow() - value.ObservedAt < HighAvailabilityStatus.ObservationLifetime;
         var standby = fresh && value.Status is { ProcessStatus: BusinessServiceStatus.Running, Readiness: BusinessReadiness.NotReady } &&
             _displayState?.Nodes.GetValueOrDefault(nodeId) is { Role: DeploymentNodeRole.Standby,
                 Reachable: true, DatabaseInRecovery: true, KeyMaterialReady: true, CertificateReady: true } &&
@@ -553,13 +551,13 @@ public sealed partial class ServiceManagementViewModel
             {
                 var node = NodeSession(target);
                 connection = node.Connection;
-                if (connection is null && _businessSession is { } session)
-                    connection = await StartBusinessAuthentication(target, session).WaitAsync(token);
+                if (connection is null)
+                    connection = await EnsureTargetSessionAsync(target, token, requestCredentials: false);
                 if (connection is null || token.IsCancellationRequested || version != _managementSessionVersion) return;
                 // Explicit refresh owns the current node's status read; peers remain independent.
                 if (ReferenceEquals(connection, _connection) && (_readBusy || IsBusy)) return;
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(TimeSpan.FromSeconds(45));
+                deadline.CancelAfter(ManagementTimeouts.Read);
                 var reply = await connection.StatusAsync(deadline.Token);
                 if (deadline.IsCancellationRequested || version != _managementSessionVersion || _disposed) return;
                 if (reply.IsUnauthorized || reply.Envelope.Error is not null || reply.Envelope.Result is not { } value ||

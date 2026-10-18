@@ -102,7 +102,6 @@ public sealed record TrustedServerTopology(string ServerId, IReadOnlyList<Truste
                 node.UsesPublicHttps && (Uri.CheckHostName(node.Host) != UriHostNameType.Dns ||
                     Uri.CheckHostName(node.OriginHost) == UriHostNameType.Unknown || node.OriginPort is < 1 or > 65535)) ||
             Nodes.Select(node => node.Address).Distinct().Count() != Nodes.Count ||
-            Nodes.Select(node => DeviceStore.NormalizeHost(node.Host)).Distinct().Count() != Nodes.Count ||
             Nodes.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != Nodes.Count)
             throw new FormatException("主备可信配置无效或地址/节点重复。");
     }

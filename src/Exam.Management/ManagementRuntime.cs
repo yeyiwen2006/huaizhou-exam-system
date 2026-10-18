@@ -85,7 +85,8 @@ public sealed class ManagementRuntime(
     private ManagementOperationRunner? _operations;
     public ManagementOperationRunner Operations
     {
-        get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync, RecordFailure); }
+        get { lock (_operationsGate) return _operations ??= new(ServerId, NodeId, journal, clock, ReconcileAsync, RecordFailure,
+            (operation, token) => Failover.CancelAsync(operation, token)); }
     }
 
     private async Task<ManagementOperation?> ReconcileAsync(ManagementOperation operation, CancellationToken token)

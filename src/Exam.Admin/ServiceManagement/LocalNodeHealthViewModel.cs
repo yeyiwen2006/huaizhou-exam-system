@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using Exam.Contracts.HighAvailability;
+using Exam.Contracts.ServiceManagement;
 
 namespace Exam.Admin.ServiceManagement;
 
@@ -23,10 +24,10 @@ public sealed partial class ServiceManagementViewModel
                 try
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                    deadline.CancelAfter(TimeSpan.FromSeconds(45));
+                    deadline.CancelAfter(ManagementTimeouts.Read);
                     var connection = NodeSession(target).Connection;
-                    if (connection is null && _businessSession is { } session)
-                        connection = await StartBusinessAuthentication(target, session).WaitAsync(deadline.Token);
+                    if (connection is null)
+                        connection = await EnsureTargetSessionAsync(target, deadline.Token, requestCredentials: false);
                     if (!Current()) return;
                     if (connection is null) MarkLocalNodeUnavailable(target,
                         NodeSession(target).AuthenticationError is UnauthorizedAccessException);

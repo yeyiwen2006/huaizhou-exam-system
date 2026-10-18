@@ -39,6 +39,8 @@
             <StackPanel>
                 <controls:Banner Level="Warning" IsOpen="{Binding ShowProtectionWarning}" Message="{Binding ProtectionText}"/>
                 <TextBlock Text="{Binding DisplayMessage}" Style="{StaticResource Management.Message}"/>
+                <TextBlock Text="{Binding HighAvailabilityFailureText}" Style="{StaticResource Management.Message}"/>
+                <TextBlock Text="{Binding RecoveryLoginNotice}" Style="{StaticResource Management.Message}"/>
             </StackPanel>
         </Border>
         <ScrollViewer x:Name="PageScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -49,15 +51,6 @@
                         <TextBlock Text="{Binding ConnectionStatus}" Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,8,0,12"/>
                         <Button Content="重新连接" Style="{StaticResource Management.Action}"
                                 Command="{Binding ReconnectCommand}" HorizontalAlignment="Left"/>
-                        <StackPanel IsEnabled="{Binding CanEnterManagementCredentials}">
-                            <TextBlock Text="考务用户名" Style="{StaticResource FieldLabel}"/>
-                            <TextBox Style="{StaticResource Management.Field}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="{Binding IsSignedIn}" MaxLength="128"/>
-                            <TextBlock Text="考务密码" Style="{StaticResource FieldLabel}"/>
-                            <PasswordBox x:Name="IndependentManagementPassword" MaxLength="128" Margin="0,4,12,12"
-                                         HorizontalContentAlignment="Left" Padding="12,0"/>
-                            <Button Content="登录管理服务" Style="{StaticResource Btn.Primary}" HorizontalAlignment="Left"
-                                    IsEnabled="{Binding CanLogin}" Click="OnIndependentManagementLogin"/>
-                        </StackPanel>
                     </StackPanel>
                 </Border>
                 <Border x:Name="HighAvailabilityCard" Style="{StaticResource Management.Section}">
@@ -100,6 +93,9 @@
                                 Style="{StaticResource Btn.Secondary}" Command="{Binding RebuildCommand}"
                                 Margin="12,0,0,0" MinHeight="48" FontSize="18"
                                 AutomationProperties.Name="重建隔离的服务器并作为备机"/>
+                            <Button x:Name="CancelHighAvailabilityButton" Content="{Binding CancelHighAvailabilityText}"
+                                Style="{StaticResource Btn.Secondary}" Command="{Binding CancelHighAvailabilityCommand}"
+                                Margin="12,0,0,0" MinHeight="48" FontSize="18"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -159,10 +159,6 @@
         <Grid Grid.Row="1">
         <!-- 登录页（未登录时显示，覆盖整个窗口区域） -->
         <ContentControl x:Name="PageRegion" />
-        <Button x:Name="FailureManagementButton" Content="主服务器故障，直接进入服务器管理"
-                Style="{StaticResource Btn.Secondary}" HorizontalAlignment="Right" VerticalAlignment="Top"
-                Panel.ZIndex="10" Margin="0,16,28,0" Click="OnManagementRequested"
-                ToolTip="主服务器不可用导致无法正常登录时，可直接登录备用服务器管理并完成隔离确认与接管"/>
 
         <!-- 主界面（登录后显示） -->
         <TabControl x:Name="MainTabArea"
@@ -180,7 +176,7 @@
                     </Grid.RowDefinitions>
                     <DockPanel>
                         <Button x:Name="LogoutButton" DockPanel.Dock="Right" Content="退出登录" Style="{StaticResource Btn.Secondary}" MinWidth="96" Padding="14,0"
-                                IsEnabled="{Binding Connection.IsConnected}" Click="OnLogoutRequested" />
+                                IsEnabled="{Binding Connection.IsAuthenticated}" Click="OnLogoutRequested" />
                         <Border Style="{StaticResource IconTile}" Width="36" Height="36" CornerRadius="9" Margin="0,0,12,0">
                             <Path Style="{StaticResource IconTile.Glyph}" Data="{StaticResource Icon.Users}" Width="18" Height="18" />
                         </Border>

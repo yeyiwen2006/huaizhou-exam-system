@@ -340,7 +340,7 @@ public sealed class MainViewModel : BindableBase, IDisposable
 /// 登录页：填写服务器地址、用户名和口令，默认使用标准 HTTPS 端口；也可注册新的考务账号。
 /// 登录后显示当前账号并可退出登录。口令只在本进程内存中短暂保存，登录或注册后即清空。
 /// </summary>
-public sealed class ConnectionViewModel : BindableBase
+public sealed partial class ConnectionViewModel : BindableBase
 {
     private const string ServerAddressGuidance = "请填写服务器 IP、域名或 HTTPS 根地址，例如 exam.example.com；默认使用 HTTPS 443 端口。";
     private readonly AdminApiClient _api;
@@ -365,7 +365,7 @@ public sealed class ConnectionViewModel : BindableBase
         if (!string.IsNullOrWhiteSpace(configured)) _serverAddress = configured.Trim();
         ConnectCommand = new AsyncRelayCommand(LoginAsync, onError: error => SetError("登录", error));
         RegisterCommand = new AsyncRelayCommand(RegisterAsync, onError: error => SetError("注册", error));
-        LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsConnected);
+        LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => IsAuthenticated);
         ShowRegisterCommand = new RelayCommand(() => IsRegistering = true);
         CancelRegisterCommand = new RelayCommand(() => IsRegistering = false);
         AcknowledgeRegistrationCommand = new RelayCommand(() => ShowRegistrationSuccess = false);
@@ -419,6 +419,7 @@ public sealed class ConnectionViewModel : BindableBase
             if (SetProperty(ref _isConnected, value))
             {
                 OnPropertyChanged(nameof(IsLoggedOut));
+                OnPropertyChanged(nameof(IsAuthenticated));
                 OnPropertyChanged(nameof(ShowRegisterFields));
                 OnPropertyChanged(nameof(AccountTitle));
                 OnPropertyChanged(nameof(IsAdministrator));
@@ -436,7 +437,7 @@ public sealed class ConnectionViewModel : BindableBase
 
     public string AccountTitle => _api.Account is { } account && IsConnected
         ? $"{account.DisplayName}（{account.Username}）{(account.IsAdministrator ? " · 管理员" : string.Empty)}"
-        : string.Empty;
+        : _managementUsername is { } username ? $"{username} · 服务器管理" : string.Empty;
 
     /// <summary>登录（沿用原“连接服务器”命令名，供界面和测试共用）。</summary>
     public AsyncRelayCommand ConnectCommand { get; }
@@ -449,8 +450,9 @@ public sealed class ConnectionViewModel : BindableBase
     /// <summary>清空口令框；由界面订阅，在登录或注册结束后执行。</summary>
     public event Action? PasswordsCleared;
 
-    private async Task LoginAsync()
+    internal async Task LoginAsync()
     {
+        IsLoginInProgress = true;
         IsConnected = false;
         Status = "正在登录…";
         _api.Disconnect();
@@ -459,7 +461,16 @@ public sealed class ConnectionViewModel : BindableBase
             await _api.LoginAsync(BuildServerAddress(), Username, Password);
             await _api.CheckConnectionAsync();
         }
-        finally { ClearPasswords(); }
+        catch (Exception error) when (BusinessUnavailable(error) && LoginManagementRecoveryAsync is not null)
+        {
+            if (!await LoginManagementRecoveryAsync(BuildServerAddress(), Username, Password)) throw;
+            SetManagementIdentity(Username);
+            IsRegistering = false;
+            Status = "考务服务暂不可用，已进入服务器管理";
+            ManagementRecoveryEntered?.Invoke();
+            return;
+        }
+        finally { ClearPasswords(); IsLoginInProgress = false; }
         IsRegistering = false;
         IsConnected = true;
         ShowCurrentEndpoint();
@@ -490,10 +501,11 @@ public sealed class ConnectionViewModel : BindableBase
         ShowRegistrationSuccess = result.Account.Status == Exam.Contracts.Operators.OperatorStatus.Pending;
     }
 
-    private async Task LogoutAsync()
+    internal async Task LogoutAsync()
     {
         await _api.LogoutAsync();
         IsConnected = false;
+        SetManagementIdentity(null);
         Status = "已退出登录。";
     }
 

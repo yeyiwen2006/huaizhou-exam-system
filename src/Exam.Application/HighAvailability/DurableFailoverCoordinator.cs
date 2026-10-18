@@ -16,6 +16,7 @@ public interface IHighAvailabilityManagementPlatform
     // Reconciliation can finish an already-proven publication, but must not repeat promotion/rebuild.
     Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token);
     Task<bool> VerifyFailedBeforeInstallationAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
+    Task<bool> CancelAsync(FailoverExecutionPlan plan, CancellationToken token) => Task.FromResult(false);
 }
 
 /// <summary>Uses the same cross-process durable journal as local management. No production state lives in memory.</summary>
@@ -105,7 +106,7 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         // action briefly. Reconcile the same durable intent; never repeat promotion.
         using (var verification = CancellationTokenSource.CreateLinkedTokenSource(token))
         {
-            verification.CancelAfter(TimeSpan.FromSeconds(45));
+            verification.CancelAfter(ManagementTimeouts.Read);
             while (!await platform.ReconcileAsync(plan, verification.Token))
                 await Task.Delay(TimeSpan.FromSeconds(1), verification.Token);
         }
@@ -126,7 +127,8 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
         if (operation.Kind == ManagementOperationKind.Rebuild && await platform.VerifyFailedBeforeInstallationAsync(plan, token))
         {
             return operation with { Phase = ManagementOperationPhase.Failed, FailoverFailureVerified = true,
-                Error = new(ErrorCodes.ServiceRecovering, "重建准备已安全终结；已发布的权威状态、旧数据及审计保留。请刷新状态后发起新的重建请求。") };
+                Error = operation.Error is { Code: not ErrorCodes.ServiceRecovering } cause ? cause :
+                    new(ErrorCodes.ServiceRecovering, "重建复制或准备未完成，原库未替换；原请求、暂存文件及审计保留，可以重新发起重建。") };
         }
         if (!await platform.ReconcileAsync(plan, token)) return null;
         return await CompletedAsync(operation, plan, token);
@@ -142,6 +144,13 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
             throw new IOException("主备操作完成状态的最新实际证据尚未核实。");
         return operation with { Phase = ManagementOperationPhase.Completed, Error = null, HighAvailability = observed,
             FailoverCompletedState = plan.After };
+    }
+
+    public async Task<ManagementOperation?> CancelAsync(ManagementOperation operation, CancellationToken token)
+    {
+        if (operation.Kind is not (ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild)) return null;
+        if (operation.FailoverPlan is { } plan && !await platform.CancelAsync(plan, token)) return null;
+        return operation with { Phase = ManagementOperationPhase.Canceled, Error = null };
     }
 
     public static string Action(ManagementOperation operation) => $"F02:{operation.Kind}:{operation.RequestId}";

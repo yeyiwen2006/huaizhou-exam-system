@@ -54,7 +54,7 @@ public static class ManagementEntryPoint
         var port = configuration.GetValue<int>("Management:HttpsPort");
         if (port is < 1 or > 65535) throw new InvalidOperationException("管理 HTTPS 端口无效。");
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler
-            { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(20) });
+            { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = ManagementTimeouts.Read });
         builder.Services.AddSingleton<DurableFailoverCoordinator>(provider =>
         {
             var nodes = configuration.GetSection("HighAvailability:Nodes").GetChildren().ToDictionary(section => section.Key,
@@ -94,7 +94,9 @@ public static class ManagementEntryPoint
             () => FileRecoveryDeploymentSelection.ResolveConnection(SelectedConfiguration, serverId, nodeId, CurrentEpoch()),
             configuration["Management:OperatorCachePath"] ?? Path.Combine(Required("Management:OperationDirectory"), "operators.cache"),
             authenticatePeerBusinessSession: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().AuthenticateAsync,
-            localBusinessSessionAllowed: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().LocalBusinessSessionAllowed));
+            localBusinessSessionAllowed: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().LocalBusinessSessionAllowed,
+            authenticatePeerManagementSession: provider.GetRequiredService<PeerBusinessSessionAuthenticator>().AuthenticateManagementAsync));
+        builder.Services.AddSingleton(_ => new ManagementBusinessSessionIssuer(SelectedConfiguration, serverId, nodeId, CurrentEpoch));
         builder.Services.AddHostedService(_ => new AutomaticBackupWorker(configuration, SelectedConfiguration));
 
         ManagementRuntime CreateRuntime(HttpClient http, Func<DurableFailoverCoordinator> failover)

@@ -40,6 +40,7 @@ public partial class MainWindow : Window
         _viewModel.Connection.PropertyChanged += OnConnectionPropertyChanged;
         _viewModel.BusinessSessionChanged += OnBusinessSessionChanged;
         Management.ActiveNodeVerified += OnActiveNodeVerified;
+        ConfigureUnifiedLogin();
         ShowLoginPage();
     }
 
@@ -47,7 +48,6 @@ public partial class MainWindow : Window
     {
         DetachLogin();
         _loginPage = new AdminLoginPage(_viewModel.Connection);
-        FailureManagementButton.Visibility = Visibility.Visible;
         PageRegion.Content = _loginPage;
         MainTabArea.Visibility = Visibility.Collapsed;
     }
@@ -55,7 +55,6 @@ public partial class MainWindow : Window
     private void ShowRegistrationSuccessPage()
     {
         DetachLogin();
-        FailureManagementButton.Visibility = Visibility.Collapsed;
         PageRegion.Content = new RegistrationSuccessPage(_viewModel.Connection);
         MainTabArea.Visibility = Visibility.Collapsed;
     }
@@ -63,7 +62,6 @@ public partial class MainWindow : Window
     private void ShowMainArea()
     {
         DetachLogin();
-        FailureManagementButton.Visibility = Visibility.Collapsed;
         PageRegion.Content = null;
         MainTabArea.Visibility = Visibility.Visible;
     }
@@ -74,6 +72,7 @@ public partial class MainWindow : Window
         {
             OnBusinessSessionChanged();
             _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
+            if (!_viewModel.Connection.IsConnected && Management.IsSignedIn) { OpenManagement(); return; }
             if (!_viewModel.Connection.IsConnected && _router.Route != AdminWorkspaceRoute.LocalManagement)
             { Management.Deactivate(); ShowLoginPage(); }
             else if (_router.Route != AdminWorkspaceRoute.LocalManagement) ShowMainArea();
@@ -101,17 +100,15 @@ public partial class MainWindow : Window
 
     private async void OnActiveNodeVerified(string serverId, string nodeId, long epoch)
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(35));
-        try { await _viewModel.ReconnectToActiveNodeAsync(serverId, nodeId, epoch, deadline.Token); }
-        catch (Exception error) when (error is System.IO.IOException or System.Net.Http.HttpRequestException or OperationCanceledException or
-            System.Security.Cryptography.CryptographicException) { /* Business requests retain their original IDs and retry the trusted route. */ }
+        _businessRecoveryTarget = (serverId, nodeId, epoch);
+        await ResumeBusinessFromManagementAsync();
     }
 
     private void OnManagementRequested(object sender, RoutedEventArgs e) => OpenManagement();
 
     private async void OnLogoutRequested(object sender, RoutedEventArgs e)
     {
-        if (_confirmingLogout || !_viewModel.Connection.IsConnected) return;
+        if (_confirmingLogout || !_viewModel.Connection.IsAuthenticated) return;
         _confirmingLogout = true;
         try
         {
@@ -121,7 +118,9 @@ public partial class MainWindow : Window
             {
                 await Management.LogoutAsync();
                 Management.SetBusinessSession(null);
-                _viewModel.Connection.LogoutCommand.Execute(null);
+                _pendingBusinessSession = null; _enteredThroughRecovery = false;
+                await _viewModel.Connection.LogoutAsync();
+                _router.ReturnToBusiness(); ShowLoginPage();
             }
         }
         finally { _confirmingLogout = false; }
@@ -179,7 +178,6 @@ public partial class MainWindow : Window
         if (_router.Route == AdminWorkspaceRoute.LocalManagement && MainTabArea.SelectedIndex == MainViewModel.ManagementPage &&
             ManagementPageRegion.Content is not null) return;
         Management.SetBusinessSession(_viewModel.CaptureBusinessSession());
-        FailureManagementButton.Visibility = Visibility.Collapsed;
         if (_router.Route != AdminWorkspaceRoute.LocalManagement && _viewModel.SelectedPage != MainViewModel.ManagementPage)
             _businessPage = _viewModel.SelectedPage;
         _router.OpenManagement();
@@ -200,6 +198,7 @@ public partial class MainWindow : Window
     }
     public void ReturnToBusiness()
     {
+        if (!_viewModel.Connection.IsConnected && Management.IsSignedIn) return;
         Management.Deactivate();
         _router.BusinessConnectionChanged(_viewModel.Connection.IsConnected);
         _router.ReturnToBusiness();
@@ -264,6 +263,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
+        ShutdownUnifiedLogin();
         _viewModel.Connection.PropertyChanged -= OnConnectionPropertyChanged;
         _viewModel.BusinessSessionChanged -= OnBusinessSessionChanged;
         Management.ActiveNodeVerified -= OnActiveNodeVerified;
