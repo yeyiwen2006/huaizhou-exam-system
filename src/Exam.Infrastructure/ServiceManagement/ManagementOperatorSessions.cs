@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Exam.Application.Security;
 using Exam.Infrastructure.Postgres.Operators;
 using Npgsql;
@@ -14,7 +14,7 @@ namespace Exam.Infrastructure.ServiceManagement;
 /// 以 Windows 本机加密保存）。Linux 仅使用数据库认证，不写入离线口令缓存。
 /// 会话只在本进程内存中，退出登录或程序重启后失效。
 /// </summary>
-public sealed class ManagementOperatorSessions(
+public sealed partial class ManagementOperatorSessions(
     Func<string?> connectionString,
     string cachePath,
     TimeSpan? databaseTimeout = null,
@@ -23,12 +23,16 @@ public sealed class ManagementOperatorSessions(
     Func<string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerBusinessSession = null,
     Func<bool>? localBusinessSessionAllowed = null,
     TimeProvider? time = null,
-    Func<string, string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerManagementSession = null)
+    Func<string, string, CancellationToken, Task<AuthenticatedOperator?>>? authenticatePeerManagementSession = null,
+    Func<string, CancellationToken, Task<CachedOperatorCredential?>>? authenticateBusinessCredential = null)
 {
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Huaizhou.Exam.Management.OperatorCache.v1");
-    private sealed record Session(AuthenticatedOperator Operator, CachedOperatorCredential? Credential, DateTimeOffset VerifiedAt);
+    private sealed record Session(AuthenticatedOperator Operator, CachedOperatorCredential? Credential, DateTimeOffset VerifiedAt, long Observation);
+    private sealed record CredentialSnapshot(IReadOnlyDictionary<string, CachedOperatorCredential> Credentials, DateTimeOffset ObservedAt, long Observation);
     private readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
-    private IReadOnlyDictionary<string, CachedOperatorCredential>? _onlineCredentials;
+    private readonly object _identityGate = new();
+    private CredentialSnapshot? _onlineCredentials;
+    private long _observation;
     private static readonly TimeSpan OfflineLifetime = TimeSpan.FromHours(24);
     private readonly SemaphoreSlim _cacheGate = new(1, 1);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
@@ -39,13 +43,19 @@ public sealed class ManagementOperatorSessions(
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password)) return null;
-        var credentials = await TryRefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false)
-            ?? await ReadCacheAsync(cancellationToken).ConfigureAwait(false);
-        var key = Exam.Contracts.Operators.OperatorRules.Key(username);
-        var match = credentials.FirstOrDefault(item => Exam.Contracts.Operators.OperatorRules.Key(item.Username) == key);
-        if (match is null || !OperatorPasswordHasher.Verify(password, match.PasswordHash)) return null;
-        var session = new AuthenticatedOperator(match.Username, match.IsAdministrator);
-        return CreateSession(session, match);
+        // Keep the password check and issuance in the same refresh order. Another
+        // login cannot publish a revocation while this one is using its old snapshot.
+        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var credentials = await RefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false);
+            var key = Exam.Contracts.Operators.OperatorRules.Key(username);
+            var match = credentials is null ? await ReadCacheAsync(key, cancellationToken).ConfigureAwait(false)
+                : credentials.FirstOrDefault(item => Exam.Contracts.Operators.OperatorRules.Key(item.Username) == key);
+            if (match is null || !OperatorPasswordHasher.Verify(password, match.PasswordHash)) return null;
+            return CreateSession(new(match.Username, match.IsAdministrator), match, Interlocked.Read(ref _observation));
+        }
+        finally { _refreshGate.Release(); }
     }
 
     /// <summary>Exchanges a currently valid business session for an independent management session, without a password or offline fallback.</summary>
@@ -56,47 +66,75 @@ public sealed class ManagementOperatorSessions(
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(databaseTimeout ?? TimeSpan.FromSeconds(5));
         AuthenticatedOperator? account = null;
+        CachedOperatorCredential? credential = null;
+        Exception? localFailure = null;
+        var observation = Interlocked.Increment(ref _observation);
+        var verifiedAt = _time.GetUtcNow();
         if (localBusinessSessionAllowed?.Invoke() != false)
         {
-            try { account = await (authenticateBusinessSession ?? AuthenticateBusinessSessionFromPostgresAsync)(token, deadline.Token).ConfigureAwait(false); }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+            try
+            {
+                if (authenticateBusinessSession is not null)
+                    account = await authenticateBusinessSession(token, deadline.Token).ConfigureAwait(false);
+                else
+                {
+                    credential = await (authenticateBusinessCredential ?? AuthenticateBusinessCredentialFromPostgresAsync)(token, deadline.Token).ConfigureAwait(false);
+                    if (credential is not null) account = new(credential.Username, credential.IsAdministrator);
+                }
+            }
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested) { localFailure = error; }
         }
         if (account is null && authenticatePeerBusinessSession is not null)
         {
+            observation = Interlocked.Increment(ref _observation);
             account = await authenticatePeerBusinessSession(token, cancellationToken).ConfigureAwait(false);
-            if (account is null) return null;
-            var managementToken = OperatorPasswordHasher.NewSessionToken();
-            _sessions[OperatorPasswordHasher.TokenDigest(managementToken)] = new(account, null, _time.GetUtcNow());
-            return (managementToken, account);
         }
-        if (account is null) return null;
-        return CreateSession(account, null);
+        if (account is null)
+        {
+            if (localFailure is not null) ExceptionDispatchInfo.Capture(localFailure).Throw();
+            return null;
+        }
+        var session = CreateSession(account, credential, observation);
+        if (session is not null && credential is not null)
+        {
+            try { await WriteExchangedCredentialAsync(credential, verifiedAt, cancellationToken).ConfigureAwait(false); }
+            catch (Exception) { /* Offline cache maintenance must not reject an authenticated session. */ }
+        }
+        return session;
     }
 
     public async Task<(string Token, AuthenticatedOperator Operator)?> ExchangeManagementSessionAsync(string sourceNodeId,
         string credential, CancellationToken token)
     {
         if (string.IsNullOrWhiteSpace(credential) || credential.Length > 256 || authenticatePeerManagementSession is null) return null;
+        var observation = Interlocked.Increment(ref _observation);
         var account = await authenticatePeerManagementSession(sourceNodeId, credential, token).ConfigureAwait(false);
-        return account is null ? null : CreateSession(account, null);
+        return account is null ? null : CreateSession(account, null, observation);
     }
 
-    private (string Token, AuthenticatedOperator Operator) CreateSession(AuthenticatedOperator account, CachedOperatorCredential? credential)
+    private (string Token, AuthenticatedOperator Operator)? CreateSession(AuthenticatedOperator account, CachedOperatorCredential? credential, long observation)
     {
-        var token = OperatorPasswordHasher.NewSessionToken();
-        _sessions[OperatorPasswordHasher.TokenDigest(token)] = new(account, credential, _time.GetUtcNow());
-        return (token, account);
+        lock (_identityGate)
+        {
+            if (_onlineCredentials is { } known && known.Observation > observation &&
+                !MatchesSnapshot(account, credential, known.Credentials)) return null;
+            var token = OperatorPasswordHasher.NewSessionToken();
+            _sessions[OperatorPasswordHasher.TokenDigest(token)] = new(account, credential, _time.GetUtcNow(), observation);
+            return (token, account);
+        }
     }
+
+    private static bool MatchesSnapshot(AuthenticatedOperator account, CachedOperatorCredential? original,
+        IReadOnlyDictionary<string, CachedOperatorCredential> current) =>
+        current.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(account.Username), out var credential) &&
+        credential.IsAdministrator == account.IsAdministrator && (original is null || original == credential);
 
     public AuthenticatedOperator? Authenticate(string? token)
     {
         if (string.IsNullOrWhiteSpace(token) || token.Length > 256) return null;
         var digest = OperatorPasswordHasher.TokenDigest(token);
         if (!_sessions.TryGetValue(digest, out var session)) return null;
-        var known = Volatile.Read(ref _onlineCredentials);
-        if (_time.GetUtcNow() - session.VerifiedAt > OfflineLifetime ||
-            session.Credential is not null && known is not null && (!known.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(session.Operator.Username), out var credential) ||
-            credential != session.Credential))
+        if (_time.GetUtcNow() - session.VerifiedAt > OfflineLifetime)
         { _sessions.TryRemove(digest, out _); return null; }
         return session.Operator;
     }
@@ -109,17 +147,10 @@ public sealed class ManagementOperatorSessions(
     public bool Logout(string? token) =>
         !string.IsNullOrWhiteSpace(token) && _sessions.TryRemove(OperatorPasswordHasher.TokenDigest(token), out _);
 
-    private async Task<IReadOnlyList<CachedOperatorCredential>?> TryRefreshFromDatabaseAsync(CancellationToken cancellationToken)
-    {
-        // Publish account snapshots in read order. A slower, older read must never
-        // overwrite a revocation that another request has already observed.
-        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await RefreshFromDatabaseAsync(cancellationToken).ConfigureAwait(false); }
-        finally { _refreshGate.Release(); }
-    }
-
     private async Task<IReadOnlyList<CachedOperatorCredential>?> RefreshFromDatabaseAsync(CancellationToken cancellationToken)
     {
+        var observation = Interlocked.Increment(ref _observation);
+        var observedAt = _time.GetUtcNow();
         IReadOnlyList<CachedOperatorCredential> credentials;
         try
         {
@@ -134,11 +165,14 @@ public sealed class ManagementOperatorSessions(
         }
 
         var current = credentials.ToDictionary(item => Exam.Contracts.Operators.OperatorRules.Key(item.Username), StringComparer.Ordinal);
-        Volatile.Write(ref _onlineCredentials, current);
-        foreach (var pair in _sessions)
-            if (pair.Value.Credential is not null && (!current.TryGetValue(Exam.Contracts.Operators.OperatorRules.Key(pair.Value.Operator.Username), out var credential) ||
-                credential != pair.Value.Credential)) _sessions.TryRemove(pair.Key, out _);
-        try { await WriteCacheAsync(credentials, cancellationToken).ConfigureAwait(false); }
+        lock (_identityGate)
+        {
+            Volatile.Write(ref _onlineCredentials, new(current, observedAt, observation));
+            foreach (var pair in _sessions)
+                if (pair.Value.Observation < observation && !MatchesSnapshot(pair.Value.Operator, pair.Value.Credential, current))
+                    _sessions.TryRemove(pair.Key, out _);
+        }
+        try { await WriteCacheAsync(credentials, observedAt, cancellationToken).ConfigureAwait(false); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
         {
             // 缓存写入失败不影响本次以数据库为准的登录；下次登录再刷新。
@@ -155,50 +189,13 @@ public sealed class ManagementOperatorSessions(
         return await new PostgresOperatorAccounts(dataSource).ListActiveCredentialsAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<AuthenticatedOperator?> AuthenticateBusinessSessionFromPostgresAsync(string token, CancellationToken cancellationToken)
+    private async Task<CachedOperatorCredential?> AuthenticateBusinessCredentialFromPostgresAsync(string token, CancellationToken cancellationToken)
     {
         var connection = connectionString();
         if (string.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("未配置数据库连接。");
         var builder = new NpgsqlConnectionStringBuilder(connection) { Timeout = 5 };
         await using var dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
-        return await new PostgresOperatorAccounts(dataSource).AuthenticateAsync(token, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<IReadOnlyList<CachedOperatorCredential>> ReadCacheAsync(CancellationToken cancellationToken)
-    {
-        if (!OperatingSystem.IsWindows()) return [];
-        await _cacheGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!File.Exists(cachePath) || DateTimeOffset.UtcNow - File.GetLastWriteTimeUtc(cachePath) > OfflineLifetime) return [];
-            var plaintext = Unprotect(await File.ReadAllBytesAsync(cachePath, cancellationToken).ConfigureAwait(false));
-            try { return JsonSerializer.Deserialize<CachedOperatorCredential[]>(plaintext) ?? []; }
-            finally { Array.Clear(plaintext); }
-        }
-        catch (Exception error) when (error is CryptographicException or JsonException or IOException)
-        {
-            return [];
-        }
-        finally { _cacheGate.Release(); }
-    }
-
-    private async Task WriteCacheAsync(IReadOnlyList<CachedOperatorCredential> credentials, CancellationToken cancellationToken)
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        await _cacheGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var directory = Path.GetDirectoryName(Path.GetFullPath(cachePath))!;
-            Directory.CreateDirectory(directory);
-            var plaintext = JsonSerializer.SerializeToUtf8Bytes(credentials);
-            byte[] encrypted;
-            try { encrypted = Protect(plaintext); }
-            finally { Array.Clear(plaintext); }
-            var temporary = Path.Combine(directory, $".operators.{Guid.NewGuid():N}.tmp");
-            await File.WriteAllBytesAsync(temporary, encrypted, cancellationToken).ConfigureAwait(false);
-            File.Move(temporary, cachePath, overwrite: true);
-        }
-        finally { _cacheGate.Release(); }
+        return await new PostgresOperatorAccounts(dataSource).AuthenticateManagementCredentialAsync(token, cancellationToken).ConfigureAwait(false);
     }
 
     // 只缓存 PBKDF2 哈希；Windows 本机加密作为额外保护，防止缓存文件被直接复制到别处读取。

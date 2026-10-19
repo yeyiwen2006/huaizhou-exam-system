@@ -37,7 +37,8 @@ public sealed record ManagementRestoreOutcome(
 
 /// <summary>Bounded, non-sensitive projection of the protected local operation journal.</summary>
 public sealed record ManagementAuditEntry(string RequestId, ManagementOperationKind Kind,
-    ManagementOperationPhase Phase, DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, string? ErrorCode);
+    ManagementOperationPhase Phase, DateTimeOffset AcceptedAt, DateTimeOffset UpdatedAt, string? ErrorCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverContinuationPending = false);
 
 public sealed record ProtectedRuntimeLogEntry(DateTimeOffset Timestamp, string Source, string Level,
     string Category, int EventId);
@@ -58,4 +59,6 @@ public sealed record ManagementOperation(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverFailureVerified = false,
     // Transient query projection only; durable journals retain the last proven checkpoint.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverWorkInProgress = false,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool CancellationRequested = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool CancellationRequested = false,
+    // The role change succeeded; the original task still owns its remaining startup work.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FailoverContinuationPending = false);

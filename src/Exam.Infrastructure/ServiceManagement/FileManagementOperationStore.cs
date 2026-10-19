@@ -80,7 +80,24 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
             }
             cancellationToken.ThrowIfCancellationRequested();
             Check(path);
-            File.Move(temporary, path, overwrite: true);
+            var replacementWait = Stopwatch.StartNew();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    File.Move(temporary, path, overwrite: true);
+                    break;
+                }
+                catch (Exception error) when (
+                    (error is IOException or UnauthorizedAccessException) &&
+                    ((error.HResult & 0xFFFF) is 5 or 32 or 33) && replacementWait.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    // Windows can refuse an overwrite while a snapshot reader still holds the target,
+                    // even with FileShare.Delete. Retry only the prepared atomic replacement.
+                    await Task.Delay(20, cancellationToken);
+                }
+            }
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
@@ -123,6 +140,28 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
         return Task.FromResult(intent is not null);
     }
 
+    public async Task<bool> HasLaterBusinessStopAsync(ManagementOperation operation, CancellationToken token)
+    {
+        foreach (var path in OperationFiles())
+        {
+            Check(path);
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            if (input.Length is <= 0 or > MaximumBytes) throw new InvalidDataException("操作记录大小无效。");
+            var bytes = new byte[checked((int)input.Length)];
+            await input.ReadExactlyAsync(bytes, token);
+            using var document = JsonDocument.Parse(bytes);
+            if (!document.RootElement.TryGetProperty("requestId", out var id) || id.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("操作记录缺少请求标识。");
+            var requestId = id.GetString() ?? throw new InvalidDataException("操作记录缺少请求标识。");
+            if (Resolve(requestId) != path) throw new InvalidDataException("操作记录文件名与请求标识不符。");
+            var later = await FindAsync(requestId, token) ?? throw new InvalidDataException("操作记录消失。");
+            if (later.Kind == ManagementOperationKind.Stop && later.RequestId != operation.RequestId &&
+                later.ServerId == operation.ServerId && later.NodeId == operation.NodeId && later.AcceptedAt >= operation.AcceptedAt)
+                return true;
+        }
+        return false;
+    }
+
     public async Task<IReadOnlyList<ManagementAuditEntry>> ReadAuditAsync(int limit, CancellationToken cancellationToken)
     {
         if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
@@ -144,7 +183,7 @@ public sealed class FileManagementOperationStore : IManagementOperationStore
             if (Resolve(requestId) != path) throw new InvalidDataException("操作记录文件名与请求标识不符。");
             var operation = await FindAsync(requestId, cancellationToken) ?? throw new InvalidDataException("操作记录消失。");
             entries.Add(new(operation.RequestId, operation.Kind, operation.Phase,
-                operation.AcceptedAt, operation.UpdatedAt, operation.Error?.Code));
+                operation.AcceptedAt, operation.UpdatedAt, operation.Error?.Code, operation.FailoverContinuationPending));
         }
         return entries.OrderByDescending(entry => entry.UpdatedAt).ThenBy(entry => entry.RequestId, StringComparer.Ordinal)
             .Take(limit).ToArray();

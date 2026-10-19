@@ -214,10 +214,13 @@ public static class ReplicaResourceTransfer
             // and its previous-version directory instead of accumulating identical copies.
             var previousDigest = FileConfirmationStore.ResourcesDigest(full, persist: true);
             var alreadyCurrent = previousDigest == expectedDigest;
-            // Complete potentially slow hashing before the final role and cancellation check.
-            await verifyStandby(token);
-            token.ThrowIfCancellationRequested();
-            if (alreadyCurrent) return;
+            if (alreadyCurrent)
+            {
+                await verifyStandby(token);
+                token.ThrowIfCancellationRequested();
+                return;
+            }
+            // ExchangeAsync checks the role and cancellation immediately before switching directories.
             await exchange.ExchangeAsync(suffix, expectedDigest, previousDigest, verifyStandby, token);
         }
         finally

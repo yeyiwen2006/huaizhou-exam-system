@@ -115,7 +115,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
                 return (state, row.GetBoolean(0), row.GetString(1), row.GetString(2), row.GetInt32(3));
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (NpgsqlException error) when (attempt == 0 && error.IsTransient &&
+            catch (NpgsqlException error) when (attempt == 0 && error.IsTransient && !CausedByTimeout(error) &&
                 ShouldRecordDatabaseFailure(error, node.NodeId == Local.NodeId && Volatile.Read(ref _localDatabaseTransition) > 0))
             { await Task.Delay(TimeSpan.FromMilliseconds(250), _time, token); }
             catch (Exception error)
@@ -134,6 +134,9 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             }
         }
     }
+
+    private static bool CausedByTimeout(Exception error) => error is TimeoutException ||
+        error.InnerException is { } inner && CausedByTimeout(inner);
 
     public static bool ShouldRecordDatabaseFailure(Exception error, bool replacingDatabase) => error switch
     {
@@ -486,22 +489,57 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         else throw new ArgumentException("主备计划类型无效。");
     }
 
+    public async Task<bool> ContinueCommittedChangeAsync(FailoverExecutionPlan plan, CancellationToken token)
+    {
+        // Durable success already proves publication/selection and the installed
+        // rebuild marker. Only the current local role decides whether its startup
+        // remains applicable; neither old resources nor the old peer is a gate.
+        var actual = await ReadAsync(Local, token);
+        if (actual is null || actual.Value.System != plan.SystemIdentifier || actual.Value.Database != plan.DatabaseName ||
+            !FailoverStateHistory.Covers(actual.Value.State, plan.After)) return false;
+        if (actual.Value.State.Version > plan.After.Version) return true;
+        if (plan.Kind == ManagementOperationKind.Takeover && !actual.Value.Recovery)
+        {
+            await new ReadyCheckedBusinessHost(_business, _http, PeerAddress(Local, "health/ready"),
+                _options.ServerId, Local.NodeId, plan.After.ServerEpoch).StartAsync(token);
+            return true;
+        }
+        if (plan.Kind == ManagementOperationKind.Rebuild && actual.Value.Recovery)
+        {
+            if (_business.Status != BusinessServiceStatus.Running) await _business.StartAsync(token);
+            if (_business.Status != BusinessServiceStatus.Running) return false;
+            if (ReadRebuildProgress(plan) is { Phase: "Applied" } progress)
+                await SaveRebuildProgressAsync(progress with { Phase = "Completed" }, token);
+            await RetireSupersededSlotsAsync(plan, token);
+            return true;
+        }
+        return false;
+    }
+
     public async Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
-        if (plan.Kind == ManagementOperationKind.Rebuild && HasRebuildCompletion(plan))
+        var active = _options.Nodes[plan.After.ActiveNodeId]; var actual = await ReadAsync(active, token);
+        if (plan.Kind == ManagementOperationKind.Takeover || plan.Kind == ManagementOperationKind.Rebuild && HasRebuildCompletion(plan))
         {
-            // A later authorized transition does not undo a completed historical rebuild.
+            // A later authorized transition does not undo a completed historical change.
             // Close only its journal; never reselect or restart its now obsolete role.
-            foreach (var node in _options.Nodes.Values)
+            if (actual is { } current && current.System == plan.SystemIdentifier && current.Database == plan.DatabaseName &&
+                current.State.Version > plan.After.Version && FailoverStateHistory.Covers(current.State, plan.After)) return true;
+            // A healthy takeover target does not wait for the isolated peer. A
+            // rebuilt local node may already have taken over while the old primary
+            // database remains reachable under business-network isolation.
+            if (actual is null || actual.Value.Recovery || plan.Kind == ManagementOperationKind.Rebuild)
             {
-                var current = await ReadAsync(node, token);
-                if (current is { Recovery: false } && current.Value.State.ActiveNodeId == node.NodeId &&
-                    current.Value.System == plan.SystemIdentifier && current.Value.Database == plan.DatabaseName &&
-                    current.Value.State.Version > plan.After.Version && FailoverStateHistory.Covers(current.Value.State, plan.After))
-                    return true;
+                foreach (var node in _options.Nodes.Values.Where(node => node.NodeId != active.NodeId))
+                {
+                    var later = await ReadAsync(node, token);
+                    if (later is { Recovery: false } && later.Value.State.ActiveNodeId == node.NodeId &&
+                        later.Value.System == plan.SystemIdentifier && later.Value.Database == plan.DatabaseName &&
+                        later.Value.State.Version > plan.After.Version && FailoverStateHistory.Covers(later.Value.State, plan.After))
+                        return true;
+                }
             }
         }
-        var active = _options.Nodes[plan.After.ActiveNodeId]; var actual = await ReadAsync(active, token);
         if (actual is null || actual.Value.Recovery || actual.Value.System != plan.SystemIdentifier || actual.Value.Database != plan.DatabaseName)
             return false;
         if (!SameState(actual.Value.State, plan.Before) && !SameState(actual.Value.State, plan.After)) return false;
@@ -848,9 +886,11 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             if (!HasRebuildCompletion(plan)) return false;
         }
         var actual = await ReadAsync(Local, token);
-        return actual is { Recovery: true } && actual.Value.System == plan.SystemIdentifier && actual.Value.Database == plan.DatabaseName &&
+        // Before the marker, installation still requires the actual standby and
+        // prepared resources. After it, later business/role changes preserve that success.
+        return actual is not null && actual.Value.System == plan.SystemIdentifier && actual.Value.Database == plan.DatabaseName &&
             FailoverStateHistory.Covers(actual.Value.State, plan.After) &&
-            (requireMarker && actual.Value.State.Version > plan.After.Version ||
-                _localResourceDigest.Read() == plan.ResourcesDigest);
+            (actual.Value.Recovery || requireMarker && actual.Value.State.Version > plan.After.Version) &&
+            (requireMarker || _localResourceDigest.Read() == plan.ResourcesDigest);
     }
 }

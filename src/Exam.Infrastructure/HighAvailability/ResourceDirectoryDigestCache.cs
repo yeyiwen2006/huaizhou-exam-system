@@ -38,10 +38,10 @@ internal sealed class ResourceDirectoryDigestCache(string root, Func<string, str
                 return _digest;
 
             var digest = compute(root);
-            if (!before.SequenceEqual(Inventory()) || ChangesObserved != changes || Volatile.Read(ref _watcherFailed))
+            if (!before.SequenceEqual(Inventory()))
                 throw new IOException("资源目录在读取期间发生变化。");
-            // Delayed notifications can cause one extra refresh, never mark an older observation
-            // as covering a later change. Metadata also catches changes before callbacks arrive.
+            // Notifications invalidate cached contents, not a complete read. Keep the starting
+            // count so a delayed notification still forces the next read to refresh.
             _digest = digest;
             _entries = before;
             _verifiedChanges = changes;

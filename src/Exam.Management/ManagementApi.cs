@@ -81,6 +81,7 @@ public static class ManagementApi
                 }
                 var actor = session.Username;
                 context.Items["Management.Actor"] = actor;
+                context.Items["Management.Identity"] = session;
                 if (HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method))
                 {
                     runtime.RequireTarget(context.Request.Headers[ManagementHeaders.ServerId].ToString(),
@@ -108,14 +109,12 @@ public static class ManagementApi
 
         app.MapGet("/management/v1/service/status", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetStatusAsync(context.RequestAborted)));
-        app.MapGet("/management/v1/identity", async (HttpContext context, ManagementRuntime runtime, ManagementOperatorSessions sessions) =>
-            await WriteAsync(context, runtime, await sessions.AuthenticateAsync(
-                context.Request.Headers.Authorization.ToString()["Bearer ".Length..], context.RequestAborted)));
+        app.MapGet("/management/v1/identity", async (HttpContext context, ManagementRuntime runtime) =>
+            await WriteAsync(context, runtime, Identity(context)));
         app.MapPost("/management/v1/business-session", async (HttpContext context, ManagementRuntime runtime,
-            ManagementOperatorSessions sessions, ManagementBusinessSessionIssuer issuer) =>
+            ManagementBusinessSessionIssuer issuer) =>
         {
-            var actor = await sessions.AuthenticateAsync(context.Request.Headers.Authorization.ToString()["Bearer ".Length..], context.RequestAborted);
-            await WriteAsync(context, runtime, await issuer.IssueAsync(actor!, await ReadAsync<ManagementBusinessSessionRequest>(context, json), context.RequestAborted));
+            await WriteAsync(context, runtime, await issuer.IssueAsync(Identity(context), await ReadAsync<ManagementBusinessSessionRequest>(context, json), context.RequestAborted));
         });
         app.MapGet("/management/v1/service/configuration", async (HttpContext context, ManagementRuntime runtime) =>
             await WriteAsync(context, runtime, await runtime.GetConfigurationAsync(context.RequestAborted)));
@@ -191,6 +190,7 @@ public static class ManagementApi
         context.Request.Body.Position = 0;
     }
     private static string Actor(HttpContext context) => (string)context.Items["Management.Actor"]!;
+    private static AuthenticatedOperator Identity(HttpContext context) => (AuthenticatedOperator)context.Items["Management.Identity"]!;
     private static Task WriteOperationAsync(HttpContext context, ManagementRuntime runtime, ManagementOperation operation) =>
         WriteAsync(context, runtime, operation, operation.Error, operation.Error is null ? 200 : Status(operation.Error.Code));
 

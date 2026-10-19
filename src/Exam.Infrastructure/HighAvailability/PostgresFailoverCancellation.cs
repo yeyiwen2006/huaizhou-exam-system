@@ -37,14 +37,23 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         {
             // Preparation paused this read-only replica's confirmation listener.
             // Canceling before promotion must leave it available as the same standby.
-            try { await _business.StartAsync(token); }
+            try
+            {
+                // Canceling the wait did not cancel a stop already sent to SCM.
+                // Finish that stop before asking the same standby listener to start.
+                if (_business.Status == BusinessServiceStatus.Stopping) await _business.StopAsync(token);
+                await _business.StartAsync(token);
+            }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception error)
-            { try { _recordProbeFailure?.Invoke("Exam.Management.Takeover.StandbyListenerRestoreFailed", error); } catch { } }
+            {
+                try { _recordProbeFailure?.Invoke("Exam.Management.Takeover.StandbyListenerRestoreFailed", error); } catch { }
+                return false; // Keep this cancellation resumable until its paused listener is restored.
+            }
             return true;
         }
         // Promotion is irreversible. Publish/select only the promotion already made;
         // this path cannot issue pg_promote or automatically switch the primary back.
-        return false; // A promoted primary cannot be reported as a canceled takeover.
+        return await ReconcileAsync(plan, token); // Finish this promotion; never issue another pg_promote.
     }
 }

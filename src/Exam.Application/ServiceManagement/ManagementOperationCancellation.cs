@@ -21,7 +21,12 @@ public sealed partial class ManagementOperationRunner
             throw new DomainRuleException(ErrorCodes.Forbidden, "只能取消当前账号在此节点发起的操作。");
         if (!Cancelable(operation)) throw new DomainRuleException(ErrorCodes.InvalidInput, "仅接管和重建支持取消。");
         operation = await CompleteChangeAsync(operation, token);
-        if (Settled(operation)) return operation;
+        if (Settled(operation))
+        {
+            if (operation.Phase == ManagementOperationPhase.Completed && operation.FailoverContinuationPending)
+                QueueFailoverReconciliation(operation);
+            return operation;
+        }
         // This small, independent intent does not wait for the execution journal lock.
         // It also survives a lost HTTP response or a management host restart.
         await store.RequestCancellationAsync(requestId, actorId, token);

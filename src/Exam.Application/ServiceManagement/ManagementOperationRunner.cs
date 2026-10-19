@@ -17,6 +17,9 @@ public sealed partial class ManagementOperationRunner(
     private readonly SemaphoreSlim _completionWrites = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _executing = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _reconcilingFailover = new(StringComparer.Ordinal);
+    private static bool NeedsReconciliation(ManagementOperation operation) =>
+        operation.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification ||
+        operation.Phase == ManagementOperationPhase.Completed && operation.FailoverContinuationPending;
 
     public async Task<ManagementOperation> ExecuteAsync<T>(
         string requestId, string actorId, ManagementOperationKind kind, T content,
@@ -67,6 +70,7 @@ public sealed partial class ManagementOperationRunner(
         using var durableDeadline = HighAvailability.DurableFailoverCoordinator.IsFailover(kind)
             ? new CancellationTokenSource(ManagementTimeouts.HighAvailabilityOperation) : null;
         var executionToken = durableDeadline?.Token ?? cancellationToken;
+        ManagementOperation? continuation = null;
         _executing.TryAdd(requestId, 0);
         try
         {
@@ -116,6 +120,14 @@ public sealed partial class ManagementOperationRunner(
                         ? "状态检测未完成，可在修复依赖后用新的 requestId 再次检查。"
                         : "操作未能确认完成，须核对实际服务、配置及隔离数据；不得自动重试。") };
             }
+            if (result.Phase != ManagementOperationPhase.Completed && result.FailoverPlan is not null && completeChange is not null)
+            {
+                // A failed startup/read after publication must preserve the committed
+                // role and its remaining work even when no client polls the request.
+                using var completion = new CancellationTokenSource(ManagementTimeouts.Read);
+                try { result = await CompleteChangeAsync(result, completion.Token); }
+                catch (Exception) { /* Preserve the original checkpoint for later reconciliation. */ }
+            }
             if (result.Phase != ManagementOperationPhase.Completed &&
                 await store.IsCancellationRequestedAsync(requestId, CancellationToken.None))
             {
@@ -125,13 +137,19 @@ public sealed partial class ManagementOperationRunner(
             result = result with { UpdatedAt = clock.UtcNow };
             // Disconnected clients cannot cancel durable final recording. Failure leaves Accepted for restart diagnosis.
             result = await SaveFinalAsync(result, CancellationToken.None);
+            if (result.Phase == ManagementOperationPhase.Completed && result.FailoverContinuationPending)
+                continuation = result;
             if (executionError is not null && result.Phase is ManagementOperationPhase.Failed or ManagementOperationPhase.NeedsVerification &&
                 !await store.IsCancellationRequestedAsync(requestId, CancellationToken.None))
                 try { recordFailure?.Invoke(result, executionError); }
                 catch { /* Diagnostic failure must not change the durable result. */ }
             return result;
         }
-        finally { _cancellations.TryRemove(requestId, out _); _executing.TryRemove(requestId, out _); }
+        finally
+        {
+            _cancellations.TryRemove(requestId, out _); _executing.TryRemove(requestId, out _);
+            if (continuation is not null) QueueFailoverReconciliation(continuation);
+        }
     }
 
     public async Task<ManagementOperation> FindAsync(string requestId, string actorId, CancellationToken cancellationToken)
@@ -141,14 +159,12 @@ public sealed partial class ManagementOperationRunner(
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
         operation = await CompleteChangeAsync(operation, cancellationToken);
-        if (_executing.ContainsKey(requestId) || reconcile is null ||
-            operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
+        if (_executing.ContainsKey(requestId) || reconcile is null || !NeedsReconciliation(operation))
             return await CancellationProjectionAsync(operation, cancellationToken);
         if (HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (_reconcilingFailover.TryAdd(requestId, 0))
-                _ = ReconcileFailoverInBackgroundAsync(operation);
+            QueueFailoverReconciliation(operation);
             return await CancellationProjectionAsync(operation, cancellationToken);
         }
         await using var guard = await store.AcquireAsync(cancellationToken);
@@ -157,6 +173,13 @@ public sealed partial class ManagementOperationRunner(
         if (operation.ServerId != serverId || operation.NodeId != nodeId || operation.ActorId != actorId)
             throw new DomainRuleException(ErrorCodes.Forbidden, "操作记录身份与本机已认证身份不符。");
         return await ReconcileUnderLockAsync(operation, cancellationToken);
+    }
+
+    private void QueueFailoverReconciliation(ManagementOperation operation)
+    {
+        if (reconcile is not null && !_executing.ContainsKey(operation.RequestId) &&
+            NeedsReconciliation(operation) && _reconcilingFailover.TryAdd(operation.RequestId, 0))
+            _ = ReconcileFailoverInBackgroundAsync(operation);
     }
 
     private async Task ReconcileFailoverInBackgroundAsync(ManagementOperation original)
@@ -174,13 +197,20 @@ public sealed partial class ManagementOperationRunner(
             if (operation is null || operation.ServerId != serverId || operation.NodeId != nodeId ||
                 operation.ActorId != original.ActorId || operation.Kind != original.Kind || operation.ContentHash != original.ContentHash)
                 throw new InvalidDataException("原主备请求的持久绑定发生变化。");
-            await ReconcileUnderLockAsync(operation, deadline.Token);
+            var result = await ReconcileUnderLockAsync(operation, deadline.Token);
+            // A pending cancellation can discover that the role already committed.
+            // Continue its startup in this same durable task instead of waiting for
+            // a client that correctly stopped polling after receiving success.
+            if (operation.Phase != ManagementOperationPhase.Completed &&
+                result.Phase == ManagementOperationPhase.Completed && result.FailoverContinuationPending)
+                await ReconcileUnderLockAsync(result, deadline.Token);
         }
         catch (Exception error)
         {
             var cancellationRequested = await store.IsCancellationRequestedAsync(original.RequestId, CancellationToken.None);
             var latest = await store.FindAsync(original.RequestId, CancellationToken.None);
-            if (!cancellationRequested && latest?.Phase != ManagementOperationPhase.Completed)
+            if ((!cancellationRequested || latest?.Phase == ManagementOperationPhase.Completed) &&
+                (latest?.Phase != ManagementOperationPhase.Completed || latest?.FailoverContinuationPending == true))
                 try { recordFailure?.Invoke(original, error); } catch { }
             if (cancellationRequested)
             {
@@ -190,7 +220,11 @@ public sealed partial class ManagementOperationRunner(
                     await using var guard = await store.AcquireAsync(cleanup.Token);
                     var current = await store.FindAsync(original.RequestId, cleanup.Token);
                     if (current is not null && current.Phase is ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification)
-                        await SaveFinalAsync(await CancellationResultAsync(current, cleanup.Token), CancellationToken.None);
+                    {
+                        var result = await SaveFinalAsync(await CancellationResultAsync(current, cleanup.Token), CancellationToken.None);
+                        if (result.Phase == ManagementOperationPhase.Completed && result.FailoverContinuationPending)
+                            await ReconcileUnderLockAsync(result, cleanup.Token);
+                    }
                 }
                 catch (Exception cleanupError) { try { recordFailure?.Invoke(original, cleanupError); } catch { } }
             }
@@ -201,19 +235,30 @@ public sealed partial class ManagementOperationRunner(
 
     private async Task<ManagementOperation> ReconcileUnderLockAsync(ManagementOperation operation, CancellationToken token)
     {
-        if (reconcile is null || _executing.ContainsKey(operation.RequestId) ||
-            operation.Phase is not (ManagementOperationPhase.Accepted or ManagementOperationPhase.NeedsVerification))
+        if (reconcile is null || _executing.ContainsKey(operation.RequestId) || !NeedsReconciliation(operation))
             return ForQuery(operation);
-        if (await store.IsCancellationRequestedAsync(operation.RequestId, token))
+        if (operation.Phase == ManagementOperationPhase.Completed)
+        {
+            // Explicit later stop intent wins even if its process died before the
+            // stop result was recorded. Never revive it from an older successful HA request.
+            if (await store.HasLaterBusinessStopAsync(operation, token))
+                return await SaveFinalAsync(operation with { FailoverContinuationPending = false }, token);
+        }
+        else if (await store.IsCancellationRequestedAsync(operation.RequestId, token))
         {
             var canceled = await CancellationResultAsync(operation, token);
-            await SaveFinalAsync(canceled, CancellationToken.None);
-            return await CancellationProjectionAsync(canceled, token);
+            var settled = await SaveFinalAsync(canceled, CancellationToken.None);
+            return await CancellationProjectionAsync(settled, token);
         }
         ManagementOperation? observed;
         try { observed = await reconcile(operation, token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return ForQuery(operation); }
+        catch (Exception error)
+        {
+            if (operation.Phase == ManagementOperationPhase.Completed && operation.FailoverContinuationPending)
+                try { recordFailure?.Invoke(operation, error); } catch { }
+            return ForQuery(operation);
+        }
         if (observed is null) return ForQuery(operation);
         var failedWithoutIntent = HighAvailability.DurableFailoverCoordinator.IsFailover(operation.Kind) &&
             observed.Phase == ManagementOperationPhase.Failed && observed.Error is not null &&
@@ -231,7 +276,7 @@ public sealed partial class ManagementOperationRunner(
              !(operation.Kind == ManagementOperationKind.Restore && observed.Phase == ManagementOperationPhase.Staged &&
                observed.Restore is { IsolationStaged: true, BusinessReady: false })))
             throw new InvalidOperationException("操作核对结果未保留原请求绑定。");
-        observed = observed with { UpdatedAt = clock.UtcNow };
+        observed = observed with { UpdatedAt = operation.Phase == ManagementOperationPhase.Completed ? operation.UpdatedAt : clock.UtcNow };
         return await SaveFinalAsync(observed, token);
     }
 
@@ -251,7 +296,16 @@ public sealed partial class ManagementOperationRunner(
         {
             // A late startup failure or canceled HTTP wait cannot overwrite a proven takeover.
             var current = await store.FindAsync(result.RequestId, token);
-            if (current is { Phase: ManagementOperationPhase.Completed, Kind: ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild }) return current;
+            if (current is { Phase: ManagementOperationPhase.Completed, Kind: ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild })
+            {
+                if (current.FailoverContinuationPending && result.Phase == ManagementOperationPhase.Completed &&
+                    !result.FailoverContinuationPending)
+                {
+                    current = current with { FailoverContinuationPending = false };
+                    await store.SaveAsync(current, token);
+                }
+                return current;
+            }
             await store.SaveAsync(result, token);
             return result;
         }

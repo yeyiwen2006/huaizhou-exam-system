@@ -121,6 +121,24 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
             : null;
     }
 
+    // Management obtains offline material from the same row that authenticated the
+    // business token. The hash never becomes part of a transport account or session.
+    internal async ValueTask<CachedOperatorCredential?> AuthenticateManagementCredentialAsync(string token, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT a.username, a.password_hash, a.is_administrator,
+                   (extract(epoch FROM a.updated_at)*1000000)::bigint
+              FROM exam.operator_sessions s
+              JOIN exam.operator_accounts a ON a.username_key = s.username_key
+             WHERE s.token_digest = @digest AND s.revoked_at IS NULL AND a.status = 'active';
+            """);
+        command.Parameters.AddWithValue("digest", OperatorPasswordHasher.TokenDigest(token));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new CachedOperatorCredential(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetInt64(3))
+            : null;
+    }
+
     public async ValueTask<bool> LogoutAsync(string token, CancellationToken cancellationToken = default)
     {
         await using var command = dataSource.CreateCommand(

@@ -82,10 +82,13 @@ public sealed class ManagementRuntime(
         if (readAudit is null) throw new InvalidOperationException("受保护操作日志未配置。");
         var entries = await readAudit(limit, token);
         var changed = false;
-        foreach (var entry in entries.Where(entry => entry.Phase == ManagementOperationPhase.Canceled &&
+        foreach (var entry in entries.Where(entry => (entry.Phase == ManagementOperationPhase.Canceled || entry.FailoverContinuationPending) &&
             entry.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild))
             if (await journal.FindAsync(entry.RequestId, token) is { } original)
-                changed |= (await Operations.FindAsync(original.RequestId, original.ActorId, token)).Phase != entry.Phase;
+            {
+                var observed = await Operations.FindAsync(original.RequestId, original.ActorId, token);
+                changed |= observed.Phase != entry.Phase || observed.FailoverContinuationPending != entry.FailoverContinuationPending;
+            }
         return changed ? await readAudit(limit, token) : entries;
     }
     public Task<IReadOnlyList<ProtectedRuntimeLogEntry>> ReadRuntimeLogsAsync(int limit, CancellationToken token) =>
