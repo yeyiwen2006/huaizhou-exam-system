@@ -9,6 +9,7 @@ public partial class MainWindow
     private readonly CancellationTokenSource _loginRecoveryLifetime = new();
     private DispatcherTimer? _loginRecoveryTimer;
     private bool _resumingBusiness, _enteredThroughRecovery;
+    private CancellationTokenSource? _loginRecoveryAttempt;
     private ManagementBusinessSession? _pendingBusinessSession;
     private (string Server, string Node, long Epoch)? _businessRecoveryTarget;
 
@@ -29,8 +30,15 @@ public partial class MainWindow
     }
     private void OnManagementIdentityChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(Management.IsSignedIn) && Management.IsSignedIn)
-            _viewModel.Connection.SetManagementIdentity(Management.Username);
+        if (e.PropertyName != nameof(Management.IsSignedIn)) return;
+        if (!Management.IsSignedIn)
+        {
+            _loginRecoveryAttempt?.Cancel();
+            _pendingBusinessSession = null;
+            _businessRecoveryTarget = null;
+            _enteredThroughRecovery = false;
+        }
+        _viewModel.Connection.SetManagementIdentity(Management.IsSignedIn ? Management.Username : null);
     }
     private void OnLoginRecoveryTick(object? sender, EventArgs e)
     {
@@ -42,6 +50,7 @@ public partial class MainWindow
         if (_resumingBusiness || !Management.IsSignedIn || _loginRecoveryLifetime.IsCancellationRequested) return;
         _resumingBusiness = true;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_loginRecoveryLifetime.Token);
+        _loginRecoveryAttempt = deadline;
         deadline.CancelAfter(ManagementTimeouts.Read);
         try
         {
@@ -53,9 +62,16 @@ public partial class MainWindow
                 if (_pendingBusinessSession is { } pending && (pending.ServerId != target.Server || pending.ServerEpoch < target.Epoch ||
                     pending.ServerEpoch == target.Epoch && pending.NodeId != target.Node)) _pendingBusinessSession = null;
             }
-            _pendingBusinessSession ??= await Management.CreateBusinessSessionAsync(deadline.Token);
-            if (_pendingBusinessSession is null) return;
-            await _viewModel.Connection.CompleteBusinessRecoveryAsync(_pendingBusinessSession, deadline.Token);
+            var pendingSession = _pendingBusinessSession ?? await Management.CreateBusinessSessionAsync(deadline.Token);
+            deadline.Token.ThrowIfCancellationRequested();
+            if (pendingSession is null) return;
+            if (_businessRecoveryTarget is { } currentTarget && (pendingSession.ServerId != currentTarget.Server ||
+                pendingSession.ServerEpoch < currentTarget.Epoch ||
+                pendingSession.ServerEpoch == currentTarget.Epoch && pendingSession.NodeId != currentTarget.Node))
+            { _pendingBusinessSession = null; return; }
+            _pendingBusinessSession = pendingSession;
+            await _viewModel.Connection.CompleteBusinessRecoveryAsync(pendingSession, deadline.Token);
+            deadline.Token.ThrowIfCancellationRequested();
             _pendingBusinessSession = null;
             Management.ClearRecoveryLoginNotice();
             if (_enteredThroughRecovery)
@@ -66,7 +82,7 @@ public partial class MainWindow
             }
         }
         catch (Exception) { /* Keep each management session and the exact pending operations. */ }
-        finally { _resumingBusiness = false; }
+        finally { _loginRecoveryAttempt = null; _resumingBusiness = false; }
     }
     private void ShutdownUnifiedLogin()
     {

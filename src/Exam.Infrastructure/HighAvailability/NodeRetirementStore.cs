@@ -9,6 +9,33 @@ public sealed record RetiredNodeEpoch(string ServerId, string NodeId, long Epoch
 
 public sealed class NodeRetirementStore(string directory)
 {
+    // Retirement belongs to the node across role changes. Older deployments placed
+    // it beside the selected epoch's confirmation head; keep reading that evidence.
+    public static string? ResolveDirectory(Func<string, string?> configuration, string nodeId) =>
+        configuration($"HighAvailability:Nodes:{nodeId}:ConfirmationDirectory") is { Length: > 0 } root
+            ? root : configuration("Confirmation:Directory");
+
+    public static RetiredNodeEpoch? ReadConfigured(Func<string, string?> configuration, string nodeId) =>
+        ReadLatest(ResolveDirectory(configuration, nodeId), configuration("Confirmation:Directory"));
+
+    public static RetiredNodeEpoch? ReadLatest(string? directory, string? previousDirectory = null)
+    {
+        RetiredNodeEpoch? latest = null;
+        var comparison = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        foreach (var path in new[] { directory, previousDirectory }.Where(path => !string.IsNullOrWhiteSpace(path))
+                     .Distinct(comparison))
+        {
+            var current = new NodeRetirementStore(path!).Read();
+            if (current is null) continue;
+            if (latest is not null && (latest.ServerId != current.ServerId || latest.NodeId != current.NodeId ||
+                latest.ActiveEpoch == current.ActiveEpoch && latest.ActiveNodeId != current.ActiveNodeId))
+                throw new IOException("旧节点隔离记录的身份或活动代次冲突。");
+            if (latest is null || current.ActiveEpoch > latest.ActiveEpoch ||
+                current.ActiveEpoch == latest.ActiveEpoch && current.Epoch > latest.Epoch) latest = current;
+        }
+        return latest;
+    }
+
     private string PathName
     {
         get

@@ -111,16 +111,15 @@ public sealed partial class AdminApiClient
         SaveRoutes(routes); _trustedRoutes = routes;
     }
 
-    private async Task<Uri> ResolveLoginRouteAsync(Uri requested, CancellationToken token)
+    private async Task<(Uri Address, TrustedRoutes? Routes)> ResolveLoginRouteAsync(Uri requested, CancellationToken token)
     {
         var saved = ReadRoutes();
-        _trustedRoutes = saved?.Nodes.Any(node => node.Address == requested) == true ? saved : null;
-        if (_trustedRoutes is not { } routes) return requested;
+        if (saved?.Nodes.Any(node => node.Address == requested) != true) return (requested, null);
+        var routes = saved;
         var active = await FindActiveRouteAsync(routes, routes.Epoch, null, token);
         if (active is null) throw new HttpRequestException("可信主备尚未返回活动节点，原连接记录已保留，请稍后重试。");
         var verified = routes with { Epoch = active.Value.Epoch, ActiveNodeId = active.Value.Route.NodeId };
-        SaveRoutes(verified); _trustedRoutes = verified;
-        return active.Value.Route.Address;
+        return (active.Value.Route.Address, verified);
     }
 
     private async Task<(TrustedRoute Route, long Epoch)?> FindActiveRouteAsync(TrustedRoutes routes, long minimumEpoch, string? preferred, CancellationToken token)
@@ -181,20 +180,25 @@ public sealed partial class AdminApiClient
             if (failedGeneration != _routeGeneration &&
                 (preferred is null || preferred == _nodeId && _serverEpoch >= minimumEpoch)) return true;
             if (preferred is null && Environment.TickCount64 < _nextRouteAttempt) return false;
+            var credential = _httpClient.DefaultRequestHeaders.Authorization;
+            var actor = _operatorId;
             var active = await FindActiveRouteAsync(routes, Math.Max(minimumEpoch, _serverEpoch), preferred, token);
+            // A different login can complete while the credential-free probes are in
+            // flight. Its token must never be sent to this session's former servers.
+            if (identity != _identityGeneration) return false;
             if (active is null) { _nextRouteAttempt = Environment.TickCount64 + 3000; return false; }
             if (active.Value.Route.Address == _httpClient.BaseAddress && active.Value.Epoch <= _serverEpoch) return false;
             var candidate = CreateRoutedClient(routes);
             try
             {
                 candidate.BaseAddress = active.Value.Route.Address;
-                candidate.DefaultRequestHeaders.Authorization = _httpClient.DefaultRequestHeaders.Authorization;
+                candidate.DefaultRequestHeaders.Authorization = credential;
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(ManagementTimeouts.Read);
                 using var response = await candidate.GetAsync("api/v1/operators/me", deadline.Token);
                 var account = await response.Content.ReadFromJsonAsync<ApiEnvelope<OperatorAccount>>(_json, deadline.Token);
                 if (!response.IsSuccessStatusCode || account is not { IsSuccess: true, Result: { } result } ||
                     account.ServerId != routes.ServerId || account.NodeId != active.Value.Route.NodeId || account.ServerEpoch != active.Value.Epoch ||
-                    !string.Equals(result.Username, _operatorId, StringComparison.OrdinalIgnoreCase) || result.Status != OperatorStatus.Active)
+                    !string.Equals(result.Username, actor, StringComparison.OrdinalIgnoreCase) || result.Status != OperatorStatus.Active)
                     return false;
                 if (identity != _identityGeneration) return false;
                 var updated = routes with { Epoch = account.ServerEpoch, ActiveNodeId = account.NodeId };

@@ -46,7 +46,9 @@ public sealed class SignalRExamCommandFeed(DeviceRecord device, ServerNodeEnvelo
     public string? LastError => _replaced
         ? "当前设备授权或连接已失效，已停止处理试题，请重新核对参加考试状态。"
         : _processingError ?? _connectionError;
-    public bool IsConnected => _connection?.State == HubConnectionState.Connected && !_replaced;
+    // A live socket may still belong to a fenced former primary. Failed CatchUp
+    // must let the runtime probe its trusted peer instead of suppressing recovery.
+    public bool IsConnected => _connection?.State == HubConnectionState.Connected && !_replaced && _connectionError is null;
 
     public async Task StartAsync(ParticipationResult participation,
         Func<CommandDelivery, CancellationToken, Task> handler, CancellationToken ct = default)

@@ -46,15 +46,25 @@ public sealed partial class ServiceManagementViewModel
     public async Task<ManagementBusinessSession?> CreateBusinessSessionAsync(CancellationToken token)
     {
         if (!IsSignedIn || _connection is not { Actor: not null } connection) return null;
+        var generation = _generation;
         if (CurrentActiveNodeId is null || _displayState is null)
         {
             var observation = await connection.HighAvailabilityAsync(token);
+            token.ThrowIfCancellationRequested();
+            if (!Current(connection, generation) || !IsSignedIn) return null;
             ApplyHighAvailabilityReply(observation);
         }
         if (CurrentActiveNodeId is not { } active || _displayState is not { } state) return null;
         var reply = await connection.ExchangeBusinessSessionAsync(active, state.ServerEpoch, token);
+        token.ThrowIfCancellationRequested();
+        if (!Current(connection, generation) || !IsSignedIn) return null;
         if (reply.Envelope.Error?.Code is ErrorCodes.StaleServerEpoch or ErrorCodes.NotActiveServer)
-            ApplyHighAvailabilityReply(await connection.HighAvailabilityAsync(token));
+        {
+            var observation = await connection.HighAvailabilityAsync(token);
+            token.ThrowIfCancellationRequested();
+            if (!Current(connection, generation) || !IsSignedIn) return null;
+            ApplyHighAvailabilityReply(observation);
+        }
         return reply.Envelope.Error is null ? reply.Envelope.Result : null;
     }
 }

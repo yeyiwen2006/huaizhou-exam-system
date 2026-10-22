@@ -236,7 +236,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     public async Task<HighAvailabilityStatus> ObserveAsync(CancellationToken token)
     {
         var local = await ReadAsync(Local, token);
-        var retired = new NodeRetirementStore(Local.ConfirmationDirectory).Read();
+        var retired = NodeRetirementStore.ReadLatest(Local.ConfirmationDirectory, _readSelection()?.ConfirmationDirectory);
         if (local is { Recovery: false } && (retired is null || local.Value.State.ServerEpoch > retired.ActiveEpoch) &&
             IsSelectedIsolatedPrimary(local.Value.State))
         {
@@ -628,6 +628,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     {
         using var replicaLock = Confirmation(Local, plan.Before.ServerEpoch).Lock();
         var head = RequireTakeoverHead(plan.Before);
+        // Preparation runs while the standby listener is still available. An
+        // in-flight exchange can advance its resources before the listener stops.
+        // Reject that obsolete plan before promotion, while cancellation can still
+        // restore the same read-only standby and a fresh request can be prepared.
+        if (head.Record.SystemIdentifier != plan.SystemIdentifier || head.Record.DatabaseName != plan.DatabaseName ||
+            head.Record.ResourcesDigest != plan.ResourcesDigest || _localResourceDigest.Read() != plan.ResourcesDigest)
+            throw new IOException("接管准备后的确认资源或数据库身份已变化；尚未提升，请取消原请求后重新发起接管。");
         await using var source = ManagementProbeConnection.Create(Local.ConnectionString, 70);
         await PostgresStandbyConfirmation.VerifyPositionAsync(source, head.Record, Local.NodeId, token,
             Local.ConnectionString, _options.PostgresBinDirectory);

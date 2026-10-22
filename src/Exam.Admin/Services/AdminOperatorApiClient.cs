@@ -23,17 +23,21 @@ public sealed partial class AdminApiClient
     public async Task<OperatorAccount> LoginAsync(string baseAddress, string username, string password,
         CancellationToken cancellationToken = default)
     {
-        var address = await ResolveLoginRouteAsync(NormalizeAddress(baseAddress), cancellationToken);
+        var generation = Generation;
+        var (address, routes) = await ResolveLoginRouteAsync(NormalizeAddress(baseAddress), cancellationToken);
+        EnsureCurrentConnection(generation);
         ApiEnvelope<OperatorSession>? authenticated = null;
         var session = await SendAnonymousAsync<OperatorSession>(address.AbsoluteUri, "api/v1/operators/login",
             new LoginOperatorRequest(username, password), cancellationToken, envelope =>
             {
                 if (string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) || envelope.ServerEpoch < 1 ||
-                    _trustedRoutes is { } routes && (envelope.ServerId != routes.ServerId || envelope.ServerEpoch < routes.Epoch ||
+                    routes is not null && (envelope.ServerId != routes.ServerId || envelope.ServerEpoch < routes.Epoch ||
                         routes.Nodes.Single(node => node.Address == address).NodeId != envelope.NodeId))
                     throw new System.IO.IOException("登录节点与可信主备身份不一致。");
                 authenticated = envelope;
-            });
+            }, routes, useCurrentRoutes: false);
+        EnsureCurrentConnection(generation);
+        _trustedRoutes = routes;
         Configure(address.AbsoluteUri, session.Token, session.Account.Username);
         _serverId = authenticated!.ServerId; _nodeId = authenticated.NodeId; _serverEpoch = authenticated.ServerEpoch;
         _account = session.Account;
@@ -67,11 +71,11 @@ public sealed partial class AdminApiClient
             new SetOperatorStatusRequest(username, status), cancellationToken);
 
     private async Task<T> SendAnonymousAsync<T>(string baseAddress, string path, object body, CancellationToken cancellationToken,
-        Action<ApiEnvelope<T>>? verify = null)
+        Action<ApiEnvelope<T>>? verify = null, TrustedRoutes? routes = null, bool useCurrentRoutes = true)
         where T : class
     {
         var address = NormalizeAddress(baseAddress);
-        using var client = CreateClient();
+        using var client = CreateRoutedClient(useCurrentRoutes ? _trustedRoutes : routes);
         client.BaseAddress = address;
         using var response = await client.PostAsJsonAsync(path, body, _json, cancellationToken);
         ApiEnvelope<T>? envelope = null;

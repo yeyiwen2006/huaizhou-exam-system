@@ -138,6 +138,9 @@ public sealed partial class HttpStudentApi : IStudentApi, IStudentPresenceApi, I
         {
             _server = endpoint;
             _nodeId = node?.NodeId;
+            // A user-requested login retry is a new attempt, even with the same
+            // saved identity. Do not retain a prior background probe's backoff.
+            Interlocked.Exchange(ref _nextFailedPeerProbe, 0);
             // Preserve the last confirmed primary until the selected login endpoint proves
             // its role. It may be the old primary after a previous successful takeover.
             _connectionGeneration++;

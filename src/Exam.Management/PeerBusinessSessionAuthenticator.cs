@@ -33,9 +33,7 @@ public sealed class PeerBusinessSessionAuthenticator : IDisposable
 
     private RetiredNodeEpoch? Retirement()
     {
-        var directory = _configuration("Confirmation:Directory") ??
-            _configuration($"HighAvailability:Nodes:{_nodeId}:ConfirmationDirectory");
-        return string.IsNullOrWhiteSpace(directory) ? null : new NodeRetirementStore(directory).Read();
+        return NodeRetirementStore.ReadConfigured(_configuration, _nodeId);
     }
 
     public bool LocalBusinessSessionAllowed() => Retirement() is not { } retired || retired.ActiveEpoch < _epoch();

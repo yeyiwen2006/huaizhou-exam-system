@@ -31,23 +31,37 @@ internal sealed class ReplicaResourceExchange(string target, string owner)
         }
         if (Directory.Exists(staged) && FileConfirmationStore.ResourcesDigest(staged, persist: true) == intent.Digest)
         {
-            if (Directory.Exists(target))
+            var hasCurrent = Directory.Exists(target);
+            if (hasCurrent)
             {
                 if (Directory.Exists(previous) || FileConfirmationStore.ResourcesDigest(target) != intent.PreviousDigest)
                     throw new IOException("资源交换的原目录证据不一致。");
-                ReplicaResourceTransfer.MoveDirectory(target, previous);
             }
             else if (!Directory.Exists(previous) || FileConfirmationStore.ResourcesDigest(previous) != intent.PreviousDigest)
                 throw new IOException("资源交换的原件不可核实。");
             await verify(token);
+            token.ThrowIfCancellationRequested();
+            // Keep the current directory in place while the final role check can still fail.
+            // Once it passes, complete both renames without an asynchronous cancellation gap.
+            if (hasCurrent) ReplicaResourceTransfer.MoveDirectory(target, previous);
             ReplicaResourceTransfer.MoveDirectory(staged, target);
             await CommitAsync(intent, token);
+            return;
+        }
+        // A failed staging write, or a completed rollback whose journal deletion was
+        // interrupted, leaves the exact original in place. Release that intent for retry.
+        if (Directory.Exists(target) && !Directory.Exists(previous) &&
+            FileConfirmationStore.ResourcesDigest(target) == intent.PreviousDigest)
+        {
+            await verify(token); token.ThrowIfCancellationRequested();
+            File.Delete(Journal);
             return;
         }
         // Roll back only the exact original that this intent moved. Never guess by time.
         if (!Directory.Exists(target) && Directory.Exists(previous) && FileConfirmationStore.ResourcesDigest(previous) == intent.PreviousDigest)
         {
             await verify(token);
+            token.ThrowIfCancellationRequested();
             ReplicaResourceTransfer.MoveDirectory(previous, target);
             File.Delete(Journal);
             return;

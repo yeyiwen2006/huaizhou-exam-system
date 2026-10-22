@@ -451,7 +451,7 @@ public sealed partial class StudentExamRuntime(
                     await StartNotificationsAsync(participation, server);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-            catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException or TimeoutException or CryptographicException or UnauthorizedAccessException)
+            catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException or TimeoutException or CryptographicException or UnauthorizedAccessException or Microsoft.AspNetCore.SignalR.HubException)
             { _handlingError = "正在核对可信服务器并恢复指令连接；原登记、答案与待传答卷保持不变。"; NotifyStateChanged(); }
         }
     }

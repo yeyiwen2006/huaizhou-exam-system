@@ -24,9 +24,9 @@ public sealed class NodeAuthorityGuard(NpgsqlDataSource source, IConfiguration c
         try
         {
             if (_retired) return false;
-            var directory = configuration["Confirmation:Directory"];
+            var directory = NodeRetirementStore.ResolveDirectory(key => configuration[key], identity.NodeId);
             var retirement = string.IsNullOrWhiteSpace(directory) ? null : new NodeRetirementStore(directory);
-            if (!_checked && retirement?.Read() is { } old &&
+            if (!_checked && NodeRetirementStore.ReadConfigured(key => configuration[key], identity.NodeId) is { } old &&
                 (old.ServerId != identity.ServerId || old.NodeId != identity.NodeId ||
                  old.Epoch >= identity.ServerEpoch || old.ActiveEpoch > identity.ServerEpoch))
                 return Retire();

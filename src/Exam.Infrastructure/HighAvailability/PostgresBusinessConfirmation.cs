@@ -212,7 +212,11 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (true)
             {
-                try { await VerifyPositionAsync(source, record, standbyNodeId, token); break; }
+                try
+                {
+                    await VerifyPositionAsync(source, record, standbyNodeId, token, timelineConnection, postgresBinDirectory);
+                    break;
+                }
                 catch (IOException) when (DateTime.UtcNow < deadline) { await Task.Delay(50, token); }
             }
             if (_resources.Read() != record.ResourcesDigest)
@@ -235,7 +239,7 @@ public sealed class PostgresStandbyConfirmation(NpgsqlDataSource source, FileCon
             }
             else if (!await (VerifiedStartupProbe ?? _readiness).VerifyConfirmationResourcesAsync(token))
                 throw new IOException("备节点新增或变更的试题资源核对失败。");
-            await VerifyPositionAsync(source, record, standbyNodeId, token);
+            await VerifyPositionAsync(source, record, standbyNodeId, token, timelineConnection, postgresBinDirectory);
             if (_resources.Read() != record.ResourcesDigest)
                 throw new IOException("备节点资源在确认期间改变。");
             var continuation = previous is not null && previous.Record.Timeline != record.Timeline

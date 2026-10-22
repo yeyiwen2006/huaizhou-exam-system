@@ -11,12 +11,14 @@ public sealed partial class AdminApiClient
 {
     public async Task LoginWithManagementSessionAsync(ManagementBusinessSession session, CancellationToken token)
     {
+        var generation = Generation;
         var address = NormalizeAddress(session.BusinessAddress);
         using var client = CreateClient();
         client.BaseAddress = address;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.Session.Token);
         using var response = await client.GetAsync("api/v1/operators/me", token);
         var envelope = await response.Content.ReadFromJsonAsync<ApiEnvelope<OperatorAccount>>(_json, token);
+        EnsureCurrentConnection(generation);
         if (!response.IsSuccessStatusCode || envelope is not { Error: null, Result: { } account } ||
             envelope.ServerId != session.ServerId || envelope.NodeId != session.NodeId || envelope.ServerEpoch < session.ServerEpoch ||
             !string.Equals(account.Username, session.Session.Account.Username, StringComparison.OrdinalIgnoreCase))

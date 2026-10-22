@@ -49,6 +49,7 @@ public sealed partial class AdminApiClient : IDisposable
         _serverId = null;
         _nodeId = null;
         _serverEpoch = 0;
+        _nextRouteAttempt = 0;
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -74,6 +75,16 @@ public sealed partial class AdminApiClient : IDisposable
              (envelope.ServerEpoch == _serverEpoch && !StringComparer.Ordinal.Equals(_nodeId, envelope.NodeId)) ||
              _trustedRoutes is { } routes && routes.Nodes.SingleOrDefault(node => node.Address == _httpClient.BaseAddress)?.NodeId != envelope.NodeId))
             throw new AdminApiException("STALE_SERVER_IDENTITY", "响应来自不同服务器或过期节点代次，已拒绝使用。", HttpStatusCode.BadGateway);
+        if (envelope is { IsSuccess: true, Result: not null } && _trustedRoutes is { } trusted &&
+            envelope.ServerId == trusted.ServerId && envelope.ServerEpoch > trusted.Epoch &&
+            trusted.Nodes.SingleOrDefault(node => node.Address == _httpClient.BaseAddress)?.NodeId == envelope.NodeId)
+        {
+            // A former primary can become active again at the same address while this
+            // client is offline. Keep that confirmed epoch across application restarts.
+            var confirmed = trusted with { Epoch = envelope.ServerEpoch, ActiveNodeId = envelope.NodeId };
+            SaveRoutes(confirmed);
+            _trustedRoutes = confirmed;
+        }
         _serverId = envelope.ServerId;
         _nodeId = envelope.NodeId;
         _serverEpoch = envelope.ServerEpoch;
@@ -289,19 +300,22 @@ public sealed partial class AdminApiClient : IDisposable
         where T : class
     {
         var generation = _routeGeneration; var identity = _identityGeneration;
-        try { return await SendCoreAsync<T>(method, relativeUri, payload, cancellationToken, preserveRequestId); }
+        // Caller-owned lists can change while a request is awaiting the network. Keep
+        // the same business content as well as the journal's request ID during takeover.
+        var frozenPayload = payload is null ? null : JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
+        try { return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId); }
         catch (Exception error) when (CanReconnect(error) && !cancellationToken.IsCancellationRequested && identity == _identityGeneration)
         {
             if (!await TryReconnectBusinessAsync(generation, cancellationToken)) throw;
             // The mutation journal reuses the same request ID and exact business content.
-            return await SendCoreAsync<T>(method, relativeUri, payload, cancellationToken, preserveRequestId);
+            return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId);
         }
     }
 
     private async Task<T> SendCoreAsync<T>(
         HttpMethod method,
         string relativeUri,
-        object? payload,
+        JsonObject? payload,
         CancellationToken cancellationToken, bool preserveRequestId = false)
         where T : class
     {
@@ -321,14 +335,14 @@ public sealed partial class AdminApiClient : IDisposable
         {
             // Prepared grading revisions own a durable request ID. The generic mutation cache must
             // neither replace it nor generate a fresh one after a successful cross-process replay.
-            var fixedBody = JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
+            var fixedBody = payload;
             if (fixedBody["requestId"]?.GetValue<string>() is not { Length: > 0 and <= 128 })
                 throw new InvalidDataException("规则预览缺少有效的固定请求编号。");
             request.Content = JsonContent.Create(fixedBody, options: _json);
         }
         else if (payload is not null)
         {
-            var body = JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
+            var body = payload.DeepClone().AsObject();
             // Keep the same requestId after a lost response/5xx. Only a definitive result
             // completes a mutation. Keys contain a digest, never the roster or token.
             body.Remove("requestId");

@@ -2,6 +2,7 @@ using Exam.Application.Activation;
 using Exam.Application.Commands;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
+using Exam.Domain.Common;
 using Exam.Server.Runtime;
 using Microsoft.AspNetCore.SignalR;
 
@@ -60,14 +61,17 @@ public sealed class RealtimeDeviceAuthorizer(
         RealtimeConnectRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (activeNode is not null && !(await activeNode.CheckAsync(cancellationToken)).Allowed)
+        if (activeNode is not null && await activeNode.CheckAsync(cancellationToken) is { Allowed: false } authority)
         {
-            return false;
+            throw new DomainRuleException(authority.ErrorCode, authority.Reason ?? "当前节点暂不可用，请重新获取活动服务器。", true);
         }
 
         if (!string.Equals(request.ServerId, server.ServerId, StringComparison.Ordinal) ||
-            request.ServerEpoch != server.ServerEpoch ||
-            !await credentials.IsActiveDeviceAsync(request.DeviceId, cancellationToken).ConfigureAwait(false))
+            request.ServerEpoch != server.ServerEpoch)
+        {
+            throw new DomainRuleException(ErrorCodes.StaleServerEpoch, "服务代次已变化，请重新获取活动服务器。", true);
+        }
+        if (!await credentials.IsActiveDeviceAsync(request.DeviceId, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
@@ -283,7 +287,15 @@ public sealed class ExamEventHub(
 
     private async Task RequireStillAuthorizedAsync(RealtimeConnectRequest identity)
     {
-        if (!await authorizer.IsStillAuthorizedAsync(identity, Context.ConnectionAborted))
+        bool authorized;
+        try { authorized = await authorizer.IsStillAuthorizedAsync(identity, Context.ConnectionAborted); }
+        catch (DomainRuleException error)
+        {
+            // A role change or unavailable database does not revoke this device.
+            // Keep its registration so another catch-up cannot misreport revocation.
+            throw new HubException($"{error.Code}: {error.Message}");
+        }
+        if (!authorized)
         {
             connections.Remove(Context.ConnectionId);
             // Keep the transport alive long enough for the stable error code to reach

@@ -17,8 +17,7 @@ public sealed class ManagementBusinessSessionIssuer(Func<string, string?> config
         var root = "HighAvailability:Nodes:" + request.ActiveNodeId + ":";
         var connectionString = configuration(root + "ConnectionString");
         var address = configuration(root + "BusinessHttpsUrl");
-        var directory = configuration("Confirmation:Directory") ?? configuration("HighAvailability:Nodes:" + nodeId + ":ConfirmationDirectory");
-        var retired = string.IsNullOrWhiteSpace(directory) ? null : new NodeRetirementStore(directory).Read();
+        var retired = NodeRetirementStore.ReadConfigured(configuration, nodeId);
         var minimumEpoch = Math.Max(currentEpoch(), retired?.ActiveEpoch ?? 1);
         if (string.IsNullOrWhiteSpace(connectionString) || !Uri.TryCreate(address, UriKind.Absolute, out var endpoint) ||
             endpoint.Scheme != "https" || endpoint.AbsolutePath != "/" || endpoint.UserInfo.Length != 0 ||

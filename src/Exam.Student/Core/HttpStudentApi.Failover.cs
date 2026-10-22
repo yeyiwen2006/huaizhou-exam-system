@@ -31,6 +31,7 @@ public sealed partial class HttpStudentApi
     {
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(nodeId) || epoch < 1 ||
             _trustedServerId is not null && serverId != _trustedServerId || !allowStaleStatus && epoch < _serverEpoch ||
+            !allowStaleStatus && epoch == _serverEpoch && _device?.ActiveNodeId is { } activeNode && nodeId != activeNode ||
             _device?.Topology is { } topology && topology.Nodes.SingleOrDefault(node => node.Address == _server)?.NodeId != nodeId)
             throw new IdentityRejectedException("服务器身份、节点或服务代次不匹配，原登记和答卷已保留。");
     }

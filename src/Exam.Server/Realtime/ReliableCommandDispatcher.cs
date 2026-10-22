@@ -1,4 +1,6 @@
 using Exam.Application.Commands;
+using Exam.Contracts.Common;
+using Exam.Domain.Common;
 using Microsoft.AspNetCore.SignalR;
 
 namespace Exam.Server.Realtime;
@@ -79,6 +81,12 @@ public sealed class ReliableCommandDispatcher(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+        }
+        catch (DomainRuleException error) when (error.Code is ErrorCodes.NotActiveServer or
+            ErrorCodes.StaleServerEpoch or ErrorCodes.ServiceRecovering)
+        {
+            // Leave both the device authorization and connection registered. CatchUp
+            // returns the role/storage error and lets the client reconnect to authority.
         }
         catch (Exception exception)
         {
