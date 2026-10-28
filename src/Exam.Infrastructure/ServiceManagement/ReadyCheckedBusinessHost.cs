@@ -22,6 +22,7 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _pollInterval;
     private readonly ServiceConfiguration? _expectedConfiguration;
+    private readonly Func<CancellationToken, Task<bool>>? _standbyReadiness;
     private volatile bool _ready;
 
     public ReadyCheckedBusinessHost(
@@ -33,7 +34,8 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
         long serverEpoch,
         TimeSpan? timeout = null,
         TimeSpan? pollInterval = null,
-        ServiceConfiguration? expectedConfiguration = null)
+        ServiceConfiguration? expectedConfiguration = null,
+        Func<CancellationToken, Task<bool>>? standbyReadiness = null)
     {
         _processHost = processHost ?? throw new ArgumentNullException(nameof(processHost));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -54,6 +56,7 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
             expectedConfiguration.HttpsPort is < 1 or > 65535))
             throw new ArgumentException("期望业务配置必须绑定同一节点且包含有效端口与版本。", nameof(expectedConfiguration));
         _expectedConfiguration = expectedConfiguration;
+        _standbyReadiness = standbyReadiness;
         // Preserve the deployment's certificate DNS name; the managed port follows the saved configuration.
         _readyEndpoint = expectedConfiguration is null ? readyEndpoint :
             new UriBuilder(readyEndpoint) { Port = expectedConfiguration.HttpsPort }.Uri;
@@ -102,6 +105,8 @@ public sealed class ReadyCheckedBusinessHost : IManagedBusinessHost
             try
             {
                 ready = await CheckReadyAsync(attempt.Token);
+                if (!ready && _standbyReadiness is not null)
+                    ready = await _standbyReadiness(attempt.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {

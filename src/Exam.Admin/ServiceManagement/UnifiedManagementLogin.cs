@@ -13,34 +13,22 @@ public sealed partial class ServiceManagementViewModel
 
     public async Task<bool> LoginForRecoveryAsync(string businessAddress, string username, string password)
     {
+        if (_disposed) return false;
         if (!HasConnectionConfiguration) throw new InvalidOperationException("尚未配置服务器管理连接，请联系部署人员。");
         if (IsSignedIn && _connection?.Actor is { } actor && !string.Equals(actor, username, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("请先退出当前考务账号，再登录其他账号。");
         Username = username;
-        var host = new Uri(businessAddress).Host;
-        Exception? last = null;
-        foreach (var target in ConfiguredManagementTargets.OrderByDescending(target => new Uri(target.Address).Host == host))
-        {
-            if (ReadPendingRequest(target) is { } pending) _knownPendingRequests[target.Key] = pending;
-            var previous = NodeSession(target).Connection;
-            var connection = await AuthenticateNodeAsync(NodeSession(target), (client, token) => client.LoginAsync(username, password, token),
-                username, _managementSessionVersion, _lifetime.Token);
-            if (connection is null)
-            {
-                last = NodeSession(target).AuthenticationError;
-                if (last is UnauthorizedAccessException) throw last;
-                continue;
-            }
-            SelectCurrentConnection(connection, ReadPendingRequest(target));
-            if (previous is not null && !ReferenceEquals(previous, connection)) previous.Dispose();
-            IsSignedIn = true;
-            Message = "考务服务暂不可用，已进入服务器管理";
-            RecoveryLoginNotice = Message;
-            _ = RefreshPeerStatusAsync(force: true);
-            StartPolling();
-            return true;
-        }
-        throw last ?? new System.Net.Http.HttpRequestException("考务服务和服务器管理均暂不可用。");
+        var version = _managementSessionVersion;
+        var connection = await ConnectTargetsAsync(CurrentTarget(),
+            (client, token) => client.LoginAsync(username, password, token), username, _lifetime.Token);
+        if (connection is null || _disposed || version != _managementSessionVersion) return false;
+        SelectCurrentConnection(connection, ReadPendingRequest(connection.Target));
+        IsSignedIn = true;
+        Message = "考务服务暂不可用，已进入服务器管理";
+        RecoveryLoginNotice = Message;
+        _ = RefreshPeerStatusAsync(force: true);
+        StartPolling();
+        return true;
     }
 
     public async Task<ManagementBusinessSession?> CreateBusinessSessionAsync(CancellationToken token)
@@ -55,6 +43,18 @@ public sealed partial class ServiceManagementViewModel
             ApplyHighAvailabilityReply(observation);
         }
         if (CurrentActiveNodeId is not { } active || _displayState is not { } state) return null;
+        if (connection.Target.NodeId != active)
+        {
+            var target = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == active);
+            if (target is null) return null;
+            var activeConnection = await EnsureTargetSessionAsync(target, token);
+            token.ThrowIfCancellationRequested();
+            if (activeConnection is null || !Current(connection, generation) || !IsSignedIn ||
+                CurrentActiveNodeId != active || _displayState?.ServerEpoch != state.ServerEpoch) return null;
+            SelectCurrentConnection(activeConnection, ReadPendingRequest(target));
+            connection = activeConnection;
+            generation = _generation;
+        }
         var reply = await connection.ExchangeBusinessSessionAsync(active, state.ServerEpoch, token);
         token.ThrowIfCancellationRequested();
         if (!Current(connection, generation) || !IsSignedIn) return null;

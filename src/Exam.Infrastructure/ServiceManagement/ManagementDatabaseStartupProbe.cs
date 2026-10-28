@@ -46,6 +46,8 @@ public sealed class ManagementDatabaseStartupProbe(string? connectionString, lon
                     reader.GetString(0) != configuration.NodeId && reader.GetInt64(1) == expectedEpoch &&
                     !reader.IsDBNull(2) && reader.GetString(2) == "Standby";
                 var writable = !inRecovery && !readOnly;
+                if (expectedStandby)
+                    results.Add(new("database-standby", true, "本机为当前代次的只读备用节点。", false));
                 results.Add(new("database-role", writable || expectedStandby,
                     expectedStandby ? "备用节点只读（预期），业务写入保持关闭。" :
                     writable ? "数据库可写角色已核对。" : "数据库为备库或只读状态，禁止启动业务写入。", !expectedStandby));

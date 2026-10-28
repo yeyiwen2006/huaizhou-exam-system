@@ -17,7 +17,10 @@ public sealed record HighAvailabilityStatus(string ServerId, string NodeId,
 }
 
 public sealed record HighAvailabilityMaterialProof(string ServerId, string NodeId, long Epoch,
-    bool KeysReady, bool CertificateReady, DateTimeOffset ObservedAt);
+    bool KeysReady, bool CertificateReady, DateTimeOffset ObservedAt)
+{
+    public ServiceConfiguration? ServiceConfiguration { get; init; }
+}
 
 public sealed record HighAvailabilityRequest(string RequestId, string ServerId, string NodeId,
     string ActorId, long ExpectedEpoch, long ExpectedVersion, string TargetNodeId, string Reason,

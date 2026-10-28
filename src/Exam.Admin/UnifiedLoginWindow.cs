@@ -42,7 +42,8 @@ public partial class MainWindow
     }
     private void OnLoginRecoveryTick(object? sender, EventArgs e)
     {
-        if (!_viewModel.Connection.IsConnected && Management.IsSignedIn && !_viewModel.Connection.IsLoginInProgress)
+        if ((!_viewModel.Connection.IsConnected || _businessRecoveryTarget is not null) &&
+            Management.IsSignedIn && !_viewModel.Connection.IsLoginInProgress)
             _ = ResumeBusinessFromManagementAsync();
     }
     private async Task ResumeBusinessFromManagementAsync()

@@ -64,13 +64,17 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         ValidateRebuildPaths();
         if (progress.Phase is not ("Prepared" or "Installing" or "Applied") || progress.DatabaseIdentity is null || progress.ResourcesIdentity is null)
             throw new IOException("重建缺少已核验暂存目录证据。");
-        var source = await ReadAsync(_options.Nodes[plan.After.ActiveNodeId], token);
-        if (source is null || source.Value.Recovery || source.Value.System != plan.SystemIdentifier ||
-            source.Value.Database != plan.DatabaseName || !SameState(source.Value.State, plan.After))
-            throw new IOException("重建权威已变化，禁止继续旧角色的目录启用。");
+        if (progress.Phase == "Prepared")
+        {
+            var source = await ReadAsync(_options.Nodes[plan.After.ActiveNodeId], token);
+            if (source is null || source.Value.Recovery || source.Value.System != plan.SystemIdentifier ||
+                source.Value.Database != plan.DatabaseName || !SameState(source.Value.State, plan.After))
+                throw new IOException("重建权威已变化，禁止继续旧角色的目录启用。");
+        }
         if (ExternalPreparationProcesses.IsRunning(_options.PostgresBinDirectory, RebuildSlot(plan)))
             throw new IOException("原基础备份或校验进程尚未退出。");
-        await SaveRebuildProgressAsync(progress with { Phase = "Installing" }, token);
+        if (progress.Phase == "Prepared")
+            await SaveRebuildProgressAsync(progress with { Phase = "Installing" }, token);
         var database = Path.Combine(RebuildSlot(plan), Local.NodeId);
         var resources = Path.Combine(RebuildSlot(plan), "resources");
         var installed = DirectoryInstalled(database, _options.PostgresDataDirectory, progress.OldDatabaseIdentity,
@@ -84,6 +88,8 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
                 throw new IOException("本机服务未停止，禁止交换目录。");
             InstallDirectory(database, _options.PostgresDataDirectory,
                 progress.OldDatabaseIdentity, progress.DatabaseIdentity, plan.ContentHash);
+            if (DirectoryIdentity(Local.ResourcesDirectory) != progress.ResourcesIdentity)
+                PreserveResourceExchangeJournal(plan.ContentHash);
             InstallDirectory(resources, Local.ResourcesDirectory,
                 progress.OldResourcesIdentity, progress.ResourcesIdentity, plan.ContentHash);
         }
@@ -108,7 +114,19 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
         if (_business.Status != BusinessServiceStatus.Running) throw new IOException("备用确认服务尚未启动。");
         await SaveRebuildProgressAsync(progress with { Phase = "Completed" }, token);
         // The same durable marker was written at Applied, before starting the listener.
-        await RetireSupersededSlotsAsync(plan, token);
+        if (progress.Phase == "Prepared") await RetireSupersededSlotsAsync(plan, token);
+    }
+
+    private void PreserveResourceExchangeJournal(string requestHash)
+    {
+        var resources = Local.ResourcesDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(resources)!;
+        var original = PathBoundary.ResolveWithinRoot(parent, resources + ".replica-swap.json", "资源交换记录路径越界。");
+        if (!File.Exists(original)) return;
+        var quarantine = PathBoundary.ResolveWithinRoot(parent,
+            resources + ".quarantine." + requestHash + ".replica-swap.json", "资源交换隔离路径越界。");
+        if (File.Exists(quarantine)) throw new IOException("原资源交换记录与隔离记录同时存在，重建未覆盖记录。");
+        File.Move(original, quarantine);
     }
 
     private void InstallDirectory(string staged, string target, string? oldIdentity, string newIdentity, string hash)
@@ -134,7 +152,10 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform
 
     private bool HasRebuildCompletion(FailoverExecutionPlan plan)
     {
-        if (ReadRebuildProgress(plan) is { Phase: "Completed" }) return true;
+        // Applied is itself a durable completion proof, saved only after the
+        // installed local standby was verified. A crash before the redundant
+        // marker must not force another installation or a read of the old source.
+        if (ReadRebuildProgress(plan) is { Phase: "Applied" or "Completed" }) return true;
         var marker = Path.Combine(RebuildSlot(plan), "rebuild-complete.json");
         var stored = DurableJsonFile.Read<FailoverExecutionPlan>(marker);
         return stored is not null && JsonSerializer.SerializeToUtf8Bytes(stored, JsonDefaults.Create()).AsSpan()

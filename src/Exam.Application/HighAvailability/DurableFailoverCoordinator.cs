@@ -40,7 +40,9 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
             request.Reason is null || request.Reason.Length > 500 ||
             string.IsNullOrWhiteSpace(request.TargetNodeId) || request.TargetNodeId.Length > 200)
             throw new DomainRuleException(ErrorCodes.InvalidInput, "主备请求的目标、操作者或备注无效。");
-        var observed = await platform.ObserveAsync(token);
+        var observed = operation.Kind == ManagementOperationKind.Takeover
+            ? await platform.ObserveLocalAsync(token)
+            : await platform.ObserveAsync(token);
         var before = observed.State;
         if (observed.ServerId != serverId || observed.NodeId != nodeId || before is null ||
             observed.VerifiedAt is null || clock.UtcNow - observed.VerifiedAt > HighAvailabilityStatus.ObservationLifetime ||
@@ -147,7 +149,9 @@ public sealed class DurableFailoverCoordinator(string serverId, string nodeId,
 
     private async Task<ManagementOperation> CompletedAsync(ManagementOperation operation, FailoverExecutionPlan plan, CancellationToken token)
     {
-        var observed = await platform.ObserveAsync(token);
+        var observed = plan.Kind is ManagementOperationKind.Takeover or ManagementOperationKind.Rebuild
+            ? await platform.ObserveLocalAsync(token)
+            : await platform.ObserveAsync(token);
         if (observed.State is not { } state || observed.VerifiedAt is not { } time ||
             clock.UtcNow - time > HighAvailabilityStatus.ObservationLifetime || time > clock.UtcNow.AddSeconds(5) ||
             !FailoverStateHistory.Covers(state, plan.After) ||

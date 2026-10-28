@@ -9,7 +9,8 @@ namespace Exam.Infrastructure.ServiceManagement;
 
 /// <summary>Observe the running host's startup result; status polling never replays the examination database.</summary>
 public sealed class RunningBusinessMaterialProbe(HttpClient http, Uri businessAddress,
-    string serverId, string nodeId, Func<long> epoch, Func<string> peerToken, TimeProvider? time = null) : IStartupReadinessProbe
+    string serverId, string nodeId, Func<long> epoch, Func<string> peerToken, TimeProvider? time = null,
+    ServiceConfiguration? expectedConfiguration = null) : IStartupReadinessProbe
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly object _gate = new();
@@ -17,6 +18,7 @@ public sealed class RunningBusinessMaterialProbe(HttpClient http, Uri businessAd
 
     private bool Current(HighAvailabilityMaterialProof proof) =>
         proof.ServerId == serverId && proof.NodeId == nodeId && proof.Epoch == epoch() &&
+        (expectedConfiguration is null || proof.ServiceConfiguration == expectedConfiguration) &&
         _time.GetUtcNow() - proof.ObservedAt < HighAvailabilityStatus.ObservationLifetime &&
         proof.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
 

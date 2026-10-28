@@ -193,7 +193,11 @@ public sealed class LocalManagementClient : IDisposable
                     { IsolationStaged: true, BusinessReady: false }) ||
             operation.Phase == ManagementOperationPhase.Completed && (operation.Error is not null || !(operation.Kind switch
             {
-                ManagementOperationKind.Start => operation.Status is { ProcessStatus: BusinessServiceStatus.Running, Readiness: BusinessReadiness.Ready },
+                ManagementOperationKind.Start => operation.Status is { ProcessStatus: BusinessServiceStatus.Running } started &&
+                    (started.Readiness == BusinessReadiness.Ready || started.Readiness == BusinessReadiness.NotReady &&
+                        started.Checks.Any(check => check.Name == "database-standby" && check.Passed) &&
+                        started.Checks.Any(check => check.Name == "standby-listener" && check.Passed) &&
+                        started.Checks.All(check => check.Passed || !check.BlocksWrites)),
                 ManagementOperationKind.Stop => operation.Status is { ProcessStatus: BusinessServiceStatus.Stopped },
                 ManagementOperationKind.Configure => operation.Configuration is { Version: > 0 },
                 ManagementOperationKind.Checks => operation.Checks is { Count: > 0 },

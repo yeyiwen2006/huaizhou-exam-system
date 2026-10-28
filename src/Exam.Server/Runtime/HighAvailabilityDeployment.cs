@@ -25,6 +25,7 @@ public static class HighAvailabilityDeployment
         var certificate = await new NodeCertificateStartupReadinessProbe(cert).RunAsync(service, context.RequestAborted);
         var startup = context.RequestServices.GetRequiredService<BusinessRecoveryGuard>().Snapshot;
         return new(identity.ServerId, identity.NodeId, identity.ServerEpoch, startup.MaterialsReady,
-            certificate.Count > 0 && certificate.All(c => c.Passed || !c.BlocksWrites), DateTimeOffset.UtcNow);
+            certificate.Count > 0 && certificate.All(c => c.Passed || !c.BlocksWrites), DateTimeOffset.UtcNow)
+        { ServiceConfiguration = context.RequestServices.GetService<BusinessServiceConfiguration>()?.Value };
     }
 }

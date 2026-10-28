@@ -179,10 +179,14 @@ public sealed partial class ServiceManagementViewModel
         // The business client already verified the active node. A pending request on
         // the isolated peer must not make that peer the page's current authority.
         var preferred = Array.FindIndex(targets, target => target.NodeId == _businessSession?.NodeId);
-        if (preferred >= 0 && await attempts[preferred].WaitAsync(token) is { } active) return active;
+        var preferredAttempt = preferred >= 0 ? attempts[preferred] : null;
         while (attempts.Count > 0)
         {
             var finished = await Task.WhenAny(attempts).WaitAsync(token);
+            // Prefer the known active node only if it has replied. A healthy peer
+            // must remain usable while that node is offline or still authenticating.
+            if (preferredAttempt is { IsCompletedSuccessfully: true } && preferredAttempt.Result is { } active)
+                return active;
             attempts.Remove(finished);
             if (await finished is not { } available) continue;
             // If both replies have already arrived, resume an original request on its own node.
@@ -357,7 +361,9 @@ public sealed partial class ServiceManagementViewModel
                 if (original is not null) { Message = "目标节点存在原请求，正在继续查询其处理状态。"; return false; }
                 return true;
             }
-            var reply = await candidate.HighAvailabilityAsync(deadline.Token);
+            var reply = kind == ManagementOperationKind.Takeover
+                ? await candidate.LocalHighAvailabilityAsync(deadline.Token)
+                : await candidate.HighAvailabilityAsync(deadline.Token);
             if (deadline.IsCancellationRequested || version != _managementSessionVersion || !IsSignedIn ||
                 selected != HighAvailabilityTarget.Trim()) return false;
             if (reply.IsUnauthorized || reply.Envelope.Error is not null || reply.Envelope.Result is not { } status)

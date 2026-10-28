@@ -54,6 +54,7 @@ public sealed partial class ServiceManagementViewModel
                                 _localNodeHealth[target.Key] = new(node, state.ServerEpoch);
                                 ApplyLocalAuthority(status, target);
                                 UpdateDisplayedNodes();
+                                UpdateCommands();
                             }
                         }
                     }

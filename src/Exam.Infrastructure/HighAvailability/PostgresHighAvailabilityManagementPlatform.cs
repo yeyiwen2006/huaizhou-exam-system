@@ -37,6 +37,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     private readonly HighAvailabilityManagementOptions _options;
     private readonly HttpClient _http;
     private readonly IStartupReadinessProbe _localMaterials;
+    private readonly IStartupReadinessProbe _stoppedMaterials;
     private readonly IExternalProcessRunner _processes;
     private readonly IManagedBusinessHost _business, _postgres;
     private readonly TimeProvider _time;
@@ -55,7 +56,7 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         IStartupReadinessProbe? localMaterials = null, IExternalProcessRunner? processes = null,
         IManagedBusinessHost? business = null, IManagedBusinessHost? postgres = null, TimeProvider? time = null,
         Action? verifyDeployment = null, Action<string, Exception>? recordProbeFailure = null,
-        Func<FailoverDeploymentSelection?>? readSelection = null)
+        Func<FailoverDeploymentSelection?>? readSelection = null, IStartupReadinessProbe? stoppedMaterials = null)
     {
         if (options.Nodes.Count is < 1 or > 2 || !options.Nodes.ContainsKey(options.LocalNodeId) ||
             options.Nodes.Any(p => p.Key != p.Value.NodeId || string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 200 ||
@@ -83,12 +84,13 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             if (new ScmWindowsServiceControl().GetBinaryPath(options.PostgresServiceName) != BuildPostgresServiceCommand(options))
                 throw new IOException("SCM 数据库服务的实际启动命令与受控数据目录不一致，禁止重建。");
         });
-        _localMaterials = localMaterials ?? new CompositeStartupReadinessProbe([
+        _stoppedMaterials = stoppedMaterials ?? new CompositeStartupReadinessProbe([
             new NodeCertificateStartupReadinessProbe(Local.CertificateThumbprint),
             new ConfirmationMaterialReadinessProbe(StateSource(Local),
                 new CertificateStorePackageKeyUnwrapper(Local.NodeId,
                     new Exam.Infrastructure.Security.ServerCertificateSource(Local.CertificateThumbprint))),
             new PostgresWalArchiveReadinessProbe(Local.ConnectionString, options)]);
+        _localMaterials = localMaterials ?? _stoppedMaterials;
     }
 
     private async Task<(ServerDeploymentState State, bool Recovery, string System, string Database, int Timeline)?> ReadAsync(
@@ -184,7 +186,8 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
     {
         if (node.NodeId == Local.NodeId)
         {
-            var checks = await _localMaterials.RunAsync(LocalConfiguration(), token);
+            var probe = _business.Status == BusinessServiceStatus.Stopped ? _stoppedMaterials : _localMaterials;
+            var checks = await probe.RunAsync(LocalConfiguration(), token);
             var certificate = checks.Any(c => c.Name == "node-certificate-private-key" && c.Passed);
             return (checks.Count > 1 && checks.All(c => c.Passed || !c.BlocksWrites), certificate, null, checks);
         }
@@ -510,7 +513,6 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
             if (_business.Status != BusinessServiceStatus.Running) return false;
             if (ReadRebuildProgress(plan) is { Phase: "Applied" } progress)
                 await SaveRebuildProgressAsync(progress with { Phase = "Completed" }, token);
-            await RetireSupersededSlotsAsync(plan, token);
             return true;
         }
         return false;
@@ -518,6 +520,16 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
 
     public async Task<bool> ReconcileAsync(FailoverExecutionPlan plan, CancellationToken token)
     {
+        if (plan.Kind == ManagementOperationKind.Rebuild && HasRebuildCompletion(plan) &&
+            await ContinueCommittedChangeAsync(plan, token)) return true;
+        if (plan.Kind == ManagementOperationKind.Rebuild &&
+            ReadRebuildProgress(plan) is { Phase: "Installing" } installation)
+        {
+            // The source was checked before the durable installation intent. Finish
+            // that same read-only installation even if the source is now offline.
+            await InstallPreparedRebuildAsync(installation, token);
+            return await VerifyRebuiltLocalAsync(plan, token);
+        }
         var active = _options.Nodes[plan.After.ActiveNodeId]; var actual = await ReadAsync(active, token);
         if (plan.Kind == ManagementOperationKind.Takeover || plan.Kind == ManagementOperationKind.Rebuild && HasRebuildCompletion(plan))
         {

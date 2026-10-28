@@ -187,6 +187,21 @@ public sealed partial class ServiceManagementViewModel
 
     private bool CanVerifyHighAvailabilityTarget(ManagementOperationKind kind)
     {
+        if (kind == ManagementOperationKind.Takeover)
+        {
+            if (_routingConnection) return false;
+            if (CanIssueHighAvailability(kind)) return true;
+            // The current management connection may be the failed old primary.
+            // Let a fresh independent standby observation open target verification.
+            var takeoverTarget = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == HighAvailabilityTarget.Trim());
+            return takeoverTarget is not null && SelectedNode is { IsPlaceholder: false } selected &&
+                selected.NodeId == takeoverTarget.NodeId && CurrentActiveNodeId != takeoverTarget.NodeId &&
+                LocalObservation(takeoverTarget.NodeId) is { AuthenticationRequired: false, Unavailable: false,
+                    State: { Role: DeploymentNodeRole.Standby, Reachable: true, DatabaseInRecovery: true } node } local &&
+                local.Epoch >= ReadKnownServerEpoch(takeoverTarget) &&
+                _time.GetUtcNow() - node.ObservedAt < HighAvailabilityStatus.ObservationLifetime &&
+                node.ObservedAt <= _time.GetUtcNow().AddSeconds(5);
+        }
         if (kind != ManagementOperationKind.Rebuild)
             return CanIssueHighAvailability(kind);
         // Background reconnect establishes the target's session. Once enabled,

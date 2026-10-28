@@ -65,6 +65,12 @@ public sealed partial class AdminApiClient : IDisposable
             throw new OperationCanceledException("业务连接已切换，沿原请求核对当前主机。");
     }
 
+    private void EnsureCurrentIdentity(long identity)
+    {
+        if (identity != _identityGeneration)
+            throw new OperationCanceledException("考务账号或服务器已更换，原操作不会发送到新会话。");
+    }
+
     private void ValidateEnvelope<T>(ApiEnvelope<T> envelope)
     {
         if (string.IsNullOrWhiteSpace(envelope.ServerId) || string.IsNullOrWhiteSpace(envelope.NodeId) ||
@@ -150,21 +156,25 @@ public sealed partial class AdminApiClient : IDisposable
         catch (Exception error) when (CanReconnect(error) && !cancellationToken.IsCancellationRequested && identity == _identityGeneration)
         {
             if (!await TryReconnectBusinessAsync(generation, cancellationToken)) throw;
+            EnsureCurrentIdentity(identity);
             received = await _httpClient.GetAsync("health/ready", cancellationToken); generation = _routeGeneration;
         }
         using var response = received;
+        EnsureCurrentIdentity(identity);
         EnsureCurrentRoute(generation);
         if (!response.IsSuccessStatusCode)
         {
             if (await TryReconnectBusinessAsync(generation, cancellationToken))
-            { await CheckConnectionAsync(cancellationToken); return; }
+            { EnsureCurrentIdentity(identity); await CheckConnectionAsync(cancellationToken); return; }
             throw new AdminApiException("SERVICE_NOT_READY", $"服务器就绪检查失败：HTTP {(int)response.StatusCode}。", response.StatusCode);
         }
 
         // 健康检查是公开接口；再读取当前登录账号，确认会话仍然有效。
         try
         {
-            _account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get, "api/v1/operators/me", null, cancellationToken);
+            var account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get, "api/v1/operators/me", null, cancellationToken);
+            EnsureCurrentIdentity(identity);
+            _account = account;
         }
         catch (AdminApiException error) when (error.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
         {
@@ -303,12 +313,12 @@ public sealed partial class AdminApiClient : IDisposable
         // Caller-owned lists can change while a request is awaiting the network. Keep
         // the same business content as well as the journal's request ID during takeover.
         var frozenPayload = payload is null ? null : JsonSerializer.SerializeToNode(payload, _json)!.AsObject();
-        try { return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId); }
+        try { return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId, identity); }
         catch (Exception error) when (CanReconnect(error) && !cancellationToken.IsCancellationRequested && identity == _identityGeneration)
         {
             if (!await TryReconnectBusinessAsync(generation, cancellationToken)) throw;
             // The mutation journal reuses the same request ID and exact business content.
-            return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId);
+            return await SendCoreAsync<T>(method, relativeUri, frozenPayload, cancellationToken, preserveRequestId, identity);
         }
     }
 
@@ -316,17 +326,21 @@ public sealed partial class AdminApiClient : IDisposable
         HttpMethod method,
         string relativeUri,
         JsonObject? payload,
-        CancellationToken cancellationToken, bool preserveRequestId = false)
+        CancellationToken cancellationToken, bool preserveRequestId, long identity)
         where T : class
     {
+        EnsureCurrentIdentity(identity);
         EnsureConfigured();
         if (payload is not null && !preserveRequestId && _serverId is null)
         {
-            _account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get,
+            var account = await SendAsync<Exam.Contracts.Operators.OperatorAccount>(HttpMethod.Get,
                 "api/v1/operators/me", null, cancellationToken);
+            EnsureCurrentIdentity(identity);
+            _account = account;
             if (!string.Equals(_account.Username, _operatorId, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("当前登录账号与业务请求操作者不一致。");
         }
+        EnsureCurrentIdentity(identity);
         var generation = _routeGeneration;
         var client = _httpClient;
         using var request = new HttpRequestMessage(method, relativeUri);

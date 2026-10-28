@@ -70,9 +70,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
     IDurableConfirmationPeer? peer, string? timelineConnection = null, string? postgresBinDirectory = null) : IBusinessConfirmation, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly object _peerGate = new();
-    private CancellationTokenSource? _maintenancePeer;
-    private int _foregroundWaiters;
+    private readonly SemaphoreSlim _peerGate = new(1, 1);
     private readonly ResourceDirectoryDigestCache _resources = new(resourcesDirectory);
     private long _nextPeerAttempt;
     public async Task MaintainReplicationAsync(CancellationToken token)
@@ -82,20 +80,15 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         if (peer is not null) await peer.SynchronizeResourcesAsync(resourcesDirectory, _resources.Read(), token);
         await ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: true);
     }
-    public async Task ConfirmAsync(CancellationToken token)
-    {
-        // Background repair yields its network wait to a business request. Its longer
-        // peer deadline must not extend the foreground local-durability path.
-        lock (_peerGate) { _foregroundWaiters++; _maintenancePeer?.Cancel(); }
-        try { await ConfirmCoreAsync(token, TimeSpan.FromMilliseconds(750), maintenance: false); }
-        finally { lock (_peerGate) _foregroundWaiters--; }
-    }
+    public Task ConfirmAsync(CancellationToken token) =>
+        ConfirmCoreAsync(token, TimeSpan.FromMilliseconds(750), maintenance: false);
     public Task ConfirmReplicationAsync(CancellationToken token) =>
-        ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: false);
+        ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: true);
 
     private async Task ConfirmCoreAsync(CancellationToken token, TimeSpan peerBudget, bool maintenance)
     {
         await _gate.WaitAsync(token);
+        var ownsLocalGate = true;
         FileStream? locked = null;
         try
         {
@@ -141,33 +134,34 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
             await store.SaveAsync(new(record, true), token, continuation);
             var local = new ConfirmationHead(record, true);
             locked.Dispose(); locked = null;
-            if (peer is not null && Environment.TickCount64 >= Interlocked.Read(ref _nextPeerAttempt))
+            await connection.DisposeAsync();
+            _gate.Release(); ownsLocalGate = false;
+            // Slow replication runs independently after local durability. Foreground
+            // writes skip an occupied peer channel instead of canceling its progress.
+            if (peer is not null && (maintenance || Environment.TickCount64 >= Interlocked.Read(ref _nextPeerAttempt)))
             {
-                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                deadline.CancelAfter(peerBudget);
-                if (maintenance)
-                    lock (_peerGate)
+                var ownsPeerGate = false;
+                if (maintenance) { await _peerGate.WaitAsync(token); ownsPeerGate = true; }
+                else ownsPeerGate = await _peerGate.WaitAsync(0, token);
+                if (ownsPeerGate)
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    deadline.CancelAfter(peerBudget);
+                    var dual = record with { Mode = ProtectionMode.SynchronousDualNode };
+                    try
                     {
-                        if (_foregroundWaiters != 0) deadline.Cancel();
-                        else _maintenancePeer = deadline;
+                        if (await peer.ConfirmAsync(dual, deadline.Token) != dual)
+                            throw new IOException("备节点确认边界与原请求不同。");
+                        record = dual;
+                        Interlocked.Exchange(ref _nextPeerAttempt, 0);
                     }
-                var dual = record with { Mode = ProtectionMode.SynchronousDualNode };
-                try
-                {
-                    if (await peer.ConfirmAsync(dual, deadline.Token) != dual)
-                        throw new IOException("备节点确认边界与原请求不同。");
-                    record = dual;
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (Exception)
-                {
-                    // Only peer work is recoverable here. Local I/O, ownership, WAL and resource failures
-                    // remain outside this catch and still refuse success.
-                    Interlocked.Exchange(ref _nextPeerAttempt, Environment.TickCount64 + 3000);
-                }
-                finally
-                {
-                    if (maintenance) lock (_peerGate) _maintenancePeer = null;
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch (Exception)
+                    {
+                        // A peer failure cannot undo a successful local durable write.
+                        Interlocked.Exchange(ref _nextPeerAttempt, Environment.TickCount64 + 3000);
+                    }
+                    finally { _peerGate.Release(); }
                 }
             }
             token.ThrowIfCancellationRequested();
@@ -181,7 +175,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认尚未完成，保留原请求重试。", retryable: true); }
-        finally { locked?.Dispose(); _gate.Release(); }
+        finally { locked?.Dispose(); if (ownsLocalGate) _gate.Release(); }
     }
 
     public void Dispose() => _resources.Dispose();

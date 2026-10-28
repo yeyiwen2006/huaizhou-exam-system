@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using Exam.Contracts.Commands;
 using Exam.Contracts.Common;
@@ -45,9 +46,6 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         {
             throw new InvalidOperationException("试题包长度或版本无效。");
         }
-        if (_device?.Topology is not null)
-            RequireResult(await GetServerTimeAsync(ct));
-
         HttpRequestMessage message;
         long generation;
         long identityGeneration;
@@ -79,6 +77,25 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         using var response = received;
         if ((int)response.StatusCode >= 500 && await TryReconnectAsync(identityGeneration, generation, ct))
             throw new DownloadEndpointChangedException();
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict &&
+            response.Content.Headers.ContentType?.MediaType == "application/json")
+        {
+            await response.Content.LoadIntoBufferAsync(16384, deadline.Token);
+            ApiEnvelope<object>? failure;
+            try { failure = await response.Content.ReadFromJsonAsync<ApiEnvelope<object>>(_json, deadline.Token); }
+            catch (System.Text.Json.JsonException error)
+            { throw new HttpRequestException("题包服务器响应格式无效，请稍后重试。", error); }
+            if (failure?.Error?.Code is ErrorCodes.NotActiveServer or ErrorCodes.ServiceRecovering or
+                ErrorCodes.StaleServerEpoch or ErrorCodes.ReplicaUnavailable)
+            {
+                lock (_connectionGate)
+                {
+                    EnsureDownloadContext(identityGeneration, generation);
+                    ValidateIdentity(failure.ServerId, failure.NodeId, failure.ServerEpoch, allowStaleStatus: true);
+                }
+                if (await TryReconnectAsync(identityGeneration, generation, ct)) throw new DownloadEndpointChangedException();
+            }
+        }
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType != "application/vnd.huaizhou.exam-package" ||
             (response.Content.Headers.ContentLength is { } advertised && advertised != descriptor.PackageLength))
         {
@@ -91,12 +108,16 @@ public sealed partial class HttpStudentApi : IExamPackageApi
         {
             throw new HttpRequestException("题包响应缺少有效的服务器身份或版本。");
         }
+        bool epochChanged;
         lock (_connectionGate)
         {
             EnsureDownloadContext(identityGeneration, generation);
             ValidateIdentity(serverId, Header(response, "X-Exam-Node-Id"), epoch);
             ValidateServer(serverId, epoch);
+            epochChanged = generation != _connectionGeneration;
+            generation = _connectionGeneration;
         }
+        if (epochChanged) TrustedEndpointChanged?.Invoke(this, EventArgs.Empty);
         await using var content = await response.Content.ReadAsStreamAsync(deadline.Token);
         var buffer = new byte[64 * 1024];
         long total = 0;

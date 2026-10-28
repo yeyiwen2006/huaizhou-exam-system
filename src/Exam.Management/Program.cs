@@ -118,8 +118,13 @@ public static class ManagementEntryPoint
             var store = new DeferredConfigurationStore(() => new FileServiceConfigurationStore(Required("Management:ServiceConfigurationPath")));
             var journal = new DeferredOperationStore(() => new FileManagementOperationStore(Required("Management:OperationDirectory")));
             string? SelectedConnection() => FileRecoveryDeploymentSelection.ResolveConnection(SelectedConfiguration, serverId, nodeId, CurrentEpoch());
-            ReadyCheckedBusinessHost ReadyHost(ServiceConfiguration expected) => new(process, http,
-                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, CurrentEpoch(), expectedConfiguration: expected);
+            Task<bool> StandbyReady(ServiceConfiguration expected, CancellationToken token) =>
+                new StandbyBusinessReadinessProbe(SelectedConnection() ?? "", http,
+                    new UriBuilder(Required("Management:BusinessReadyEndpoint")) { Port = expected.HttpsPort, Path = "/" }.Uri,
+                    serverId, nodeId, CurrentEpoch(), () => configuration["Confirmation:PeerToken"] ?? "").CheckAsync(expected, token);
+            ReadyCheckedBusinessHost ReadyHost(ServiceConfiguration expected, bool allowStandby = false) => new(process, http,
+                new Uri(Required("Management:BusinessReadyEndpoint")), serverId, nodeId, CurrentEpoch(), expectedConfiguration: expected,
+                standbyReadiness: allowStandby ? token => StandbyReady(expected, token) : null);
             FileRecoveryDeploymentSwitch Deployment() => new(new FileRecoveryDeploymentSelection(Required("Recovery:SelectionPath")), CurrentEpoch(),
                 async (_, token) => (await new PostgresRecoveryStateComparison(SelectedRequired("ConnectionStrings:Exam"),
                     Required("ConnectionStrings:ExamRecovery"), CurrentEpoch()).RunAsync(await store.LoadAsync(token), token)).Passed,
@@ -139,10 +144,10 @@ public static class ManagementEntryPoint
                 return new(options);
             }
             var backups = new DeferredBackupCoordinator(CreateBackups);
-            IStartupReadinessProbe Preflight(string? target = null) => new CompositeStartupReadinessProbe([
+            IStartupReadinessProbe Preflight(string? target = null, bool allowStandby = false) => new CompositeStartupReadinessProbe([
                 new LocalStorageStartupReadinessProbe(long.TryParse(configuration["Management:MinimumAvailableBytes"], out var minimumBytes) ? minimumBytes : 1024L * 1024 * 1024),
                 new DeferredReadinessProbe(() => new NodeCertificateStartupReadinessProbe(NodeCertificate())),
-                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), CurrentEpoch())),
+                new DeferredReadinessProbe(() => new ManagementDatabaseStartupProbe(target ?? SelectedConnection(), CurrentEpoch(), inspectStandby: allowStandby)),
                 new DeferredReadinessProbe(() => new ConfiguredRecoveryReadinessProbe(target ?? SelectedConnection(), NodeCertificate())),
                 new BackupIntegrityStartupReadinessProbe(() => new PostgresBackupCoordinator(new PostgresBackupOptions(
                     Required("Backup:PostgresBinDirectory"), "", Required("Backup:AllowedBackupRoot"), "", "", "",
@@ -151,7 +156,7 @@ public static class ManagementEntryPoint
             ]);
             ServerCertificateSource NodeCertificate() => new(SelectedConfiguration("PackageSecurity:CertificateThumbprint"),
                 SelectedConfiguration("PackageSecurity:CertificatePath"), SelectedConfiguration("PackageSecurity:CertificatePassword"));
-            var preflight = Preflight();
+            var preflight = Preflight(allowStandby: true);
             async Task<StartupCheckResult> ConfirmedState(ServiceConfiguration expected, RecoveryWorkingCopy working, CancellationToken token)
             {
                 var original = await new PostgresRecoveryStateComparison(SelectedRequired("ConnectionStrings:Exam"),
@@ -172,7 +177,7 @@ public static class ManagementEntryPoint
                 catch (Exception) { return original.Check; }
             }
             return new ManagementRuntime(serverId, nodeId, store, process,
-                ReadyHost,
+                expected => ReadyHost(expected, allowStandby: true),
                 preflight, () => backups, journal, new SystemClock(), port,
                 (expected, token) => ReadyHost(expected).ObserveReadyAsync(token),
                 prepareRecoveryWorkingCopy: string.IsNullOrWhiteSpace(configuration["Recovery:WorkingRoot"]) ? null :
@@ -261,6 +266,7 @@ public static class ManagementEntryPoint
                     "", "", Required("Backup:AllowedBackupRoot"), "", "", "", TimeSpan.FromSeconds(5)),
                     new ExternalProcessRunner()).ReadBackupInfoAsync(directory, token))
             {
+                ObserveStandbyReady = StandbyReady,
                 // Manual status checks inspect local metadata. Full startup/restore auditing
                 // and the primary-only write guards remain on their original paths.
                 StatusInspection = new CompositeStartupReadinessProbe([

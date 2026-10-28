@@ -389,8 +389,12 @@ public sealed partial class ServiceManagementViewModel : BindableBase, IDisposab
                 if (!Current(connection, generation) || !IsSignedIn) return;
                 // A human may need more than the proof lifetime to confirm. Re-read the selected node,
                 // and require another confirmation if the active node, epoch or selection changed.
-                if (kind != ManagementOperationKind.Rebuild)
-                    await ObserveHighAvailabilityAsync(connection, generation, _lifetime.Token);
+                if (kind == ManagementOperationKind.Takeover)
+                {
+                    var local = await connection.LocalHighAvailabilityAsync(_lifetime.Token);
+                    if (!Accept(connection, generation, local.IsUnauthorized)) return;
+                    ApplyHighAvailabilityReply(local);
+                }
                 if (!Current(connection, generation) || _availability?.State is not { } after ||
                     after.ActiveNodeId != before.ActiveNodeId || after.ServerEpoch != before.ServerEpoch ||
                     after.Version != before.Version || HighAvailabilityTarget.Trim() != targetNode ||

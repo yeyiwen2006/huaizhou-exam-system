@@ -34,6 +34,7 @@ public sealed class ManagementRuntime(
     public bool SupportsAdvancedOperations { get; } = supportsAdvancedOperations;
     public Action<ManagementOperation, Exception>? RecordFailure { get; init; }
     public IStartupReadinessProbe? StatusInspection { get; init; }
+    public Func<ServiceConfiguration, CancellationToken, Task<bool>>? ObserveStandbyReady { get; init; }
     public Func<CancellationToken, Task<BackupMaintenanceStatus?>>? ReadAutomaticBackupStatus { get; init; }
     public async Task<BackupInfo> GetBackupInfoAsync(string sourceDirectory, CancellationToken token)
     {
@@ -125,10 +126,13 @@ public sealed class ManagementRuntime(
         {
             var configuration = await GetConfigurationAsync(token);
             var checks = await preflight.RunAsync(configuration, token);
-            if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites) && await observeBusinessReady(configuration, token) &&
+            var standby = checks.Any(check => check.Name == "database-standby" && check.Passed);
+            if (checks.Count > 0 && checks.All(c => c.Passed || !c.BlocksWrites) &&
+                (standby ? ObserveStandbyReady is not null && await ObserveStandbyReady(configuration, token)
+                    : await observeBusinessReady(configuration, token)) &&
                 process.Status == BusinessServiceStatus.Running)
                 return operation with { Phase = ManagementOperationPhase.Completed, Error = null,
-                    Status = new(process.Status, BusinessReadiness.Ready, configuration, checks) };
+                    Status = StartedStatus(configuration, checks) };
         }
         if (operation.Kind is ManagementOperationKind.Backup or ManagementOperationKind.Restore &&
             operation.RequestJson is not null && process.Status == BusinessServiceStatus.Stopped && backups() is IBackupOperationEvidence evidence)
@@ -240,8 +244,15 @@ public sealed class ManagementRuntime(
             var service = new ServiceManagementService(configuration, readyHost(configuration), preflight, backups(), clock, configurations);
             var result = await service.StartAsync(token);
             return operation with { Phase = ManagementOperationPhase.Completed,
-                Status = new(process.Status, BusinessReadiness.Ready, result.Configuration, result.Checks) };
+                Status = StartedStatus(result.Configuration, result.Checks) };
         }, cancellationToken);
+    }
+
+    private ManagementStatus StartedStatus(ServiceConfiguration configuration, IReadOnlyList<StartupCheckResult> checks)
+    {
+        var standby = checks.Any(check => check.Name == "database-standby" && check.Passed);
+        return new(process.Status, standby ? BusinessReadiness.NotReady : BusinessReadiness.Ready, configuration,
+            standby ? [.. checks, new("standby-listener", true, "备用复制监听已就绪，业务写入保持关闭。", false)] : checks);
     }
 
     public Task<ManagementOperation> ConfigureAsync(ManagementConfigurationRequest request, string actor, CancellationToken cancellationToken)
