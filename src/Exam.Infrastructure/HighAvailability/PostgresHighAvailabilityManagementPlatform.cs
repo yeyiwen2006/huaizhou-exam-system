@@ -700,10 +700,9 @@ public sealed partial class PostgresHighAvailabilityManagementPlatform : IHighAv
         using var confirmation = new PostgresBusinessConfirmation(source, Confirmation(primary, plan.After.ServerEpoch), _options.ServerId,
             primary.NodeId, standby.NodeId, plan.After.ServerEpoch, primary.ResourcesDirectory, peer,
             primary.ConnectionString, _options.PostgresBinDirectory);
-        await confirmation.ConfirmReplicationAsync(token);
-        var head = Confirmation(primary, plan.After.ServerEpoch).Read();
-        // A dual head is persisted only after the peer durably ACKs that exact record.
-        // Querying the same peer again adds no evidence to this completed exchange.
+        var head = await confirmation.ConfirmReplicationAsync(token);
+        // Use this exchange's durable ACK. Concurrent business writes may have already
+        // advanced the shared head while the peer was confirming this boundary.
         if (head is not { Confirmed: true, Record.Mode: ProtectionMode.SynchronousDualNode })
             throw new IOException("恢复保护尚无双侧持久确认。");
     }

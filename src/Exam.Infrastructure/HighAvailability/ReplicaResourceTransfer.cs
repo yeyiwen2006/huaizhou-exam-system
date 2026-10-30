@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using Exam.Contracts.Common;
 using Exam.Contracts.HighAvailability;
+using Exam.Contracts.ServiceManagement;
 using Exam.Infrastructure.ServiceManagement;
 
 namespace Exam.Infrastructure.HighAvailability;
@@ -27,7 +28,7 @@ public sealed partial class HttpConfirmationPeer
         if (verifiedDigest is null || verifiedDigest.Length != 64 || verifiedDigest.Any(c => !Uri.IsHexDigit(c)))
             throw new IOException("源资源版本无效。");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(2));
+        deadline.CancelAfter(ManagementTimeouts.Read);
         var address = new Uri(Address(), "/replication/v1/resources");
         using var stateRequest = ResourceRequest(HttpMethod.Get, address, record);
         using var stateResponse = await http.SendAsync(stateRequest, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
@@ -42,6 +43,9 @@ public sealed partial class HttpConfirmationPeer
             throw new IOException("资源接收方不是当前部署的备用节点。");
         var digest = verifiedDigest;
         if (state.ResourcesDigest == digest) return;
+        // Large snapshots share the physical rebuild budget. A short status-read
+        // deadline must not restart a healthy slow transfer from the beginning.
+        deadline.CancelAfter(ManagementTimeouts.RebuildCopy);
         var archive = await ReplicaResourceTransfer.CaptureAsync(directory, digest, deadline.Token);
         try
         {

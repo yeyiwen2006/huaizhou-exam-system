@@ -195,7 +195,7 @@ public sealed partial class ServiceManagementViewModel
             // Let a fresh independent standby observation open target verification.
             var takeoverTarget = ConfiguredManagementTargets.FirstOrDefault(value => value.NodeId == HighAvailabilityTarget.Trim());
             return takeoverTarget is not null && SelectedNode is { IsPlaceholder: false } selected &&
-                selected.NodeId == takeoverTarget.NodeId && CurrentActiveNodeId != takeoverTarget.NodeId &&
+                selected.NodeId == takeoverTarget.NodeId && selected.Role == "备机" && CurrentActiveNodeId != takeoverTarget.NodeId &&
                 LocalObservation(takeoverTarget.NodeId) is { AuthenticationRequired: false, Unavailable: false,
                     State: { Role: DeploymentNodeRole.Standby, Reachable: true, DatabaseInRecovery: true } node } local &&
                 local.Epoch >= ReadKnownServerEpoch(takeoverTarget) &&

@@ -1,5 +1,6 @@
 using System.IO;
 using Exam.Contracts.Common;
+using Exam.Contracts.Resources;
 using Exam.Contracts.Submissions;
 using Exam.Contracts.Versioning;
 
@@ -50,6 +51,10 @@ public sealed class AnswerSession
     private readonly ILocalStateStore _store;
     private readonly TimeProvider _time;
     private PaperStructure? _paper;
+    private readonly AuthorizedAnswerRecovery? _recovery;
+    private readonly Func<CancellationToken, Task>? _completeRecovery;
+    private bool _recoveryCompleted;
+    private AnswerStateRecord? _replacedAuthorization;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LocalStateKey? _key;
     private AnswerSessionContext? _context;
@@ -69,10 +74,13 @@ public sealed class AnswerSession
 
     private sealed record PendingWrite(AnswerStateRecord State, PendingSnapshot Snapshot);
 
-    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null, PaperStructure? paper = null)
+    public AnswerSession(ILocalStateStore store, TimeProvider? timeProvider = null, PaperStructure? paper = null,
+        AuthorizedAnswerRecovery? recovery = null, Func<CancellationToken, Task>? completeRecovery = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _time = timeProvider ?? TimeProvider.System;
+        _recovery = recovery;
+        _completeRecovery = completeRecovery;
         _paper = paper is null ? null : new(Array.AsReadOnly(paper.Questions.Select(q =>
             q with { OptionIds = Array.AsReadOnly(q.OptionIds.ToArray()) }).ToArray()));
     }
@@ -138,8 +146,32 @@ public sealed class AnswerSession
                 BlockWrites("本地恢复记录读取失败，原数据已保留。请修复存储后重新启动，不能创建空状态覆盖。");
                 return new RestoreResult(Status, LastError);
             }
+            var progress = _recovery?.Progress;
+            if (_recovery is not null &&
+                (_recovery.ExamId != key.ExamId || _recovery.CandidateId != key.CandidateId ||
+                 _recovery.ParticipationId != context.ParticipationId || _recovery.EntryVersion != context.EntryVersion ||
+                 _recovery.DeviceId != context.DeviceId || _recovery.AuthorizationVersion != context.AuthorizationVersion ||
+                 _recovery.RetainLocalAnswersFromAuthorizationVersion is { } from &&
+                    (from < 1 || from > context.AuthorizationVersion) ||
+                 progress is not null && (progress.ExamId != key.ExamId || progress.CandidateId != key.CandidateId ||
+                    progress.ParticipationId != context.ParticipationId || progress.EntryVersion != context.EntryVersion ||
+                    progress.AuthorizationVersion > context.AuthorizationVersion || progress.AnswerVersion < 1 ||
+                    progress.PaperVersion < 1 || progress.PaperVersion > context.PaperVersion ||
+                    _paper is not null && (AnswerSheetContract.Validate(_paper, progress.Answers) is not null ||
+                        progress.CurrentQuestionId is { } question && !KnownQuestion(question)))))
+                return DenyRestore("服务器恢复答案与当前考生、授权或试卷不一致，原本地记录已保留。");
             if (saved is not null && !MatchesContext(saved))
-                return DenyRestore("本地记录的设备或参加考试授权与当前服务器不一致，已拒绝恢复。");
+            {
+                // 服务器确认本设备一直保有授权时接续本地编辑；实际换机后只接续服务器答案。
+                if (_recovery is null || fixedRecord is not null || saved.ParticipationId != context.ParticipationId ||
+                    saved.EntryVersion != context.EntryVersion || saved.DeviceId != context.DeviceId ||
+                    saved.AuthorizationVersion >= context.AuthorizationVersion)
+                    return DenyRestore("本地记录的设备或参加考试授权与当前服务器不一致，已拒绝恢复。");
+                _replacedAuthorization = saved;
+                if (_recovery.RetainLocalAnswersFromAuthorizationVersion is not { } retainedFrom ||
+                    saved.AuthorizationVersion < retainedFrom)
+                    saved = null;
+            }
             if (saved is not null && _paper is not null &&
                 (AnswerSheetContract.Validate(_paper, saved.Answers) is not null ||
                  saved.Marks.Any(id => !KnownQuestion(id)) ||
@@ -160,18 +192,25 @@ public sealed class AnswerSession
             if (saved is not null)
             {
                 _reliable = FreezeState(saved);
-                if (saved.PaperVersion == context.PaperVersion)
+                if (saved.PaperVersion == context.PaperVersion && _replacedAuthorization is null)
                 {
+                    if (!await CompleteRecoveryAsync(ct).ConfigureAwait(false))
+                        return new RestoreResult(Status, LastError!);
                     _status = AnswerSessionStatus.Active;
                     return new RestoreResult(Status, "已恢复最后成功保存的本地状态，并核对当前服务器授权。");
                 }
-                _pendingWrite = BuildPending(checked(saved.AnswerVersion + 1), saved.Answers, saved.Marks, saved.CurrentQuestionId);
+                _pendingWrite = BuildPending(checked(Math.Max(saved.AnswerVersion, progress?.AnswerVersion ?? 0) + 1),
+                    saved.Answers, saved.Marks, saved.CurrentQuestionId);
             }
             else
             {
-                var initial = _paper is null ? EmptyAnswers() : _paper.Questions.ToDictionary(
-                    q => q.QuestionId, _ => AnswerValue.Empty(), StringComparer.Ordinal);
-                _pendingWrite = BuildPending(1, initial, new HashSet<string>(StringComparer.Ordinal), null);
+                var initial = progress?.Answers ?? (_paper is not null ? _paper.Questions.ToDictionary(
+                    q => q.QuestionId, _ => AnswerValue.Empty(), StringComparer.Ordinal) :
+                    _replacedAuthorization?.Answers.Keys.ToDictionary(id => id, _ => AnswerValue.Empty(), StringComparer.Ordinal)
+                        ?? EmptyAnswers());
+                _pendingWrite = BuildPending(checked(Math.Max(progress?.AnswerVersion ?? 0,
+                    _replacedAuthorization?.AnswerVersion ?? 0) + 1), initial,
+                    new HashSet<string>(StringComparer.Ordinal), progress?.CurrentQuestionId);
             }
             await PersistPendingAsync(ct).ConfigureAwait(false);
             return new RestoreResult(Status, LastError ?? "本地状态已可靠保存。");
@@ -226,7 +265,12 @@ public sealed class AnswerSession
             }
             if (HasPendingPaperUpdate)
                 return ChangeFailure("试卷更新尚未确认，请重试更新；不能独立推进答案的试卷版本。");
-            if (_pendingWrite is null) return AnswerChangeResult.Ok(AnswerVersion);
+            if (_pendingWrite is null)
+            {
+                if (!await CompleteRecoveryAsync(ct).ConfigureAwait(false)) return ChangeFailure(LastError!);
+                if (_status == AnswerSessionStatus.WriteBlocked) { _status = AnswerSessionStatus.Active; LastError = null; }
+                return AnswerChangeResult.Ok(AnswerVersion);
+            }
             return await PersistPendingAsync(ct).ConfigureAwait(false);
         }, ct);
 
@@ -383,7 +427,9 @@ public sealed class AnswerSession
         StoreWriteResult result;
         try
         {
-            result = await _store.SaveAnswerStateAsync(_key!, pending.State, pending.Snapshot, ct).ConfigureAwait(false);
+            result = _replacedAuthorization is { } previous
+                ? await _store.ReplaceAuthorizationAsync(_key!, previous, pending.State, pending.Snapshot, ct).ConfigureAwait(false)
+                : await _store.SaveAnswerStateAsync(_key!, pending.State, pending.Snapshot, ct).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -395,11 +441,31 @@ public sealed class AnswerSession
             return ChangeFailure(LastError!);
         }
         _reliable = pending.State;
+        _replacedAuthorization = null;
         _pendingWrite = null;
+        if (!await CompleteRecoveryAsync(ct).ConfigureAwait(false)) return ChangeFailure(LastError!);
         _status = AnswerSessionStatus.Active;
         LastError = null;
         StateSaved?.Invoke();
         return AnswerChangeResult.Ok(AnswerVersion);
+    }
+
+    private async Task<bool> CompleteRecoveryAsync(CancellationToken ct)
+    {
+        if (_recoveryCompleted || _completeRecovery is null) return true;
+        try
+        {
+            await _completeRecovery(ct).ConfigureAwait(false);
+            _recoveryCompleted = true;
+            return true;
+        }
+        catch (Exception)
+        {
+            // Clear the recovery intent before exposing editable answers. A later
+            // missing database must not silently fall back to the old server snapshot.
+            BlockWrites("恢复答案已保存，但恢复记录尚未确认完成，请重试本地保存。");
+            return false;
+        }
     }
 
     private async Task<FixSubmissionResult> PersistFixedAsync(CancellationToken ct)
@@ -408,6 +474,8 @@ public sealed class AnswerSession
             return new FixSubmissionResult(false, _fixed is not null, null, "当前身份或恢复记录未经有效核对，不能固定新的答卷。");
         if (_fixed is not null)
             return new FixSubmissionResult(true, true, FreezeSubmission(_fixed), null);
+        if (_replacedAuthorization is not null && !(await PersistPendingAsync(ct).ConfigureAwait(false)).Succeeded)
+            return new FixSubmissionResult(false, false, null, LastError);
         var isReplay = _frozenIntent is not null;
         var effective = _pendingWrite?.State ?? _reliable;
         if (effective is null || _requestedSubmissionId is null)

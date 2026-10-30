@@ -32,6 +32,7 @@ public sealed partial class ExamPackageManager : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _plaintextGate = new();
     private byte[]? _unlockedPayload;
+    private AuthorizedAnswerRecovery? _answerRecovery;
     private long _controlGeneration;
     private volatile PackageControlState _state;
     private bool _freshPreparation;
@@ -107,6 +108,17 @@ public sealed partial class ExamPackageManager : IDisposable
         !_state.Revoked && !_state.Ended && CurrentPhase == Phase.Idle &&
         _state.Preparation is { Status: EntryPreparationStatus.DeviceDecisionPending };
     public byte[]? UnlockedPayload { get { lock (_plaintextGate) return _unlockedPayload; } }
+    public AuthorizedAnswerRecovery? AnswerRecovery { get { lock (_plaintextGate) return _answerRecovery; } }
+    internal bool HasPendingSavedAnswerRecovery => _state.PendingAnswerRecovery?.Progress is not null;
+    internal AuthorizedAnswerRecovery? EndedAnswerRecovery => ExamEnded && !_state.Revoked &&
+        CurrentPhase != Phase.Revoked ? _state.PendingAnswerRecovery : null;
+    internal Task<bool> CompleteAnswerRecoveryAsync(AuthorizedAnswerRecovery recovery, CancellationToken ct) => LockedAsync(() =>
+    {
+        if (_state.PendingAnswerRecovery is { } pending && pending.ParticipationId == recovery.ParticipationId &&
+            pending.EntryVersion == recovery.EntryVersion && pending.AuthorizationVersion == recovery.AuthorizationVersion)
+            Save(_state with { PendingAnswerRecovery = null });
+        return Task.FromResult(true);
+    }, ct);
     public bool ExamStarted => _state.Started;
     public bool ExamEnded => _state.Ended || _terminalInMemory;
     public bool HasPendingConfirmation => _state.PendingConfirm is not null;
@@ -586,12 +598,18 @@ public sealed partial class ExamPackageManager : IDisposable
                 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             await PackageCiphertext.DecryptAsync(encrypted, plaintext, material, ct);
             completed = plaintext.ToArray();
-            if (generation != ControlGeneration) return false;
-            Save(_state with { ProtectedUnlockMaterial = protectedMaterial });
+            if (generation != ControlGeneration)
+            {
+                if (ExamEnded && !_state.Revoked && _authorizedThisRun)
+                    Save(_state with { PendingAnswerRecovery = material.AnswerRecovery });
+                return false;
+            }
+            Save(_state with { ProtectedUnlockMaterial = protectedMaterial, PendingAnswerRecovery = material.AnswerRecovery });
             lock (_plaintextGate)
             {
                 if (generation != _controlGeneration || ExamEnded || !_authorizedThisRun) return false;
                 _unlockedPayload = completed;
+                _answerRecovery = material.AnswerRecovery;
                 completed = null;
                 CurrentPhase = Phase.Unlocked;
                 LastError = null;
@@ -719,7 +737,17 @@ public sealed partial class ExamPackageManager : IDisposable
             throw new InvalidDataException("服务器身份或服务代次与当前考试不一致。");
         if (Server != server) Save(_state with { Server = server });
     }
-    private void Save(PackageControlState state) { _store.Save(state); _state = state; }
+    private void Save(PackageControlState state)
+    {
+        if (state.PendingAnswerRecovery is { } recovery && (state.Revoked ||
+            state.Participation is not { } participation ||
+            participation.BusinessState == ParticipationBusinessState.NotParticipating ||
+            participation.ParticipationId != recovery.ParticipationId || participation.EntryVersion != recovery.EntryVersion ||
+            participation.AuthorizationVersion != recovery.AuthorizationVersion || participation.AuthorizedDeviceId != recovery.DeviceId))
+            state = state with { PendingAnswerRecovery = null };
+        _store.Save(state);
+        _state = state;
+    }
     private void RecordFailure(ApiError? error)
     {
         LastError = error?.Message ?? "服务器未确认操作结果，请重试。";
@@ -842,6 +870,7 @@ public sealed partial class ExamPackageManager : IDisposable
             else { _authorizedThisRun = false; _freshPreparation = false; }
             plaintext = _unlockedPayload;
             _unlockedPayload = null;
+            if (!ended) _answerRecovery = null;
             CurrentPhase = ended ? Phase.Ended : Phase.Revoked;
         }
         if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
@@ -849,7 +878,7 @@ public sealed partial class ExamPackageManager : IDisposable
     private void ClearPlaintext()
     {
         byte[]? plaintext;
-        lock (_plaintextGate) { plaintext = _unlockedPayload; _unlockedPayload = null; }
+        lock (_plaintextGate) { plaintext = _unlockedPayload; _unlockedPayload = null; _answerRecovery = null; }
         if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
     }
     public void Dispose()

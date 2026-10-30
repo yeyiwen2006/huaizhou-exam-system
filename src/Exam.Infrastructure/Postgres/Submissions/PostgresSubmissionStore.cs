@@ -215,19 +215,25 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
             cancellationToken);
         if (replay is not null)
         {
-            await transaction.CommitAsync(cancellationToken);
             if (!Matches(replay.Value.Identity, request))
             {
+                await transaction.CommitAsync(cancellationToken);
                 return new SubmissionPersistenceResult(
                     SubmissionPersistenceStatus.AuthorizationRevoked,
                     null);
             }
 
-            return replay.Value.Result.Status is SubmissionPersistenceStatus.Saved or
-                SubmissionPersistenceStatus.ExistingSubmission or
-                SubmissionPersistenceStatus.RequestReplay
-                ? replay.Value.Result with { Status = SubmissionPersistenceStatus.RequestReplay }
-                : replay.Value.Result;
+            // 旧版本服务可能已经拒绝过同一份固定答卷。当前连续保留原设备的裁决
+            // 允许重新核对该拒绝；成功回执与其他结果仍按原请求重放。
+            if (replay.Value.Result.Status != SubmissionPersistenceStatus.AuthorizationRevoked)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return replay.Value.Result.Status is SubmissionPersistenceStatus.Saved or
+                    SubmissionPersistenceStatus.ExistingSubmission or
+                    SubmissionPersistenceStatus.RequestReplay
+                    ? replay.Value.Result with { Status = SubmissionPersistenceStatus.RequestReplay }
+                    : replay.Value.Result;
+            }
         }
 
         // These locks cover races where different request ids target the same immutable
@@ -255,7 +261,8 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
                 SubmissionPersistenceStatus.ParticipationNotFound,
                 null);
         }
-        else if (!IsAuthorized(request, authorization))
+        else if (!IsAuthorized(request, authorization) &&
+            !await KeptDeviceCanSubmitAsync(connection, transaction, request, authorization, cancellationToken))
         {
             result = new SubmissionPersistenceResult(
                 SubmissionPersistenceStatus.AuthorizationRevoked,
@@ -343,15 +350,26 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
             }
         }
 
-        await InsertIdempotencyAsync(
-            connection,
-            transaction,
-            "exam.submission_idempotency",
-            request.RequestId,
-            IdentityOf(request),
-            result,
-            persistedAt,
-            cancellationToken);
+        if (replay is not null)
+        {
+            await using var update = new NpgsqlCommand("""
+                UPDATE exam.submission_idempotency SET result_payload = @result
+                 WHERE request_id = @request_id;
+                """, connection, transaction);
+            update.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(result, JsonOptions));
+            update.Parameters.AddWithValue("request_id", NpgsqlDbType.Text, request.RequestId);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else
+            await InsertIdempotencyAsync(
+                connection,
+                transaction,
+                "exam.submission_idempotency",
+                request.RequestId,
+                IdentityOf(request),
+                result,
+                persistedAt,
+                cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return result;
     }
@@ -804,6 +822,30 @@ public sealed class PostgresSubmissionStore : ISubmissionStore
         request.EntryVersion == authorization.EntryVersion &&
         string.Equals(request.DeviceId, authorization.AuthorizedDeviceId, StringComparison.Ordinal) &&
         request.AuthorizationVersion == authorization.AuthorizationVersion;
+
+    private static async ValueTask<bool> KeptDeviceCanSubmitAsync(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, SubmitFinalAnswersRequest request, AuthorizationRow authorization,
+        CancellationToken cancellationToken)
+    {
+        if (request.ExamId != authorization.ExamId || request.CandidateId != authorization.CandidateId ||
+            request.EntryVersion != authorization.EntryVersion || request.DeviceId != authorization.AuthorizedDeviceId ||
+            request.AuthorizationVersion < 1 || request.AuthorizationVersion >= authorization.AuthorizationVersion)
+            return false;
+        // FindAuthorizationAsync 已锁住参加考试记录，裁决不能在本次确认与收卷之间变更。
+        // 仅旧授权的固定答卷读取历史；普通进度及当前授权的交卷无需增加查询。
+        await using var command = new NpgsqlCommand("""
+            SELECT count(DISTINCT authorization_version) = @current - @previous
+                   AND COALESCE(bool_and(selected_device_id = @device), false)
+              FROM exam.device_decision_audits
+             WHERE participation_id = @participation
+               AND authorization_version > @previous AND authorization_version <= @current;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("current", NpgsqlDbType.Bigint, authorization.AuthorizationVersion);
+        command.Parameters.AddWithValue("previous", NpgsqlDbType.Bigint, request.AuthorizationVersion);
+        command.Parameters.AddWithValue("device", NpgsqlDbType.Text, request.DeviceId);
+        command.Parameters.AddWithValue("participation", NpgsqlDbType.Text, request.ParticipationId);
+        return await command.ExecuteScalarAsync(cancellationToken) is true;
+    }
 
     private static bool Matches(RequestIdentity identity, SyncProgressRequest request) =>
         identity == IdentityOf(request);

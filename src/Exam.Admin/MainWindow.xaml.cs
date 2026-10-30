@@ -221,7 +221,7 @@ public partial class MainWindow : Window
 
     private void OnSelectedPageChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!ReferenceEquals(e.OriginalSource, MainTabArea)) return;
+        if (!ReferenceEquals(e.OriginalSource, MainTabArea) || MainTabArea.SelectedIndex < 0) return;
         if (MainTabArea.SelectedIndex == MainViewModel.ManagementPage) { OpenManagement(); return; }
         if (_router.Route == AdminWorkspaceRoute.LocalManagement)
         {

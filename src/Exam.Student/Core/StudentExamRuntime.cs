@@ -38,6 +38,7 @@ public sealed partial class StudentExamRuntime(
     private AnswerSessionContext? _answerContext;
     private FixedSubmissionRecord? _recoveredSubmission;
     private FixedSubmissionRecord? _endedRecoveryIntent;
+    private AnswerSession? _endedRecoveryAnswers;
     private bool _localRecoveryChecked;
     private string? _localStateError;
     private StudentPaperManifest? _paper;
@@ -176,11 +177,31 @@ public sealed partial class StudentExamRuntime(
                     _localStateError = $"复核上报记录恢复失败：{enqueued.Error}";
             }
             _recoveredSubmission = await localState.LoadFixedSubmissionAsync(_localKey, ct);
-            if (_recoveredSubmission is null && Manager.RequiresLocalAnswerRecovery &&
+            if (_recoveredSubmission is null && Manager.RequiresLocalAnswerRecovery && !Manager.HasPendingSavedAnswerRecovery &&
                 await localState.LoadAnswerStateAsync(_localKey, ct) is null)
             {
                 _localStateError = "本机保留了上次已经开考的参加考试记录，但原本地答案缺失。不能重建空答卷或重新开始，请联系考务人员恢复原记录。";
                 return false;
+            }
+            if (_recoveredSubmission is null && Manager.EndedAnswerRecovery is { } recovery &&
+                Manager.Participation is { } current && Manager.Descriptor is { } descriptor &&
+                (recovery.Progress is not null || await localState.LoadAnswerStateAsync(_localKey, ct) is not null))
+            {
+                // END 在解锁后、SQLite 初始化前到达时，先完成该次授权的恢复再固定。
+                // 此会话只供收卷，不向答题界面公开；恢复意图保存在加密控制记录中，可跨重启重试。
+                _endedRecoveryAnswers ??= new AnswerSession(localState, recovery: recovery);
+                await _endedRecoveryAnswers.SuspendAsync("考试已经结束，仅恢复并固定原答案。", ct);
+                await _endedRecoveryAnswers.StartAsync(_localKey, new(current.ParticipationId, current.EntryVersion,
+                    current.AuthorizationVersion, descriptor.PaperVersion, device.DeviceId, IsServerAuthorized: true), ct);
+                var fixedResult = await _endedRecoveryAnswers.FixSubmissionAsync(
+                    _endedRecoveryAnswers.FixedSubmissionId ?? $"subm-{Guid.NewGuid():N}", ct);
+                if (!fixedResult.Succeeded || fixedResult.Record is null)
+                {
+                    _localStateError = fixedResult.Error ?? _endedRecoveryAnswers.LastError;
+                    return false;
+                }
+                _recoveredSubmission = fixedResult.Record;
+                await Manager.CompleteAnswerRecoveryAsync(recovery, ct);
             }
             if (_recoveredSubmission is null && Manager.ExamEnded &&
                 await localState.LoadPendingSnapshotAsync(_localKey, ct) is { } snapshot)
@@ -328,13 +349,17 @@ public sealed partial class StudentExamRuntime(
                 return;
             }
             if (Manager.CurrentPhase != ExamPackageManager.Phase.Unlocked) return;
-            var answers = new AnswerSession(localState!, paper: _paper.Structure);
+            var recovery = Manager.AnswerRecovery;
+            var answers = new AnswerSession(localState!, paper: _paper.Structure, recovery: recovery,
+                completeRecovery: recovery is null ? null : token => Manager.CompleteAnswerRecoveryAsync(recovery, token));
             Answers = answers;
             _answerContext = context;
             answers.WriteBlocked += OnAnswerWriteBlocked;
             answers.StateSaved += OnAnswerStateSaved;
             answers.SubmissionFixed += OnSubmissionFixed;
             var restored = await answers.StartAsync(_localKey, context, ct);
+            if (restored.IsUsable && recovery is not null)
+                await Manager.CompleteAnswerRecoveryAsync(recovery, ct);
             _recoveredSubmission ??= answers.FixedSubmission;
             _localStateError = restored.IsUsable ? null : restored.Message;
             // END/revocation can arrive while SQLite recovery awaits its worker. Never let

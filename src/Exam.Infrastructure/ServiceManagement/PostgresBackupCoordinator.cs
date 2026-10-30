@@ -201,7 +201,7 @@ public sealed class PostgresBackupCoordinator(
         var expectedResources = await CaptureDirectoryAsync(
             options.VersionedResourcesDirectory,
             "版本化资源源目录",
-            cancellationToken);
+            cancellationToken, allowEmpty: true);
         var expectedProtected = await CaptureDirectoryAsync(
             options.ProtectedConfigurationDirectory,
             "受保护配置源目录",
@@ -377,7 +377,9 @@ public sealed class PostgresBackupCoordinator(
 
         if (requireSourceDirectories)
         {
-            RequireNonEmptyDirectory(options.VersionedResourcesDirectory, "版本化资源源目录");
+            // Published packages may live entirely in PostgreSQL; the auxiliary resource directory can be empty.
+            if (!Directory.Exists(options.VersionedResourcesDirectory))
+                throw new DirectoryNotFoundException("版本化资源源目录不存在。");
             RequireNonEmptyDirectory(options.ProtectedConfigurationDirectory, "受保护配置源目录");
         }
         var roots = new[]
@@ -441,7 +443,6 @@ public sealed class PostgresBackupCoordinator(
             string.IsNullOrWhiteSpace(manifest.BackupId) ||
             string.IsNullOrWhiteSpace(manifest.RequestId) ||
             string.IsNullOrWhiteSpace(manifest.ActorId) ||
-            manifest.ResourceFiles.Count == 0 ||
             manifest.ProtectedConfigurationFiles.Count == 0)
         {
             throw new InvalidDataException("备份清单版本或必需字段无效。");
@@ -700,9 +701,11 @@ public sealed class PostgresBackupCoordinator(
     private static async Task<IReadOnlyList<BackupFileEntry>> CaptureDirectoryAsync(
         string root,
         string description,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowEmpty = false)
     {
-        RequireNonEmptyDirectory(root, description);
+        if (!Directory.Exists(root)) throw new DirectoryNotFoundException($"{description}不存在：{root}");
+        if (!allowEmpty) RequireNonEmptyDirectory(root, description);
         var fullRoot = Path.GetFullPath(root);
         PathBoundary.RejectExistingReparsePoints(fullRoot, fullRoot);
         var files = EnumerateFilesWithoutLinks(fullRoot);
@@ -724,7 +727,7 @@ public sealed class PostgresBackupCoordinator(
                 Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken))));
         }
 
-        if (result.Count == 0)
+        if (!allowEmpty && result.Count == 0)
         {
             throw new DirectoryNotFoundException($"{description}不存在或为空：{root}");
         }
@@ -738,7 +741,7 @@ public sealed class PostgresBackupCoordinator(
         string description,
         CancellationToken cancellationToken)
     {
-        var actual = await CaptureDirectoryAsync(root, description, cancellationToken);
+        var actual = await CaptureDirectoryAsync(root, description, cancellationToken, allowEmpty: expected.Count == 0);
         if (!actual.SequenceEqual(expected))
         {
             throw new InvalidDataException($"{description}在备份或恢复期间发生变化，未得到一致快照。");

@@ -97,7 +97,6 @@ public static class ProtectedRuntimeLogReader
                 entries.Add(entry);
             }
         }
-        if (entries.Count == 0) throw new FileNotFoundException("受保护日志尚不可用。");
         return entries.OrderByDescending(x => x.Timestamp).Take(limit).ToArray();
     }
 }

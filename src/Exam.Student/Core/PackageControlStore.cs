@@ -46,6 +46,8 @@ internal sealed record PackageControlState
     public WithdrawParticipationRequest? PendingWithdraw { get; init; }
     public ParticipationResult? Participation { get; init; }
     public byte[]? ProtectedUnlockMaterial { get; init; }
+    // 仅用于已授权答案尚未落盘时的恢复；END 可清除解锁密钥，但必须保留此记录。
+    public AuthorizedAnswerRecovery? PendingAnswerRecovery { get; init; }
     public bool Started { get; init; }
     public bool? AnswersInitialized { get; init; }
     public bool Ended { get; init; }
