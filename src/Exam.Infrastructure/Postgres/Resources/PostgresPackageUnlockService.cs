@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Exam.Contracts.Common;
 using Exam.Contracts.Resources;
+using Exam.Contracts.Submissions;
 using Exam.Infrastructure.Security;
 using Npgsql;
 
@@ -95,7 +96,7 @@ public sealed class PostgresPackageUnlockService(
         }
 
         await RequireCurrentExamAsync(connection, transaction, request, examId, cancellationToken);
-        await RequireCurrentParticipationAsync(connection, transaction, request, cancellationToken);
+        var recovery = await RequireCurrentParticipationAsync(connection, transaction, request, examId, cancellationToken);
 
         const string prefix = "resource-envelope:";
         if (!request.UnlockReference.StartsWith(prefix, StringComparison.Ordinal) ||
@@ -144,7 +145,8 @@ public sealed class PostgresPackageUnlockService(
             await RequireBeforeDeadlineAsync(connection, transaction, examId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new PackageUnlockMaterial(
-                envelope.PackageId, envelope.PaperVersion, envelope.ChunkSize, envelope.NoncePrefix, dataKey);
+                envelope.PackageId, envelope.PaperVersion, envelope.ChunkSize, envelope.NoncePrefix, dataKey)
+                { AnswerRecovery = recovery };
         }
         catch
         {
@@ -267,15 +269,34 @@ public sealed class PostgresPackageUnlockService(
         }
     }
 
-    private static async Task RequireCurrentParticipationAsync(
+    private static async Task<AuthorizedAnswerRecovery> RequireCurrentParticipationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         PackageUnlockRequest request,
+        string examId,
         CancellationToken cancellationToken)
     {
+        // 等待并发裁决完成后再读取答案和裁决历史，避免把新授权与等待前的旧快照拼在一起。
+        // 此锁也与进度写入互斥；复用现有解锁请求，不增加客户端网络往返。
+        await using (var participationLock = new NpgsqlCommand(
+            "SELECT participation_id FROM exam.participations WHERE participation_id = $1 FOR SHARE;", connection, transaction))
+        {
+            participationLock.Parameters.AddWithValue(request.ParticipationId);
+            await participationLock.ExecuteScalarAsync(cancellationToken);
+        }
         await using var command = new NpgsqlCommand("""
-            SELECT entry_version, authorized_device_id, authorization_version, business_state
-              FROM exam.participations WHERE participation_id = $1 FOR SHARE;
+            SELECT p.entry_version, p.authorized_device_id, p.authorization_version, p.business_state,
+                   p.candidate_id, progress.answer_version, progress.paper_version, progress.device_id,
+                   progress.authorization_version, progress.answers::text, progress.current_question_id,
+                   progress.last_synced_at,
+                   COALESCE((SELECT MAX(a.authorization_version)
+                               FROM exam.device_decision_audits a
+                              WHERE a.participation_id = p.participation_id
+                                AND a.selected_device_id <> p.authorized_device_id), 0) + 1
+              FROM exam.participations p
+              LEFT JOIN exam.participation_progress progress
+                ON progress.participation_id = p.participation_id AND progress.entry_version = p.entry_version
+             WHERE p.participation_id = $1;
             """, connection, transaction);
         command.Parameters.AddWithValue(request.ParticipationId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -290,6 +311,17 @@ public sealed class PostgresPackageUnlockService(
         {
             throw Reject(ErrorCodes.KeyNotReleased, "当前参加考试状态不能解锁试题。");
         }
+
+        var candidateId = reader.GetString(4);
+        PersistedProgress? progress = reader.IsDBNull(5) ? null : new(
+            examId, candidateId, request.ParticipationId, request.EntryVersion, reader.GetString(7),
+            reader.GetInt64(8), reader.GetInt64(5), reader.GetInt64(6),
+            JsonSerializer.Deserialize<Dictionary<string, AnswerValue>>(reader.GetString(9), JsonOptions)
+                ?? throw Reject(ErrorCodes.ServiceRecovering, "服务器已保存答案无法读取。"),
+            reader.IsDBNull(10) ? null : reader.GetString(10), reader.GetFieldValue<DateTimeOffset>(11));
+        return new(examId, candidateId, request.ParticipationId, request.EntryVersion,
+            request.DeviceId, request.AuthorizationVersion, progress)
+            { RetainLocalAnswersFromAuthorizationVersion = reader.GetInt64(12) };
     }
 
     private static PackageUnlockException Reject(string code, string message) => new(code, message);

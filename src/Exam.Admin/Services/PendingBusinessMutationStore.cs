@@ -21,7 +21,7 @@ public sealed class PendingBusinessMutationStore(string directory)
         var bodyHash = Hash(body);
         var scope = Scope(server, actor);
         Check(scope); Directory.CreateDirectory(scope); Check(scope);
-        using var guard = new FileStream(Path.Combine(scope, "requests.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var guard = AcquireLock(scope);
         var file = Path.Combine(scope, Key(method, path, bodyHash) + ".pending");
         var current = Read(file);
         if (current is not null)
@@ -43,12 +43,32 @@ public sealed class PendingBusinessMutationStore(string directory)
     {
         var scope = Scope(expected.ServerId, expected.Actor);
         Check(scope);
-        using var guard = new FileStream(Path.Combine(scope, "requests.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var guard = AcquireLock(scope);
         var file = Path.Combine(scope, Key(expected.Method, expected.Path, expected.BodyHash) + ".pending");
         if (Read(file) is { } current && current.RequestId == expected.RequestId && current.BodyHash == expected.BodyHash)
         {
             if (expected.Epoch < current.Epoch) throw new InvalidDataException("旧代次响应不能清除新节点上的未确认业务请求。");
             File.Delete(file);
+        }
+    }
+
+    private static FileStream AcquireLock(string scope)
+    {
+        // Several pages may persist or acknowledge different requests concurrently.
+        // Keep the lock local to this short file operation, never across a network request.
+        var started = Environment.TickCount64;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(Path.Combine(scope, "requests.lock"), FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33 &&
+                                            Environment.TickCount64 - started < 2000)
+            {
+                Thread.Sleep(5);
+            }
         }
     }
 

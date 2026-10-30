@@ -109,7 +109,6 @@ public static class ManagementEntryPoint
                 foreach (var (path, source) in new[] { (Required("Management:ProtectedBusinessLogPath"), "business"), (managementLog, "management") })
                     try { entries.AddRange(await ProtectedRuntimeLogReader.ReadAsync(path, source, limit, token)); }
                     catch (FileNotFoundException) { }
-                if (entries.Count == 0) throw new FileNotFoundException("受保护日志尚不可用。");
                 return entries.OrderByDescending(entry => entry.Timestamp).Take(limit).ToArray();
             }
             var process = new DeferredBusinessHost(() => OperatingSystem.IsLinux()

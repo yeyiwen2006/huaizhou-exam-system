@@ -333,8 +333,8 @@ internal static partial class ExamCli
                         var exam=await FindExam(name);
                         var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
                         if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
-                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
-                            ??throw new ArgumentException("当前考试没有该学生端编号。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number&&x.ConflictDevices.Count>0)
+                            ??throw new ArgumentException("该学生端当前没有待裁决的设备冲突。");
                         var selected=participant.ConflictDevices.SingleOrDefault(x=>x.ClientNumber==keepNumber)
                             ??throw new ArgumentException("指定设备不在当前冲突列表中。");
                         return Request("/api/v1/participation/device-decisions",new DeviceDecisionRequest(id,participant.ParticipationId,
@@ -349,8 +349,9 @@ internal static partial class ExamCli
                         var exam=await FindExam(name);
                         var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
                         if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
-                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
-                            ??throw new ArgumentException("当前考试没有该学生端编号。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number&&
+                            x.Commands.Any(command=>command.EventType==type&&command.CanResend))
+                            ??throw new ArgumentException("该学生端没有当前可重发的该类型指令。");
                         var command=participant.Commands.Where(x=>x.EventType==type&&x.CanResend).OrderByDescending(x=>x.StateVersion).FirstOrDefault()
                             ??throw new ArgumentException("没有当前可重发的该类型指令。");
                         return ResendRequest(id,participant,command);
@@ -363,9 +364,8 @@ internal static partial class ExamCli
                         var exam=await FindExam(name);
                         var snapshot=await Send<MonitoringSnapshot>(HttpMethod.Get,$"/api/v1/exams/{Uri.EscapeDataString(exam.ExamId)}/monitoring");
                         if(snapshot.ExamId!=exam.ExamId)throw new InvalidDataException("监测快照属于另一场考试。");
-                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number)
-                            ??throw new ArgumentException("当前考试没有该学生端编号。");
-                        if(participant.ReceiptId is not null)throw new ArgumentException("该考生的答卷已经回收。");
+                        var participant=snapshot.Participants.SingleOrDefault(x=>x.ClientNumber==number&&x.ReceiptId is null)
+                            ??throw new ArgumentException("该学生端没有尚未回收的参试记录。");
                         var command=participant.Commands.Where(x=>x.EventType==CommandEventType.End&&x.CanResend).OrderByDescending(x=>x.StateVersion).FirstOrDefault()
                             ??throw new ArgumentException("没有可补传的结束指令。");
                         return ResendRequest(id,participant,command);

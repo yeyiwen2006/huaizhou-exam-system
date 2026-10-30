@@ -82,10 +82,10 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
     }
     public Task ConfirmAsync(CancellationToken token) =>
         ConfirmCoreAsync(token, TimeSpan.FromMilliseconds(750), maintenance: false);
-    public Task ConfirmReplicationAsync(CancellationToken token) =>
+    public Task<ConfirmationHead> ConfirmReplicationAsync(CancellationToken token) =>
         ConfirmCoreAsync(token, TimeSpan.FromSeconds(10), maintenance: true);
 
-    private async Task ConfirmCoreAsync(CancellationToken token, TimeSpan peerBudget, bool maintenance)
+    private async Task<ConfirmationHead> ConfirmCoreAsync(CancellationToken token, TimeSpan peerBudget, bool maintenance)
     {
         await _gate.WaitAsync(token);
         var ownsLocalGate = true;
@@ -172,6 +172,7 @@ public sealed class PostgresBusinessConfirmation(NpgsqlDataSource source, FileCo
                 if (store.Read() == local && _resources.Read() == resources)
                     await store.SaveAsync(new(record, true), token);
             }
+            return new(record, true);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception) { throw new DomainRuleException(ErrorCodes.ServiceRecovering, "持久确认尚未完成，保留原请求重试。", retryable: true); }

@@ -261,9 +261,10 @@ public sealed class PostgresParticipationPersistence(NpgsqlDataSource dataSource
                     (participation_id, exam_id, candidate_id, entry_version, business_state,
                      authorized_device_id, authorization_version, version,
                      current_paper_version, current_grading_version)
-                VALUES
-                    (@participation_id, @exam_id, @candidate_id, @entry_version, @business_state,
-                     @authorized_device_id, @authorization_version, @version, 1, 1)
+                VALUES (@participation_id, @exam_id, @candidate_id, @entry_version, @business_state,
+                        @authorized_device_id, @authorization_version, @version,
+                        GREATEST(1, (SELECT paper_version FROM exam.exam_entry_access WHERE exam_id = @exam_id)),
+                        GREATEST(1, (SELECT grading_version FROM exam.version_state WHERE exam_id = @exam_id)))
                 ON CONFLICT (participation_id) DO UPDATE SET
                     entry_version = EXCLUDED.entry_version,
                     business_state = EXCLUDED.business_state,

@@ -90,6 +90,11 @@ public interface ILocalStateStore : IDisposable
     Task<StoreWriteResult> SaveAnswerStateAsync(
         LocalStateKey key, AnswerStateRecord state, PendingSnapshot? snapshot, CancellationToken ct = default);
 
+    /// <summary>服务器重新授权后，以已保存进度替换旧设备会话，并在同一事务保留旧答案。</summary>
+    Task<StoreWriteResult> ReplaceAuthorizationAsync(LocalStateKey key, AnswerStateRecord previous,
+        AnswerStateRecord state, PendingSnapshot snapshot, CancellationToken ct = default) =>
+        Task.FromResult(StoreWriteResult.Fail("本地存储不支持设备裁决后的答案恢复。"));
+
     /// <summary>旧入口显式拒绝无版本写入；标记也必须通过完整状态事务保存。</summary>
     Task<StoreWriteResult> SaveMarksAsync(LocalStateKey key, IReadOnlyCollection<string> marks, CancellationToken ct = default);
 
@@ -566,6 +571,61 @@ public sealed class SqliteLocalStateStore : ILocalStateStore, ISubmissionReceipt
         }
 
         return WriteAsync(key, (conn, tx) => SaveStateCore(conn, tx, key, state, snapshot), ct);
+    }
+
+    public Task<StoreWriteResult> ReplaceAuthorizationAsync(LocalStateKey key, AnswerStateRecord previous,
+        AnswerStateRecord state, PendingSnapshot snapshot, CancellationToken ct = default)
+    {
+        try
+        {
+            ValidateKey(key);
+            previous = CloneState(previous);
+            state = CloneState(state);
+            snapshot = snapshot with { Answers = CloneAnswers(snapshot.Answers) };
+            ValidateState(previous);
+            ValidateState(state);
+            ValidateSnapshot(key, state, snapshot);
+            Require(previous.ParticipationId == state.ParticipationId && previous.EntryVersion == state.EntryVersion &&
+                previous.DeviceId == state.DeviceId && previous.AuthorizationVersion < state.AuthorizationVersion &&
+                previous.AnswerVersion < state.AnswerVersion, "设备裁决恢复必须接续同一参试的新授权和答案版本。");
+        }
+        catch (Exception ex) when (IsStoreError(ex))
+        {
+            return Task.FromResult(StoreWriteResult.Fail($"本地恢复被拒绝：{ex.Message}"));
+        }
+        return WriteAsync(key, (conn, tx) =>
+        {
+            Require(LoadFixedRaw(conn, tx, key) is null, "已固定答卷不能由设备裁决覆盖。");
+            var current = LoadState(conn, tx, key);
+            if (current is not null && SameState(current, state))
+            {
+                Require(SameSnapshot(LoadSnapshotRaw(conn, tx, key)!, snapshot), "恢复重试的快照必须保持不变。");
+                return;
+            }
+            Require(current is not null && SameState(current, previous), "原本地答案已变化，不能覆盖并发保存的内容。");
+            using var archive = conn.CreateCommand();
+            archive.Transaction = tx;
+            archive.CommandText = """
+                CREATE TABLE IF NOT EXISTS authorization_history(
+                    server_key TEXT NOT NULL, exam_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+                    entry_version INTEGER NOT NULL, authorization_version INTEGER NOT NULL,
+                    state_payload TEXT NOT NULL, snapshot_payload TEXT NOT NULL,
+                    PRIMARY KEY(server_key,exam_id,candidate_id,entry_version,authorization_version));
+                INSERT INTO authorization_history
+                SELECT s.server_key,s.exam_id,s.candidate_id,$entry,$authorization,s.payload,p.payload
+                FROM answer_state s JOIN pending_snapshot p
+                    USING(server_key,exam_id,candidate_id)
+                WHERE s.server_key=$server AND s.exam_id=$exam AND s.candidate_id=$candidate;
+                """;
+            archive.Parameters.AddWithValue("$server", key.ServerKey);
+            archive.Parameters.AddWithValue("$exam", key.ExamId);
+            archive.Parameters.AddWithValue("$candidate", key.CandidateId);
+            archive.Parameters.AddWithValue("$entry", previous.EntryVersion);
+            archive.Parameters.AddWithValue("$authorization", previous.AuthorizationVersion);
+            archive.ExecuteNonQuery();
+            Put(conn, tx, key, "answer_state", state);
+            Put(conn, tx, key, "pending_snapshot", snapshot);
+        }, ct);
     }
 
     private static void SaveStateCore(SqliteConnection conn, SqliteTransaction tx, LocalStateKey key,

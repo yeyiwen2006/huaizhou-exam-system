@@ -129,6 +129,9 @@ public sealed class SubmissionSyncService(
             var uploadsPending = await FlushUploadsAsync(ct).ConfigureAwait(false);
             if (_phase is SubmissionSyncPhase.Confirmed or SubmissionSyncPhase.Blocked)
                 return uploadsPending ? RetryInterval : Timeout.InfiniteTimeSpan;
+            // 固定答卷不恢复编辑。保留原载荷，由服务器在同一事务中核对连续保留本设备的裁决。
+            if (runtime.FixedSubmission is { } fixedRecord)
+                return await SyncFixedAsync(fixedRecord, ct).ConfigureAwait(false);
             if (runtime.Manager.CurrentPhase == ExamPackageManager.Phase.Revoked ||
                 runtime.Answers?.Status == AnswerSessionStatus.PermissionDenied)
                 return await BlockAsync("当前设备或本地记录没有有效授权，已停止自动上传，请联系考务人员核对。");

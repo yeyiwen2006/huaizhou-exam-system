@@ -98,7 +98,7 @@ public static class BusinessConfirmationRegistration
         services.AddSingleton(_ => new HttpClient(new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(30) });
         // Peer operations own separate deadlines for small confirmations and large snapshots.
-        // A shared 30-second HttpClient timeout otherwise aborts the two-minute upload early.
+        // A shared 30-second HttpClient timeout otherwise aborts large uploads early.
         services.AddSingleton(_ => new ReplicationHttpClient(new HttpClient(new HttpClientHandler
         { AllowAutoRedirect = false, UseProxy = false, UseCookies = false }) { Timeout = Timeout.InfiniteTimeSpan }));
         services.AddSingleton<IBusinessConfirmation>(provider => isolatedTestRuntime

@@ -41,7 +41,15 @@ public sealed partial class AdminApiClient
         Configure(address.AbsoluteUri, session.Token, session.Account.Username);
         _serverId = authenticated!.ServerId; _nodeId = authenticated.NodeId; _serverEpoch = authenticated.ServerEpoch;
         _account = session.Account;
-        await LearnRoutesAsync(cancellationToken);
+        var authenticatedGeneration = Generation;
+        // Route discovery is optional metadata after this node has authenticated us.
+        // A transient discovery failure must not turn a usable login into a failure.
+        try { await LearnRoutesAsync(cancellationToken); }
+        catch (HttpRequestException) { }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        catch (AdminApiException error) when ((int)error.StatusCode >= 500 && error.Code.StartsWith("HTTP_", StringComparison.Ordinal)) { }
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureCurrentConnection(authenticatedGeneration);
         return session.Account;
     }
 

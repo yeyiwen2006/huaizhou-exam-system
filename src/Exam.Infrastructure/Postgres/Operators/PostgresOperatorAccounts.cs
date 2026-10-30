@@ -73,35 +73,35 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
         // 用户名不存在时仍做一次哈希计算，避免通过响应时间判断用户名是否存在。
         var verified = OperatorPasswordHasher.Verify(request.Password, hash ?? DummyHash);
         if (hash is null || !verified) throw Rule(OperatorErrorCodes.InvalidCredentials, "用户名或口令不正确。");
-        var account = await FindAsync(connection, null, request.Username!, cancellationToken).ConfigureAwait(false)
-            ?? throw Rule(OperatorErrorCodes.InvalidCredentials, "用户名或口令不正确。");
-        EnsureActive(account);
-
-        return await CreateSessionAsync(connection, account, cancellationToken).ConfigureAwait(false);
+        return await CreateSessionAsync(connection, request.Username!, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<OperatorSession> IssueAuthenticatedSessionAsync(string username, CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        var account = await FindAsync(connection, null, username, cancellationToken).ConfigureAwait(false)
-            ?? throw Rule(OperatorErrorCodes.InvalidCredentials, "考务账号不存在。");
-        EnsureActive(account);
-        return await CreateSessionAsync(connection, account, cancellationToken).ConfigureAwait(false);
+        return await CreateSessionAsync(connection, username, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async ValueTask<OperatorSession> CreateSessionAsync(NpgsqlConnection connection, OperatorAccount account,
+    private static async ValueTask<OperatorSession> CreateSessionAsync(NpgsqlConnection connection, string username,
         CancellationToken cancellationToken)
     {
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        // Keep session issuance and account disabling in one order. Otherwise a
+        // disable can revoke existing tokens before this new token is inserted.
+        var account = await FindAsync(connection, transaction, username, cancellationToken, forShare: true).ConfigureAwait(false)
+            ?? throw Rule(OperatorErrorCodes.InvalidCredentials, "考务账号不存在。");
+        EnsureActive(account);
         var token = OperatorPasswordHasher.NewSessionToken();
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO exam.operator_sessions (token_digest, username_key, created_at)
             VALUES (@digest, @key, clock_timestamp());
-            """, connection))
+            """, connection, transaction))
         {
             insert.Parameters.AddWithValue("digest", OperatorPasswordHasher.TokenDigest(token));
             insert.Parameters.AddWithValue("key", OperatorRules.Key(account.Username));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new OperatorSession(token, account);
     }
 
@@ -170,7 +170,8 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(actor);
         if (!actor.IsAdministrator) throw Rule(OperatorErrorCodes.NotAdministrator, "只有管理员可以批准或停用考务账号。");
-        if (request.Status == OperatorStatus.Pending) throw Rule(ParticipationErrorCodes.InvalidRequest, "不能把账号改回待审批。");
+        if (request.Status is not (OperatorStatus.Active or OperatorStatus.Disabled))
+            throw Rule(ParticipationErrorCodes.InvalidRequest, "账号状态只能设为启用或停用。");
         var key = OperatorRules.Key(request.Username ?? string.Empty);
         if (key == OperatorRules.Key(actor.Username) && request.Status == OperatorStatus.Disabled)
             throw Rule(OperatorErrorCodes.LastAdministrator, "不能停用当前登录的账号。");
@@ -231,9 +232,10 @@ public sealed class PostgresOperatorAccounts(NpgsqlDataSource dataSource) : IOpe
     }
 
     private static async Task<OperatorAccount?> FindAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
-        string username, CancellationToken cancellationToken)
+        string username, CancellationToken cancellationToken, bool forShare = false)
     {
-        await using var command = new NpgsqlCommand($"SELECT {Columns} FROM exam.operator_accounts WHERE username_key = @key;",
+        await using var command = new NpgsqlCommand($"SELECT {Columns} FROM exam.operator_accounts WHERE username_key = @key" +
+            (forShare ? " FOR SHARE;" : ";"),
             connection, transaction);
         command.Parameters.AddWithValue("key", OperatorRules.Key(username));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
