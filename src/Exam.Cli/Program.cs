@@ -8,6 +8,7 @@ using Exam.Contracts.Common;
 // Console defaults follow the Windows locale; redirected Chinese diagnostics must not become question marks.
 // Both stdout and stderr are UTF-8 without a BOM, including controlled success/error output.
 Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
@@ -153,7 +154,8 @@ internal static partial class ExamCli
         Console.WriteLine("                                        确认同一预览后加密上传，原请求可安全重试");
         Console.WriteLine("  import materials 考试名称 --output 新目录 [--server URL]");
         Console.WriteLine("                                        取回当前已发布版本的源材料（含独立答案），用于继续修题");
-        Console.WriteLine("  management COMMAND [选项]             调用独立服务器管理宿主（status/ha-status/configuration/logs/runtime-logs/operation/start/stop/checks/configure/backup/restore/takeover/emergency/rebuild/reprotect）");
+        Console.WriteLine("  management login|logout               登录或退出当前目标节点的独立管理服务");
+        Console.WriteLine("  management COMMAND [选项]             独立管理命令（status/ha-status/ha-local-status/configuration/logs/runtime-logs/operation/cancel/start/stop/checks/configure/backup/backup-info/restore/takeover/rebuild/reprotect）");
         Console.WriteLine("  version                               显示当前程序版本");
         Console.WriteLine("  artifact-info FILE                    只读核对发布程序集实际构建元数据");
         Console.WriteLine("  error-codes                           以 JSON 输出公共错误码");
@@ -165,13 +167,14 @@ internal static partial class ExamCli
         Console.WriteLine("  --error-format text|json               公共错误格式（默认 text，写入 stderr）");
         Console.WriteLine("  --timeout-seconds 1..3900              本次命令的总超时；不改变业务命令原有较短时限");
         Console.WriteLine();
-        Console.WriteLine("管理选项：--management-url HTTPS_URL --server-id ID --node-id ID；写操作用 --input FILE|-，operation 用 --request-id ID。");
+        Console.WriteLine("管理选项：--management-url HTTPS_URL --server-id ID --node-id ID；写操作用 --input FILE|-，operation/cancel 用 --request-id ID。");
+        Console.WriteLine("备份资料：management backup-info --source-directory 服务器备份目录；检查失败时 stdout 保留诊断结果，退出码仍为非零。");
         Console.WriteLine("也可用 EXAM_MANAGEMENT_URL、EXAM_SERVER_ID、EXAM_NODE_ID；先执行 management login 用考务账号登录服务器管理。");
         Console.WriteLine();
         Console.WriteLine("考务身份来自 login 保存的会话（也可用 EXAM_OPERATOR_TOKEN 指定会话令牌）；设备身份只从 EXAM_DEVICE_ID 和");
         Console.WriteLine("EXAM_DEVICE_CREDENTIAL 读取，不接受命令行明文，以免进入命令历史和进程列表。");
         Console.WriteLine();
-        Console.WriteLine("示例：exam-cli api POST /api/v1/activation/approve --input approve.json");
+        Console.WriteLine("示例：Exam.Cli.exe management status --error-format json --timeout-seconds 30");
         return 0;
     }
 
@@ -198,10 +201,10 @@ internal static partial class ExamCli
             return 2;
         }
 
-        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        using var client = new HttpClient(CreateBusinessHandler(baseUri))
             { BaseAddress = baseUri, Timeout = TimeSpan.FromMinutes(65) };
         using var request = new HttpRequestMessage(method, requestUri);
-        AddCredentials(request);
+        AddCredentials(request, baseUri);
         if (!string.IsNullOrWhiteSpace(options.RequestId))
         {
             request.Headers.TryAddWithoutValidation("X-Request-Id", options.RequestId);
@@ -210,7 +213,7 @@ internal static partial class ExamCli
         if (options.Input is not null)
         {
             var json = options.Input == "-"
-                ? await Console.In.ReadToEndAsync(cancellationToken)
+                ? await ReadStandardInputAsync(cancellationToken)
                 : await File.ReadAllTextAsync(Path.GetFullPath(options.Input), Encoding.UTF8, cancellationToken);
             try
             {
@@ -276,9 +279,9 @@ internal static partial class ExamCli
         return new CliOptions(server, input, requestId);
     }
 
-    private static void AddCredentials(HttpRequestMessage request)
+    private static void AddCredentials(HttpRequestMessage request, Uri address)
     {
-        var operatorToken = OperatorToken();
+        var operatorToken = OperatorToken(address);
         if (!string.IsNullOrWhiteSpace(operatorToken))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", operatorToken);

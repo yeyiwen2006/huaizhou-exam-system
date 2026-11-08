@@ -39,7 +39,8 @@ internal static partial class ExamCli
                     args.Add(value); continue;
                 }
                 if (!value.StartsWith("--", StringComparison.Ordinal)) { args.Add(value); continue; }
-                if (!seen.Add(value) || i + 1 >= arguments.Length ||
+                var repeatedChanged = value == "--changed" && args.Count >= 3 && args[0] == "import" && args[1] == "preview";
+                if ((!seen.Add(value) && !repeatedChanged) || i + 1 >= arguments.Length ||
                     arguments[i + 1].StartsWith("--", StringComparison.Ordinal))
                     throw new ArgumentException("选项重复或缺少值。");
                 if (value == "--error-format")
@@ -99,6 +100,11 @@ internal static partial class ExamCli
             var publicIssues = declared.Where(value => diagnostic.Contains(value, StringComparison.Ordinal)).Distinct().Order(StringComparer.Ordinal);
             code = exit == 3 ? "IMPORT_VALIDATION_FAILED" : "IMPORT_COMPILATION_FAILED";
             message = "导入核对未通过。 " + string.Join(" ", publicIssues);
+        }
+        if (localImport && exit == 5 && !deadline.IsCancellationRequested)
+        {
+            code = "IMPORT_TOOLCHAIN_UNAVAILABLE";
+            message = "未找到可用的 XeLaTeX，或本地编译工具运行超时；请确认已安装 TeX Live 或 MiKTeX，并将 xelatex 加入 PATH。";
         }
         if ((importAction == "publish" || gradingPublication) && exit is 4 or 5 or 6 or 130)
             message = "发布结果未确认；请保留原预览目录，核对考试状态后使用同一目录重试，不要重新生成另一份发布请求。";

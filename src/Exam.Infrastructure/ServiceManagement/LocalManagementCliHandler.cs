@@ -10,18 +10,23 @@ namespace Exam.Infrastructure.ServiceManagement;
 public sealed class LocalManagementCliHandler(LocalManagementClient client)
 {
     public async Task<int> RunAsync(string command, string? inputJson, string? requestId,
-        TextWriter output, TextWriter errors, CancellationToken token = default)
+        TextWriter output, TextWriter errors, CancellationToken token = default, string? sourceDirectory = null)
     {
         try
         {
+            if (command == "backup-info" != (sourceDirectory is not null))
+                throw new ArgumentException("备份资料查询须指定来源目录。");
             return command switch
             {
                 "status" when inputJson is null && requestId is null => await WriteAsync(await client.GetStatusAsync(token), output, errors),
                 "ha-status" when inputJson is null && requestId is null => await WriteAsync(await client.GetHighAvailabilityAsync(token), output, errors),
+                "ha-local-status" when inputJson is null && requestId is null => await WriteAsync(await client.GetLocalHighAvailabilityAsync(token), output, errors),
                 "configuration" when inputJson is null && requestId is null => await WriteAsync(await client.GetConfigurationAsync(token), output, errors),
+                "backup-info" when inputJson is null && requestId is null => await WriteAsync(await client.GetBackupInfoAsync(sourceDirectory!, token), output, errors),
                 "logs" when inputJson is null && requestId is null => await WriteAsync(await client.GetLogsAsync(50, token), output, errors),
                 "runtime-logs" when inputJson is null && requestId is null => await WriteAsync(await client.GetRuntimeLogsAsync(50, token), output, errors),
                 "operation" when inputJson is null && requestId is not null => await WriteAsync(await client.GetOperationAsync(requestId, token), output, errors),
+                "cancel" when inputJson is null && requestId is not null => await WriteAsync(await client.CancelOperationAsync(requestId, token), output, errors),
                 "start" or "stop" or "checks" or "configure" or "backup" or "restore" or "takeover" or "emergency" or "rebuild" or "reprotect" when inputJson is not null && requestId is null =>
                     await WriteAsync(await client.ExecuteAsync(Kind(command), inputJson, token), output, errors),
                 _ => throw new ArgumentException("管理命令或输入无效。")
@@ -71,11 +76,31 @@ public sealed class LocalManagementCliHandler(LocalManagementClient client)
         }
         if (envelope.Result is HighAvailabilityStatus availability && code == 0 &&
             (availability.State is null || availability.VerifiedAt is not { } verified ||
-             DateTimeOffset.UtcNow - verified > TimeSpan.FromSeconds(10) || verified > DateTimeOffset.UtcNow.AddSeconds(5) ||
+             DateTimeOffset.UtcNow - verified >= HighAvailabilityStatus.ObservationLifetime || verified > DateTimeOffset.UtcNow.AddSeconds(5) ||
              availability.SynchronousProtectionVerified && availability.State.Nodes.Values.Any(n =>
-                 DateTimeOffset.UtcNow - n.ObservedAt > TimeSpan.FromSeconds(10) || n.ObservedAt > DateTimeOffset.UtcNow.AddSeconds(5)) ||
+                 DateTimeOffset.UtcNow - n.ObservedAt >= HighAvailabilityStatus.ObservationLifetime || n.ObservedAt > DateTimeOffset.UtcNow.AddSeconds(5)) ||
              availability.Checks.Any(c => c.BlocksWrites && !c.Passed))) code = 6;
-        await (code == 0 ? output : errors).WriteLineAsync(JsonSerializer.Serialize(envelope, JsonDefaults.Create()));
+        // A failed readiness check or unfinished request is still a verified diagnostic result.
+        // Keep it on stdout so the public stderr boundary cannot discard the information needed to repair it.
+        // Protected journal inputs and arbitrary error prose are never part of the CLI projection.
+        if (envelope.Result is ManagementOperation observed)
+            envelope = envelope with { Result = (T)(object)(observed with
+            {
+                RequestJson = null, RecoveryWorkingDirectory = null, FailoverPlan = null,
+                Error = PublicError(observed.Error)
+            }) };
+        envelope = envelope with { Error = PublicError(envelope.Error) };
+        if (code == 0 || envelope.Result is not null)
+            await output.WriteLineAsync(JsonSerializer.Serialize(envelope, JsonDefaults.Create()));
+        if (code != 0)
+            await errors.WriteLineAsync(JsonSerializer.Serialize(new
+            {
+                error = PublicError(error) ?? new ApiError(code == 4 ? ErrorCodes.VersionConflict : "CLI_ERROR",
+                    "管理检查未通过或原请求尚未完成，请核对输出中的状态和检查项。")
+            }, JsonDefaults.Create()));
         return code;
     }
+
+    private static ApiError? PublicError(ApiError? error) => error is null ? null :
+        new(error.Code, "管理操作未完成，请核对检查结果和原请求状态。", Retryable: error.Retryable);
 }

@@ -35,27 +35,50 @@ foreach ($program in $programs.GetEnumerator()) {
     if ($LASTEXITCODE -ne 0) { throw "$($program.Key) 发布失败，已生成的文件保留在 $destination" }
 }
 
-# Only distribute repository templates and documentation, never local connection files or test data.
-foreach ($relative in @(
-    'deploy/server/README.md', 'deploy/server/Install-WindowsServices.ps1',
+# Keep an explicit reference tree for both server operators and the admin-computer CLI.
+# Do not recurse through docs or configuration directories: they can contain local reports and connections.
+$referenceFiles = @(
+    'docs/cli-usage.md', 'docs/gui-cli-coverage.md', 'docs/service-management.md',
+    'docs/high-availability-management.md', 'docs/backup-and-failover-runbook.md',
+    'docs/acceptance-criteria.md', 'docs/operations/automatic-backup-retention.md',
+    'docs/operations/capacity-observability.md', 'docs/operations/postgresql-maintenance.md',
+    'docs/operations/ha-audit-repair-20261018.md',
+    'deploy/server/README.md', 'deploy/server/Install-WindowsServices.ps1', 'deploy/server/Publish-Server.ps1',
+    'deploy/server/appsettings.business.linux.example.json',
+    'deploy/server/appsettings.management.linux.example.json',
+    'deploy/server/service-configuration.linux.example.json', 'deploy/server/install-systemd.sh',
     'deploy/management/Export-AdminConnection.ps1', 'deploy/server-capacity.example.json',
-    'deploy/student-failover.example.json',
+    'deploy/student-failover.example.json', 'deploy/student/README.md',
+    'deploy/student/server.example.json', 'deploy/student/server.public.example.json',
+    'deploy/student/server.public.single.example.json',
     'samples/service-management/appsettings.business.example.json',
     'samples/service-management/appsettings.management.example.json',
     'samples/service-management/appsettings.high-availability.example.json',
     'samples/service-management/appsettings.single-node.example.json',
-    'samples/service-management/service-configuration.example.json'
-)) { Copy-ReleaseFile $relative 'server' }
-# Keep the reference tree intact so links in the deployment and recovery instructions work offline.
-foreach ($folder in @('docs', 'deploy/postgresql')) {
-    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $repository $folder) -Recurse -File) {
-        $relative = [IO.Path]::GetRelativePath($repository, $file.FullName)
-        Copy-ReleaseFile $relative 'server'
-    }
+    'samples/service-management/service-configuration.example.json',
+    'samples/service-management/ha-takeover-request.example.json', 'eng/maintenance/README.md',
+    'deploy/postgresql/README.md', 'deploy/postgresql/check-deployment.example.json',
+    'deploy/postgresql/pg_hba.conf.fragment', 'deploy/postgresql/primary/postgresql.conf.fragment',
+    'deploy/postgresql/standby/postgresql.conf.fragment',
+    'deploy/postgresql/scripts/Initialize-Standby.ps1',
+    'deploy/postgresql/scripts/Invoke-ExamMaintenance.ps1',
+    'deploy/postgresql/scripts/Invoke-WalArchive.ps1',
+    'deploy/postgresql/scripts/Invoke-WalArchiveCommand.ps1',
+    'deploy/postgresql/scripts/New-PostgresqlDeployment.ps1',
+    'deploy/postgresql/scripts/Postgresql.Operations.psm1',
+    'deploy/postgresql/scripts/Restore-WalArchive.ps1',
+    'deploy/postgresql/scripts/Test-ExamDeployment.ps1',
+    'deploy/postgresql/scripts/Test-ReplicationReadiness.ps1',
+    'deploy/postgresql/scripts/Test-StorageCapacity.ps1'
+)
+foreach ($relative in $referenceFiles) {
+    Copy-ReleaseFile $relative 'server'
+    Copy-ReleaseFile $relative 'admin'
 }
 Copy-ReleaseFile 'deploy/server/部署说明.md' 'server' '部署说明.md'
 Copy-ReleaseFile 'deploy/admin/README.md' 'admin' '部署说明.md'
-Copy-ReleaseFile 'docs/cli-usage.md' 'admin' 'cli/使用说明.md'
+$cliGuide = "# 考务 CLI`r`n`r`n运行本目录中的 ``Exam.Cli.exe help`` 查看命令。连接、登录、业务操作与部署排障步骤见[完整使用说明](../docs/cli-usage.md)。`r`n"
+[IO.File]::WriteAllText((Join-Path $destination 'admin/cli/使用说明.md'), $cliGuide, [Text.UTF8Encoding]::new($false))
 Copy-ReleaseFile 'deploy/student/README.md' 'student' '部署说明.md'
 Copy-ReleaseFile 'deploy/student/server.example.json' 'student' 'server.example.json'
 Copy-ReleaseFile 'deploy/student/server.public.example.json' 'student' 'server.public.example.json'

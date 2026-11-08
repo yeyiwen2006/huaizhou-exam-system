@@ -12,10 +12,10 @@ internal static partial class ExamCli
     internal const string ManagementSessionKind = "management";
 
     /// <summary>业务请求使用的会话令牌：环境变量优先，其次是 login 保存的会话。</summary>
-    internal static string? OperatorToken() =>
+    internal static string? OperatorToken(Uri address) =>
         Environment.GetEnvironmentVariable(OperatorTokenEnvironment) is { Length: > 0 } token
             ? token
-            : CliSessionStore.Load(BusinessSessionKind);
+            : CliSessionStore.Load(BusinessSessionKind, CliSessionStore.Scope(address));
 
     private static async Task<int> RunAccountAsync(string command, string[] arguments, CancellationToken cancellationToken)
     {
@@ -32,15 +32,17 @@ internal static partial class ExamCli
             ? rest[0] : null;
         if (target is not null) rest.RemoveAt(0);
         var options = ParseOptions(rest);
+        if (options.Input is not null || options.RequestId is not null ||
+            username is not null && command is not ("register" or "login") ||
+            displayName is not null && command != "register")
+            throw new ArgumentException("账号命令包含不适用的选项。");
         var server = options.Server ?? Environment.GetEnvironmentVariable(ServerEnvironment);
-        if (!Uri.TryCreate(server, UriKind.Absolute, out var address) ||
-            address.Scheme != "https" && !(address.Scheme == "http" && IPAddress.TryParse(address.Host, out var ip) &&
-                IPAddress.IsLoopback(ip) && Environment.GetEnvironmentVariable(InsecureLoopbackEnvironment) == "true"))
+        if (!TryResolveServer(server, out var address))
         {
             Console.Error.WriteLine($"必须用 --server 或 {ServerEnvironment} 提供有效的 HTTPS 服务地址。");
             return 2;
         }
-        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(1) };
+        using var client = new HttpClient(CreateBusinessHandler(address)) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(1) };
         var json = JsonDefaults.Create();
 
         async Task<T> Send<T>(HttpMethod method, string path, object? body, bool authenticated) where T : class
@@ -48,7 +50,7 @@ internal static partial class ExamCli
             using var request = new HttpRequestMessage(method, path);
             if (authenticated)
             {
-                var token = OperatorToken() ?? throw new AccountCliException(HttpStatusCode.Unauthorized, "尚未登录，请先执行 login。");
+                var token = OperatorToken(address) ?? throw new AccountCliException(HttpStatusCode.Unauthorized, "尚未登录，请先执行 login。");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             }
             if (body is not null) request.Content = JsonContent.Create(body, options: json);
@@ -67,10 +69,10 @@ internal static partial class ExamCli
             {
                 case "register":
                 {
-                    username ??= Prompt("用户名：");
-                    displayName ??= Prompt("姓名：");
-                    var password = ReadPassword("口令：");
-                    if (password != ReadPassword("再次输入口令：")) { Console.Error.WriteLine("两次输入的口令不一致。"); return 2; }
+                    username ??= await PromptAsync("用户名：", cancellationToken);
+                    displayName ??= await PromptAsync("姓名：", cancellationToken);
+                    var password = await ReadPasswordAsync("口令：", cancellationToken);
+                    if (password != await ReadPasswordAsync("再次输入口令：", cancellationToken)) { Console.Error.WriteLine("两次输入的口令不一致。"); return 2; }
                     var result = await Send<RegisterOperatorResult>(HttpMethod.Post, "/api/v1/operators/register",
                         new RegisterOperatorRequest(username, displayName, password), authenticated: false);
                     Console.WriteLine(result.Account.Status == OperatorStatus.Active
@@ -80,22 +82,24 @@ internal static partial class ExamCli
                 }
                 case "login":
                 {
-                    username ??= Prompt("用户名：");
-                    var password = ReadPassword("口令：");
+                    username ??= await PromptAsync("用户名：", cancellationToken);
+                    var password = await ReadPasswordAsync("口令：", cancellationToken);
                     var session = await Send<OperatorSession>(HttpMethod.Post, "/api/v1/operators/login",
                         new LoginOperatorRequest(username, password), authenticated: false);
-                    CliSessionStore.Save(BusinessSessionKind, session.Token);
+                    if (string.IsNullOrWhiteSpace(session.Token) || session.Account is null)
+                        throw new HttpRequestException("登录响应缺少有效会话。");
+                    CliSessionStore.Save(BusinessSessionKind, CliSessionStore.Scope(address), session.Token);
                     Console.WriteLine($"已登录：{session.Account.DisplayName}（{session.Account.Username}）{(session.Account.IsAdministrator ? "，管理员" : string.Empty)}。");
                     return 0;
                 }
                 case "logout":
                 {
-                    if (OperatorToken() is not null)
+                    if (OperatorToken(address) is not null)
                     {
                         try { await Send<object>(HttpMethod.Post, "/api/v1/operators/logout", null, authenticated: true); }
                         catch (AccountCliException) { /* 会话已失效时仍删除本机保存的会话 */ }
                     }
-                    CliSessionStore.Delete(BusinessSessionKind);
+                    CliSessionStore.Delete(BusinessSessionKind, CliSessionStore.Scope(address));
                     Console.WriteLine("已退出登录。");
                     return 0;
                 }
@@ -141,20 +145,27 @@ internal static partial class ExamCli
         }
     }
 
-    private static string Prompt(string label)
+    internal static async Task<string> PromptAsync(string label, CancellationToken cancellationToken)
     {
-        Console.Error.Write(label);
-        return Console.ReadLine()?.Trim() ?? string.Empty;
+        if (!Console.IsInputRedirected) Console.Error.Write(label);
+        return (await ReadInputLineAsync(cancellationToken))?.Trim() ?? string.Empty;
     }
 
+    // Console.In serializes its reads synchronously even through TextReader.ReadLineAsync.
+    // Keep a missing redirected input line from blocking the command deadline.
+    private static Task<string?> ReadInputLineAsync(CancellationToken cancellationToken) =>
+        Task.Run(Console.ReadLine, cancellationToken).WaitAsync(cancellationToken);
+
     /// <summary>口令从标准输入读取；在终端中不回显。重定向输入时按行读取，便于自动化。</summary>
-    internal static string ReadPassword(string label)
+    internal static async Task<string> ReadPasswordAsync(string label, CancellationToken cancellationToken)
     {
-        Console.Error.Write(label);
-        if (Console.IsInputRedirected) return Console.ReadLine() ?? string.Empty;
+        if (!Console.IsInputRedirected) Console.Error.Write(label);
+        if (Console.IsInputRedirected) return await ReadInputLineAsync(cancellationToken) ?? string.Empty;
         var builder = new StringBuilder();
         while (true)
         {
+            while (!Console.KeyAvailable) await Task.Delay(50, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var key = Console.ReadKey(intercept: true);
             if (key.Key == ConsoleKey.Enter) break;
             if (key.Key == ConsoleKey.Backspace) { if (builder.Length > 0) builder.Length--; continue; }

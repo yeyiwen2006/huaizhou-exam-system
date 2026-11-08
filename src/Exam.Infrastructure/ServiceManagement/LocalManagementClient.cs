@@ -42,8 +42,13 @@ public sealed class LocalManagementClient : IDisposable
     public Task<ManagementClientResponse<ManagementStatus>> GetStatusAsync(CancellationToken token = default) =>
         SendAsync<ManagementStatus>(HttpMethod.Get, "service/status", null, token);
 
-    public Task<ManagementClientResponse<ManagementOperation>> CancelOperationAsync(string requestId, CancellationToken token = default) =>
-        SendAsync<ManagementOperation>(HttpMethod.Post, "operations/" + Uri.EscapeDataString(requestId) + "/cancel", "{}", token);
+    public async Task<ManagementClientResponse<ManagementOperation>> CancelOperationAsync(string requestId, CancellationToken token = default)
+    {
+        RequireRequestId(requestId);
+        var response = await SendAsync<ManagementOperation>(HttpMethod.Post, "operations/" + Uri.EscapeDataString(requestId) + "/cancel", "{}", token);
+        RequireOperationBinding(response.Envelope.Result, requestId, null);
+        return response;
+    }
     public Task<ManagementClientResponse<ManagementBusinessSession>> ExchangeBusinessSessionAsync(ManagementBusinessSessionRequest request, CancellationToken token = default) =>
         SendAsync<ManagementBusinessSession>(HttpMethod.Post, "business-session", JsonSerializer.Serialize(request, _json), token);
 

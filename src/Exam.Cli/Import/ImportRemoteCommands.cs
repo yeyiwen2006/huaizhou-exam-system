@@ -43,11 +43,11 @@ internal static partial class ExamCli
         if (action == "materials" && (confirmed || output is null || reason is not null || changed.Count > 0))
         { Console.Error.WriteLine("取回源材料需要 考试名称 与 --output 新目录；不能确认发布或声明变更题号。"); return 2; }
         if (!TryResolveServer(server ?? Environment.GetEnvironmentVariable(ServerEnvironment), out var address)) return 2;
-        if (string.IsNullOrWhiteSpace(OperatorToken()))
+        if (string.IsNullOrWhiteSpace(OperatorToken(address)))
         { Console.Error.WriteLine("请先登录考务账号，再检查或发布试卷。"); return 3; }
-        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        using var http = new HttpClient(CreateBusinessHandler(address))
         { BaseAddress = address, Timeout = TimeSpan.FromMinutes(30) };
-        var api = new HttpExamPublicationClient(http, AddCredentials);
+        var api = new HttpExamPublicationClient(http, request => AddCredentials(request, address));
         try
         {
             if (action == "preview")

@@ -23,11 +23,11 @@ internal static partial class ExamCli
         if(positional.Length==0)return UnknownCommand([category]);
         if(!TryResolveServer(options.Server??Environment.GetEnvironmentVariable(ServerEnvironment),out var address))
         {Console.Error.WriteLine("请提供有效的 HTTPS 服务地址。");return 2;}
-        using var http=new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=address,Timeout=TimeSpan.FromMinutes(2)};
+        using var http=new HttpClient(CreateBusinessHandler(address)){BaseAddress=address,Timeout=TimeSpan.FromMinutes(2)};
         var json=JsonDefaults.Create();string? logicalServer=null;long latestEpoch=0;
         async Task<T> Send<T>(HttpMethod method,string path,object? body=null)where T:class
         {
-            using var message=new HttpRequestMessage(method,path);AddCredentials(message);
+            using var message=new HttpRequestMessage(method,path);AddCredentials(message,address);
             if(body is not null)message.Content=JsonContent.Create(body,options:json);
             using var response=await http.SendAsync(message,ct);
             // 先按状态码判定：错误响应常常是网关或重启页的非 JSON 正文，
@@ -56,7 +56,7 @@ internal static partial class ExamCli
             if(options.Input is null)throw new ArgumentException("该操作需要 --input FILE|- 指定 UTF-8 JSON。");
             if(options.Input!="-"&&new FileInfo(Path.GetFullPath(options.Input)).Length>16*1024*1024)
                 throw new ArgumentException("JSON 输入超过16 MiB，请拆分名册批次。");
-            var text=options.Input=="-"?await Console.In.ReadToEndAsync(ct):await File.ReadAllTextAsync(Path.GetFullPath(options.Input),Encoding.UTF8,ct);
+            var text=options.Input=="-"?await ReadStandardInputAsync(ct):await File.ReadAllTextAsync(Path.GetFullPath(options.Input),Encoding.UTF8,ct);
             if(text.Length>16*1024*1024)throw new ArgumentException("JSON 输入过大。");return JsonDocument.Parse(text);
         }
         string RequestId(JsonElement? input=null)=>options.RequestId??
