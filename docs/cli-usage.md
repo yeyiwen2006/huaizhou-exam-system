@@ -132,7 +132,7 @@ $statusExitCode = $LASTEXITCODE
 | `health / time` | 业务就绪状态和服务器时间 |
 | `api METHOD PATH` | 使用当前业务会话调用正式业务 API，例如 `api GET /api/v1/diagnostics/runtime` 读取运行容量快照 |
 
-运行 `help` 查看各命令完整参数。考试管理以名称选择考试，设备使用完整公开编号。只有本机编译 TeX 试题需要 XeLaTeX；状态、日志、监控和报表操作不需要安装 TeX 或 PostgreSQL 客户端。
+运行 `help` 查看各命令完整参数。考试管理以名称选择考试，设备使用完整公开编号。报表命令 `reports status/show/export` 使用考试编号 `examId`，可复用先前 `exams list` 返回的编号，直接请求目标报表，不重复获取考试目录。只有本机编译 TeX 试题需要 XeLaTeX；状态、日志、监控和报表操作不需要安装 TeX 或 PostgreSQL 客户端。
 
 ## 设备查询、裁决和补传
 

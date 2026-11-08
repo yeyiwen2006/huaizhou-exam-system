@@ -139,8 +139,8 @@ internal static partial class ExamCli
         Console.WriteLine("  commands resend 考试名称 学生端编号 start|end   重发该考生仍可重发的开始或结束指令");
         Console.WriteLine("  commands reupload 考试名称 学生端编号      请求补传原答卷（重发未回收考生的结束指令）");
         Console.WriteLine("  publications publish 名称 --input FILE  原子激活已验证的试卷及计分规则");
-        Console.WriteLine("  reports status|show EXAM [--server URL]  查看报表进度或同版五表");
-        Console.WriteLine("  reports export EXAM FILE [--server URL]  下载并完整保存 Excel");
+        Console.WriteLine("  reports status|show EXAM_ID [--server URL]  用考试编号直接查看报表进度或同版五表");
+        Console.WriteLine("  reports export EXAM_ID FILE [--server URL]  用考试编号直接下载并完整保存 Excel");
         Console.WriteLine("  grading status EXAM [--server URL]     读取当前规则版本、答卷范围及计分就绪状态（EXAM 为考试名称）");
         Console.WriteLine("  grading revise 考试 --package 目录 --reason 说明 --output 新目录");
         Console.WriteLine("                                        保存私有规则预览，不编译、不发布；先核对完整答案与满分");
