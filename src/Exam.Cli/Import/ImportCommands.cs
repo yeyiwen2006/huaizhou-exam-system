@@ -11,7 +11,7 @@ internal static partial class ExamCli
     ///
     /// 这是**本地**命令（不入库、不连服务器）：在材料所在机器上核对「这套包能不能导入、能不能编译、
     /// 每个选项能不能定位」。抽取依赖包内已带隐藏外观链接标记；未适配的材料会在这里报出抽取失败，
-    /// 而不是留到学生端才发现点不了。需要 `--no-regions` 时只做清单校验与编译。
+    /// 而不是留到学生端才发现点不了。成功必须同时完成编译和选项坐标提取。
     /// </summary>
     private static async Task<int> RunImportAsync(string action, string packageRoot, string[] arguments,
         CancellationToken cancellationToken)
@@ -23,7 +23,11 @@ internal static partial class ExamCli
 
         if (action is not "verify") return 2;
         var options = ParseOptions(arguments);
-        var keepOutput = options.Input is not null;
+        if (options.Input is not null || options.RequestId is not null)
+        {
+            Console.Error.WriteLine("import verify 从材料目录读取清单，不接受 --input 或 --request-id。");
+            return 2;
+        }
         var manifestPath = Path.Combine(packageRoot, "manifest.json");
         if (!File.Exists(manifestPath))
         {
@@ -92,7 +96,6 @@ internal static partial class ExamCli
                 }
 
                 compiled++;
-                if (keepOutput) continue;
 
                 var extraction = extractor.Extract(new OptionRegionRequest(manifest.ExamId, 1,
                     // 校验已保证清单的选项非空且唯一。
@@ -107,12 +110,11 @@ internal static partial class ExamCli
         }
         finally
         {
-            if (!keepOutput && Directory.Exists(output)) Directory.Delete(output, recursive: true);
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
         }
 
         Console.WriteLine($"题目 {manifest.Questions.Count}：编译成功 {compiled}、编译失败 {compileFailed}" +
-            (keepOutput ? "（仅校验与编译）" : $"、抽取失败 {extractFailed}"));
-        if (keepOutput) Console.WriteLine("编译产物保留在：" + output);
+            $"、抽取失败 {extractFailed}");
         return compileFailed == 0 && extractFailed == 0 ? 0 : 4;
     }
 }

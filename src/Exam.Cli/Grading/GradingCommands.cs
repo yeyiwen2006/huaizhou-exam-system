@@ -28,10 +28,10 @@ internal static partial class ExamCli
         if (!preparing && options.Keys.Any(key => key != "--server") || action == "status" && confirm || action == "publish" && !confirm)
         { Console.Error.WriteLine("确认发布使用 grading publish 规则预览目录 --confirm，不能改动原预览参数。"); return 2; }
         if (!TryResolveServer(options.GetValueOrDefault("--server") ?? Environment.GetEnvironmentVariable(ServerEnvironment), out var address)) return 2;
-        if (string.IsNullOrWhiteSpace(OperatorToken())) { Console.Error.WriteLine("请先登录考务账号。"); return 3; }
-        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        if (string.IsNullOrWhiteSpace(OperatorToken(address))) { Console.Error.WriteLine("请先登录考务账号。"); return 3; }
+        using var http = new HttpClient(CreateBusinessHandler(address))
         { BaseAddress = address, Timeout = TimeSpan.FromMinutes(5) };
-        var api = new HttpExamPublicationClient(http, AddCredentials);
+        var api = new HttpExamPublicationClient(http, request => AddCredentials(request, address));
         try
         {
             if (action == "publish")

@@ -2,13 +2,15 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Exam.Contracts.Common;
+using Exam.Contracts.Exams;
 using Exam.Contracts.Reporting;
+using Exam.Domain.Exams;
 using Exam.Domain.Reporting;
 using Exam.Reporting;
 
 internal static partial class ExamCli
 {
-    private static async Task<int> RunReportAsync(string action, string examId, string[] arguments, CancellationToken cancellationToken)
+    private static async Task<int> RunReportAsync(string action, string examReference, string[] arguments, CancellationToken cancellationToken)
     {
         var userCancellation = cancellationToken;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -20,14 +22,14 @@ internal static partial class ExamCli
         var options = ParseOptions(destination is null ? arguments : arguments[1..]);
         var server = options.Server ?? Environment.GetEnvironmentVariable(ServerEnvironment);
         if (!TryResolveServer(server, out var address)) return 2;
-        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(5) };
+        using var client = new HttpClient(CreateBusinessHandler(address)) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(5) };
         ApiEnvelope<T>? Envelope<T>(ApiEnvelope<T>? value) => value is not null &&
             !string.IsNullOrWhiteSpace(value.ServerId) && !string.IsNullOrWhiteSpace(value.NodeId) && value.ServerEpoch > 0
             ? value : throw new InvalidDataException("报表响应缺少服务器身份。");
         async Task<ApiEnvelope<T>> Get<T>(string path)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
-            AddCredentials(request);
+            AddCredentials(request, address);
             using var response = await client.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
                 throw new ReportCliException(response.StatusCode);
@@ -37,9 +39,21 @@ internal static partial class ExamCli
         }
         try
         {
+            var catalog = await Get<ExamSummary[]>("/api/v1/exams");
+            var matches = catalog.Result!.Where(exam => exam.ExamId == examReference ||
+                ExamSettingsRules.NameKey(exam.Name) == ExamSettingsRules.NameKey(examReference)).ToArray();
+            if (matches.Length != 1)
+            {
+                Console.Error.WriteLine("没有找到唯一匹配的考试，请核对考试名称或编号。");
+                return 4;
+            }
+            var examId = matches[0].ExamId;
             var root = "/api/v1/reports/" + Uri.EscapeDataString(examId);
             var initial = await Get<ReportStatus>(root + "/status");
-            if (initial.Result!.ExamId != examId) throw new InvalidDataException("报表考试不一致。");
+            if (initial.Result!.ExamId != examId || initial.ServerId != catalog.ServerId ||
+                initial.ServerEpoch < catalog.ServerEpoch ||
+                initial.ServerEpoch == catalog.ServerEpoch && initial.NodeId != catalog.NodeId)
+                throw new InvalidDataException("报表考试或服务器身份不一致。");
             ReportStatusValidator.Validate(initial.Result);
             if (action == "status") { Console.WriteLine(JsonSerializer.Serialize(initial, JsonDefaults.Create())); return 0; }
             if (initial.Result.State != ReportState.Ready || initial.Result.SnapshotId is null)
@@ -56,7 +70,7 @@ internal static partial class ExamCli
                 Console.WriteLine(JsonSerializer.Serialize(result, JsonDefaults.Create())); return 0;
             }
             using var download = new HttpRequestMessage(HttpMethod.Get, root + "/xlsx?snapshotId=" + Uri.EscapeDataString(snapshot));
-            AddCredentials(download);
+            AddCredentials(download, address);
             using var binary = await client.SendAsync(download, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!binary.IsSuccessStatusCode) throw new ReportCliException(binary.StatusCode);
             var workbook = await ReportWorkbookDownload.ReadAsync(binary, snapshot, cancellationToken);

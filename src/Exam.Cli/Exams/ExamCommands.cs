@@ -39,17 +39,21 @@ internal static partial class ExamCli
             Console.Error.WriteLine($"必须用 --server 或 {ServerEnvironment} 提供有效的 HTTPS 服务地址。");
             return 2;
         }
-        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(2) };
+        using var client = new HttpClient(CreateBusinessHandler(address)) { BaseAddress = address, Timeout = TimeSpan.FromMinutes(2) };
         var json = JsonDefaults.Create();
 
         async Task<T> Send<T>(HttpMethod method, string path, object? body) where T : class
         {
             using var request = new HttpRequestMessage(method, path);
-            AddCredentials(request);
+            AddCredentials(request, address);
             if (body is not null) request.Content = JsonContent.Create(body, options: json);
             using var response = await client.SendAsync(request, cancellationToken);
+            // Gateways and stopped services may return HTML or an empty response.
+            // Classify that HTTP failure before trying to decode a successful envelope.
+            if (!response.IsSuccessStatusCode)
+                throw new ExamCliException(response.StatusCode, $"服务器未完成本次操作（{(int)response.StatusCode}）。");
             var envelope = await response.Content.ReadFromJsonAsync<ApiEnvelope<T>>(json, cancellationToken);
-            if (!response.IsSuccessStatusCode || envelope?.Error is not null || envelope?.Result is null)
+            if (envelope?.Error is not null || envelope?.Result is null)
                 throw new ExamCliException(response.StatusCode, envelope?.Error?.Message ?? $"服务器未完成本次操作（{(int)response.StatusCode}）。");
             if (string.IsNullOrWhiteSpace(envelope.ServerId) || envelope.ServerEpoch < 1)
                 throw new InvalidDataException("响应缺少服务器身份。");
@@ -68,7 +72,7 @@ internal static partial class ExamCli
         {
             if (options.Input is null) throw new ArgumentException("需要用 --input FILE|- 提供 JSON。");
             return options.Input == "-"
-                ? await Console.In.ReadToEndAsync(cancellationToken)
+                ? await ReadStandardInputAsync(cancellationToken)
                 : await File.ReadAllTextAsync(Path.GetFullPath(options.Input), Encoding.UTF8, cancellationToken);
         }
 
