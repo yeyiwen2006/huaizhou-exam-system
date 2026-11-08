@@ -2,15 +2,13 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Exam.Contracts.Common;
-using Exam.Contracts.Exams;
 using Exam.Contracts.Reporting;
-using Exam.Domain.Exams;
 using Exam.Domain.Reporting;
 using Exam.Reporting;
 
 internal static partial class ExamCli
 {
-    private static async Task<int> RunReportAsync(string action, string examReference, string[] arguments, CancellationToken cancellationToken)
+    private static async Task<int> RunReportAsync(string action, string examId, string[] arguments, CancellationToken cancellationToken)
     {
         var userCancellation = cancellationToken;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -39,21 +37,9 @@ internal static partial class ExamCli
         }
         try
         {
-            var catalog = await Get<ExamSummary[]>("/api/v1/exams");
-            var matches = catalog.Result!.Where(exam => exam.ExamId == examReference ||
-                ExamSettingsRules.NameKey(exam.Name) == ExamSettingsRules.NameKey(examReference)).ToArray();
-            if (matches.Length != 1)
-            {
-                Console.Error.WriteLine("没有找到唯一匹配的考试，请核对考试名称或编号。");
-                return 4;
-            }
-            var examId = matches[0].ExamId;
             var root = "/api/v1/reports/" + Uri.EscapeDataString(examId);
             var initial = await Get<ReportStatus>(root + "/status");
-            if (initial.Result!.ExamId != examId || initial.ServerId != catalog.ServerId ||
-                initial.ServerEpoch < catalog.ServerEpoch ||
-                initial.ServerEpoch == catalog.ServerEpoch && initial.NodeId != catalog.NodeId)
-                throw new InvalidDataException("报表考试或服务器身份不一致。");
+            if (initial.Result!.ExamId != examId) throw new InvalidDataException("报表考试不一致。");
             ReportStatusValidator.Validate(initial.Result);
             if (action == "status") { Console.WriteLine(JsonSerializer.Serialize(initial, JsonDefaults.Create())); return 0; }
             if (initial.Result.State != ReportState.Ready || initial.Result.SnapshotId is null)
